@@ -36,7 +36,7 @@ export interface BacktestEngineSummary {
 	excess_return_pct: number;
 	/** Profit Factor: 総利益 / 総損失（損失がない場合 null） */
 	profit_factor: number | null;
-	/** 年率換算 Sharpe Ratio（日次リターンベース） */
+	/** 年率換算 Sharpe Ratio（timeframe のバーリターンベース） */
 	sharpe_ratio: number | null;
 	/** 1トレードあたり平均損益[%] */
 	avg_pnl_pct: number;
@@ -135,10 +135,11 @@ function calcProfitFactor(trades: Trade[]): number | null {
  * timeframe → 1 年あたりのバー数
  * 暗号資産は 24/365 稼働のため、日数 × 1 日あたりのバー数。
  */
+const DAYS_PER_YEAR = 365;
 const BARS_PER_YEAR: Record<string, number> = {
-	'1D': 365,
-	'4H': 365 * 6,
-	'1H': 365 * 24,
+	'1D': DAYS_PER_YEAR,
+	'4H': DAYS_PER_YEAR * 6,
+	'1H': DAYS_PER_YEAR * 24,
 };
 
 /**
@@ -165,7 +166,7 @@ function calcSharpeRatio(equityCurve: EquityPoint[], timeframe: string): number 
 	const stdev = Math.sqrt(variance);
 	if (stdev === 0) return null;
 
-	const barsPerYear = BARS_PER_YEAR[timeframe] ?? 365;
+	const barsPerYear = BARS_PER_YEAR[timeframe] ?? DAYS_PER_YEAR;
 	const sharpe = (mean / stdev) * Math.sqrt(barsPerYear);
 	return Number(sharpe.toFixed(2));
 }

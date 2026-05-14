@@ -279,6 +279,12 @@ describe('calculateSummary - sharpe_ratio timeframe annualization', () => {
 		const ratio = s4H / s1D;
 		expect(ratio).toBeCloseTo(Math.sqrt(6), 1);
 	});
+
+	it('未知 timeframe は 365（1D 相当）にフォールバックする', () => {
+		const s1D = calculateSummary([], 0, candles, equityCurve, '1D').sharpe_ratio;
+		const sUnknown = calculateSummary([], 0, candles, equityCurve, 'UNKNOWN_TF').sharpe_ratio;
+		expect(sUnknown).toBe(s1D);
+	});
 });
 
 // ---------------------------------------------------------------------------
