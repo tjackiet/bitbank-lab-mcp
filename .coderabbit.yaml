@@ -26,5 +26,6 @@ knowledge_base:
         - errors.md: エラーコードの扱い、特に MCP tool から返す
           エラーレスポンスの整形が公式エラーコードと整合しているか
         - CHANGELOG.md: 公式 API の最近の変更で MCP 側が追随すべき項目がないか
-        HMAC-SHA256 署名対象文字列の構築仕様 (ACCESS-NONCE +
-        request_path + query / body) も rest-api.md に従う。
+        HMAC-SHA256 署名対象文字列の構築仕様も rest-api.md に従う。
+        GET: ACCESS-NONCE + request_path(+query)
+        POST: ACCESS-NONCE + request body(JSON)
