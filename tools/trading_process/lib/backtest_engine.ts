@@ -132,30 +132,41 @@ function calcProfitFactor(trades: Trade[]): number | null {
 }
 
 /**
- * 年率換算 Sharpe Ratio を日次エクイティカーブから計算
- * Sharpe = mean(daily_return) / stdev(daily_return) * sqrt(365)
+ * timeframe → 1 年あたりのバー数
+ * 暗号資産は 24/365 稼働のため、日数 × 1 日あたりのバー数。
  */
-function calcSharpeRatio(equityCurve: EquityPoint[]): number | null {
+const BARS_PER_YEAR: Record<string, number> = {
+	'1D': 365,
+	'4H': 365 * 6,
+	'1H': 365 * 24,
+};
+
+/**
+ * 年率換算 Sharpe Ratio をエクイティカーブから計算
+ * Sharpe = mean(bar_return) / stdev(bar_return) * sqrt(barsPerYear)
+ *
+ * timeframe に応じた年率換算係数を使う。未知の timeframe は 365（日次相当）を fallback とする。
+ */
+function calcSharpeRatio(equityCurve: EquityPoint[], timeframe: string): number | null {
 	if (equityCurve.length < 2) return null;
 
-	// 日次リターン（equity_pct の差分をパーセントで）
-	const dailyReturns: number[] = [];
+	const barReturns: number[] = [];
 	for (let i = 1; i < equityCurve.length; i++) {
 		const prevEq = 1 + equityCurve[i - 1].equity_pct / 100;
 		const currEq = 1 + equityCurve[i].equity_pct / 100;
 		if (prevEq > 0) {
-			dailyReturns.push(currEq / prevEq - 1);
+			barReturns.push(currEq / prevEq - 1);
 		}
 	}
-	if (dailyReturns.length < 2) return null;
+	if (barReturns.length < 2) return null;
 
-	const mean = dailyReturns.reduce((a, b) => a + b, 0) / dailyReturns.length;
-	const variance = dailyReturns.reduce((sum, r) => sum + (r - mean) ** 2, 0) / (dailyReturns.length - 1);
+	const mean = barReturns.reduce((a, b) => a + b, 0) / barReturns.length;
+	const variance = barReturns.reduce((sum, r) => sum + (r - mean) ** 2, 0) / (barReturns.length - 1);
 	const stdev = Math.sqrt(variance);
 	if (stdev === 0) return null;
 
-	// 暗号資産: 年間 365 日
-	const sharpe = (mean / stdev) * Math.sqrt(365);
+	const barsPerYear = BARS_PER_YEAR[timeframe] ?? 365;
+	const sharpe = (mean / stdev) * Math.sqrt(barsPerYear);
 	return Number(sharpe.toFixed(2));
 }
 
@@ -167,6 +178,7 @@ export function calculateSummary(
 	maxDrawdown: number,
 	candles: Candle[],
 	equityCurve: EquityPoint[],
+	timeframe: string,
 ): BacktestEngineSummary {
 	// Buy&Hold の計算
 	let buyHoldPnlPct = 0;
@@ -185,7 +197,7 @@ export function calculateSummary(
 			buy_hold_pnl_pct: Number(buyHoldPnlPct.toFixed(2)),
 			excess_return_pct: Number((-buyHoldPnlPct).toFixed(2)),
 			profit_factor: null,
-			sharpe_ratio: calcSharpeRatio(equityCurve),
+			sharpe_ratio: calcSharpeRatio(equityCurve, timeframe),
 			avg_pnl_pct: 0,
 		};
 	}
@@ -206,7 +218,7 @@ export function calculateSummary(
 		buy_hold_pnl_pct: Number(buyHoldPnlPct.toFixed(2)),
 		excess_return_pct: Number(excessReturn.toFixed(2)),
 		profit_factor: calcProfitFactor(trades),
-		sharpe_ratio: calcSharpeRatio(equityCurve),
+		sharpe_ratio: calcSharpeRatio(equityCurve, timeframe),
 		avg_pnl_pct: Number(avgPnl.toFixed(2)),
 	};
 }
@@ -236,7 +248,7 @@ export function runBacktestEngine(
 	const { equity_curve, drawdown_curve, max_drawdown } = calculateEquityAndDrawdown(trades, candles);
 
 	// 4. サマリー計算
-	const summary = calculateSummary(trades, max_drawdown, candles, equity_curve);
+	const summary = calculateSummary(trades, max_drawdown, candles, equity_curve, input.timeframe);
 
 	// 5. オーバーレイデータ取得
 	const overlays = strategy.getOverlays(candles, params);
