@@ -251,11 +251,11 @@ describe('analyze_indicators', () => {
 		]).toContain(res.data.trend);
 	});
 
-	it('analyzeTrend: 完全フラット価格（SMA全て同値, RSI=100）→ overbought（price==SMA でトレンド条件外）', async () => {
+	it('analyzeTrend: 完全フラット価格（SMA全て同値, RSI=50）→ sideways（price==SMA でトレンド条件外）', async () => {
 		// 完全フラット価格: close = open = high = low = 一定値
 		// SMA_25 = SMA_75 = close → price == sma25 == sma75（> でも < でもない）
-		// Wilder RSI: 変化なし → avgLoss=0 → RSI = 100 → overbought
-		// これにより lines 311 (if rsi > 70) が true になる → overbought が返る
+		// Wilder RSI: 変化なし → avgGain=0 && avgLoss=0 → 中立値 RSI = 50（業界標準）
+		// RSI=50 は overbought/oversold いずれでもなく、price==SMA でトレンド条件外なので sideways
 		// モック2回で合計 2×100=200行 (全て同値)
 		const rows = makeOhlcvRows(100).map(([_o, _h, _l, _c, v, ts]) => {
 			const base = '5000000';
@@ -270,8 +270,8 @@ describe('analyze_indicators', () => {
 
 		const res = await analyzeIndicators('btc_jpy', '1day', null);
 		assertOk(res);
-		// RSI=100 > 70 かつ price==SMA なので uptrend/downtrend 条件に入らず overbought
-		expect(res.data.trend).toBe('overbought');
+		// RSI=50 は中立値、price==SMA なので uptrend/downtrend 条件に入らず sideways
+		expect(res.data.trend).toBe('sideways');
 	});
 
 	it('analyzeTrend: 緩やかな上下動（RSI≈50, SMA同値付近）→ sideways', async () => {

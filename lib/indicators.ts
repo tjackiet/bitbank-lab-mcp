@@ -92,7 +92,8 @@ export function ema(prices: number[], period: number): number[] {
  *
  * @param closes 終値配列（古い順）
  * @param period RSI 期間（通常 14）
- * @returns RSI配列（0–100、先頭 period 個は NaN）
+ * @returns RSI配列（0–100、先頭 period 個は NaN）。
+ *   変動なし区間（avgGain=0 かつ avgLoss=0）は中立値 50 を返す（業界標準）。
  */
 export function rsi(closes: number[], period: number): number[] {
 	const result: number[] = nanArray(closes.length);
@@ -114,7 +115,7 @@ export function rsi(closes: number[], period: number): number[] {
 
 	// 最初の RSI
 	if (avgLoss === 0) {
-		result[period] = 100;
+		result[period] = avgGain === 0 ? 50 : 100;
 	} else {
 		result[period] = 100 - 100 / (1 + avgGain / avgLoss);
 	}
@@ -129,7 +130,7 @@ export function rsi(closes: number[], period: number): number[] {
 		avgLoss = (avgLoss * (period - 1) + loss) / period;
 
 		if (avgLoss === 0) {
-			result[i] = 100;
+			result[i] = avgGain === 0 ? 50 : 100;
 		} else {
 			result[i] = 100 - 100 / (1 + avgGain / avgLoss);
 		}
