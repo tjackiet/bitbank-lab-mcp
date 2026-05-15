@@ -187,15 +187,37 @@ describe('rsi', () => {
 		expect(result[14]).toBe(100);
 	});
 
-	it('avgGain === 0 かつ avgLoss === 0（完全フラット）のとき RSI = 100', () => {
-		// 全て同一価格: avgGain=0, avgLoss=0 → 0/0 未定義だが仕様として 100 を返す
+	it('avgGain === 0 かつ avgLoss === 0（完全フラット）のとき RSI = 50', () => {
+		// 全て同一価格: avgGain=0, avgLoss=0 → 0/0 未定義のため中立値 50 を返す（業界標準）
 		const closes = Array.from({ length: 20 }, () => 100);
 		const result = rsi(closes, 14);
-		expect(result[14]).toBe(100);
-		// Wilder smoothing 後も同様（変化がないため avgLoss=0 のまま）
+		expect(result[14]).toBe(50);
+		// Wilder smoothing 後も同様（変化がないため avgGain=0 && avgLoss=0 のまま）
 		for (let i = 14; i < result.length; i++) {
-			expect(result[i]).toBe(100);
+			expect(result[i]).toBe(50);
 		}
+	});
+
+	it('初期窓フラット → その後の上昇で RSI が 50 から離脱する', () => {
+		// 先頭 15 個フラット（初期窓は avgGain=0 && avgLoss=0 で 50）、その後上昇
+		const closes = [100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 110, 120];
+		const result = rsi(closes, 14);
+		// 初期窓は完全フラット → 中立値 50
+		expect(result[14]).toBe(50);
+		// 上昇開始後は 50 から離脱（avgLoss=0 のまま avgGain>0 なので RSI=100 となる）
+		expect(result[15]).toBeGreaterThan(50);
+		expect(result[16]).toBeGreaterThan(50);
+	});
+
+	it('初期窓フラット → その後の下落で RSI が 50 から下方向に離脱する', () => {
+		// 先頭 15 個フラット（初期窓は avgGain=0 && avgLoss=0 で 50）、その後下落
+		const closes = [100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 90, 80];
+		const result = rsi(closes, 14);
+		// 初期窓は完全フラット → 中立値 50
+		expect(result[14]).toBe(50);
+		// 下落開始後は 50 から下方向に離脱（avgGain=0 のまま avgLoss>0 なので RSI=0）
+		expect(result[15]).toBeLessThan(50);
+		expect(result[16]).toBeLessThan(50);
 	});
 
 	it('Wilder smoothing が正しく適用される', () => {
