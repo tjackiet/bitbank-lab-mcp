@@ -78,6 +78,10 @@ function buildEngineResult() {
 			profit_factor: null,
 			sharpe_ratio: null,
 			avg_pnl_pct: 1.23,
+			evaluation_start: '2024-01-01T00:00:00.000Z',
+			evaluation_end: '2024-01-31T00:00:00.000Z',
+			evaluation_bars: 30,
+			warmup_bars: 0,
 		},
 		trades: [
 			{
