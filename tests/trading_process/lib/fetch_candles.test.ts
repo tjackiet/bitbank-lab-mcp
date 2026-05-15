@@ -219,7 +219,7 @@ describe('fetchCandlesForBacktest', () => {
 		} as never);
 		const warmup = 200;
 		const result = await fetchCandlesForBacktest('btc_jpy', '1D', { type: 'period', value: '1Y' }, warmup);
-		// neededBars = 365 + 200 + 10 = 575 → 500 < 575 なので全件
+		// neededBars = 365 + 200 + 10 = 575 → データ不足 (500 < 575) なので全件返却
 		expect(result).toHaveLength(500);
 	});
 

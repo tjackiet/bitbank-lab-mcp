@@ -35,38 +35,47 @@ export const StrategyConfigSchema = z.object({
 	params: z.record(z.string(), z.number()).optional().default({}).describe('Strategy parameters (overrides defaults)'),
 });
 
-export const RunBacktestInputSchema = z.object({
-	pair: z.string().optional().default('btc_jpy').describe('Trading pair (e.g., btc_jpy)'),
-	timeframe: BacktestTimeframeEnum.optional()
-		.default('1D')
-		.describe('Candle timeframe: 1D (daily), 4H (4-hour), 1H (hourly)'),
-	period: BacktestPeriodEnum.optional()
-		.default('3M')
-		.describe('Backtest period: 1M, 3M, 6M, 1Y, 2Y, or 3Y. Ignored when start_date and end_date are both provided.'),
-	start_date: IsoDateSchema.optional().describe(
-		'Backtest start date (ISO 8601: YYYY-MM-DD). Takes precedence over period when both start_date and end_date are provided.',
-	),
-	end_date: IsoDateSchema.optional().describe(
-		'Backtest end date (ISO 8601: YYYY-MM-DD). Takes precedence over period when both start_date and end_date are provided.',
-	),
-	strategy: StrategyConfigSchema.describe('Strategy configuration'),
-	fee_bp: z.number().min(0).max(100).optional().default(12).describe('One-way fee in basis points'),
-	execution: z.literal('t+1_open').optional().default('t+1_open').describe('Execution timing (fixed: t+1_open)'),
-	outputDir: z.string().optional().default('/mnt/user-data/outputs').describe('Output directory for chart files'),
-	savePng: z.boolean().optional().default(true).describe('Save chart as PNG file (default: true)'),
-	includeSvg: z
-		.boolean()
-		.optional()
-		.default(false)
-		.describe('Include SVG string in response (default: false, for token saving)'),
-	chartDetail: z
-		.enum(['default', 'full'])
-		.optional()
-		.default('default')
-		.describe(
-			'Chart detail level: default (equity+DD only) or full (price+indicator+equity+DD+position). Use full ONLY when user explicitly requests price chart or indicator visualization.',
+export const RunBacktestInputSchema = z
+	.object({
+		pair: z.string().optional().default('btc_jpy').describe('Trading pair (e.g., btc_jpy)'),
+		timeframe: BacktestTimeframeEnum.optional()
+			.default('1D')
+			.describe('Candle timeframe: 1D (daily), 4H (4-hour), 1H (hourly)'),
+		period: BacktestPeriodEnum.optional()
+			.default('3M')
+			.describe('Backtest period: 1M, 3M, 6M, 1Y, 2Y, or 3Y. Ignored when start_date and end_date are both provided.'),
+		start_date: IsoDateSchema.optional().describe(
+			'Backtest start date (ISO 8601: YYYY-MM-DD). Takes precedence over period when both start_date and end_date are provided.',
 		),
-});
+		end_date: IsoDateSchema.optional().describe(
+			'Backtest end date (ISO 8601: YYYY-MM-DD). Takes precedence over period when both start_date and end_date are provided.',
+		),
+		strategy: StrategyConfigSchema.describe('Strategy configuration'),
+		fee_bp: z.number().min(0).max(100).optional().default(12).describe('One-way fee in basis points'),
+		execution: z.literal('t+1_open').optional().default('t+1_open').describe('Execution timing (fixed: t+1_open)'),
+		outputDir: z.string().optional().default('/mnt/user-data/outputs').describe('Output directory for chart files'),
+		savePng: z.boolean().optional().default(true).describe('Save chart as PNG file (default: true)'),
+		includeSvg: z
+			.boolean()
+			.optional()
+			.default(false)
+			.describe('Include SVG string in response (default: false, for token saving)'),
+		chartDetail: z
+			.enum(['default', 'full'])
+			.optional()
+			.default('default')
+			.describe(
+				'Chart detail level: default (equity+DD only) or full (price+indicator+equity+DD+position). Use full ONLY when user explicitly requests price chart or indicator visualization.',
+			),
+	})
+	.refine((data) => !((data.start_date && !data.end_date) || (!data.start_date && data.end_date)), {
+		error: 'start_date and end_date must be provided together',
+		path: ['end_date'],
+	})
+	.refine((data) => !(data.start_date && data.end_date) || data.start_date <= data.end_date, {
+		error: 'start_date must be on or before end_date',
+		path: ['end_date'],
+	});
 
 const GenericBacktestSummarySchema = z.object({
 	total_pnl_pct: z.number(),

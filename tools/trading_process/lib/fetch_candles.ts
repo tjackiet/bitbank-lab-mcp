@@ -101,13 +101,12 @@ function normalizeAndClean(normalized: NormalizedCandle[]): Candle[] {
 
 	valid.sort((a, b) => dayjs(a.time).valueOf() - dayjs(b.time).valueOf());
 
+	// Map は挿入順を保持するので、ソート済みを set すれば結果も時系列順
 	const uniqueMap = new Map<string, Candle>();
 	for (const candle of valid) {
 		uniqueMap.set(candle.time, candle);
 	}
-	const unique = Array.from(uniqueMap.values());
-	unique.sort((a, b) => dayjs(a.time).valueOf() - dayjs(b.time).valueOf());
-	return unique;
+	return Array.from(uniqueMap.values());
 }
 
 async function fetchRawCandles(pair: string, timeframe: Timeframe, fetchLimit: number): Promise<Candle[]> {
@@ -196,7 +195,9 @@ async function fetchByAbsoluteRange(
 	// end_date より後を除外
 	const inRange = uniqueCandles.filter((c) => dayjs(c.time).valueOf() <= endMs);
 	if (inRange.length === 0) {
-		throw new Error(`No candle data in range [${start}, ${end}]`);
+		throw new Error(
+			`No candle data in range [${start}, ${end}] (fetched ${uniqueCandles.length} candles, all outside range)`,
+		);
 	}
 
 	// start_date 以降の最初のインデックス
