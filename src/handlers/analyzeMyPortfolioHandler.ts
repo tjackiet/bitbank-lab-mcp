@@ -13,9 +13,13 @@ import { fail, ok } from '../../lib/result.js';
 import { getDefaultClient, PrivateApiError } from '../private/client.js';
 import { AnalyzeMyPortfolioOutputSchema } from '../private/schemas.js';
 import {
+	buildAccountPnl,
 	buildEquitySeries,
+	buildPeriodAccountPnl,
 	calcDepositWithdrawalSummary,
+	calcMarginPnl,
 	calcPeriodDWSummary,
+	calcPeriodMarginPnl,
 	calcPeriodNetFlow,
 	calcPeriodRealizedPnl,
 	calcPnl,
@@ -28,16 +32,20 @@ import {
 	fetchDepositWithdrawal,
 	fetchTechnical,
 	fetchTickerPrices,
+	paginateMarginTrades,
 	paginateTrades,
 } from './portfolio/fetch.js';
 import type {
+	AccountPnl,
 	CandlePriceData,
 	DepositWithdrawalSummary,
 	EquityPoint,
+	PeriodAccountPnl,
 	PeriodDWSummary,
 	PeriodPerformance,
 	PeriodRealizedPnl,
 	RawAsset,
+	RawMarginTrade,
 	RawTrade,
 	TechnicalSummary,
 } from './portfolio/types.js';
@@ -66,20 +74,26 @@ export default async function analyzeMyPortfolioHandler(args: {
 		// JST 基準の年初来・月初来の境界（API フェッチの since パラメータにも使用）
 		const boundaries = getJstPeriodBoundaries();
 
-		// 2. 約定履歴 + 入出金履歴を並列取得（年初以降のみ）
+		// 2. 約定履歴 + 信用約定履歴 + 入出金履歴を並列取得（年初以降のみ）
 		// 年次は年初比、月次は月初比の比較のため、年初以降のデータで十分。
 		// 全履歴を取得しないことで API 呼び出し回数を削減し、pagination 上限の問題も回避。
 		const tradePromise = include_pnl
 			? paginateTrades(client, boundaries.yearStartMs)
 			: Promise.resolve({ trades: [] as RawTrade[], truncated: false });
 
+		const marginTradePromise = include_pnl
+			? paginateMarginTrades(client, boundaries.yearStartMs)
+			: Promise.resolve({ trades: [] as RawMarginTrade[], truncated: false });
+
 		const dwPromise = include_deposit_withdrawal
 			? fetchDepositWithdrawal(client, boundaries.yearStartMs)
 			: Promise.resolve(null);
 
-		const [tradeResult, dwData] = await Promise.all([tradePromise, dwPromise]);
+		const [tradeResult, marginTradeResult, dwData] = await Promise.all([tradePromise, marginTradePromise, dwPromise]);
 		const allTrades = tradeResult.trades;
 		const tradesTruncated = tradeResult.truncated;
+		const allMarginTrades = marginTradeResult.trades;
+		const marginTradesTruncated = marginTradeResult.truncated;
 
 		// 期間パフォーマンス用: 全関連ペアのキャンドルデータを早期フェッチ開始
 		const allRelevantPairs = new Set<string>();
@@ -184,7 +198,7 @@ export default async function analyzeMyPortfolioHandler(args: {
 			}
 		}
 
-		// 6.5. 年初来・月初来の実現損益を算出（JST 基準）
+		// 6.5. 年初来・月初来の実現損益を算出（JST 基準、現物単独）
 		let yearlyRealizedPnl: PeriodRealizedPnl | undefined;
 		let monthlyRealizedPnl: PeriodRealizedPnl | undefined;
 		if (include_pnl && allTrades.length > 0) {
@@ -197,6 +211,43 @@ export default async function analyzeMyPortfolioHandler(args: {
 			monthlyRealizedPnl = calcPeriodRealizedPnl(
 				allTrades,
 				boundaries.monthStartMs,
+				boundaries.monthStartIso,
+				boundaries.nowIso,
+			);
+		}
+
+		// 6.5b. 信用 PnL の集計 + 口座全体 PnL の構築
+		// 現物の totalRealizedPnl と yearly/monthlyRealizedPnl は現物単独の値として維持し、
+		// account_pnl 系として「現物 + 信用決済損益 - 信用支払利息」をまとめて公開する。
+		let accountPnl: AccountPnl | undefined;
+		let yearlyAccountPnl: PeriodAccountPnl | undefined;
+		let monthlyAccountPnl: PeriodAccountPnl | undefined;
+		if (include_pnl) {
+			const marginPnlAll = calcMarginPnl(allMarginTrades);
+			accountPnl = buildAccountPnl(totalRealizedPnl, marginPnlAll);
+
+			const marginPnlYearly = calcPeriodMarginPnl(
+				allMarginTrades,
+				boundaries.yearStartMs,
+				boundaries.yearStartIso,
+				boundaries.nowIso,
+			);
+			yearlyAccountPnl = buildPeriodAccountPnl(
+				yearlyRealizedPnl?.realized_pnl ?? 0,
+				marginPnlYearly,
+				boundaries.yearStartIso,
+				boundaries.nowIso,
+			);
+
+			const marginPnlMonthly = calcPeriodMarginPnl(
+				allMarginTrades,
+				boundaries.monthStartMs,
+				boundaries.monthStartIso,
+				boundaries.nowIso,
+			);
+			monthlyAccountPnl = buildPeriodAccountPnl(
+				monthlyRealizedPnl?.realized_pnl ?? 0,
+				marginPnlMonthly,
 				boundaries.monthStartIso,
 				boundaries.nowIso,
 			);
@@ -666,6 +717,22 @@ export default async function analyzeMyPortfolioHandler(args: {
 			}
 		}
 
+		// 実現損益（現物単独）と口座全体 PnL（現物 + 信用決済損益 - 利息）
+		if (accountPnl != null) {
+			const spotSign = accountPnl.spot_realized_pnl >= 0 ? '+' : '';
+			lines.push(`Realized PnL (Spot): ${spotSign}${formatPriceJPY(accountPnl.spot_realized_pnl)}`);
+			const totalSign = accountPnl.total >= 0 ? '+' : '';
+			const hasMargin = accountPnl.margin_realized_pnl !== 0 || accountPnl.margin_interest !== 0;
+			if (hasMargin) {
+				const mSign = accountPnl.margin_realized_pnl >= 0 ? '+' : '';
+				lines.push(
+					`Account PnL: ${totalSign}${formatPriceJPY(accountPnl.total)} (Spot: ${spotSign}${formatPriceJPY(accountPnl.spot_realized_pnl)} / Margin: ${mSign}${formatPriceJPY(accountPnl.margin_realized_pnl)} / Interest: -${formatPriceJPY(accountPnl.margin_interest)})`,
+				);
+			} else {
+				lines.push(`Account PnL: ${totalSign}${formatPriceJPY(accountPnl.total)}`);
+			}
+		}
+
 		if (totalUnrealizedPnl != null) {
 			const sign = totalUnrealizedPnl >= 0 ? '+' : '';
 			lines.push(
@@ -673,8 +740,9 @@ export default async function analyzeMyPortfolioHandler(args: {
 			);
 		}
 		lines.push('※ 評価損益は当年（1/1〜）の約定ベース。年初以前の取得原価は含みません');
-		if (tradesTruncated) {
-			lines.push('※ 約定履歴が上限に達したため一部のみ取得。損益計算が不正確な可能性があります');
+		if (tradesTruncated || marginTradesTruncated) {
+			const subjects = [tradesTruncated && '現物', marginTradesTruncated && '信用'].filter(Boolean).join(' / ');
+			lines.push(`※ 約定履歴（${subjects}）が上限に達したため一部のみ取得。損益計算が不正確な可能性があります`);
 		}
 		lines.push('');
 
@@ -768,6 +836,9 @@ export default async function analyzeMyPortfolioHandler(args: {
 						period_end: monthlyRealizedPnl.period_end,
 					}
 				: undefined,
+			account_pnl: accountPnl,
+			yearly_account_pnl: yearlyAccountPnl,
+			monthly_account_pnl: monthlyAccountPnl,
 			deposit_withdrawal_summary: depositWithdrawalSummary,
 			yearly_dw_summary: yearlyDWSummary,
 			monthly_dw_summary: monthlyDWSummary,

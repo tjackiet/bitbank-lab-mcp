@@ -14,8 +14,15 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { calcPeriodRealizedPnl, calcPnl, reconstructHoldingsAtDate } from '../../../src/handlers/portfolio/calc.js';
-import type { RawTrade } from '../../../src/handlers/portfolio/types.js';
+import {
+	buildAccountPnl,
+	calcMarginPnl,
+	calcPeriodMarginPnl,
+	calcPeriodRealizedPnl,
+	calcPnl,
+	reconstructHoldingsAtDate,
+} from '../../../src/handlers/portfolio/calc.js';
+import type { RawMarginTrade, RawTrade } from '../../../src/handlers/portfolio/types.js';
 
 /** 必須フィールドを既定値で埋めた RawTrade を生成する */
 function makeTrade(overrides: Partial<RawTrade> = {}): RawTrade {
@@ -275,5 +282,113 @@ describe('reconstructHoldingsAtDate', () => {
 		const result = reconstructHoldingsAtDate(currentHoldings, trades, 1000, null);
 		expect(result.get('btc')).toBe(0.999);
 		expect(result.has('jpy')).toBe(false);
+	});
+});
+
+// ── 信用 PnL 集計 ──
+
+/** 必須フィールドを既定値で埋めた RawMarginTrade を生成する */
+function makeMarginTrade(overrides: Partial<RawMarginTrade> = {}): RawMarginTrade {
+	return {
+		trade_id: 1,
+		pair: 'btc_jpy',
+		order_id: 1,
+		side: 'buy',
+		position_side: 'long',
+		type: 'limit',
+		amount: '0',
+		price: '0',
+		maker_taker: 'maker',
+		fee_amount_base: '0',
+		fee_amount_quote: '0',
+		executed_at: 0,
+		...overrides,
+	};
+}
+
+describe('calcMarginPnl', () => {
+	it('決済約定のみカウントし、建玉約定（profit_loss なし）はスキップ', () => {
+		// 決済 2 件（profit_loss あり）+ 建玉 1 件（profit_loss なし）
+		const trades: RawMarginTrade[] = [
+			makeMarginTrade({ trade_id: 1, side: 'buy', amount: '0.01', price: '15000000' }), // 建玉
+			makeMarginTrade({ trade_id: 2, side: 'sell', amount: '0.01', price: '15500000', profit_loss: '5000' }), // 決済
+			makeMarginTrade({ trade_id: 3, side: 'sell', amount: '0.01', price: '15800000', profit_loss: '8000' }), // 決済
+		];
+		const result = calcMarginPnl(trades);
+		expect(result.close_trade_count).toBe(2);
+		expect(result.margin_realized_pnl).toBe(13_000);
+	});
+
+	it('利息を加算する（profit_loss なしでも interest があれば合算）', () => {
+		const trades: RawMarginTrade[] = [
+			makeMarginTrade({ trade_id: 1, profit_loss: '5000', interest: '100' }),
+			makeMarginTrade({ trade_id: 2, profit_loss: '3000', interest: '200' }),
+			makeMarginTrade({ trade_id: 3, profit_loss: '1000' }), // interest なし
+		];
+		const result = calcMarginPnl(trades);
+		expect(result.margin_interest).toBe(300);
+	});
+
+	it('損失（負の profit_loss）を正しく集計する', () => {
+		const trades: RawMarginTrade[] = [
+			makeMarginTrade({ trade_id: 1, profit_loss: '500' }),
+			makeMarginTrade({ trade_id: 2, profit_loss: '-300' }),
+		];
+		const result = calcMarginPnl(trades);
+		expect(result.margin_realized_pnl).toBe(200);
+		expect(result.close_trade_count).toBe(2);
+	});
+
+	it('空配列で 0 / 0 / 0 を返す', () => {
+		const result = calcMarginPnl([]);
+		expect(result.margin_realized_pnl).toBe(0);
+		expect(result.margin_interest).toBe(0);
+		expect(result.close_trade_count).toBe(0);
+	});
+
+	it('NaN / 不正な profit_loss / interest はスキップする', () => {
+		const trades: RawMarginTrade[] = [
+			makeMarginTrade({ trade_id: 1, profit_loss: '1000', interest: '50' }),
+			makeMarginTrade({ trade_id: 2, profit_loss: 'NaN', interest: 'abc' }),
+		];
+		const result = calcMarginPnl(trades);
+		expect(result.margin_realized_pnl).toBe(1000);
+		expect(result.margin_interest).toBe(50);
+		expect(result.close_trade_count).toBe(1);
+	});
+});
+
+describe('calcPeriodMarginPnl', () => {
+	it('sinceMs 以降の約定のみを集計する', () => {
+		// 期間外 (t=500) + 期間内 (t=1500, t=2000)
+		const trades: RawMarginTrade[] = [
+			makeMarginTrade({ trade_id: 1, executed_at: 500, profit_loss: '999', interest: '10' }), // 除外
+			makeMarginTrade({ trade_id: 2, executed_at: 1500, profit_loss: '5000', interest: '100' }),
+			makeMarginTrade({ trade_id: 3, executed_at: 2000, profit_loss: '3000', interest: '50' }),
+		];
+		const result = calcPeriodMarginPnl(trades, 1000, '2024-01-01T00:00:00+09:00', '2024-12-31T23:59:59+09:00');
+		expect(result.margin_realized_pnl).toBe(8000);
+		expect(result.margin_interest).toBe(150);
+		expect(result.close_trade_count).toBe(2);
+		expect(result.period_start).toBe('2024-01-01T00:00:00+09:00');
+		expect(result.period_end).toBe('2024-12-31T23:59:59+09:00');
+	});
+});
+
+describe('buildAccountPnl', () => {
+	it('total = spot + margin - interest を返す', () => {
+		const result = buildAccountPnl(1000, { margin_realized_pnl: 500, margin_interest: 100 });
+		expect(result.spot_realized_pnl).toBe(1000);
+		expect(result.margin_realized_pnl).toBe(500);
+		expect(result.margin_interest).toBe(100);
+		expect(result.total).toBe(1400); // 1000 + 500 - 100
+	});
+
+	it('信用約定なし（margin=0, interest=0）のとき total === spot_realized_pnl', () => {
+		const result = buildAccountPnl(1234, { margin_realized_pnl: 0, margin_interest: 0 });
+		expect(result.spot_realized_pnl).toBe(1234);
+		expect(result.margin_realized_pnl).toBe(0);
+		expect(result.margin_interest).toBe(0);
+		expect(result.total).toBe(1234);
 	});
 });

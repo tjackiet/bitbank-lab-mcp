@@ -13,6 +13,7 @@ import {
 	mockBitbankSuccess,
 	rawAssetsResponse,
 	rawDepositHistoryResponse,
+	rawMarginTradeHistoryResponse,
 	rawTradeHistoryResponse,
 	rawWithdrawalHistoryResponse,
 } from '../fixtures/private-api.js';
@@ -32,7 +33,13 @@ afterEach(() => {
 });
 
 /** URL パターンでルーティングする fetch モック */
-function setupFetchMock(opts?: { assetsFail?: boolean; tradesFail?: boolean; dwFail?: boolean }) {
+function setupFetchMock(opts?: {
+	assetsFail?: boolean;
+	tradesFail?: boolean;
+	marginTradesFail?: boolean;
+	dwFail?: boolean;
+	marginTrades?: unknown;
+}) {
 	globalThis.fetch = vi.fn().mockImplementation(async (url: string | URL | Request) => {
 		const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
 
@@ -54,8 +61,16 @@ function setupFetchMock(opts?: { assetsFail?: boolean; tradesFail?: boolean; dwF
 			return new Response(JSON.stringify(mockBitbankSuccess(rawAssetsResponse)), { status: 200 });
 		}
 
-		// Private API: trade history
+		// Private API: trade history（type=margin を信用約定として分岐）
 		if (urlStr.includes('trade_history')) {
+			const isMargin = urlStr.includes('type=margin');
+			if (isMargin) {
+				if (opts?.marginTradesFail) {
+					return new Response(JSON.stringify(mockBitbankError(10007)), { status: 200 });
+				}
+				const marginPayload = opts?.marginTrades ?? { trades: [] };
+				return new Response(JSON.stringify(mockBitbankSuccess(marginPayload)), { status: 200 });
+			}
 			if (opts?.tradesFail) {
 				return new Response(JSON.stringify(mockBitbankError(10007)), { status: 200 });
 			}
@@ -155,6 +170,134 @@ describe('analyze_my_portfolio', () => {
 
 		assertFail(result);
 		expect(result.meta.errorType).toBe('authentication_error');
+	});
+
+	it('信用約定なしのケース: account_pnl.total === spot_realized_pnl、内訳は 0', async () => {
+		// marginTrades 未指定 → モックは trades: [] を返す
+		setupFetchMock();
+
+		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
+		const result = await handler({
+			include_technical: false,
+			include_pnl: true,
+			include_deposit_withdrawal: false,
+		});
+
+		assertOk(result);
+		expect(result.data.account_pnl).toBeDefined();
+		expect(result.data.account_pnl.margin_realized_pnl).toBe(0);
+		expect(result.data.account_pnl.margin_interest).toBe(0);
+		expect(result.data.account_pnl.total).toBe(result.data.account_pnl.spot_realized_pnl);
+	});
+
+	it('信用約定あり: account_pnl.total が spot + margin - interest と一致', async () => {
+		// rawMarginTradeHistoryResponse は決済 1 件（profit_loss=5000, interest=30）+ 建玉 2 件
+		setupFetchMock({ marginTrades: rawMarginTradeHistoryResponse });
+
+		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
+		const result = await handler({
+			include_technical: false,
+			include_pnl: true,
+			include_deposit_withdrawal: false,
+		});
+
+		assertOk(result);
+		const pnl = result.data.account_pnl;
+		expect(pnl).toBeDefined();
+		expect(pnl.margin_realized_pnl).toBe(5000);
+		expect(pnl.margin_interest).toBe(30);
+		expect(pnl.total).toBe(pnl.spot_realized_pnl + 5000 - 30);
+	});
+
+	it('paginateMarginTrades 失敗時のフォールバック: margin_realized_pnl=0 / margin_interest=0 で ok を返す', async () => {
+		setupFetchMock({ marginTradesFail: true });
+
+		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
+		const result = await handler({
+			include_technical: false,
+			include_pnl: true,
+			include_deposit_withdrawal: false,
+		});
+
+		assertOk(result);
+		expect(result.data.account_pnl).toBeDefined();
+		expect(result.data.account_pnl.margin_realized_pnl).toBe(0);
+		expect(result.data.account_pnl.margin_interest).toBe(0);
+	});
+
+	it('yearly_account_pnl / monthly_account_pnl の期間フィルターが正しく効く', async () => {
+		// 固定の現在時刻（JST 2026-05-16 12:00）を基準に、当月内 / 当月外 / 当年内を確実に振り分ける。
+		// vi.useFakeTimers でクロックを固定し、Date.now() ベースの境界計算（getJstPeriodBoundaries）も決定論化する。
+		const fixedNowMs = Date.UTC(2026, 4, 16, 3, 0, 0, 0); // 2026-05-16T03:00:00Z = 12:00 JST
+		vi.useFakeTimers();
+		vi.setSystemTime(fixedNowMs);
+		try {
+			const yearStartUtcMs = Date.UTC(2026, 0, 1, -9, 0, 0, 0); // 2026-01-01T00:00:00+09:00
+			const monthStartUtcMs = Date.UTC(2026, 4, 1, -9, 0, 0, 0); // 2026-05-01T00:00:00+09:00
+			// 月初前: 2026-03-15（当年内・当月外）。月初後: 2026-05-10（当年内・当月内）。
+			const beforeMonthStartMs = Date.UTC(2026, 2, 15, 0, 0, 0, 0);
+			const afterMonthStartMs = Date.UTC(2026, 4, 10, 0, 0, 0, 0);
+			expect(beforeMonthStartMs).toBeGreaterThanOrEqual(yearStartUtcMs);
+			expect(beforeMonthStartMs).toBeLessThan(monthStartUtcMs);
+			expect(afterMonthStartMs).toBeGreaterThanOrEqual(monthStartUtcMs);
+
+			const customMargin = {
+				trades: [
+					{
+						trade_id: 901,
+						pair: 'btc_jpy',
+						order_id: 9001,
+						side: 'sell',
+						position_side: 'long',
+						type: 'limit',
+						amount: '0.01',
+						price: '15500000',
+						maker_taker: 'maker',
+						fee_amount_base: '0',
+						fee_amount_quote: '0',
+						profit_loss: '1000',
+						interest: '10',
+						executed_at: beforeMonthStartMs, // 当年内・当月外
+					},
+					{
+						trade_id: 902,
+						pair: 'btc_jpy',
+						order_id: 9002,
+						side: 'sell',
+						position_side: 'long',
+						type: 'limit',
+						amount: '0.01',
+						price: '15500000',
+						maker_taker: 'maker',
+						fee_amount_base: '0',
+						fee_amount_quote: '0',
+						profit_loss: '500',
+						interest: '5',
+						executed_at: afterMonthStartMs, // 当年内・当月内
+					},
+				],
+			};
+			setupFetchMock({ marginTrades: customMargin });
+
+			const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
+			const result = await handler({
+				include_technical: false,
+				include_pnl: true,
+				include_deposit_withdrawal: false,
+			});
+
+			assertOk(result);
+			// yearly: 両方含む（1000 + 500, 10 + 5）
+			expect(result.data.yearly_account_pnl).toBeDefined();
+			expect(result.data.yearly_account_pnl.margin_realized_pnl).toBe(1500);
+			expect(result.data.yearly_account_pnl.margin_interest).toBe(15);
+			// monthly: 月初後のみ（500, 5）
+			expect(result.data.monthly_account_pnl).toBeDefined();
+			expect(result.data.monthly_account_pnl.margin_realized_pnl).toBe(500);
+			expect(result.data.monthly_account_pnl.margin_interest).toBe(5);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
 
