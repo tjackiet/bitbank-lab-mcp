@@ -309,15 +309,15 @@ describe('paginateDeposits / paginateWithdrawals — ページネーション境
 		const client = new BitbankPrivateClient({ fetcher });
 
 		const result = await fetchDepositWithdrawal(client);
-		expect(result).not.toBeNull();
+		if (!result) throw new Error('fetchDepositWithdrawal returned null');
 		// crypto 入金 1003 件（重複 2 件除く）が dedup されている
-		expect(result!.deposits).toHaveLength(1003);
-		const uuids = result!.deposits.map((d) => d.uuid);
+		expect(result.deposits).toHaveLength(1003);
+		const uuids = result.deposits.map((d) => d.uuid);
 		expect(uuids).toContain('dep-1001');
 		expect(uuids).toContain('dep-1002');
 		expect(uuids).toContain('dep-1003');
 		expect(new Set(uuids).size).toBe(uuids.length);
-		expect(result!.isComplete).toBe(true);
+		expect(result.isComplete).toBe(true);
 
 		// crypto deposit の 2 回目呼び出しの URL に since=tBoundary（+1 ではない）が含まれる
 		const fetchMock = fetcher as unknown as ReturnType<typeof vi.fn>;
@@ -364,14 +364,14 @@ describe('paginateDeposits / paginateWithdrawals — ページネーション境
 		const client = new BitbankPrivateClient({ fetcher });
 
 		const result = await fetchDepositWithdrawal(client);
-		expect(result).not.toBeNull();
+		if (!result) throw new Error('fetchDepositWithdrawal returned null');
 		// 1000 + 2 新規 (wd-1001, wd-1002) = 1002 件
-		expect(result!.withdrawals).toHaveLength(1002);
-		const uuids = result!.withdrawals.map((w) => w.uuid);
+		expect(result.withdrawals).toHaveLength(1002);
+		const uuids = result.withdrawals.map((w) => w.uuid);
 		expect(uuids).toContain('wd-1001');
 		expect(uuids).toContain('wd-1002');
 		expect(new Set(uuids).size).toBe(uuids.length);
-		expect(result!.isComplete).toBe(true);
+		expect(result.isComplete).toBe(true);
 
 		const fetchMock = fetcher as unknown as ReturnType<typeof vi.fn>;
 		const cryptoWdCalls = fetchMock.mock.calls
@@ -396,9 +396,9 @@ describe('paginateDeposits / paginateWithdrawals — ページネーション境
 		const client = new BitbankPrivateClient({ fetcher });
 
 		const result = await fetchDepositWithdrawal(client);
-		expect(result).not.toBeNull();
+		if (!result) throw new Error('fetchDepositWithdrawal returned null');
 		// crypto / jpy 両チャネルで同じ uuid が返っても 1 件に集約される
-		expect(result!.deposits).toHaveLength(1);
-		expect(result!.deposits[0].uuid).toBe('dup-1');
+		expect(result.deposits).toHaveLength(1);
+		expect(result.deposits[0].uuid).toBe('dup-1');
 	});
 });
