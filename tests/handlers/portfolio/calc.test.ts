@@ -225,4 +225,55 @@ describe('reconstructHoldingsAtDate', () => {
 		expect(result.get('btc')).toBeCloseTo(2.0, 9);
 		expect(result.get('jpy')).toBe(5_005_000);
 	});
+
+	it('不正な amount を持つ currentHoldings エントリは Number.isFinite ガードで除外される', () => {
+		// 初期化ループの `Number.isFinite(amount) && amount > 0` ガードを検証:
+		//   - 有効値（正の有限数）のみが Map に入る
+		//   - NaN / 'abc' のような malformed string、負値、ゼロ、Infinity は除外
+		const currentHoldings = [
+			{ asset: 'btc', amount: '1.0' }, // 有効 → 保持
+			{ asset: 'eth', amount: 'NaN' }, // Number.isFinite=false → 除外
+			{ asset: 'xrp', amount: 'abc' }, // Number('abc')=NaN → 除外
+			{ asset: 'ltc', amount: '-0.5' }, // amount > 0 false → 除外
+			{ asset: 'doge', amount: '0' }, // amount > 0 false → 除外
+			{ asset: 'bch', amount: 'Infinity' }, // Number.isFinite(Infinity)=false → 除外
+		];
+		const result = reconstructHoldingsAtDate(currentHoldings, [], 1000, null);
+		expect(result.size).toBe(1);
+		expect(result.get('btc')).toBe(1.0);
+		expect(result.has('eth')).toBe(false);
+		expect(result.has('xrp')).toBe(false);
+		expect(result.has('ltc')).toBe(false);
+		expect(result.has('doge')).toBe(false);
+		expect(result.has('bch')).toBe(false);
+	});
+
+	it('amount / price が finite でない trade はスキップされ、他の trade と保有は影響を受けない', () => {
+		// 約定ループの `if (!Number.isFinite(qty) || !Number.isFinite(price)) continue` を検証:
+		//   - amount='NaN' の trade はスキップ → 保有は変化しない
+		//   - price='abc' の trade はスキップ → 保有は変化しない
+		// 関数が malformed 入力でクラッシュせず Map を返すことも併せて担保。
+		const currentHoldings = [{ asset: 'btc', amount: '0.999' }];
+		const trades: RawTrade[] = [
+			makeTrade({
+				trade_id: 1,
+				executed_at: 2000,
+				side: 'buy',
+				amount: 'NaN', // qty=NaN → スキップ
+				price: '10000000',
+				fee_amount_base: '0.001',
+			}),
+			makeTrade({
+				trade_id: 2,
+				executed_at: 3000,
+				side: 'buy',
+				amount: '0.5',
+				price: 'abc', // price=NaN → スキップ
+				fee_amount_base: '0',
+			}),
+		];
+		const result = reconstructHoldingsAtDate(currentHoldings, trades, 1000, null);
+		expect(result.get('btc')).toBe(0.999);
+		expect(result.has('jpy')).toBe(false);
+	});
 });
