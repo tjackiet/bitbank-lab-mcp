@@ -226,70 +226,78 @@ describe('analyze_my_portfolio', () => {
 	});
 
 	it('yearly_account_pnl / monthly_account_pnl の期間フィルターが正しく効く', async () => {
-		// 信用約定 2 件: 1 件は遠い過去（2024 年）、1 件は当年内（rawMarginTradeHistoryResponse のもの）。
-		// paginateMarginTrades は yearStartMs 以降のみ取得するため、API レイヤーで当年分のみ返す。
-		// その上で月初フィルタが効くことを確認するため、当年内に 2 件配置する。
-		const nowMs = Date.now();
-		const monthAgoMs = nowMs - 30 * 24 * 60 * 60 * 1000; // 1か月前
-		const tenDaysAgoMs = nowMs - 10 * 24 * 60 * 60 * 1000; // 10日前
-		const customMargin = {
-			trades: [
-				{
-					trade_id: 901,
-					pair: 'btc_jpy',
-					order_id: 9001,
-					side: 'sell',
-					position_side: 'long',
-					type: 'limit',
-					amount: '0.01',
-					price: '15500000',
-					maker_taker: 'maker',
-					fee_amount_base: '0',
-					fee_amount_quote: '0',
-					profit_loss: '1000',
-					interest: '10',
-					executed_at: monthAgoMs,
-				},
-				{
-					trade_id: 902,
-					pair: 'btc_jpy',
-					order_id: 9002,
-					side: 'sell',
-					position_side: 'long',
-					type: 'limit',
-					amount: '0.01',
-					price: '15500000',
-					maker_taker: 'maker',
-					fee_amount_base: '0',
-					fee_amount_quote: '0',
-					profit_loss: '500',
-					interest: '5',
-					executed_at: tenDaysAgoMs,
-				},
-			],
-		};
-		setupFetchMock({ marginTrades: customMargin });
+		// 固定の現在時刻（JST 2026-05-16 12:00）を基準に、当月内 / 当月外 / 当年内を確実に振り分ける。
+		// vi.useFakeTimers でクロックを固定し、Date.now() ベースの境界計算（getJstPeriodBoundaries）も決定論化する。
+		const fixedNowMs = Date.UTC(2026, 4, 16, 3, 0, 0, 0); // 2026-05-16T03:00:00Z = 12:00 JST
+		vi.useFakeTimers();
+		vi.setSystemTime(fixedNowMs);
+		try {
+			const yearStartUtcMs = Date.UTC(2026, 0, 1, -9, 0, 0, 0); // 2026-01-01T00:00:00+09:00
+			const monthStartUtcMs = Date.UTC(2026, 4, 1, -9, 0, 0, 0); // 2026-05-01T00:00:00+09:00
+			// 月初前: 2026-03-15（当年内・当月外）。月初後: 2026-05-10（当年内・当月内）。
+			const beforeMonthStartMs = Date.UTC(2026, 2, 15, 0, 0, 0, 0);
+			const afterMonthStartMs = Date.UTC(2026, 4, 10, 0, 0, 0, 0);
+			expect(beforeMonthStartMs).toBeGreaterThanOrEqual(yearStartUtcMs);
+			expect(beforeMonthStartMs).toBeLessThan(monthStartUtcMs);
+			expect(afterMonthStartMs).toBeGreaterThanOrEqual(monthStartUtcMs);
 
-		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
-		const result = await handler({
-			include_technical: false,
-			include_pnl: true,
-			include_deposit_withdrawal: false,
-		});
+			const customMargin = {
+				trades: [
+					{
+						trade_id: 901,
+						pair: 'btc_jpy',
+						order_id: 9001,
+						side: 'sell',
+						position_side: 'long',
+						type: 'limit',
+						amount: '0.01',
+						price: '15500000',
+						maker_taker: 'maker',
+						fee_amount_base: '0',
+						fee_amount_quote: '0',
+						profit_loss: '1000',
+						interest: '10',
+						executed_at: beforeMonthStartMs, // 当年内・当月外
+					},
+					{
+						trade_id: 902,
+						pair: 'btc_jpy',
+						order_id: 9002,
+						side: 'sell',
+						position_side: 'long',
+						type: 'limit',
+						amount: '0.01',
+						price: '15500000',
+						maker_taker: 'maker',
+						fee_amount_base: '0',
+						fee_amount_quote: '0',
+						profit_loss: '500',
+						interest: '5',
+						executed_at: afterMonthStartMs, // 当年内・当月内
+					},
+				],
+			};
+			setupFetchMock({ marginTrades: customMargin });
 
-		assertOk(result);
-		// yearly: 両方含む（1000 + 500, 10 + 5）
-		expect(result.data.yearly_account_pnl).toBeDefined();
-		expect(result.data.yearly_account_pnl.margin_realized_pnl).toBe(1500);
-		expect(result.data.yearly_account_pnl.margin_interest).toBe(15);
-		// monthly: 10日前のみ（500, 5）。1か月前は月初境界次第だが、当月内の 10 日前は必ず含まれる
-		expect(result.data.monthly_account_pnl).toBeDefined();
-		expect(result.data.monthly_account_pnl.margin_realized_pnl).toBeGreaterThanOrEqual(500);
-		expect(result.data.monthly_account_pnl.margin_interest).toBeGreaterThanOrEqual(5);
-		// monthly は yearly 以下
-		expect(result.data.monthly_account_pnl.margin_realized_pnl).toBeLessThanOrEqual(
-			result.data.yearly_account_pnl.margin_realized_pnl,
-		);
+			const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
+			const result = await handler({
+				include_technical: false,
+				include_pnl: true,
+				include_deposit_withdrawal: false,
+			});
+
+			assertOk(result);
+			// yearly: 両方含む（1000 + 500, 10 + 5）
+			expect(result.data.yearly_account_pnl).toBeDefined();
+			expect(result.data.yearly_account_pnl.margin_realized_pnl).toBe(1500);
+			expect(result.data.yearly_account_pnl.margin_interest).toBe(15);
+			// monthly: 月初後のみ（500, 5）
+			expect(result.data.monthly_account_pnl).toBeDefined();
+			expect(result.data.monthly_account_pnl.margin_realized_pnl).toBe(500);
+			expect(result.data.monthly_account_pnl.margin_interest).toBe(5);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
 

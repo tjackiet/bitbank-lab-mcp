@@ -93,6 +93,7 @@ export default async function analyzeMyPortfolioHandler(args: {
 		const allTrades = tradeResult.trades;
 		const tradesTruncated = tradeResult.truncated;
 		const allMarginTrades = marginTradeResult.trades;
+		const marginTradesTruncated = marginTradeResult.truncated;
 
 		// 期間パフォーマンス用: 全関連ペアのキャンドルデータを早期フェッチ開始
 		const allRelevantPairs = new Set<string>();
@@ -739,8 +740,9 @@ export default async function analyzeMyPortfolioHandler(args: {
 			);
 		}
 		lines.push('※ 評価損益は当年（1/1〜）の約定ベース。年初以前の取得原価は含みません');
-		if (tradesTruncated) {
-			lines.push('※ 約定履歴が上限に達したため一部のみ取得。損益計算が不正確な可能性があります');
+		if (tradesTruncated || marginTradesTruncated) {
+			const subjects = [tradesTruncated && '現物', marginTradesTruncated && '信用'].filter(Boolean).join(' / ');
+			lines.push(`※ 約定履歴（${subjects}）が上限に達したため一部のみ取得。損益計算が不正確な可能性があります`);
 		}
 		lines.push('');
 
