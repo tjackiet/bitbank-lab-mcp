@@ -12,6 +12,7 @@ import {
 	type CandlePriceData,
 	type DepositWithdrawalData,
 	type RawDeposit,
+	type RawMarginTrade,
 	type RawTrade,
 	type RawWithdrawal,
 	type TechnicalSummary,
@@ -94,6 +95,32 @@ export async function paginateTrades(
 		since = String(lastTs + 1);
 	}
 	// MAX_PAGES 到達 or エラーで抜けた場合、最終バッチが満杯なら打ち切り
+	const truncated = all.length > 0 && all.length % PAGE_SIZE === 0;
+	return { trades: all, truncated };
+}
+
+/**
+ * ページネーション付きで信用約定履歴を取得（type=margin、最大 MAX_PAGES ページ、古い順）。
+ * 信用未利用や API 失敗時でも空配列で安全に返し、analyze_my_portfolio が落ちないようにする。
+ */
+export async function paginateMarginTrades(
+	client: BitbankPrivateClient,
+	sinceMs?: number,
+): Promise<{ trades: RawMarginTrade[]; truncated: boolean }> {
+	const all: RawMarginTrade[] = [];
+	let since: string | undefined = sinceMs != null ? String(sinceMs) : undefined;
+	for (let page = 0; page < MAX_PAGES; page++) {
+		const params: Record<string, string> = { type: 'margin', count: String(PAGE_SIZE), order: 'asc' };
+		if (since) params.since = since;
+		const result = await tryGet<{ trades: RawMarginTrade[] }>(client, '/v1/user/spot/trade_history', params);
+		if (!result.ok) break;
+		const batch = result.data.trades || [];
+		all.push(...batch);
+		if (batch.length < PAGE_SIZE) return { trades: all, truncated: false };
+		const lastTs = batch[batch.length - 1]?.executed_at;
+		if (!lastTs) break;
+		since = String(lastTs + 1);
+	}
 	const truncated = all.length > 0 && all.length % PAGE_SIZE === 0;
 	return { trades: all, truncated };
 }

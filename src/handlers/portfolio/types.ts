@@ -33,6 +33,27 @@ export interface RawTrade {
 	executed_at: number;
 }
 
+/** bitbank /v1/user/spot/trade_history (type=margin) のレスポンス型 */
+export interface RawMarginTrade {
+	trade_id: number;
+	pair: string;
+	order_id: number;
+	side: string;
+	position_side?: string;
+	type: string;
+	amount: string;
+	price: string;
+	maker_taker: string;
+	fee_amount_base: string;
+	fee_amount_quote: string;
+	fee_occurred_amount_quote?: string;
+	/** 決済時のみ。利益で正、損失で負（bitbank API 標準） */
+	profit_loss?: string;
+	/** 決済時のみ。コスト = 正の値で支払利息を表す */
+	interest?: string;
+	executed_at: number;
+}
+
 export interface RawDeposit {
 	uuid: string;
 	asset: string;
@@ -82,6 +103,24 @@ export interface PeriodRealizedPnl {
 	/** 期間の開始日時（ISO8601 JST） */
 	period_start: string;
 	/** 期間の終了日時（ISO8601 JST） = 取得時点 */
+	period_end: string;
+}
+
+// ── 口座全体 PnL（現物 + 信用決済損益 - 利息） ──
+
+export interface AccountPnl {
+	/** 現物の実現損益（JPY） */
+	spot_realized_pnl: number;
+	/** 信用の決済済み損益合計（JPY） */
+	margin_realized_pnl: number;
+	/** 信用の支払利息合計（JPY、コスト = 正値） */
+	margin_interest: number;
+	/** 口座全体 PnL = spot_realized + margin_realized - margin_interest */
+	total: number;
+}
+
+export interface PeriodAccountPnl extends AccountPnl {
+	period_start: string;
 	period_end: string;
 }
 

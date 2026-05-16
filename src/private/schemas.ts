@@ -255,6 +255,18 @@ const PeriodRealizedPnlSchema = z
 	})
 	.optional();
 
+const AccountPnlSchema = z.object({
+	spot_realized_pnl: z.number().describe('現物の実現損益（JPY）'),
+	margin_realized_pnl: z.number().describe('信用の決済済み損益（JPY）'),
+	margin_interest: z.number().describe('信用の支払利息合計（JPY、コスト = 正値）'),
+	total: z.number().describe('口座全体 PnL = spot + margin - interest'),
+});
+
+const PeriodAccountPnlSchema = AccountPnlSchema.extend({
+	period_start: z.string().describe('期間の開始日時（ISO8601 JST）'),
+	period_end: z.string().describe('期間の終了日時（ISO8601 JST）'),
+});
+
 const PeriodPerformanceSchema = z
 	.object({
 		start_value_jpy: z
@@ -314,8 +326,13 @@ export const AnalyzeMyPortfolioDataSchema = z.object({
 		.describe(
 			'当年1/1 00:00 JSTから現在までの月次JPY建て総資産推移。各点はその月1日 00:00 JST時点の復元評価額。最終点は現在のリアルタイム評価額',
 		),
-	yearly_realized_pnl: PeriodRealizedPnlSchema.describe('年初来実現損益（補助指標）'),
-	monthly_realized_pnl: PeriodRealizedPnlSchema.describe('月初来実現損益（補助指標）'),
+	yearly_realized_pnl: PeriodRealizedPnlSchema.describe('年初来実現損益（現物単独、補助指標）'),
+	monthly_realized_pnl: PeriodRealizedPnlSchema.describe('月初来実現損益（現物単独、補助指標）'),
+	account_pnl: AccountPnlSchema.optional().describe(
+		'全期間の口座全体 PnL（現物実現損益 + 信用決済損益 - 信用支払利息）。当年1/1以降の約定ベース',
+	),
+	yearly_account_pnl: PeriodAccountPnlSchema.optional().describe('年初来の口座全体 PnL（現物 + 信用決済損益 - 利息）'),
+	monthly_account_pnl: PeriodAccountPnlSchema.optional().describe('月初来の口座全体 PnL（現物 + 信用決済損益 - 利息）'),
 	deposit_withdrawal_summary: DepositWithdrawalSummarySchema,
 	yearly_dw_summary: PeriodDWSummarySchema.describe('年初来の入出金サマリー（当年1/1 00:00 JST〜現在）'),
 	monthly_dw_summary: PeriodDWSummarySchema.describe('月初来の入出金サマリー（当月1日 00:00 JST〜現在）'),

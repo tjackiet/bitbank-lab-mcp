@@ -8,13 +8,16 @@
 
 import { dayjs } from '../../../lib/datetime.js';
 import type {
+	AccountPnl,
 	DepositWithdrawalData,
 	DepositWithdrawalSummary,
 	EquityPoint,
+	PeriodAccountPnl,
 	PeriodDWSummary,
 	PeriodNetFlowResult,
 	PeriodRealizedPnl,
 	PnlResult,
+	RawMarginTrade,
 	RawTrade,
 	RawWithdrawal,
 } from './types.js';
@@ -203,6 +206,97 @@ export function calcPeriodRealizedPnl(
 	return {
 		realized_pnl: Math.round(periodRealized),
 		sell_count: periodSellCount,
+		period_start: periodStart,
+		period_end: periodEnd,
+	};
+}
+
+// ── 信用 PnL 集計 ──
+
+/**
+ * 信用約定履歴から実現損益と利息を集計する。
+ *
+ * - profit_loss: 決済約定のみに付与される。建玉約定はスキップ。
+ * - interest: 決済約定のみに付与される（コスト = 正値）。
+ * - 期間絞り込みは呼び出し側で事前に行うか、calcPeriodMarginPnl を使う。
+ */
+export function calcMarginPnl(trades: RawMarginTrade[]): {
+	margin_realized_pnl: number;
+	margin_interest: number;
+	close_trade_count: number;
+} {
+	let realized = 0;
+	let interest = 0;
+	let count = 0;
+	for (const t of trades) {
+		if (t.profit_loss != null) {
+			const pl = Number(t.profit_loss);
+			if (Number.isFinite(pl)) {
+				realized += pl;
+				count++;
+			}
+		}
+		if (t.interest != null) {
+			const it = Number(t.interest);
+			if (Number.isFinite(it)) {
+				interest += it;
+			}
+		}
+	}
+	return {
+		margin_realized_pnl: Math.round(realized),
+		margin_interest: Math.round(interest),
+		close_trade_count: count,
+	};
+}
+
+/**
+ * 期間内の信用約定のみで PnL と利息を集計する。
+ */
+export function calcPeriodMarginPnl(
+	trades: RawMarginTrade[],
+	sinceMs: number,
+	periodStart: string,
+	periodEnd: string,
+): {
+	margin_realized_pnl: number;
+	margin_interest: number;
+	close_trade_count: number;
+	period_start: string;
+	period_end: string;
+} {
+	const inPeriod = trades.filter((t) => t.executed_at >= sinceMs);
+	const result = calcMarginPnl(inPeriod);
+	return { ...result, period_start: periodStart, period_end: periodEnd };
+}
+
+/**
+ * 現物の実現損益と信用 PnL から口座全体 PnL を構築する。
+ * total = spot_realized + margin_realized - margin_interest（interest はコスト = 正値）
+ */
+export function buildAccountPnl(
+	spotRealizedPnl: number,
+	marginPnl: { margin_realized_pnl: number; margin_interest: number },
+): AccountPnl {
+	return {
+		spot_realized_pnl: spotRealizedPnl,
+		margin_realized_pnl: marginPnl.margin_realized_pnl,
+		margin_interest: marginPnl.margin_interest,
+		total: spotRealizedPnl + marginPnl.margin_realized_pnl - marginPnl.margin_interest,
+	};
+}
+
+/**
+ * 期間版の口座全体 PnL を構築する。
+ */
+export function buildPeriodAccountPnl(
+	spotRealizedPnl: number,
+	marginPnl: { margin_realized_pnl: number; margin_interest: number },
+	periodStart: string,
+	periodEnd: string,
+): PeriodAccountPnl {
+	return {
+		...buildAccountPnl(spotRealizedPnl, marginPnl),
 		period_start: periodStart,
 		period_end: periodEnd,
 	};
