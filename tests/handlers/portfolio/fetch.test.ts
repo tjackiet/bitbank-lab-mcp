@@ -445,6 +445,133 @@ describe('paginateMarginTrades — ページネーション境界', () => {
 		expect(result.truncated).toBe(true);
 		expect(calls.length).toBe(1);
 	});
+
+	it('現物 (position_side 欠損) と信用が混在するレスポンスでも信用のみが返る', async () => {
+		// 公式 docs に type=margin パラメータの記載がなく、API が無視した場合の防御。
+		// position_side == null の現物約定が混入しても、フィルタで信用のみが残る。
+		const mixed = [
+			makeMarginTrade({ trade_id: 1, executed_at: 1710000000000, profit_loss: '100' }),
+			// 現物約定（position_side なし）。フィルタで除外されるべき
+			{
+				trade_id: 2,
+				pair: 'btc_jpy',
+				order_id: 5002,
+				side: 'buy',
+				type: 'limit',
+				amount: '0.01',
+				price: '15000000',
+				maker_taker: 'maker',
+				fee_amount_base: '0.00001',
+				fee_amount_quote: '0',
+				executed_at: 1710000001000,
+			} as unknown as ReturnType<typeof makeMarginTrade>,
+			makeMarginTrade({ trade_id: 3, executed_at: 1710000002000, profit_loss: '200' }),
+		];
+		const { fetcher } = makeSequentialFetcher([mockBitbankSuccess({ trades: mixed })]);
+		const client = new BitbankPrivateClient({ fetcher });
+
+		const result = await paginateMarginTrades(client);
+		expect(result.trades).toHaveLength(2);
+		const ids = result.trades.map((t) => t.trade_id);
+		expect(ids).toEqual([1, 3]);
+		// 全レコードに position_side が付いていることを保証
+		for (const t of result.trades) {
+			expect(t.position_side).toBeDefined();
+		}
+		expect(result.truncated).toBe(false);
+	});
+
+	it('全件現物約定（position_side なし）のレスポンスは空配列を返し truncated=false', async () => {
+		const spotOnly = Array.from({ length: 5 }, (_, i) => ({
+			trade_id: 100 + i,
+			pair: 'btc_jpy',
+			order_id: 6000 + i,
+			side: 'buy' as const,
+			type: 'limit',
+			amount: '0.01',
+			price: '15000000',
+			maker_taker: 'maker',
+			fee_amount_base: '0.00001',
+			fee_amount_quote: '0',
+			executed_at: 1710000000000 + i * 1000,
+		}));
+		const { fetcher } = makeSequentialFetcher([mockBitbankSuccess({ trades: spotOnly })]);
+		const client = new BitbankPrivateClient({ fetcher });
+
+		const result = await paginateMarginTrades(client);
+		expect(result.trades).toHaveLength(0);
+		// batch.length (5) < TRADE_PAGE_SIZE (1000) で通常完了扱い
+		expect(result.truncated).toBe(false);
+	});
+
+	it('満杯バッチが全て現物でも lastTs が前進していれば次ページを取得し信用約定を拾う', async () => {
+		// 古い順 (asc) 取得で「初期は現物のみ → 途中から信用利用開始」の口座を想定。
+		// 1 ページ目が全て現物でも、後続ページに信用約定があれば取得できなければならない
+		// （marginOnly 件数のみで早期打ち切りすると取りこぼす）。
+		const spotPage = Array.from({ length: 1000 }, (_, i) => ({
+			trade_id: 200 + i,
+			pair: 'btc_jpy',
+			order_id: 7000 + i,
+			side: 'buy' as const,
+			type: 'limit',
+			amount: '0.01',
+			price: '15000000',
+			maker_taker: 'maker',
+			fee_amount_base: '0.00001',
+			fee_amount_quote: '0',
+			executed_at: 1710000000000 + i * 1000,
+		}));
+		const marginPage = [
+			makeMarginTrade({ trade_id: 9001, executed_at: 1710001500000, profit_loss: '500' }),
+			makeMarginTrade({ trade_id: 9002, executed_at: 1710001600000, profit_loss: '700' }),
+		];
+		const { fetcher, calls } = makeSequentialFetcher([
+			mockBitbankSuccess({ trades: spotPage }),
+			mockBitbankSuccess({ trades: marginPage }),
+		]);
+		const client = new BitbankPrivateClient({ fetcher });
+
+		const result = await paginateMarginTrades(client);
+		expect(result.trades).toHaveLength(2);
+		const ids = result.trades.map((t) => t.trade_id);
+		expect(ids).toEqual([9001, 9002]);
+		expect(result.truncated).toBe(false);
+		// 2 ページ取得（早期打ち切りしていない）
+		expect(calls.length).toBe(2);
+		// 2 回目の URL に since=（page1 の lastTs）が含まれる
+		const lastTsPage1 = 1710000000000 + 999 * 1000;
+		expect(calls[1]).toContain(`since=${lastTsPage1}`);
+	});
+
+	it('満杯ページで lastTs が前回 since と同一のとき truncated=true で打ち切る（カーソル進捗ゼロ保険）', async () => {
+		// 全件現物・全件同一 ts が連続するエッジケース。API が since=sameTs で同じ範囲を
+		// 返し続けたとき、カーソルが進まないことを検出して無限ループを防ぐ。
+		const sameTs = 1710000000000;
+		const spotPageSameTs = Array.from({ length: 1000 }, (_, i) => ({
+			trade_id: 300 + i,
+			pair: 'btc_jpy',
+			order_id: 8000 + i,
+			side: 'buy' as const,
+			type: 'limit',
+			amount: '0.01',
+			price: '15000000',
+			maker_taker: 'maker',
+			fee_amount_base: '0.00001',
+			fee_amount_quote: '0',
+			executed_at: sameTs,
+		}));
+		const { fetcher, calls } = makeSequentialFetcher([
+			mockBitbankSuccess({ trades: spotPageSameTs }),
+			mockBitbankSuccess({ trades: spotPageSameTs }),
+		]);
+		const client = new BitbankPrivateClient({ fetcher });
+
+		const result = await paginateMarginTrades(client);
+		expect(result.trades).toHaveLength(0);
+		expect(result.truncated).toBe(true);
+		// MAX_PAGES (10) より早く打ち切られる（初回 since=undefined → page1、since=sameTs → page2 で即打ち切り）
+		expect(calls.length).toBeLessThan(10);
+	});
 });
 
 describe('paginateDeposits / paginateWithdrawals — ページネーション境界', () => {
