@@ -323,61 +323,57 @@ describe('fetchCandlesForBacktest', () => {
 	});
 
 	it('absolute: 取得上限未達でも最古足が start_date より新しい → 明示エラー', async () => {
-		// fetchLimit は maxBars (5000) より遥かに小さく fetchHitCap=false。
-		// 最古足 (2024-01-15) は start_date (2024-01-10) より新しい。
-		// 以前は黙って 2024-01-15 から返していたが、要求レンジ不足は常にエラーにする。
+		// 今日基準で動的に組み立て、fetchLimit < maxBars (cap 未達) を保証する。
+		const start = dayjs().subtract(30, 'day').format('YYYY-MM-DD');
+		const end = dayjs(start).add(10, 'day').format('YYYY-MM-DD');
+		const earliest = dayjs(start).add(5, 'day').format('YYYY-MM-DD');
 		vi.mocked(getCandles).mockResolvedValue({
 			ok: true,
 			summary: 'ok',
-			data: { normalized: makeNormalized(20, '2024-01-15') },
+			data: { normalized: makeNormalized(20, earliest) },
 		} as never);
-		await expect(
-			fetchCandlesForBacktest('btc_jpy', '1D', { type: 'absolute', start: '2024-01-10', end: '2024-01-20' }, 0),
-		).rejects.toThrow(/Insufficient historical data.*earliest available is 2024-01-15/);
+		await expect(fetchCandlesForBacktest('btc_jpy', '1D', { type: 'absolute', start, end }, 0)).rejects.toThrow(
+			new RegExp(`Insufficient historical data.*earliest available is ${earliest}`),
+		);
 	});
 
 	it('absolute: 最古足が start_date と完全一致 → 通過する（off-by-one 境界）', async () => {
-		// 最古足 (2024-01-10) が start_date (2024-01-10) と一致するケース。
-		// earliestFetchedMs > startMs ではない（== なので >ではない）ので通過する。
+		// 最古足が start_date と一致するケース。earliestFetchedMs > startMs ではないので通過する。
+		const start = dayjs().subtract(30, 'day').format('YYYY-MM-DD');
+		const end = dayjs(start).add(10, 'day').format('YYYY-MM-DD');
 		vi.mocked(getCandles).mockResolvedValue({
 			ok: true,
 			summary: 'ok',
-			data: { normalized: makeNormalized(20, '2024-01-10') },
+			data: { normalized: makeNormalized(20, start) },
 		} as never);
-		const result = await fetchCandlesForBacktest(
-			'btc_jpy',
-			'1D',
-			{ type: 'absolute', start: '2024-01-10', end: '2024-01-20' },
-			0,
-		);
-		expect(result[0].time).toBe('2024-01-10');
+		const result = await fetchCandlesForBacktest('btc_jpy', '1D', { type: 'absolute', start, end }, 0);
+		expect(result[0].time).toBe(start);
 	});
 
 	it('absolute: 空レスポンス → 「No candle data returned」エラー', async () => {
 		// API が 0 件を返した場合は normalizeAndClean に到達する前に弾かれる。
+		const start = dayjs().subtract(30, 'day').format('YYYY-MM-DD');
+		const end = dayjs(start).add(10, 'day').format('YYYY-MM-DD');
 		vi.mocked(getCandles).mockResolvedValue({
 			ok: true,
 			summary: 'ok',
 			data: { normalized: [] },
 		} as never);
-		await expect(
-			fetchCandlesForBacktest('btc_jpy', '1D', { type: 'absolute', start: '2024-01-10', end: '2024-01-20' }, 0),
-		).rejects.toThrow('No candle data returned');
+		await expect(fetchCandlesForBacktest('btc_jpy', '1D', { type: 'absolute', start, end }, 0)).rejects.toThrow(
+			'No candle data returned',
+		);
 	});
 
 	it('absolute: 取得上限到達でも最古足が start_date と一致 → 通過する', async () => {
-		// fetchHitCap=true でも earliestFetchedMs === startMs なら不足エラーは出ない。
+		// fetchHitCap=true を発火させるため start_date を maxBars (5000) より十分過去に置く。
+		const start = dayjs().subtract(6000, 'day').format('YYYY-MM-DD');
+		const end = dayjs(start).add(20, 'day').format('YYYY-MM-DD');
 		vi.mocked(getCandles).mockResolvedValue({
 			ok: true,
 			summary: 'ok',
-			data: { normalized: makeNormalized(5000, '2024-01-10') },
+			data: { normalized: makeNormalized(5000, start) },
 		} as never);
-		const result = await fetchCandlesForBacktest(
-			'btc_jpy',
-			'1D',
-			{ type: 'absolute', start: '2024-01-10', end: '2024-01-20' },
-			0,
-		);
-		expect(result[0].time).toBe('2024-01-10');
+		const result = await fetchCandlesForBacktest('btc_jpy', '1D', { type: 'absolute', start, end }, 0);
+		expect(result[0].time).toBe(start);
 	});
 });
