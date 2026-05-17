@@ -19,3 +19,6 @@ vitest.security.config.ts
 .DS_Store
 src/types/schemas.generated.d.ts
 assets/
+
+# Local-only verification scripts (live API checks, not for publish)
+scripts/verify-*.ts
