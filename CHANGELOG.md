@@ -10,9 +10,7 @@
 ### Schema (breaking)
 - `GetOrderbookDataSchemaOut` を `{ raw, normalized }` 固定の object から `z.discriminatedUnion('mode', [Summary, Pressure, Statistics, Raw])` に変更。実装 (`tools/get_orderbook.ts`) は元々 mode 別に完全に異なる shape の `data` を返していたが、スキーマ側が追従していなかったため `z.infer<typeof GetOrderbookDataSchemaOut>` を消費する外部クライアントには契約不一致だった。これに合わせて `data.mode` を必須の discriminator として明示。`get_orderbook` 末尾で `GetOrderbookOutputSchema.parse()` 経由のリターンに切り替え、スキーマ drift が CI で検出されるようにした。
 - 併せて `GetOrderbookMetaSchemaOut` の `count`（実装で一度もセットされていなかった）を削除し、実装で実際に常設している `mode` を必須フィールドに追加。
-
-### Known Issues
-- `get_orderbook` statistics mode の `ranges[].ratio` は `askVolume === 0 && bidVolume > 0` のとき `Infinity` を返す（`tools/get_orderbook.ts` の `buildStatistics`）。Zod schema は実態に合わせて `z.literal(Number.POSITIVE_INFINITY)` を許容しているが、`JSON.stringify(Infinity)` は `null` になるため MCP の `structuredContent` 経由の wire format では情報落ちする。LLM 向けの意味表現は `content` テキスト側を正としているため当面の実害はないが、wire 上の扱いを揃える対応（`buildStatistics` 側で `null` に統一する／文字列 sentinel に置き換える／受容したままにする、のいずれか）は別タスクで検討する。
+- `get_orderbook` statistics mode の `ranges[].ratio` を `number | null` に変更（旧: `number`、その後一時的に `number | Infinity`）。`askVolume === 0 && bidVolume > 0` のとき `Infinity` を返していたが `JSON.stringify(Infinity)` が `null` になり MCP wire format と乖離するため、実装側 (`tools/get_orderbook.ts` `buildStatistics`) で `null` に正規化。「買い優勢 / strong / 売り板=0 で算出不能」の意味は `interpretation` / `summary.overall` / `summary.strength` / `content` テキストで保持する。schema は `z.number().nullable()`。
 
 ## [0.1.1] - 2026-05-08
 
