@@ -238,8 +238,9 @@ export const toolDef: ToolDefinition = {
 				(minPrice == null || t.price >= minPrice) &&
 				(maxPrice == null || t.price <= maxPrice),
 		);
+		const warningSuffix = res.meta?.warning ? `\n\n${res.meta.warning}` : '';
 		const summary = hasFilter
-			? `${String(pair).toUpperCase().replace('_', '/')} フィルタ後 ${items.length}件 (buy=${items.filter((t: TxItem) => t.side === 'buy').length} sell=${items.filter((t: TxItem) => t.side === 'sell').length})`
+			? `${String(pair).toUpperCase().replace('_', '/')} フィルタ後 ${items.length}件 (buy=${items.filter((t: TxItem) => t.side === 'buy').length} sell=${items.filter((t: TxItem) => t.side === 'sell').length})${warningSuffix}`
 			: res.summary;
 		if (view === 'items') {
 			const text = JSON.stringify(items, null, 2);

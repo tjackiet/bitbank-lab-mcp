@@ -326,5 +326,27 @@ describe('get_transactions', () => {
 			};
 			expect(res.data.normalized.map((t) => t.transaction_id)).toEqual([1, 2, 3, 4]);
 		});
+
+		it('フィルタ適用時も上流の drop 警告を summary / meta.warning に伝搬する', async () => {
+			const malformed: Array<Record<string, unknown>> = [
+				{ transaction_id: 1, price: '4000000', amount: '0.05', side: 'buy', executed_at: '1700000000000' },
+				{ transaction_id: 2, price: '5000000', amount: '0.5', side: 'sell', executed_at: '1700000001000' },
+				{ transaction_id: 3, amount: '0.7', side: 'buy', executed_at: '1700000002000' },
+				{ transaction_id: 4, price: '6000000', amount: '1.0', side: 'buy', executed_at: '1700000003000' },
+			];
+			globalThis.fetch = mockFetchOk({ success: 1, data: { transactions: malformed } });
+
+			const res = (await toolDef.handler({ pair: 'btc_jpy', limit: 10, minAmount: 0.5 })) as {
+				ok: true;
+				data: { normalized: Array<{ amount: number }> };
+				summary: string;
+				meta: { warning?: string };
+			};
+			expect(res.data.normalized.map((t) => t.amount)).toEqual([0.5, 1.0]);
+			expect(typeof res.meta.warning).toBe('string');
+			expect(res.meta.warning).toContain('1件');
+			expect(res.summary).toContain('フィルタ後');
+			expect(res.summary).toContain(res.meta.warning as string);
+		});
 	});
 });
