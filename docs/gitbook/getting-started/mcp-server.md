@@ -41,13 +41,13 @@ node -v
 
 {% tabs %}
 {% tab title="macOS" %}
-```
+```plaintext
 ~/Library/Application Support/Claude/claude_desktop_config.json
 ```
 {% endtab %}
 
 {% tab title="Windows" %}
-```
+```plaintext
 %APPDATA%\Claude\claude_desktop_config.json
 ```
 {% endtab %}
