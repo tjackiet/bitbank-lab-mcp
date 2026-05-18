@@ -23,11 +23,14 @@ function buildTransactions(count: number, opts?: { startId?: number }): TxInput[
 }
 
 function mockFetchOk(body: unknown, headers: Record<string, string> = {}) {
+	// 実 Fetch API の Headers は case-insensitive。case-sensitive な独自 mock だと
+	// 呼び出し側が異なる casing でアクセスしたとき本番と挙動が乖離するため、
+	// 標準 Headers クラスでラップして本番と等価な挙動にする。
 	return vi.fn().mockResolvedValue({
 		ok: true,
 		status: 200,
 		statusText: 'OK',
-		headers: { get: (name: string) => headers[name] ?? null },
+		headers: new Headers(headers),
 		json: async () => body,
 	}) as unknown as typeof fetch;
 }

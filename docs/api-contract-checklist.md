@@ -609,9 +609,9 @@
 
 ### High（公式仕様との差分が実害を生む可能性）
 
-- [ ] **`transaction_id` を `get_transactions` の normalized に含める** — 重複検出 / 突合が不可能な現状を解消。
-- [ ] **`get_transactions` テスト拡充** — 81 行・6 ケースは薄い。日付フォーマット境界、空配列、API 異常系、`maxAmount` / `maxPrice` フィルタ未検証。
-- [ ] **Public 全取得系で `success:0` fixture テスト追加** — `get_candles` / `get_transactions` / `get_orderbook` は `data` 構造で間接的に弾いているのみ。fixture でレスポンス封筒 `success:0` を返した時の挙動を検証する必要あり。
+- [x] **`transaction_id` を `get_transactions` の normalized に含める** — 重複検出 / 突合が不可能な現状を解消。✅ PR #462 で実装済み（`TransactionItemSchema` に optional 追加）。
+- [x] **`get_transactions` テスト拡充** — 81 行・6 ケースは薄い。日付フォーマット境界、空配列、API 異常系、`maxAmount` / `maxPrice` フィルタ未検証。✅ PR #462 で 24 ケースに拡充済み。
+- [ ] **Public 全取得系で `success:0` fixture テスト追加** — `get_candles` / `get_orderbook` は `data` 構造で間接的に弾いているのみ。fixture でレスポンス封筒 `success:0` を返した時の挙動を検証する必要あり（`get_transactions` は PR #462 で対応済み）。
 - [ ] **`get_candles` multi-year の起点を `date` パラメータ基準に修正、または明示的に「current year 起点」と仕様化** — 現状 `currentYear = dayjs().year()` 固定で、ユーザー指定 `date=2020` で過去年データを期待しても 2025/2024 を取得してしまう可能性。テストで実挙動を確定させる。
 - [ ] **`70020`（circuit break 中の market 拒否）のエラーマッピング** — `create_order` の `codeMessages` に追加。
 - [ ] **`OrderStatusEnum` に `REJECTED` / `TRIGGERED` を追加し `OrderResponseSchema.status` を enum 化** — 現状 `z.string()` で受けているため誤値検出が弱い。
