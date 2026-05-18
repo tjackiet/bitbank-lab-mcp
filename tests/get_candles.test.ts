@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dayjs } from '../lib/datetime.js';
-import getCandles from '../tools/get_candles.js';
+import getCandles, { toolDef } from '../tools/get_candles.js';
 import { assertFail, assertOk } from './_assertResult.js';
 import { candlesError } from './fixtures/bitbank-api.js';
 
@@ -478,5 +478,89 @@ describe('getCandles', () => {
 		const res = await getCandles('btc_jpy', '1day', '2024', 10, '');
 		assertOk(res);
 		expect(res.data.normalized[0]).not.toHaveProperty('isoTimeLocal');
+	});
+
+	// ── toolDef.handler 経由（fail 透過） ──
+
+	describe('toolDef.handler 経由', () => {
+		it('success:0 + view=items のとき fail を透過し 0件 JSON を返さない', async () => {
+			const fetchMock = vi.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				statusText: 'OK',
+				json: async () => candlesError,
+			});
+			globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+			const res = (await toolDef.handler({
+				pair: 'btc_jpy',
+				type: '1day',
+				date: '2024',
+				limit: 10,
+				view: 'items',
+			})) as {
+				ok: boolean;
+				meta?: { errorType?: string };
+				content?: Array<{ type: string; text: string }>;
+			};
+			expect(res.ok).toBe(false);
+			expect(res.meta?.errorType).toBe('upstream');
+			// fail を透過しているので content に 0件 JSON 配列を入れない
+			if (res.content?.[0]?.text) {
+				expect(res.content[0].text).not.toBe('[]');
+			}
+		});
+
+		it('success:0 + view=full のとき fail を透過する', async () => {
+			const fetchMock = vi.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				statusText: 'OK',
+				json: async () => candlesError,
+			});
+			globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+			const res = (await toolDef.handler({ pair: 'btc_jpy', type: '1day', date: '2024', limit: 10, view: 'full' })) as {
+				ok: boolean;
+				meta?: { errorType?: string };
+			};
+			expect(res.ok).toBe(false);
+			expect(res.meta?.errorType).toBe('upstream');
+		});
+
+		it('正常系 + view=items のとき content text は JSON 配列で N 件含む', async () => {
+			const baseTs = 1704067200000;
+			const ohlcv = Array.from({ length: 3 }, (_, i) => [
+				'100',
+				'110',
+				'90',
+				'105',
+				'1.0',
+				String(baseTs + i * 86400000),
+			]);
+			const fetchMock = vi.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				statusText: 'OK',
+				json: async () => ({
+					success: 1,
+					data: { candlestick: [{ ohlcv }] },
+				}),
+			});
+			globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+			const res = (await toolDef.handler({
+				pair: 'btc_jpy',
+				type: '1day',
+				date: '2024',
+				limit: 10,
+				view: 'items',
+			})) as {
+				content: Array<{ type: string; text: string }>;
+			};
+			const parsed = JSON.parse(res.content[0].text);
+			expect(Array.isArray(parsed)).toBe(true);
+			expect(parsed).toHaveLength(3);
+		});
 	});
 });

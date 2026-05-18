@@ -532,6 +532,7 @@ export const toolDef: ToolDefinition = {
 		tz?: string;
 	}) => {
 		const result = await getCandles(pair, type, date, limit, tz);
+		if (!result.ok) return result;
 		if (view === 'items') {
 			const items = result?.data?.normalized ?? [];
 			return {
