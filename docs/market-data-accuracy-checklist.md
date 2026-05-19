@@ -36,7 +36,7 @@ API レスポンスのフィールド整合は `docs/api-contract-checklist.md` 
 `lib/indicators.ts` の純粋関数群と、`tools/analyze_indicators.ts` 以降の加工層を含む計算契約。
 PR #489 で本セクションを契約として文書化し、PR #490 で golden / contract テスト、
 PR #491 で §8.7 の handler 誤用修正、PR #492 で `get_volatility_metrics` の
-`lib/atr()` への統合を完了した（フェーズ4 終了）。
+`lib/indicators.ts::atr()` への統合を完了した（フェーズ4 終了）。
 本セクションは契約として固定し、以降の指標変更はここを更新してから行う。
 
 ### 8.1 EMA ✅
