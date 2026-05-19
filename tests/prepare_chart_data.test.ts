@@ -383,4 +383,120 @@ describe('prepare_chart_data', () => {
 			expect(res.summary.startsWith('⚠️')).toBe(true);
 		});
 	});
+
+	// ─── 加工契約テスト（PR4）─────────────────────────────────
+	//
+	// prepare_chart_data の入出力契約を補強する。
+	// - times は単調増加（昇順）であること
+	// - 上流 warning は summary / content[0].text の先頭に伝播すること
+	// - 入力 OHLCV の先頭行が、出力 candles[0] に正しく対応すること
+	//
+	// 1day は yearly type で analyze_indicators の fetchCount=limit+199 が当年経過日数を
+	// 超えると multi-year (current + previous year) 取得が走る。単純な mockFetch だと
+	// 両年で同じ ts を返してしまうため、ここでは年ごとに distinct な ts を返す
+	// mockImplementation を使う。
+
+	describe('加工契約', () => {
+		/** 年ごとに distinct な timestamp の rows を返す mock（multi-year 取得に耐える） */
+		function mockMultiYearDistinctFetch(rowsPerYear: number = 365) {
+			vi.spyOn(globalThis, 'fetch').mockImplementation(async (url: unknown) => {
+				const urlStr = String(url);
+				const m = urlStr.match(/\/(\d{4})$/);
+				const year = m ? Number(m[1]) : dayjs.utc().year();
+				const baseTs = dayjs.utc(`${year}-01-01`).valueOf();
+				const intervalMs = 86_400_000;
+				const ohlcv: OhlcvRow[] = [];
+				for (let i = 0; i < rowsPerYear; i++) {
+					const base = 10_000_000 + (year - 2024) * 1_000_000 + i * 1_000;
+					ohlcv.push([
+						String(base),
+						String(base + 2_000),
+						String(base - 2_000),
+						String(base + 500),
+						'1.5',
+						String(baseTs + i * intervalMs),
+					]);
+				}
+				return {
+					ok: true,
+					status: 200,
+					statusText: 'OK',
+					json: async () => ({ success: 1, data: { candlestick: [{ type: '1day', ohlcv }] } }),
+				} as Response;
+			});
+		}
+
+		it('times は単調増加である（multi-year fetch を考慮し distinct な ts を供給）', async () => {
+			mockMultiYearDistinctFetch();
+			const res = await prepareChartData('btc_jpy', '1day', 100, undefined, '');
+			assertOk(res);
+			expect(res.data.times.length).toBe(100);
+			// times は UTC ISO 文字列なので辞書順比較で時系列順を判定できる
+			for (let i = 1; i < res.data.times.length; i++) {
+				expect(res.data.times[i] > res.data.times[i - 1]).toBe(true);
+			}
+		});
+
+		it('times は tz 指定時もローカル ISO で単調増加（ms 換算で検証）', async () => {
+			mockMultiYearDistinctFetch();
+			const res = await prepareChartData('btc_jpy', '1day', 60, undefined, 'Asia/Tokyo');
+			assertOk(res);
+			expect(res.data.times.length).toBe(60);
+			const msArr = res.data.times.map((t) => dayjs(t).valueOf());
+			for (let i = 1; i < msArr.length; i++) {
+				expect(msArr[i]).toBeGreaterThan(msArr[i - 1]);
+			}
+		});
+
+		it('上流 warning は summary 先頭 / handler content[0].text 先頭の両方に伝播する', async () => {
+			// 少ないデータで指標不足 warnings を発生させる（取得は成功するので fetchWarning なし）
+			mockFetch(makeOhlcvRows(40));
+			const res = await prepareChartData('xlm_jpy', '1day', 30);
+			assertOk(res);
+			// summary 先頭に warning
+			expect(res.summary.startsWith('⚠️')).toBe(true);
+			// handler 経由でも content[0].text 先頭に warning が伝播する
+			mockFetch(makeOhlcvRows(40));
+			const handlerRes = (await toolDef.handler({ pair: 'xlm_jpy', type: '1day', limit: 30 })) as {
+				content: Array<{ text: string }>;
+			};
+			const text = handlerRes.content[0].text;
+			expect(text.startsWith('⚠️')).toBe(true);
+			// warning は JSON 本体より前に出る
+			const idxWarning = text.indexOf('⚠️');
+			const idxJson = text.indexOf('"times"');
+			expect(idxWarning).toBeLessThan(idxJson);
+			expect(idxWarning).toBeGreaterThanOrEqual(0);
+		});
+
+		it('入力 OHLCV の先頭行と candles[0] / times[0] が対応する', async () => {
+			// times[0] を元に元データの (year, dayOfYear) を逆算し、入力 ohlcv と candles[0] を比較する。
+			// multi-year fetch を伴うため、times[0] から逆算するアプローチが頑健。
+			mockMultiYearDistinctFetch();
+			const res = await prepareChartData('btc_jpy', '1day', 100, undefined, '');
+			assertOk(res);
+			expect(res.data.candles.length).toBe(100);
+
+			const ts0 = dayjs.utc(res.data.times[0]).valueOf();
+			const year0 = dayjs.utc(ts0).year();
+			const yearStart = dayjs.utc(`${year0}-01-01`).valueOf();
+			const dayIdx = Math.round((ts0 - yearStart) / 86_400_000);
+			expect(dayIdx).toBeGreaterThanOrEqual(0);
+
+			// mockMultiYearDistinctFetch の式と一致させる
+			const expectedBase = 10_000_000 + (year0 - 2024) * 1_000_000 + dayIdx * 1_000;
+			const expectedO = expectedBase; // JPY ペアは整数丸めだが、入力既に整数なので一致
+			const expectedH = expectedBase + 2_000;
+			const expectedL = expectedBase - 2_000;
+			const expectedC = expectedBase + 500;
+			const expectedV = 1.5;
+
+			const [o, h, l, c, v] = res.data.candles[0];
+			expect(o).toBe(expectedO);
+			expect(h).toBe(expectedH);
+			expect(l).toBe(expectedL);
+			expect(c).toBe(expectedC);
+			expect(v).toBe(expectedV);
+		});
+	});
 });
