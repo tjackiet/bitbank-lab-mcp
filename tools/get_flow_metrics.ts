@@ -56,7 +56,8 @@ export function buildFlowMetricsText(input: BuildFlowMetricsTextInput): string {
 	const footer =
 		`\n\n---\n📌 含まれるもの: 時系列バケット（買い/売り出来高・CVD・Zスコア・スパイク）、集計値` +
 		`\n📌 含まれないもの: 個別約定の詳細、OHLCV価格データ、板情報、テクニカル指標` +
-		`\n📌 補完ツール: get_transactions（個別約定）, get_candles（OHLCV）, get_orderbook（板情報）, analyze_indicators（指標）`;
+		`\n📌 補完ツール: get_transactions（個別約定）, get_candles（OHLCV）, get_orderbook（板情報）, analyze_indicators（指標）` +
+		`\n📌 加工契約: 約定列は timestampMs 昇順 sort 済み / 重複除去キー=\`timestampMs:price:amount:side\`（transaction_id 不使用）`;
 
 	if (bucketsMode === 'summary') {
 		return baseSummary + warningLine + aggregatesLine + footer;
@@ -85,7 +86,18 @@ type TxResultLike = {
 	meta?: { errorType?: string };
 } | null;
 
-/** 複数の getTransactions 結果をマージし重複を除去する（失敗詳細も返す） */
+/**
+ * 複数の getTransactions 結果をマージし重複を除去する（失敗詳細も返す）。
+ *
+ * 重複除去キー: `timestampMs:price:amount:side`
+ *   - bitbank の `/transactions` (latest) と `/transactions/{date}` で同じ約定の
+ *     `transaction_id` が一致しないケースがあるため、`transaction_id` は使用しない。
+ *   - 同一ミリ秒・同一価格・同一数量・同一サイドの約定は実用上同一とみなす（誤差は
+ *     CVD 等の集計値に影響しない範囲）。
+ *
+ * マージ後の `txs` はソート前である。呼び出し側で `sort((a, b) => a.timestampMs - b.timestampMs)`
+ * を適用すること（加工契約: 全ての取得パスで昇順 sort を保証する）。
+ */
 function mergeTxResults(
 	results: unknown[],
 	labels?: string[],
@@ -259,14 +271,17 @@ export default async function getFlowMetrics(
 							);
 						}
 						fetchWarning = `⚠️ 当日 (${date}) のアーカイブは未公開のため /transactions (latest) から取得しました`;
-						txs = latestRes.data.normalized as Tx[];
+						// 加工契約: 全ての取得パスで昇順 sort を保証する。
+						// 上流 getTransactions も内部 sort 済みだが、契約の単一ソースをこちらに置く。
+						txs = (latestRes.data.normalized as Tx[]).slice().sort((a, b) => a.timestampMs - b.timestampMs);
 					} else {
 						return GetFlowMetricsOutputSchema.parse(
 							fail(txRes?.summary || 'failed', txRes?.meta?.errorType || 'internal'),
 						);
 					}
 				} else {
-					txs = txRes.data.normalized as Tx[];
+					// 加工契約: 全ての取得パスで昇順 sort を保証する。
+					txs = (txRes.data.normalized as Tx[]).slice().sort((a, b) => a.timestampMs - b.timestampMs);
 				}
 			} else {
 				// 日付指定なし: latest で取得し、不足なら日付ベースで補完
@@ -276,7 +291,8 @@ export default async function getFlowMetrics(
 				const latestTxs: Tx[] = latestOk && Array.isArray(latestR.data?.normalized) ? latestR.data.normalized : [];
 
 				if (latestTxs.length >= lim.value) {
-					txs = latestTxs;
+					// 加工契約: 全ての取得パスで昇順 sort を保証する。
+					txs = latestTxs.slice().sort((a, b) => a.timestampMs - b.timestampMs);
 				} else {
 					// latest の返却数が不足 → 前日・前々日の日付ベース取得で補完
 					// bitbank の latest エンドポイントは約60件のみ返却するため
@@ -518,7 +534,11 @@ export default async function getFlowMetrics(
 // ── MCP ツール定義（tool-registry から自動収集） ──
 export const toolDef: ToolDefinition = {
 	name: 'get_flow_metrics',
-	description: `[Flow / CVD / Buy-Sell Pressure] 資金フロー分析（flow / CVD / aggressor ratio / buy-sell pressure）。約定データからCVD・アグレッサー比・スパイクを検出。hours（推奨）で時間範囲指定、または limit で件数指定。`,
+	description:
+		`[Flow / CVD / Buy-Sell Pressure] 資金フロー分析（flow / CVD / aggressor ratio / buy-sell pressure）。約定データからCVD・アグレッサー比・スパイクを検出。hours（推奨）で時間範囲指定、または limit で件数指定。` +
+		`\n\n加工契約:` +
+		`\n- 内部で使用する約定列は、取得パスに関わらず timestampMs 昇順にソート済み。` +
+		`\n- latest と date ベースをマージする場合、重複除去キーは \`timestampMs:price:amount:side\`（transaction_id は使用しない: 同一約定でも上流エンドポイント間で ID が一致しないケースがあるため）。`,
 	inputSchema: GetFlowMetricsInputSchema,
 	handler: async ({
 		pair,
