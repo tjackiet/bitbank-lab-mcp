@@ -248,7 +248,7 @@ describe('toolDef handler - view routing', () => {
 		const summary = [
 			'BTC/JPY [1day] 5,000,000円 rv=0.380(ann)',
 			'',
-			'aggregates: rv_std:0.022 rv_std_ann:0.42 parkinson:0.018 garmanKlass:0.016 rogersSatchell:0.012 atr:200000',
+			'aggregates: rv_std:0.022 rv_std_ann:0.38 parkinson:0.018 garmanKlass:0.016 rogersSatchell:0.012 atr:200000',
 			'',
 			'📊 ローリング分析:',
 			'w=7 rv:0.022000 ann:0.420000 atr:200000.00',
@@ -290,9 +290,12 @@ describe('toolDef handler - view routing', () => {
 	});
 
 	it('view=summary のテキストには aggregates と rolling 情報が含まれる', async () => {
-		mockedGetVolatilityMetrics.mockResolvedValueOnce(mockOkRes() as never);
+		const mock = mockOkRes();
+		mockedGetVolatilityMetrics.mockResolvedValueOnce(mock as never);
 		const res = await toolDef.handler({ pair: 'btc_jpy', type: '1day', limit: 50, view: 'summary' });
 		const text = (res as { content: Array<{ text: string }> }).content[0].text;
+		// passthrough: handler は上流 summary をそのまま流す（一行要約に加工しない）
+		expect(text).toBe(mock.summary);
 		expect(text).toContain('aggregates:');
 		expect(text).toContain('📊 ローリング分析:');
 	});
