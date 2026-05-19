@@ -475,6 +475,21 @@ describe('toolDef.handler', () => {
 	afterEach(() => vi.clearAllMocks());
 
 	/** handler が必要とする analyzeIndicators の戻り値を構築 */
+	/** ichi_series を「今日の雲」の値（spanA[len-26]/spanB[len-26]）から構築 */
+	function buildIchiSeries(todaySpanA: number, todaySpanB: number, length = 30) {
+		// 末尾 26 本前が「今日の雲」、末尾は「26 本後の雲」（今日計算された先行スパン）。
+		// 末尾のみ別値を入れて区別する。
+		const spanA = Array.from({ length }, () => todaySpanA);
+		const spanB = Array.from({ length }, () => todaySpanB);
+		return {
+			tenkan: Array.from({ length }, () => todaySpanA),
+			kijun: Array.from({ length }, () => todaySpanB),
+			spanA,
+			spanB,
+			chikou: Array.from({ length }, () => todaySpanA),
+		};
+	}
+
 	function mockResult(overrides?: Record<string, unknown>) {
 		const series = {
 			SMA_25: Array.from({ length: 20 }, (_, i) => 9700000 + i * 1000),
@@ -503,6 +518,8 @@ describe('toolDef.handler', () => {
 			ICHIMOKU_spanB: 9400000,
 			ICHIMOKU_conversion: 9900000,
 			ICHIMOKU_base: 9700000,
+			// 「今日の雲」判定は ichi_series.spanA/B の末尾 26 本前を参照する。
+			ichi_series: buildIchiSeries(9600000, 9400000),
 			STOCH_RSI_K: 65,
 			STOCH_RSI_D: 60,
 			STOCH_RSI_prevK: 58,
@@ -652,9 +669,8 @@ describe('toolDef.handler', () => {
 
 	it('cloudPos in_cloud の検出', async () => {
 		const m = mockResult();
-		// close is between spanA and spanB → in_cloud
-		(m.data.indicators as Record<string, unknown>).ICHIMOKU_spanA = 10200000;
-		(m.data.indicators as Record<string, unknown>).ICHIMOKU_spanB = 9800000;
+		// 「今日の雲」: spanA=10.2M / spanB=9.8M、close=10M → in_cloud
+		(m.data.indicators as Record<string, unknown>).ichi_series = buildIchiSeries(10200000, 9800000);
 		m.data.normalized = Array.from({ length: 30 }, () => ({
 			close: 10000000,
 			open: 10000000,
@@ -670,8 +686,8 @@ describe('toolDef.handler', () => {
 
 	it('toCloudDistance: above_cloud で雲からの距離を計算', async () => {
 		const m = mockResult();
-		(m.data.indicators as Record<string, unknown>).ICHIMOKU_spanA = 9300000;
-		(m.data.indicators as Record<string, unknown>).ICHIMOKU_spanB = 9200000;
+		// 「今日の雲」: spanA=9.3M / spanB=9.2M、close=10M → above_cloud
+		(m.data.indicators as Record<string, unknown>).ichi_series = buildIchiSeries(9300000, 9200000);
 		m.data.normalized = Array.from({ length: 30 }, () => ({
 			close: 10000000,
 			open: 10000000,
@@ -683,6 +699,90 @@ describe('toolDef.handler', () => {
 			content: Array<{ text: string }>;
 		};
 		expect(res.content[0].text).toContain('雲の上');
+	});
+
+	// ── 「今日の雲」判定のバグ修正（spanA[len-26] を使うこと）──
+
+	it('「今日の雲」判定は ichi_series.spanA/B の末尾26本前を使う（ICHIMOKU_spanA/B とズレているケース）', async () => {
+		const m = mockResult();
+		// 末尾の ICHIMOKU_spanA/B（= 26 本後の雲）と「今日の雲」（= spanA[len-26]）が
+		// 大きく異なるケース。close=10M。
+		// - ICHIMOKU_spanA/B（末尾＝26本後）: 6M/5M → これを使うと above_cloud（バグ）
+		// - 今日の雲（spanA/B[len-26]）: 11M/10.5M → 正しくは below_cloud
+		(m.data.indicators as Record<string, unknown>).ICHIMOKU_spanA = 6000000;
+		(m.data.indicators as Record<string, unknown>).ICHIMOKU_spanB = 5000000;
+		const length = 30;
+		const spanA = Array.from({ length }, () => 11000000); // 「今日の雲」用
+		const spanB = Array.from({ length }, () => 10500000);
+		spanA[length - 1] = 6000000; // 末尾は「26 本後の雲」
+		spanB[length - 1] = 5000000;
+		(m.data.indicators as Record<string, unknown>).ichi_series = {
+			tenkan: Array.from({ length }, () => 11000000),
+			kijun: Array.from({ length }, () => 10500000),
+			spanA,
+			spanB,
+			chikou: Array.from({ length }, () => 11000000),
+		};
+		m.data.normalized = Array.from({ length: 30 }, () => ({
+			close: 10000000,
+			open: 10000000,
+			high: 10050000,
+			low: 9950000,
+		}));
+		mockedAnalyze.mockResolvedValueOnce(m as never);
+		const res = (await toolDef.handler({ pair: 'btc_jpy', type: '1day', limit: 200 })) as {
+			content: Array<{ text: string }>;
+		};
+		// 「今日の雲」（spanA[len-26]=11M, spanB[len-26]=10.5M）の下に close=10M がある
+		expect(res.content[0].text).toContain('雲の下');
+		expect(res.content[0].text).not.toContain('雲の上');
+		// 表示される先行スパンも「今日の雲」の値であること
+		expect(res.content[0].text).toContain('先行スパンA: 11,000,000');
+		expect(res.content[0].text).toContain('先行スパンB: 10,500,000');
+	});
+
+	it('ichi_series が 26 本未満なら雲判定は null にフォールバック（末尾の ICHIMOKU_spanA/B は使わない）', async () => {
+		const m = mockResult();
+		// length=20 (< 26) → spanA[len-26] が取れないのでフォールバック
+		const length = 20;
+		(m.data.indicators as Record<string, unknown>).ichi_series = {
+			tenkan: Array.from({ length }, () => 9600000),
+			kijun: Array.from({ length }, () => 9400000),
+			spanA: Array.from({ length }, () => 9600000),
+			spanB: Array.from({ length }, () => 9400000),
+			chikou: Array.from({ length }, () => 9600000),
+		};
+		// 末尾の scalar 値（= 26 本後の雲）だけは存在するが、雲判定には使わない
+		(m.data.indicators as Record<string, unknown>).ICHIMOKU_spanA = 9600000;
+		(m.data.indicators as Record<string, unknown>).ICHIMOKU_spanB = 9400000;
+		mockedAnalyze.mockResolvedValueOnce(m as never);
+		const res = (await toolDef.handler({ pair: 'btc_jpy', type: '1day', limit: 200 })) as {
+			content: Array<{ text: string }>;
+		};
+		const text = res.content[0].text;
+		// 「今日の雲」は取得できないので、強気/弱気の確定判定は出ない
+		expect(text).not.toContain('雲の上 → 強気');
+		expect(text).not.toContain('雲の下 → 弱気');
+		// 先行スパン表示も n/a（= spanA/B が null にフォールバック）
+		expect(text).toContain('先行スパンA: n/a');
+		expect(text).toContain('先行スパンB: n/a');
+	});
+
+	it('ichi_series が欠落していても雲判定は null にフォールバック', async () => {
+		const m = mockResult();
+		delete (m.data.indicators as Record<string, unknown>).ichi_series;
+		// 末尾の scalar 値（= 26 本後の雲）だけは存在するが、判定には使わない
+		(m.data.indicators as Record<string, unknown>).ICHIMOKU_spanA = 9600000;
+		(m.data.indicators as Record<string, unknown>).ICHIMOKU_spanB = 9400000;
+		mockedAnalyze.mockResolvedValueOnce(m as never);
+		const res = (await toolDef.handler({ pair: 'btc_jpy', type: '1day', limit: 200 })) as {
+			content: Array<{ text: string }>;
+		};
+		const text = res.content[0].text;
+		expect(text).not.toContain('雲の上 → 強気');
+		expect(text).not.toContain('雲の下 → 弱気');
+		expect(text).toContain('先行スパンA: n/a');
+		expect(text).toContain('先行スパンB: n/a');
 	});
 
 	it('ブルリッシュ divergence 検出（MACD）', async () => {
