@@ -221,7 +221,7 @@ npx tsx scripts/analyze_indicators_cli.ts btc_jpy 1day 200
 
 下の「### 実施履歴」に、以下の形式で 1 ラン 1 エントリ追加する。
 
-```
+```markdown
 #### YYYY-MM-DD: <pair> <timeframe>
 - 実行: `npx tsx scripts/analyze_indicators_cli.ts <pair> <timeframe> 200`
 - 比較対象: TradingView <SOURCE>:<SYMBOL> <TF>
