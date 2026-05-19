@@ -12,6 +12,17 @@ import getVolatilityMetrics from '../../tools/get_volatility_metrics.js';
 import { GetVolMetricsInputSchema } from '../schemas.js';
 import type { ToolDefinition } from '../tool-definition.js';
 
+/**
+ * meta.warning（上流 get_candles の fetchWarning + 不正OHLCスキップ件数 + isoTime欠損件数）を
+ * body の先頭に別行で連結する。LLM がデータの不完全性を見落とさないようにするため。
+ */
+export function prependVolWarning(body: string, meta: { warning?: string }): string {
+	const w = meta?.warning;
+	if (!w) return body;
+	const head = w.startsWith('⚠️') ? w : `⚠️ ${w}`;
+	return `${head}\n\n${body}`;
+}
+
 export interface VolViewInput {
 	pair: string;
 	type: string;
@@ -199,7 +210,8 @@ export const toolDef: ToolDefinition = {
 
 		// beginner view (plain language for non-experts)
 		if (view === 'beginner') {
-			const text = buildVolatilityBeginnerText(viewInput);
+			const body = buildVolatilityBeginnerText(viewInput);
+			const text = prependVolWarning(body, res.meta as { warning?: string });
 			return {
 				content: [{ type: 'text', text }],
 				structuredContent: { ...res, data: { ...res.data, tags: tagsAll } } as Record<string, unknown>,
@@ -226,7 +238,8 @@ export const toolDef: ToolDefinition = {
 				ret: Array.isArray(series.ret) ? series.ret : [],
 			},
 		};
-		const text = buildVolatilityDetailedText(detailedInput, view === 'full' ? 'full' : 'detailed');
+		const body = buildVolatilityDetailedText(detailedInput, view === 'full' ? 'full' : 'detailed');
+		const text = prependVolWarning(body, res.meta as { warning?: string });
 		return {
 			content: [{ type: 'text', text }],
 			structuredContent: { ...res, data: { ...res.data, tags: tagsAll } } as Record<string, unknown>,

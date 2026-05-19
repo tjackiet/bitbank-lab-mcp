@@ -285,4 +285,35 @@ describe('get_volatility_metrics', () => {
 			// even when volatility is objectively high.
 		});
 	});
+
+	// === 10. sampleSize / meta.warning の数値契約 ========================
+	//   data.meta.sampleSize は close.length（スキップ後の実計算本数）と一致する。
+	//   正常時は警告無し、合成タイムスタンプ（Date.now()）も埋め込まれない。
+	//   不正 OHLC / isoTime 欠損 / 上流 fetchWarning の伝播は
+	//   get_volatility_metrics.warnings.test.ts で get_candles を mock してテストする。
+
+	describe('sampleSize の数値契約', () => {
+		it('正常時は data.meta.sampleSize === data.series.close.length（スキップ無し）', async () => {
+			const rows = makeOhlcvRows(30);
+			mockFetchWithOhlcv(rows);
+			const res = await getVolatilityMetrics('btc_jpy', '1day', 30);
+			assertOk(res);
+			expect(res.data.meta.sampleSize).toBe(res.data.series.close.length);
+			expect(res.data.meta.sampleSize).toBe(30);
+			// 警告は無し
+			expect((res.meta as { warning?: string }).warning).toBeUndefined();
+		});
+
+		it('全件正常なら ts 配列に Date.now() 由来の値は含まれない', async () => {
+			const rows = makeOhlcvRows(25);
+			mockFetchWithOhlcv(rows);
+			const before = Date.now();
+			const res = await getVolatilityMetrics('btc_jpy', '1day', 25);
+			assertOk(res);
+			// 全ての ts は 2025 年起点（Date.now() が混入しない）
+			for (const t of res.data.series.ts) {
+				expect(t).toBeLessThan(before);
+			}
+		});
+	});
 });

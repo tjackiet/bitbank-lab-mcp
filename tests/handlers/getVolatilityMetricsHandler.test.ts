@@ -8,6 +8,7 @@ import {
 	buildVolatilityBeginnerText,
 	buildVolatilityDetailedText,
 	buildVolatilitySummaryText,
+	prependVolWarning,
 	toolDef,
 	type VolDetailedInput,
 	type VolViewInput,
@@ -329,5 +330,109 @@ describe('toolDef handler - view routing', () => {
 		mockedGetVolatilityMetrics.mockResolvedValueOnce({ ok: false, summary: 'err' } as never);
 		const res = await toolDef.handler({ pair: 'btc_jpy', type: '1day', limit: 50 });
 		expect((res as { ok: boolean }).ok).toBe(false);
+	});
+});
+
+// ─── handler: 上流 / 自前 warning の content 伝播 ─────────────────────────────
+
+describe('toolDef handler - meta.warning propagation', () => {
+	function mockResWithWarning(warning?: string) {
+		// 上流 (vol tool) が summary 先頭に warning を連結済みのケース。
+		const body = [
+			'BTC/JPY [1day] 5,000,000円 rv=0.380(ann)',
+			'',
+			'aggregates: rv_std:0.022 rv_std_ann:0.38 parkinson:0.018 garmanKlass:0.016 rogersSatchell:0.012 atr:200000',
+			'',
+			'📊 ローリング分析:',
+			'w=7 rv:0.022000 ann:0.420000 atr:200000.00',
+			'w=30 rv:0.019000 ann:0.360000 atr:200000.00',
+		].join('\n');
+		const summary = warning ? `${warning}\n${body}` : body;
+		return {
+			ok: true,
+			summary,
+			data: {
+				aggregates: { rv_std: 0.02, rv_std_ann: 0.38, atr: 200_000 },
+				rolling: [
+					{ window: 7, rv_std: 0.022, rv_std_ann: 0.42 },
+					{ window: 30, rv_std: 0.019, rv_std_ann: 0.36 },
+				],
+				tags: [],
+				series: { ts: [1700000000000], close: [5_000_000], ret: [0.005] },
+				meta: { annualize: true, baseIntervalMs: 86_400_000, sampleSize: 50 },
+			},
+			meta: warning ? { warning } : {},
+		};
+	}
+
+	it('view=summary: 上流 summary に warning が含まれていれば handler content にもそのまま出る', async () => {
+		const warning = '⚠️ 4年中1年の取得に失敗しました。';
+		mockedGetVolatilityMetrics.mockResolvedValueOnce(mockResWithWarning(warning) as never);
+		const res = await toolDef.handler({ pair: 'btc_jpy', type: '1day', limit: 50, view: 'summary' });
+		const text = (res as { content: Array<{ text: string }> }).content[0].text;
+		expect(text.startsWith('⚠️')).toBe(true);
+		expect(text).toContain('4年中1年の取得に失敗');
+	});
+
+	it('view=beginner: meta.warning が content[0].text の先頭に出る', async () => {
+		const warning = '⚠️ 3件の不正な OHLC をスキップしました。';
+		mockedGetVolatilityMetrics.mockResolvedValueOnce(mockResWithWarning(warning) as never);
+		const res = await toolDef.handler({ pair: 'btc_jpy', type: '1day', limit: 50, view: 'beginner' });
+		const text = (res as { content: Array<{ text: string }> }).content[0].text;
+		expect(text.startsWith('⚠️')).toBe(true);
+		expect(text).toContain('3件の不正な OHLC');
+		// 警告行のあとに本文（beginner 用テキスト）が続く
+		const idxWarning = text.indexOf('⚠️');
+		const idxBody = text.indexOf('1日の平均的な動き');
+		expect(idxWarning).toBeLessThan(idxBody);
+	});
+
+	it('view=detailed: meta.warning が content[0].text の先頭に出る', async () => {
+		const warning = '⚠️ 2件の isoTime 欠損ローソク足をスキップしました。';
+		mockedGetVolatilityMetrics.mockResolvedValueOnce(mockResWithWarning(warning) as never);
+		const res = await toolDef.handler({ pair: 'btc_jpy', type: '1day', limit: 50, view: 'detailed' });
+		const text = (res as { content: Array<{ text: string }> }).content[0].text;
+		expect(text.startsWith('⚠️')).toBe(true);
+		expect(text).toContain('2件の isoTime 欠損');
+		// 警告行のあとに本文が続く
+		const idxWarning = text.indexOf('⚠️');
+		const idxBody = text.indexOf('Volatility Metrics');
+		expect(idxWarning).toBeLessThan(idxBody);
+	});
+
+	it('view=full: meta.warning が content[0].text の先頭に出る', async () => {
+		const warning = '⚠️ 上流 fetchWarning と自前スキップが混在';
+		mockedGetVolatilityMetrics.mockResolvedValueOnce(mockResWithWarning(warning) as never);
+		const res = await toolDef.handler({ pair: 'btc_jpy', type: '1day', limit: 50, view: 'full' });
+		const text = (res as { content: Array<{ text: string }> }).content[0].text;
+		expect(text.startsWith('⚠️')).toBe(true);
+		expect(text).toContain('上流 fetchWarning と自前スキップが混在');
+	});
+
+	it('meta.warning が無い場合は beginner/detailed view content に ⚠️ が出ない', async () => {
+		mockedGetVolatilityMetrics.mockResolvedValueOnce(mockResWithWarning(undefined) as never);
+		const res = await toolDef.handler({ pair: 'btc_jpy', type: '1day', limit: 50, view: 'beginner' });
+		const text = (res as { content: Array<{ text: string }> }).content[0].text;
+		expect(text.startsWith('⚠️')).toBe(false);
+	});
+});
+
+// ─── prependVolWarning ユニットテスト ─────────────────────────────────────────
+
+describe('prependVolWarning', () => {
+	it('meta.warning を body の先頭に別行で連結する', () => {
+		const text = prependVolWarning('BODY', { warning: '⚠️ 3件の不正な OHLC をスキップしました。' });
+		expect(text.startsWith('⚠️ 3件の不正な OHLC')).toBe(true);
+		expect(text).toContain('\n\nBODY');
+	});
+
+	it('⚠️ プレフィックスがなければ自動で付ける', () => {
+		const text = prependVolWarning('BODY', { warning: 'partial fetch' });
+		expect(text.startsWith('⚠️ partial fetch')).toBe(true);
+	});
+
+	it('meta.warning が無ければ body をそのまま返す', () => {
+		expect(prependVolWarning('BODY', {})).toBe('BODY');
+		expect(prependVolWarning('BODY', { warning: undefined })).toBe('BODY');
 	});
 });
