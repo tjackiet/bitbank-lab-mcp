@@ -190,7 +190,7 @@ unit golden（§8.1–§8.12）と契約文書まで揃っても、「実 bitban
 #### 目的
 
 unit golden では捕まらない「実 API レスポンス + 未確定足を含む最終値」が、
-TradingView 等の外部チャートと一致することを手動確認する。
+外部チャート（TradingView / bitbank アプリ等）と一致することを手動確認する。
 取得層 + 計算層 + 加工層を通したエンドツーエンドの数値契約に対する
 生存確認として、phase 単位で 1 回以上記録する。
 
@@ -213,7 +213,7 @@ npx tsx scripts/analyze_indicators_cli.ts btc_jpy 1day 200
 #### 許容差
 
 - **丸め**: 表示桁数 ±2 桁
-- **最終足**: bitbank と TradingView で確定タイミングが異なる場合があるため、
+- **最終足**: bitbank と外部チャートで確定タイミングが異なる場合があるため、
   最終値が外れる場合は最終-1 本目で再比較する
 - それでも合わない場合は **実装側のバグ可能性あり** として記録する
 
@@ -224,9 +224,9 @@ npx tsx scripts/analyze_indicators_cli.ts btc_jpy 1day 200
 ```markdown
 #### YYYY-MM-DD: <pair> <timeframe>
 - 実行: `npx tsx scripts/analyze_indicators_cli.ts <pair> <timeframe> 200`
-- 比較対象: TradingView <SOURCE>:<SYMBOL> <TF>
-- RSI(14): bitbank=XX.XX / TV=XX.XX / 差=±X.XX → OK
-- BB(20,2) upper: bitbank=XXXXXXX / TV=XXXXXXX / 差=±X → OK
+- 比較対象: <外部チャート名> <SOURCE>:<SYMBOL> <TF>
+- RSI(14): bitbank=XX.XX / external=XX.XX / 差=±X.XX → OK
+- BB(20,2) upper: bitbank=XXXXXXX / external=XXXXXXX / 差=±X → OK
 - BB(20,2) middle: ... → OK
 - BB(20,2) lower: ... → OK
 - MACD line: ... → OK
@@ -260,6 +260,131 @@ npx tsx scripts/analyze_indicators_cli.ts btc_jpy 1day 200
 
 ---
 
+## 9. 総合シグナルとデータ品質（フェーズ5）
+
+`analyze_market_signal` のように複数の上流ツール（`get_flow_metrics` /
+`get_volatility_metrics` / `analyze_indicators`）の結果を加工する「総合判断ツール」が、
+データ不完全性を正しく伝播するための契約。LLM がデータ品質を誤認したまま
+判断を出すのを防ぐ。
+
+### 9.1 warning 系統の 2 分離 ✅
+
+| field | 意味 | 例 |
+|---|---|---|
+| `meta.warning` (string) | 取得層の不完全性 | `get_candles` の multi-year / multi-day 部分失敗、partial fetch |
+| `meta.warnings` (string[]) | 計算層の不完全性 | `SMA_200` がデータ不足、MACD signal の有限値不足 |
+
+2 系統は **同じ field に混ぜない**。混ぜると LLM 側で「取得層 / 計算層」のどちらに
+原因があるか判別できなくなり、ユーザー向け説明やトラブルシュートが破綻する。
+
+根拠実装: `tools/analyze_indicators.ts:687-690`（`warning` と `warnings` を別系統で meta に詰める）。
+
+### 9.2 加工ツールが上流 warning を必ず継承する義務 🟡
+
+`analyze_market_signal` のような 2 段以上の加工ツールは、上流ツール
+（`get_flow_metrics` / `get_volatility_metrics` / `analyze_indicators`）の
+`meta.warning` / `meta.warnings` を **自分の meta に展開する**:
+
+- `meta.warning`: 上流のうち取得層 warning を持つものを集めて連結（複数あれば改行区切り、または上流名を prefix）。
+- `meta.warnings`: 上流の計算層 warnings をすべて連結する（同一文字列は重複排除して良い）。
+
+参照実装: `tools/prepare_chart_data.ts:246-279`
+（`analyze_indicators` → `prepare_chart_data` の 1 段加工で確立済みのパターン。
+`upstreamWarning` / `upstreamWarnings` を切り出し、meta に展開する型紙）。
+
+🟡 状態: `analyze_market_signal` は現状この継承を行っていないため、タスクB の
+実装 PR でこの契約に合わせる。
+
+### 9.3 content 先頭の `⚠️` 行連結義務 🟡
+
+handler が独自に `content` テキストを組む場合でも、tool 層の `summary` 先頭に出した
+`⚠️` 行を handler 側でも **content の先頭に再連結する**。落とすと LLM は警告を
+見ない（`structuredContent` の meta.warning を LLM は参照できない）。
+
+実装方針: `tools/prepare_chart_data.ts:266-279` に倣い、`baseSummary` の前に
+`upstreamWarning` / `upstreamWarnings` から組み立てた `⚠️` 行群を連結する。
+`JSON.stringify(data)` を含める場合も **JSON より前** に warning 行を置く
+（`.claude/rules/tools.md` の handler チェックリスト参照）。
+
+### 9.4 `confidence` の降格契約 🟡
+
+`analyze_market_signal` の `confidence` レベル（`high` / `medium` / `low`）は
+データ品質に応じて降格する:
+
+| 条件 | 降格後の上限 |
+|---|---|
+| 取得層 `meta.warning` を上流のいずれかが持っている | `confidence` は **最大 `medium`**（`high` にしない） |
+| 主要要素のいずれかが null / データ不足で寄与計算不能 | `confidence = low` 固定 |
+
+主要要素の定義（`tools/analyze_market_signal.ts:324` の重み）:
+
+- `smaTrend`（重み 35%）: `latestClose` / `sma25` / `sma75` のいずれかが null の場合
+- `momentum`（重み 30%）: `rsi` が null の場合
+
+実装位置: `tools/analyze_market_signal.ts:359-382`（`calculateConfidence`）。
+
+🟡 状態: 現在の `calculateConfidence` は寄与値の符号一致のみで判定しており、
+データ品質を考慮していない。タスクB でこの契約に合わせる。
+
+---
+
+## 10. パターン検出（フェーズ5）
+
+`tools/detect_patterns.ts`（チャートパターン）と
+`tools/analyze_candle_patterns.ts`（ローソク足パターン）の検出ツールについて、
+出力の不変条件と再現性を契約として固定する。テスト（タスクC）はこの契約を
+fixture ベースで検証する。
+
+### 10.1 `candle_range_index` の barIndex 整合 ✅
+
+`analyze_candle_patterns` が返す各パターンの `candle_range_index = [start, end]` は
+以下の不変条件を満たす:
+
+- `0 <= start <= end < windowCandles.length`
+- 各値は `int`
+
+実装: `tools/analyze_candle_patterns.ts:730`（`[i - config.span + 1, i]` 形式で生成）。
+
+### 10.2 決定性 ✅
+
+同一入力（同じ pair / type / limit / fixture）に対する出力は **決定的**。
+再実行で `recent_patterns` / `data.patterns` が deep equal になる。
+
+- 乱数・現在時刻に依存するロジックを混入させない
+- 並列処理の order が出力順に出る場合はソート後に格納する
+
+### 10.3 `status` enum 制約 ✅
+
+許可される `status` 値:
+
+| ツール | 許可される `status` | schema |
+|---|---|---|
+| `detect_patterns` | `forming` / `near_completion` / `completed` / `invalid` | `src/schema/patterns.ts:76` |
+| `analyze_candle_patterns` | `forming` / `confirmed` | `src/schema/patterns.ts:286` |
+
+上記以外の文字列は出さない。フェーズ5 では両ツールの status 集合は
+`{ forming, near_completion, completed, confirmed, invalid }` のみで構成される。
+
+### 10.4 `status` の意味的不変条件 ✅
+
+- `completed` は **breakout 成立済み fixture** でのみ出る。形成途中の fixture では出ない。
+- **whipsaw fixture**（一度ブレイクしたあと反対側に戻る価格列）では
+  `completed` にならない — 三角形系（triangles / wedges / pennants）と
+  doubles 系（double top / bottom）どちらも対象。
+- `includeForming=false` で `forming` / `near_completion` のパターンは
+  出力から **除外**される（`tools/detect_patterns.ts:194-205` のフィルタ）。
+
+### 10.5 `allow_partial_patterns` 契約 ✅
+
+- `allow_partial_patterns=false` の場合、`uses_partial_candle=true` のパターンは
+  検出ループ段階で **skip** され、`recent_patterns` に含まれない。
+- 既定値は実装側の安全側に倒す（未確定足を含むパターンを表示しない）。
+
+実装: `tools/analyze_candle_patterns.ts:697`
+（`if (usesPartial && !allowPartial) { continue; }`）。
+
+---
+
 ## フェーズ4 実施履歴
 
 | PR | 内容 | 状態 |
@@ -268,3 +393,6 @@ npx tsx scripts/analyze_indicators_cli.ts btc_jpy 1day 200
 | #490 | §8 の各項目に golden / contract テストを追加 | ✅ Merged |
 | #491 | §8.7 の誤用 2 箇所を修正 | ✅ Merged |
 | #492 | `get_volatility_metrics` を `lib/indicators.ts::atr()` に統合 | ✅ Merged |
+| #493 | §8.3 / §8.4 の golden テスト追加（Bollinger / Stochastic） | ✅ Merged |
+| #494 | §8 をフェーズ4 merge 状態に同期 | ✅ Merged |
+| #495 | §8.13 ライブ spot check 手順 + 初回実施記録 | ✅ Merged |
