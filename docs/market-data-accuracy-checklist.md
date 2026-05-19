@@ -34,8 +34,10 @@ API レスポンスのフィールド整合は `docs/api-contract-checklist.md` 
 ## 8. 指標計算（フェーズ4）
 
 `lib/indicators.ts` の純粋関数群と、`tools/analyze_indicators.ts` 以降の加工層を含む計算契約。
-golden テスト追加（後続 PR2）と handler 修正（後続 PR3）の前提となるため、
-本 PR で先に文書化する。本 PR ではコード変更を伴わない（`atr()` の 1 行コメント追加を除く）。
+PR #489 で本セクションを契約として文書化し、PR #490 で golden / contract テスト、
+PR #491 で §8.7 の handler 誤用修正、PR #492 で `get_volatility_metrics` の
+`lib/atr()` への統合を完了した（フェーズ4 終了）。
+本セクションは契約として固定し、以降の指標変更はここを更新してから行う。
 
 ### 8.1 EMA ✅
 
@@ -106,7 +108,7 @@ StochRSI は RSI 値列に対して同じ計算を行う（`lib/indicators.ts::s
 
 `ICHIMOKU_SHIFT = 26` は `lib/indicator-config.ts:34`。
 
-### 8.7 一目均衡表 snapshot スカラー 🟡
+### 8.7 一目均衡表 snapshot スカラー ✅
 
 `analyze_indicators` が `latestIndicators` に詰める
 `ICHIMOKU_spanA` / `ICHIMOKU_spanB` は、`lib/indicators.ts::ichimokuSnapshot()` が返す
@@ -116,13 +118,15 @@ StochRSI は RSI 値列に対して同じ計算を行う（`lib/indicators.ts::s
 正しくは時系列の `ichi_series.spanA[len - 26]` / `ichi_series.spanB[len - 26]` を参照する
 （`analyze_ichimoku_snapshot` がこの方式を採用済み）。
 
-現状の誤用箇所（**本 PR では文書化のみ、修正は PR3 で対応**）:
+PR #491 で修正済み。修正前の誤用箇所と修正方針を以下に履歴として残す:
 
 - `src/handlers/analyzeIndicatorsHandler.ts:564-569`
-  `cloudTop` / `cloudBot` を `ind.ICHIMOKU_spanA` / `ind.ICHIMOKU_spanB` から直接組み立てている。
+  `cloudTop` / `cloudBot` を `ind.ICHIMOKU_spanA` / `ind.ICHIMOKU_spanB` から直接組み立てていた。
+  修正済み: `series.spanA[len - 26]` / `series.spanB[len - 26]` を参照する形に変更。
 - `src/handlers/analyzeMarketSignalHandler.ts:137-153`
   補足指標ブロックで `spanA = ICHIMOKU_spanA` / `spanB = ICHIMOKU_spanB` をそのまま「今日の雲」として
-  `cloudTop / cloudBottom` を計算し、現在価格との位置関係を出している。
+  `cloudTop / cloudBottom` を計算し、現在価格との位置関係を出していた。
+  修正済み: `series.spanA[len - 26]` / `series.spanB[len - 26]` を参照する形に変更。
 
 ### 8.8 丸め ✅
 
@@ -146,8 +150,8 @@ StochRSI は RSI 値列に対して同じ計算を行う（`lib/indicators.ts::s
   - `tr = trueRange(high, low, close)`、`atr[i] = mean(tr[i - period + 1 .. i])`。
   - **Wilder の RMA-ATR ではない**（RSI の RMA とは別ロジック）。
 - `TR[0]` は常に NaN（前足 close が存在しないため）。シード窓は `tr[1..period]`。
-- プロダクト上の ATR は `tools/get_volatility_metrics.ts` が
-  `trueRange + slidingMean (= SMA)` で算出する（`tools/get_volatility_metrics.ts:198, 214`）。
+- プロダクト上の ATR も `lib/indicators.ts::atr()` を直接利用する（PR #492 で統合）。
+  `tools/get_volatility_metrics.ts` から自前の SMA-of-TR 経路は撤去済み。
 - Wilder 版が必要になった場合は **別関数（例: `wilderAtr()`）** として追加し、
   既存呼び出しの挙動を変えない。
 
@@ -178,11 +182,11 @@ MACD は `output.subPanels.MACD.line / signal / hist` を参照する。
 
 ---
 
-## 後続 PR との関係
+## フェーズ4 実施履歴
 
-| PR | 内容 |
-|---|---|
-| PR1（本 PR） | §8 の契約を文書化。`lib/indicators.ts::atr()` に 1 行コメント追加 |
-| PR2 | §8 の各項目に対する golden テストを追加（合成 OHLC 固定配列、丸めなし） |
-| PR3 | §8.7 の誤用 2 箇所を修正（`analyzeIndicatorsHandler.ts` / `analyzeMarketSignalHandler.ts`） |
-| PR4 | `get_volatility_metrics` のリファクタ（§8.10 と同系の SMA-ATR 経路を整理） |
+| PR | 内容 | 状態 |
+|---|---|---|
+| #489 | §8 の契約を文書化 | ✅ Merged |
+| #490 | §8 の各項目に golden / contract テストを追加 | ✅ Merged |
+| #491 | §8.7 の誤用 2 箇所を修正 | ✅ Merged |
+| #492 | `get_volatility_metrics` を `lib/indicators.ts::atr()` に統合 | ✅ Merged |
