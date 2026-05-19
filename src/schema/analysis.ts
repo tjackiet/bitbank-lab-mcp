@@ -67,6 +67,8 @@ export const GetVolMetricsDataSchemaOut = z.object({
 export const GetVolMetricsMetaSchemaOut = BaseMetaSchema.extend({
 	type: CandleTypeEnum,
 	count: z.number().int(),
+	/** 取得層の不完全性を示す警告（上流 get_candles の fetchWarning、不正OHLCスキップ、isoTime欠損等）。 */
+	warning: z.string().optional(),
 });
 
 export const GetVolMetricsOutputSchema = toolResultSchema(GetVolMetricsDataSchemaOut, GetVolMetricsMetaSchemaOut);

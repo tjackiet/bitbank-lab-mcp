@@ -145,16 +145,24 @@ export default async function getVolatilityMetrics(
 		const open: number[] = [];
 		const high: number[] = [];
 		const low: number[] = [];
+		let skippedOhlc = 0;
+		let skippedIsoTime = 0;
 		for (const c of candles) {
 			const o = toNum(c.open);
 			const h = toNum(c.high);
 			const l = toNum(c.low);
 			const cl = toNum(c.close);
-			if (o == null || h == null || l == null || cl == null) continue;
+			if (o == null || h == null || l == null || cl == null) {
+				skippedOhlc++;
+				continue;
+			}
 
 			const t = toMs(c.isoTime ?? null);
-			if (t != null) ts.push(t);
-			else ts.push(ts.length > 0 ? ts[ts.length - 1] + baseIntervalMsOf(type) : Date.now());
+			if (t == null) {
+				skippedIsoTime++;
+				continue;
+			}
+			ts.push(t);
 			open.push(o);
 			high.push(h);
 			low.push(l);
@@ -164,6 +172,19 @@ export default async function getVolatilityMetrics(
 		if (close.length < 20) {
 			return GetVolMetricsOutputSchema.parse(fail('有効なOHLCデータ不足（最低20本必要）', 'user'));
 		}
+
+		// 取得層の不完全性を集約: 上流 get_candles の fetchWarning + 自前スキップ件数
+		const warningLines: string[] = [];
+		if (cRes.meta.warning) warningLines.push(cRes.meta.warning);
+		if (skippedOhlc > 0) {
+			warningLines.push(`⚠️ ${skippedOhlc}件の不正な OHLC をスキップしました。データが不完全な可能性があります。`);
+		}
+		if (skippedIsoTime > 0) {
+			warningLines.push(
+				`⚠️ ${skippedIsoTime}件の isoTime 欠損ローソク足をスキップしました。データが不完全な可能性があります。`,
+			);
+		}
+		const fetchWarning = warningLines.length > 0 ? warningLines.join('\n') : undefined;
 
 		const ret = logReturns(close, useLog);
 		const rvInst = ret.map((r) => Math.abs(r));
@@ -243,7 +264,7 @@ export default async function getVolatilityMetrics(
 				type: String(type),
 				fetchedAt: nowIso(),
 				baseIntervalMs: baseIntervalMsOf(type),
-				sampleSize: candles.length,
+				sampleSize: close.length,
 				windows: [...windows],
 				annualize: withAnn,
 				useLogReturns: useLog,
@@ -282,13 +303,18 @@ export default async function getVolatilityMetrics(
 			extra: `rv=${(rvRefAnn).toFixed(3)}(ann)${tags.length ? ` ${tags.join(',')}` : ''}`,
 		});
 		// テキスト summary にボラティリティ詳細を含める（LLM が structuredContent.data を読めない対策）
-		const summary = buildVolatilityMetricsText({
+		const bodySummary = buildVolatilityMetricsText({
 			baseSummary: baseSummaryVol,
 			aggregates: data.aggregates,
 			rolling: rollingOut,
 		});
+		// 上流 fetchWarning（get_candles の取得層不完全性）と自前スキップ警告を
+		// summary 先頭に連結する。LLM が default view で警告を見落とさないようにするため。
+		const summary = fetchWarning ? `${fetchWarning}\n${bodySummary}` : bodySummary;
 
-		const meta = createMeta(chk.pair, { type, count: candles.length });
+		const metaExtra: Record<string, unknown> = { type, count: close.length };
+		if (fetchWarning) metaExtra.warning = fetchWarning;
+		const meta = createMeta(chk.pair, metaExtra);
 		return GetVolMetricsOutputSchema.parse(
 			ok<z.infer<typeof GetVolMetricsDataSchemaOut>, z.infer<typeof GetVolMetricsMetaSchemaOut>>(
 				summary,
