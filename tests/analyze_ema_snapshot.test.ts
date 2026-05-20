@@ -697,6 +697,89 @@ describe('analyze_ema_snapshot', () => {
 		});
 	});
 
+	describe('上流 warning の伝播（取得層 meta.warning / 計算層 meta.warnings）', () => {
+		it('analyzeIndicators path: meta.warning（取得層）が tool の meta.warning と summary 先頭に伝播する', async () => {
+			const ind = buildIndicatorsOk();
+			ind.meta = {
+				...ind.meta,
+				warning: '⚠️ partial fetch (multi-year)',
+			} as typeof ind.meta;
+			mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(ind));
+
+			const res = await analyzeEmaSnapshot('btc_jpy', '1day', 220, [12, 26, 50, 200]);
+
+			assertOk(res);
+			expect(res.meta.warning).toBe('⚠️ partial fetch (multi-year)');
+			expect(res.meta.warnings).toBeUndefined();
+			expect(res.summary.split('\n')[0]).toContain('⚠️ partial fetch');
+		});
+
+		it('analyzeIndicators path: meta.warnings（計算層）が tool の meta.warnings に継承される', async () => {
+			const ind = buildIndicatorsOk();
+			ind.meta = {
+				...ind.meta,
+				warnings: ['EMA_200: データ不足', 'Ichimoku: データ不足'],
+			} as typeof ind.meta;
+			mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(ind));
+
+			const res = await analyzeEmaSnapshot('btc_jpy', '1day', 220, [12, 26, 50, 200]);
+
+			assertOk(res);
+			expect(res.meta.warnings).toEqual(['EMA_200: データ不足', 'Ichimoku: データ不足']);
+			expect(res.meta.warning).toBeUndefined();
+			expect(res.summary).toContain('⚠️ EMA_200: データ不足');
+			expect(res.summary).toContain('⚠️ Ichimoku: データ不足');
+		});
+
+		it('analyzeIndicators path: 取得層 warning と計算層 warnings は別フィールドで保持される（混入 NG）', async () => {
+			const ind = buildIndicatorsOk();
+			ind.meta = {
+				...ind.meta,
+				warning: '⚠️ partial fetch (multi-year)',
+				warnings: ['EMA_200: データ不足'],
+			} as typeof ind.meta;
+			mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(ind));
+
+			const res = await analyzeEmaSnapshot('btc_jpy', '1day', 220, [12, 26, 50, 200]);
+
+			assertOk(res);
+			expect(res.meta.warning).toBe('⚠️ partial fetch (multi-year)');
+			expect(res.meta.warnings).toEqual(['EMA_200: データ不足']);
+			expect(res.meta.warnings).not.toContain('partial fetch (multi-year)');
+			const lines = res.summary.split('\n');
+			expect(lines[0]).toContain('⚠️ partial fetch (multi-year)');
+			expect(lines[1]).toContain('⚠️ EMA_200: データ不足');
+		});
+
+		it('analyzeIndicators path: 上流 warning なしなら meta.warning / meta.warnings は付与されない', async () => {
+			mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(buildIndicatorsOk()));
+
+			const res = await analyzeEmaSnapshot('btc_jpy', '1day', 220, [12, 26, 50, 200]);
+
+			assertOk(res);
+			expect(res.meta.warning).toBeUndefined();
+			expect(res.meta.warnings).toBeUndefined();
+			expect(res.summary.startsWith('⚠️')).toBe(false);
+		});
+
+		it('getCandles path（custom periods）: meta.warning が tool の meta.warning と summary 先頭に伝播する', async () => {
+			const candlesResult = buildCandlesOk();
+			candlesResult.meta = {
+				...candlesResult.meta,
+				warning: '⚠️ partial fetch (3日中1日の取得に失敗)',
+			} as typeof candlesResult.meta;
+			mockedGetCandles.mockResolvedValueOnce(asMockResult(candlesResult));
+
+			const res = await analyzeEmaSnapshot('btc_jpy', '1day', 220, [5, 15]);
+
+			assertOk(res);
+			expect(res.meta.warning).toBe('⚠️ partial fetch (3日中1日の取得に失敗)');
+			// getCandles path では計算層 warnings は出ない
+			expect(res.meta.warnings).toBeUndefined();
+			expect(res.summary.split('\n')[0]).toContain('⚠️ partial fetch');
+		});
+	});
+
 	describe('buildEmaSnapshotText', () => {
 		const baseInput = {
 			baseSummary: 'BTC/JPY summary',
