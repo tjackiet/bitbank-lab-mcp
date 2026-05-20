@@ -28,6 +28,22 @@ const rawMarginPositionsEmptyResponse = {
 	losscut_threshold: { individual: '110', company: '120' },
 };
 
+/**
+ * 信用口座系 endpoints のデフォルト success レスポンス。
+ * `setupFetchMock` を使わずインライン fetch mock を組むテスト用に、
+ * `/v1/user/margin/status` と `/v1/user/margin/positions` を一発でハンドルする。
+ * マッチしない URL では null を返すので、呼び出し側は短絡評価で処理を続行できる。
+ */
+function maybeMarginAccountResponse(urlStr: string): Response | null {
+	if (urlStr.includes('/v1/user/margin/status')) {
+		return new Response(JSON.stringify(mockBitbankSuccess(rawMarginStatusResponse)), { status: 200 });
+	}
+	if (urlStr.includes('/v1/user/margin/positions')) {
+		return new Response(JSON.stringify(mockBitbankSuccess(rawMarginPositionsEmptyResponse)), { status: 200 });
+	}
+	return null;
+}
+
 const originalFetch = globalThis.fetch;
 
 beforeEach(() => {
@@ -365,6 +381,8 @@ describe('analyze_my_portfolio', () => {
 
 		globalThis.fetch = vi.fn().mockImplementation(async (url: string | URL | Request) => {
 			const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+			const _maybeMargin = maybeMarginAccountResponse(urlStr);
+			if (_maybeMargin) return _maybeMargin;
 			if (urlStr.includes('tickers_jpy')) return new Response(JSON.stringify(tickersJpy), { status: 200 });
 			if (urlStr.includes('candlestick')) return new Response(JSON.stringify(candlesBtcJpy1day120), { status: 200 });
 			if (urlStr.includes('/v1/user/assets')) {
@@ -419,6 +437,8 @@ describe('analyze_my_portfolio', () => {
 
 		globalThis.fetch = vi.fn().mockImplementation(async (url: string | URL | Request) => {
 			const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+			const _maybeMargin = maybeMarginAccountResponse(urlStr);
+			if (_maybeMargin) return _maybeMargin;
 			if (urlStr.includes('tickers_jpy')) return new Response(JSON.stringify(tickersJpy), { status: 200 });
 			if (urlStr.includes('candlestick')) return new Response(JSON.stringify(candlesBtcJpy1day120), { status: 200 });
 			if (urlStr.includes('/v1/user/assets')) {
@@ -489,6 +509,8 @@ describe('analyze_my_portfolio', () => {
 
 		globalThis.fetch = vi.fn().mockImplementation(async (url: string | URL | Request) => {
 			const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+			const _maybeMargin = maybeMarginAccountResponse(urlStr);
+			if (_maybeMargin) return _maybeMargin;
 			if (urlStr.includes('tickers_jpy')) return new Response(JSON.stringify(tickersJpy), { status: 200 });
 			if (urlStr.includes('candlestick')) return new Response(JSON.stringify(candlesBtcJpy1day120), { status: 200 });
 			if (urlStr.includes('/v1/user/assets')) {
@@ -626,6 +648,8 @@ describe('analyze_my_portfolio', () => {
 		const seenUrls: string[] = [];
 		globalThis.fetch = vi.fn().mockImplementation(async (url: string | URL | Request) => {
 			const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+			const _maybeMargin = maybeMarginAccountResponse(urlStr);
+			if (_maybeMargin) return _maybeMargin;
 			seenUrls.push(urlStr);
 
 			if (urlStr.includes('tickers_jpy')) {
@@ -709,6 +733,8 @@ describe('analyze_my_portfolio', () => {
 
 			globalThis.fetch = vi.fn().mockImplementation(async (url: string | URL | Request) => {
 				const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+				const _maybeMargin = maybeMarginAccountResponse(urlStr);
+				if (_maybeMargin) return _maybeMargin;
 				if (urlStr.includes('tickers_jpy')) {
 					return new Response(JSON.stringify(tickersJpy), { status: 200 });
 				}
@@ -797,6 +823,8 @@ describe('analyze_my_portfolio', () => {
 
 			globalThis.fetch = vi.fn().mockImplementation(async (url: string | URL | Request) => {
 				const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+				const _maybeMargin = maybeMarginAccountResponse(urlStr);
+				if (_maybeMargin) return _maybeMargin;
 				if (urlStr.includes('tickers_jpy')) {
 					return new Response(JSON.stringify(tickersJpy), { status: 200 });
 				}
@@ -906,6 +934,8 @@ describe('analyze_my_portfolio', () => {
 
 			globalThis.fetch = vi.fn().mockImplementation(async (url: string | URL | Request) => {
 				const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+				const _maybeMargin = maybeMarginAccountResponse(urlStr);
+				if (_maybeMargin) return _maybeMargin;
 				if (urlStr.includes('tickers_jpy')) {
 					return new Response(JSON.stringify(tickersJpy), { status: 200 });
 				}
@@ -1100,6 +1130,8 @@ describe('analyze_my_portfolio — toolDef handler', () => {
 		// setup URL routing fetch mock
 		globalThis.fetch = vi.fn().mockImplementation(async (url: string | URL | Request) => {
 			const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+			const _maybeMargin = maybeMarginAccountResponse(urlStr);
+			if (_maybeMargin) return _maybeMargin;
 
 			if (urlStr.includes('tickers_jpy')) {
 				return new Response(JSON.stringify(tickersJpy), { status: 200 });

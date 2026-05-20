@@ -192,8 +192,8 @@ export interface PeriodNetFlowResult {
 
 // ── 信用口座状態・建玉 ──
 
-export type MarginStatusData = z.infer<typeof GetMarginStatusDataSchema>;
-export type MarginPositionsData = z.infer<typeof GetMarginPositionsDataSchema>;
+export interface MarginStatusData extends z.infer<typeof GetMarginStatusDataSchema> {}
+export interface MarginPositionsData extends z.infer<typeof GetMarginPositionsDataSchema> {}
 
 /**
  * 信用口座の状態と建玉サマリ。
