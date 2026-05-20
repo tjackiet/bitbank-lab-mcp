@@ -89,8 +89,21 @@ async function paginateWithdrawals(
 	return { withdrawals: all, complete: false };
 }
 
+export interface PaginateTradesOptions {
+	/**
+	 * API に渡すベースパラメータ（pair / since / end など）。
+	 * order に対応するカーソル側（asc → since, desc → end）の値は初回カーソルとして使われ、
+	 * 後続ページではカーソル側のみが上書きされる（もう一方の境界は preserve）。
+	 */
+	baseParams?: Record<string, string>;
+	/** カーソル方向。asc → `since` を前進、desc → `end` を後退。デフォルト 'asc'。 */
+	order?: 'asc' | 'desc';
+	/** 返却する最大件数。デフォルトは事実上の無制限（Number.POSITIVE_INFINITY）。 */
+	limit?: number;
+}
+
 /**
- * ページネーション付きで現物約定履歴を取得（最大 MAX_PAGES ページ、古い順）。
+ * ページネーション付きで現物約定履歴を取得（最大 MAX_PAGES ページ）。
  *
  * 公式 docs (bitbankinc/bitbank-api-docs) は trade_history の `position_side` を
  * 「信用取引の時のみ」と明記しているため、現物エンドポイントから返るレコードには
@@ -102,14 +115,24 @@ async function paginateWithdrawals(
  */
 export async function paginateTrades(
 	client: BitbankPrivateClient,
-	sinceMs?: number,
+	options: PaginateTradesOptions = {},
 ): Promise<{ trades: RawTrade[]; truncated: boolean }> {
+	const baseParams = options.baseParams ?? {};
+	const order = options.order ?? 'asc';
+	const limit = options.limit ?? Number.POSITIVE_INFINITY;
+	const cursorKey: 'since' | 'end' = order === 'desc' ? 'end' : 'since';
+
 	const all: RawTrade[] = [];
 	const seenIds = new Set<number>();
-	let since: string | undefined = sinceMs != null ? String(sinceMs) : undefined;
+	let cursor: string | undefined = baseParams[cursorKey];
+
 	for (let page = 0; page < MAX_PAGES; page++) {
-		const params: Record<string, string> = { count: String(TRADE_PAGE_SIZE), order: 'asc' };
-		if (since) params.since = since;
+		const params: Record<string, string> = {
+			...baseParams,
+			count: String(TRADE_PAGE_SIZE),
+			order,
+			...(cursor ? { [cursorKey]: cursor } : {}),
+		};
 		const result = await tryGet<{ trades: RawTrade[] }>(client, '/v1/user/spot/trade_history', params);
 		if (!result.ok) break;
 		const batch = result.data.trades || [];
@@ -120,20 +143,22 @@ export async function paginateTrades(
 		all.push(...newRecords);
 		// truncated 判定はフィルタ前の batch.length を使う。フィルタ後の長さで判定すると
 		// 信用比率が高いとき早期終了し、次ページの現物約定を取り逃がす（paginateMarginTrades と同じ理由）。
-		if (batch.length < TRADE_PAGE_SIZE) return { trades: all, truncated: false };
+		if (batch.length < TRADE_PAGE_SIZE) return { trades: all.slice(0, limit), truncated: false };
+		// limit 到達 → 早期打ち切り（期間内に未取得レコードがある可能性があるため truncated=true）
+		if (all.length >= limit) return { trades: all.slice(0, limit), truncated: true };
 		// 同一タイムスタンプが TRADE_PAGE_SIZE 件以上連続して進捗しない場合の保険。
-		// カーソルベース（since の前進有無）で判定して、満杯信用ページに当たった瞬間に
+		// カーソルベース（since/end の前進有無）で判定して、満杯信用ページに当たった瞬間に
 		// 後続の現物約定を取り逃がさないようにする（paginateMarginTrades と同じ）。
 		const lastTs = batch[batch.length - 1]?.executed_at;
 		if (!lastTs) break;
-		const nextSince = String(lastTs);
-		if (nextSince === since) return { trades: all, truncated: true };
-		since = nextSince;
+		const nextCursor = String(lastTs);
+		if (nextCursor === cursor) return { trades: all.slice(0, limit), truncated: true };
+		cursor = nextCursor;
 	}
 	// ループ脱出は全て未完了（MAX_PAGES 到達 / API エラー / lastTs 欠損）。
 	// 境界 dedup で all.length が TRADE_PAGE_SIZE の倍数にならないケースを誤って完了扱いしないよう、
 	// 早期 return の通常完了パス以外は truncated=true で返す。
-	return { trades: all, truncated: true };
+	return { trades: all.slice(0, limit), truncated: true };
 }
 
 /**
