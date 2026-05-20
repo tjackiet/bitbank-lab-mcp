@@ -4,102 +4,24 @@
  * bitbank Private API `/v1/user/spot/trade_history` を呼び出し、
  * LLM が分析しやすい形に整形して返す。
  *
- * - 自動ページネーション: count > PAGE_SIZE (1000) の場合、cursor ベースで
- *   複数回リクエストし全件取得を試みる（最大 MAX_PAGES ページ）。
+ * - 自動ページネーション: count > PAGE_SIZE (1000) の場合、`portfolio/fetch.paginateTrades`
+ *   経由で cursor ベースに複数回リクエストし全件取得を試みる（最大 MAX_PAGES ページ）。
+ *   現物専用のため `position_side != null`（信用約定）の混入は防御的に除外する。
  * - isComplete フラグ: 全件取得できたかどうかを meta に含める。
  */
 
 import { nowIso, parseIso8601, toIsoMs } from '../../lib/datetime.js';
 import { formatPair, formatPrice } from '../../lib/formatter.js';
 import { fail, ok } from '../../lib/result.js';
-import { type BitbankPrivateClient, getDefaultClient, PrivateApiError } from '../../src/private/client.js';
+import { paginateTrades } from '../../src/handlers/portfolio/fetch.js';
+import type { RawTrade } from '../../src/handlers/portfolio/types.js';
+import { getDefaultClient, PrivateApiError } from '../../src/private/client.js';
 import { GetMyTradeHistoryInputSchema, GetMyTradeHistoryOutputSchema } from '../../src/private/schemas.js';
 import type { ToolDefinition } from '../../src/tool-definition.js';
 
-/** bitbank /v1/user/spot/trade_history のレスポンス型 */
-interface RawTrade {
-	trade_id: number;
-	pair: string;
-	order_id: number;
-	side: string;
-	position_side?: string;
-	type: string;
-	amount: string;
-	price: string;
-	maker_taker: string;
-	fee_amount_base: string;
-	fee_amount_quote: string;
-	fee_occurred_amount_quote?: string;
-	profit_loss?: string;
-	interest?: string;
-	executed_at: number;
-}
-
-// ── ページネーション設定 ──
+// bitbank /v1/user/spot/trade_history の 1 リクエスト上限。`paginateTrades` 内の
+// `TRADE_PAGE_SIZE` と同値（bitbank API 仕様の制約。`count` がこの値以下なら単発で済む）。
 const PAGE_SIZE = 1000;
-const MAX_PAGES = 10;
-
-/**
- * cursor ベースの自動ページネーション。
- *
- * order に応じてカーソル方向を切り替える:
- * - asc: `since` を最後の約定の executed_at で前進させる
- * - desc: `end` を最後の約定（= batch 末尾 = 最古）の executed_at で後退させる
- *
- * いずれも同一ミリ秒の境界レコードを取りこぼさないため、カーソルはインクリメントせず、
- * trade_id で重複排除する。since/end が外部指定されている場合でも、指定されていない側の
- * 境界は preserve され、カーソル側だけが各ページで上書きされる。
- */
-async function paginateTrades(
-	client: BitbankPrivateClient,
-	baseParams: Record<string, string>,
-	limit: number,
-	order: 'asc' | 'desc',
-): Promise<{ trades: RawTrade[]; isComplete: boolean }> {
-	const all: RawTrade[] = [];
-	const seenIds = new Set<number>();
-	const cursorKey: 'since' | 'end' = order === 'desc' ? 'end' : 'since';
-	let cursor: string | undefined = baseParams[cursorKey];
-
-	for (let page = 0; page < MAX_PAGES; page++) {
-		const params: Record<string, string> = {
-			...baseParams,
-			count: String(PAGE_SIZE),
-			order,
-			...(cursor ? { [cursorKey]: cursor } : {}),
-		};
-		const rawData = await client.get<{ trades: RawTrade[] }>('/v1/user/spot/trade_history', params);
-		const batch = rawData.trades || [];
-		const newRecords = batch.filter((t) => !seenIds.has(t.trade_id));
-		for (const t of newRecords) seenIds.add(t.trade_id);
-		all.push(...newRecords);
-
-		// 取得件数が PAGE_SIZE 未満 → 全件取得完了
-		if (batch.length < PAGE_SIZE) {
-			return { trades: all.slice(0, limit), isComplete: true };
-		}
-
-		// limit に達したら打ち切り。count を満たしただけで、期間内に未取得レコードがある可能性があるため isComplete=false
-		if (all.length >= limit) {
-			return { trades: all.slice(0, limit), isComplete: false };
-		}
-
-		// 同一タイムスタンプが PAGE_SIZE 件以上連続して進捗しない場合の保険
-		if (newRecords.length === 0) {
-			return { trades: all.slice(0, limit), isComplete: false };
-		}
-
-		// 次ページ: batch 末尾の executed_at をカーソルに。
-		// asc → 末尾は最新 → since を前進。 desc → 末尾は最古 → end を後退。
-		// 同一 ts のレコードを次ページに含めて再取得し、dedup する。
-		const lastTs = batch[batch.length - 1]?.executed_at;
-		if (!lastTs) break;
-		cursor = String(lastTs);
-	}
-
-	// MAX_PAGES 到達 → 打ち切り
-	return { trades: all.slice(0, limit), isComplete: false };
-}
 
 export default async function getMyTradeHistory(args: {
 	pair?: string;
@@ -146,10 +68,11 @@ export default async function getMyTradeHistory(args: {
 			// 取得件数が count 未満なら全件取得済み
 			isComplete = rawTrades.length < count;
 		} else {
-			// 自動ページネーション（order に応じて asc + since / desc + end カーソルで取得）
-			const result = await paginateTrades(client, baseParams, count, order);
+			// 自動ページネーション（order に応じて asc + since / desc + end カーソルで取得）。
+			// `position_side != null` の信用約定は paginateTrades 側で防御的に除外される。
+			const result = await paginateTrades(client, { baseParams, order, limit: count });
 			rawTrades = result.trades;
-			isComplete = result.isComplete;
+			isComplete = !result.truncated;
 		}
 
 		const timestamp = nowIso();
