@@ -323,17 +323,23 @@ handler が独自に `content` テキストを組む場合でも、tool 層の `
 | 取得層 `meta.warning` を上流のいずれかが持っている | `confidence` は **最大 `medium`**（`high` にしない） |
 | 主要要素のいずれかが null / データ不足で寄与計算不能 | `confidence = low` 固定 |
 
-主要要素の定義（`tools/analyze_market_signal.ts:479-482` の `missingCoreFactors`）:
+主要要素の定義（`tools/analyze_market_signal.ts:481-489` の `missingCoreFactors`）:
 
+- `latestClose`: 最新終値が null
 - `SMA_200`: `sma200` が null
 - `SMA_75`: `sma75` が null
+- `SMA_25`: `sma25` が null
 - `RSI_14`: `rsi` が null
 
+`smaTrendFactor`（重み 35%）の寄与計算は `latestClose` / `sma25` / `sma75` の
+3 つすべてを必要とする（`tools/analyze_market_signal.ts:287` のガード）。
+`sma200` は alignment bonus に加えて `dist / 0.05` 補正項にも使うため core 扱い。
+`momentumFactor`（重み 30%）は `rsi` が null の場合に 0 になる。
 いずれかが欠損していると `missingCoreFactors` に積まれ、`calculateConfidence` 冒頭で
 `low` 固定 + 理由文に列挙される。
 
 実装位置: `tools/analyze_market_signal.ts:363-401`（`calculateConfidence` 本体）
-／ `tools/analyze_market_signal.ts:479-486`（`missingCoreFactors` の組み立てと呼び出し）。
+／ `tools/analyze_market_signal.ts:479-489`（`missingCoreFactors` の組み立てと呼び出し）。
 
 ---
 
