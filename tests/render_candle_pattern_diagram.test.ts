@@ -114,7 +114,9 @@ describe('render_candle_pattern_diagram', () => {
 
 		assertOk(res);
 		// 日付ラベルの x 座標を抽出。<text x="N" ... > の date が見える形式から拾う
-		const xs = [...res.data.svg!.matchAll(/<text x="([\d.]+)"[^>]*>05\/\d{2}<\/text>/g)].map((m) => Number(m[1]));
+		const xs = [...(res.data.svg ?? '').matchAll(/<text x="([\d.]+)"[^>]*>05\/\d{2}<\/text>/g)].map((m) =>
+			Number(m[1]),
+		);
 		expect(xs).toHaveLength(4);
 		// 4 本の中央値が plot area の中央 (425) になっていること（±1px 許容）
 		const mid = (xs[0] + xs[xs.length - 1]) / 2;
@@ -128,7 +130,9 @@ describe('render_candle_pattern_diagram', () => {
 		const res = await renderCandlePatternDiagram({ candles });
 
 		assertOk(res);
-		const xs = [...res.data.svg!.matchAll(/<text x="([\d.]+)"[^>]*>01\/\d{2}<\/text>/g)].map((m) => Number(m[1]));
+		const xs = [...(res.data.svg ?? '').matchAll(/<text x="([\d.]+)"[^>]*>01\/\d{2}<\/text>/g)].map((m) =>
+			Number(m[1]),
+		);
 		expect(xs).toHaveLength(10);
 		// 最右の候補が plotRight (750) を超えない
 		expect(xs[xs.length - 1]).toBeLessThan(750);
