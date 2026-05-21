@@ -6,7 +6,7 @@ import { EPSILON } from '../../lib/math.js';
 import { generatePatternDiagram } from '../../lib/pattern-diagrams.js';
 import { deduplicatePatterns, finalizeConf, periodScoreDays } from './helpers.js';
 import { clamp01, marginFromRelDev, relDev } from './regression.js';
-import { DOUBLE_LEVEL_MAX_PCT, isSameLevel } from './structural.js';
+import { DOUBLE_LEVEL_MAX_PCT, isSameLevel, validatePriorTrend } from './structural.js';
 import type { Pivot } from './swing.js';
 import { type CandleData, type DetectContext, type DetectResult, type PatternEntry, pushCand } from './types.js';
 
@@ -138,6 +138,21 @@ function findRelaxedDoubleTop(
 			});
 			continue;
 		}
+		const trend = validatePriorTrend(candles, a.idx, breakoutIdx - a.idx, 'up_or_sideways');
+		if (!trend.ok) {
+			pcand({
+				type: 'double_top',
+				accepted: false,
+				reason: `prior_trend_mismatch:${trend.classification}`,
+				idxs: [a.idx, b.idx, c.idx],
+				pts: [
+					{ role: 'peak1', idx: a.idx, price: a.price },
+					{ role: 'valley', idx: b.idx, price: b.price },
+					{ role: 'peak2', idx: c.idx, price: c.price },
+				],
+			});
+			continue;
+		}
 
 		const start = candles[a.idx].isoTime,
 			end = candles[breakoutIdx].isoTime;
@@ -252,6 +267,21 @@ function findRelaxedDoubleBottom(
 			});
 			continue;
 		}
+		const trend = validatePriorTrend(candles, a.idx, breakoutIdx - a.idx, 'down_or_sideways');
+		if (!trend.ok) {
+			pcand({
+				type: 'double_bottom',
+				accepted: false,
+				reason: `prior_trend_mismatch:${trend.classification}`,
+				idxs: [a.idx, b.idx, c.idx],
+				pts: [
+					{ role: 'valley1', idx: a.idx, price: a.price },
+					{ role: 'peak', idx: b.idx, price: b.price },
+					{ role: 'valley2', idx: c.idx, price: c.price },
+				],
+			});
+			continue;
+		}
 
 		const start = candles[a.idx].isoTime,
 			end = candles[breakoutIdx].isoTime;
@@ -329,6 +359,22 @@ function tryFormingDoubleTop(ctx: DetectContext): PatternEntry | null {
 	const patternDays = Math.round(formationBars * daysPerBar);
 	if (patternDays < MIN_PATTERN_DAYS || patternDays > MAX_FORMING_DAYS) return null;
 
+	const trend = validatePriorTrend(candles, leftPeak.idx, lastIdx - leftPeak.idx, 'up_or_sideways');
+	if (!trend.ok) {
+		ctx.debugCandidates.push({
+			type: 'double_top',
+			accepted: false,
+			reason: `prior_trend_mismatch:${trend.classification}`,
+			indices: [leftPeak.idx, valley.idx, lastIdx],
+			points: [
+				{ role: 'peak1', idx: leftPeak.idx, price: leftPeak.price, isoTime: candles[leftPeak.idx]?.isoTime },
+				{ role: 'valley', idx: valley.idx, price: valley.price, isoTime: candles[valley.idx]?.isoTime },
+				{ role: 'forming_peak', idx: lastIdx, price: currentPrice, isoTime: candles[lastIdx]?.isoTime },
+			],
+		});
+		return null;
+	}
+
 	const neckline = [
 		{ x: leftPeak.idx, y: valley.price },
 		{ x: lastIdx, y: valley.price },
@@ -397,6 +443,27 @@ function tryFormingDoubleBottom(ctx: DetectContext): PatternEntry | null {
 		const formationBars = Math.max(0, lastIdx - leftValley.idx);
 		const patternDays = Math.round(formationBars * daysPerBar);
 		if (patternDays < 14 || patternDays > MAX_FORMING_DAYS) continue;
+
+		const trend = validatePriorTrend(candles, leftValley.idx, lastIdx - leftValley.idx, 'down_or_sideways');
+		if (!trend.ok) {
+			ctx.debugCandidates.push({
+				type: 'double_bottom',
+				accepted: false,
+				reason: `prior_trend_mismatch:${trend.classification}`,
+				indices: [leftValley.idx, midPeak.idx, rightValley.idx, lastIdx],
+				points: [
+					{ role: 'valley1', idx: leftValley.idx, price: leftValley.price, isoTime: candles[leftValley.idx]?.isoTime },
+					{ role: 'peak', idx: midPeak.idx, price: midPeak.price, isoTime: candles[midPeak.idx]?.isoTime },
+					{
+						role: 'valley2',
+						idx: rightValley.idx,
+						price: rightValley.price,
+						isoTime: candles[rightValley.idx]?.isoTime,
+					},
+				],
+			});
+			continue;
+		}
 
 		const neckline = [
 			{ x: midPeak.idx, y: midPeak.price },
@@ -493,6 +560,21 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 						type: 'double_top',
 						accepted: false,
 						reason: 'no_breakout',
+						idxs: [a.idx, b.idx, c.idx],
+						pts: [
+							{ role: 'peak1', idx: a.idx, price: a.price },
+							{ role: 'valley', idx: b.idx, price: b.price },
+							{ role: 'peak2', idx: c.idx, price: c.price },
+						],
+					});
+					continue;
+				}
+				const trend = validatePriorTrend(candles, a.idx, breakoutIdx - a.idx, 'up_or_sideways');
+				if (!trend.ok) {
+					pcand({
+						type: 'double_top',
+						accepted: false,
+						reason: `prior_trend_mismatch:${trend.classification}`,
 						idxs: [a.idx, b.idx, c.idx],
 						pts: [
 							{ role: 'peak1', idx: a.idx, price: a.price },
@@ -605,6 +687,21 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 						type: 'double_bottom',
 						accepted: false,
 						reason: 'no_breakout',
+						idxs: [a.idx, b.idx, c.idx],
+						pts: [
+							{ role: 'valley1', idx: a.idx, price: a.price },
+							{ role: 'peak', idx: b.idx, price: b.price },
+							{ role: 'valley2', idx: c.idx, price: c.price },
+						],
+					});
+					continue;
+				}
+				const trend = validatePriorTrend(candles, a.idx, breakoutIdx - a.idx, 'down_or_sideways');
+				if (!trend.ok) {
+					pcand({
+						type: 'double_bottom',
+						accepted: false,
+						reason: `prior_trend_mismatch:${trend.classification}`,
 						idxs: [a.idx, b.idx, c.idx],
 						pts: [
 							{ role: 'valley1', idx: a.idx, price: a.price },
