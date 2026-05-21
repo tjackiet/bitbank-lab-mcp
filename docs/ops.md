@@ -71,15 +71,31 @@ npx @modelcontextprotocol/inspector docker run -i --rm \
 
 HTTPで試す場合（任意）:
 
+HTTP transport には Bearer 認証と rate limit が必須。`MCP_HTTP_TOKEN` を渡さないと起動拒否される。
+
 ```bash
+export MCP_HTTP_TOKEN="$(openssl rand -hex 32)"
+
 docker run -it --rm -p 8787:8787 \
   -e MCP_ENABLE_HTTP=1 -e PORT=8787 \
+  -e MCP_HTTP_TOKEN="$MCP_HTTP_TOKEN" \
   -e NO_COLOR=1 -e LOG_LEVEL=info \
   bitbank-mcp
 
-# 別ターミナルから Inspector で接続
+# 別ターミナルから Inspector で接続（Inspector の Header 設定で
+# Authorization: Bearer $MCP_HTTP_TOKEN を付与する）
 npx @modelcontextprotocol/inspector http://localhost:8787/mcp
 ```
+
+HTTP transport に関連する環境変数:
+
+| 環境変数 | 必須 | デフォルト |
+|---|---|---|
+| `MCP_HTTP_TOKEN` | HTTP 時必須 | – |
+| `RATE_LIMIT_WINDOW_MS` | – | `60000` |
+| `RATE_LIMIT_MAX` | – | `60` |
+| `ALLOWED_HOSTS` | – | `127.0.0.1,localhost` (src/server.ts) / `localhost,127.0.0.1,*.ngrok-free.dev` (src/http.ts) |
+| `ALLOWED_ORIGINS` | – | (空) |
 
 ログ永続化（任意）:
 
