@@ -130,6 +130,55 @@ npx -y bitbank-lab-mcp
 - パラメータ改ざんを検知（トークン生成時と実行時のパラメータが一致しない場合は拒否）
 - キャンセルにも同様の確認フローを適用（`preview_cancel_order` / `preview_cancel_orders`）
 
+#### content / structuredContent / `_meta` の役割と HITL の境界
+
+MCP 仕様（SEP-1624 の整理）では `CallToolResult.content` と `structuredContent` の役割が次のように分かれている:
+
+- **`content`** — 会話 UX 向けの主要出力。多くのホスト（Claude Desktop など）で LLM のコンテキストに直接渡るのはここ。
+- **`structuredContent`** — 機械処理・UI ウィジェット向けの構造化データ。型安全・スキーマ検証用途。
+- **`_meta`** — クライアント／ホストが付随情報を渡すための領域（MCP Apps の UI ヒドレーション等）。
+
+ただし「`structuredContent` は LLM に渡らない」というのは**ホスト依存の挙動であり、仕様上の保証ではない**。実例:
+
+| ホスト | `content` | `structuredContent` の扱い |
+|---|---|---|
+| Claude Desktop | 主に LLM 入力 | 表示／補助。基本は LLM の主入力ではない（仕様保証ではない） |
+| Claude Code | 主に LLM 入力 | バージョンによっては LLM 入力に流す挙動が観測されている（`anthropics/claude-code#15412`） |
+| VS Code | 補助 | **`structuredContent` を優先的にモデルに渡す** |
+| Cursor / Windsurf | 主に LLM 入力 | 無視する実装が多い |
+| OpenAI Apps SDK | 会話に出る | ウィジェット用途。`structuredContent` と `content` は会話トランスクリプトに出る前提。`_meta` はコンポーネントへ転送 |
+
+このため本プロジェクトでは次の原則を採る:
+
+1. **LLM が判断すべき情報は `content[0].text` に厚く載せる。** 件数・主要フィールド・warning・打ち切り状態・ユーザー確認が必要な旨は、`content` を読んだだけで判断できるようにする。`.claude/rules/tools.md` の「content テキストにデータを含める」も参照。
+2. **`structuredContent` は UI / 機械処理 / 将来クライアント向けの補助データ**として扱う。「LLM 非可視」を安全境界とは**みなさない**。設計上 `structuredContent` を読むのは UI ウィジェット・Inspector・スクリプトと想定する。
+3. **CRITICAL 情報（`BITBANK_API_KEY` / `BITBANK_API_SECRET` / `ACCESS-SIGNATURE` 等）は `content` / `structuredContent` / `_meta` のどこにも載せない。** `.claude/rules/sensitive-data.md` の CRITICAL 区分に従う。
+4. **`confirmation_token`** は CRITICAL 寄りの「実行鍵」。後述の「`confirmation_token` の受け渡し」節に従い、`content[0].text` には載せず、ホスト UI / elicitation 経路を主流とする。
+
+#### `confirmation_token` の受け渡し
+
+`confirmation_token` は本来「ユーザーの最終確認を経たことの証拠」であり、LLM が独断で引用して `create_order` を呼べる文字列にしてはならない。実装は次の階層で扱う:
+
+1. **第一選択（elicitation 対応ホスト）** — `preview_order` ハンドラ内で `server.elicitInput` によりユーザー確認 → 同一ハンドラ内で `create_order` を呼び出して完結。**トークンはサーバープロセス内に閉じ、LLM/クライアントには返らない**。Claude Desktop / Claude Code のうち elicitation 対応版はこの経路。
+2. **第二選択（MCP Apps / SEP-1865 対応ホスト）** — `_meta.ui.resourceUri` 経由で iframe UI を表示し、UI が `app.callServerTool('create_order', ...)` でトークンを直接渡す。トークンは LLM コンテキストを通らない。
+3. **フォールバック（elicitation も SEP-1865 も非対応のホスト）** — 現状は `structuredContent.data.confirmation_token` でトークンを返している。これは**過渡的なフォールバックであり、`structuredContent` を LLM 非可視の安全境界とみなしているわけではない**。`content[0].text` 側にはトークンを載せず、「ユーザー確認なしに `create_order` を呼ばない」旨をツール説明文と本文末尾の両方で繰り返している。今後より安全な代替（後述）へ寄せていく。
+
+なお `content[0].text` には常に以下を載せる（LLM のハルシネーション防止）:
+
+- 注文／キャンセル対象の主要フィールド（pair / side / type / amount / 価格 / トリガー価格 / `position_side`）
+- 上流／事前バリデーションの warning
+- ユーザーの最終確認が必要であること
+
+これにより、LLM が `structuredContent` をまったく見られないクライアント（Cursor / Windsurf 系）でも、ユーザー確認の必要性と概要を理解した上で対話を継続できる。
+
+#### 将来の代替案（実装未着手）
+
+`structuredContent` も LLM 経路となり得る以上、トークンを `structuredContent` に置く現フォールバックは恒久解ではない。下記は別 PR で検討する設計案:
+
+- **サーバー側 pending action store** — `preview_*` がサーバー内 Map に pending entry を作り、短い不透明 ID（HMAC ではない）を返す。`create_order` 等は ID と「独立したユーザー合意シグナル」の両方を要求する。LLM が ID 単体を引用しても発注に至らない。
+- **`_meta` 経由の UI 専用チャネル** — MCP Apps 対応ホストでは `_meta` をコンポーネント側にだけ転送する仕様（OpenAI Apps SDK ドキュメント参照）を利用する。ただし MCP 基本仕様としては「`_meta` は LLM 非可視」を保証しないため、これ単体で安全境界とはしない。
+- **elicitation 非対応ホストの明示的サポート縮退** — 「HITL 強制が必要なホストは elicitation か SEP-1865 のどちらかを要求する」とする方針も選択肢。
+
 ### 検証の責務分担（preview と create）
 
 注文の事前検証は **`preview_order` を主責務** とする設計。`create_order` は HITL 確認 + bitbank 本 API の最終ガードを軸に、preview から create までの間に状態が変化し得る項目のみを軽量に再検証する。

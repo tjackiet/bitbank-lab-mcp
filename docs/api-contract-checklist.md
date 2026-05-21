@@ -634,6 +634,28 @@
 | 出金 API 非実装 | `request_withdrawal` を実装しない | ✅ 未実装 | ✅ |
 | 出力フィールド除外 | `account_number`, `account_owner`, `branch_name`, `account_type` を出力に含めない | ✅ `WithdrawalItemSchema` で意図的に欠落させ、`getMyDepositWithdrawal` の整形でも `bank_name` のみ抽出 | ✅ |
 | confirmation_token のマスク | `SENSITIVE_KEYS` でログマスク | ✅ `lib/logger.ts` で `confirmation_token` / `token` をマスク | ✅ |
+| confirmation_token を `content[0].text` に載せない | LLM 可視テキストに実行鍵を出さない | ✅ `preview_order` / `preview_cancel_order` / `preview_cancel_orders` の `fallbackText` はトークンを含まない（`tools/private/preview_*.ts` の `fallbackText` 構築箇所を参照） | ✅ |
+| confirmation_token を `structuredContent` に置く扱い | 「LLM 非可視」は仕様保証ではないため、過渡フォールバックとして許容するが恒久解とはしない | 🟡 現状 `structuredContent.data.confirmation_token` で返している。第一選択は elicitation で完結させる経路。詳細は `docs/private-api.md` の「`confirmation_token` の受け渡し」節と「将来の代替案」 | 🟡 |
+
+#### content / structuredContent / `_meta` の境界
+
+MCP 仕様（SEP-1624 の整理）と各ホストの実挙動は次のとおりで、**`structuredContent` を「LLM 非可視」と仮定するのは安全ではない**:
+
+| ホスト | `content` | `structuredContent` |
+|---|---|---|
+| Claude Desktop | 主に LLM 入力 | 表示／補助（LLM の主入力にはしないのが基本）。仕様保証ではない |
+| Claude Code | 主に LLM 入力 | バージョンによっては LLM 入力に流す挙動（`anthropics/claude-code#15412`） |
+| VS Code | 補助 | **`structuredContent` を優先的にモデルへ** |
+| Cursor / Windsurf | 主に LLM 入力 | 無視する実装が多い |
+| OpenAI Apps SDK | 会話に出る | ウィジェット用途。`structuredContent` と `content` は会話トランスクリプトに出る前提。`_meta` はコンポーネントへ転送 |
+
+このため本プロジェクトでは:
+
+1. LLM が判断する必要のある情報（件数・主要フィールド・warning・打ち切り状態・ユーザー確認の必要性）は **`content[0].text` に厚く載せる**。Claude Desktop を主クライアントとする以上、これが LLM の主入力。
+2. `structuredContent` は UI / 機械処理向けの補助とし、**LLM 非可視を安全境界とはみなさない**。
+3. CRITICAL 情報（API キー・HMAC 署名・`confirmation_token` 等の実行鍵）は **`content` / `structuredContent` / `_meta` のどこにも載せない**ことを原則とする。`confirmation_token` の現状は上表「過渡フォールバック」を参照。
+
+詳細運用とフォールバック整理は `docs/private-api.md` の「content / structuredContent / `_meta` の役割と HITL の境界」「`confirmation_token` の受け渡し」「将来の代替案」を参照。
 
 ---
 
