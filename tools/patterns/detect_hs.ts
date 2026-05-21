@@ -5,7 +5,7 @@
 import { generatePatternDiagram } from '../../lib/pattern-diagrams.js';
 import { finalizeConf, periodScoreDays } from './helpers.js';
 import { clamp01, marginFromRelDev, relDev } from './regression.js';
-import { HS_NECKLINE_MAX_PCT, validateHorizontalNeckline } from './structural.js';
+import { HS_NECKLINE_MAX_PCT, validateHorizontalNeckline, validatePriorTrend } from './structural.js';
 import type { DeduplicablePattern, DetectContext, DetectResult } from './types.js';
 
 // ── 定数 ──
@@ -48,6 +48,16 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 			const start = candles[p0.idx].isoTime;
 			const end = candles[p4.idx].isoTime;
 			if (start && end) {
+				const trend = validatePriorTrend(candles, p0.idx, p4.idx - p0.idx, 'down_or_sideways');
+				if (!trend.ok) {
+					debugCandidates.push({
+						type: 'inverse_head_and_shoulders',
+						accepted: false,
+						reason: `prior_trend_mismatch:${trend.classification}`,
+						indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+					});
+					continue;
+				}
 				const neckline = [
 					{ x: p1.idx, y: p1.price },
 					{ x: p3.idx, y: p3.price },
@@ -158,6 +168,16 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 			const start = candles[p0.idx].isoTime;
 			const end = candles[p4.idx].isoTime;
 			if (start && end) {
+				const trend = validatePriorTrend(candles, p0.idx, p4.idx - p0.idx, 'up_or_sideways');
+				if (!trend.ok) {
+					debugCandidates.push({
+						type: 'head_and_shoulders',
+						accepted: false,
+						reason: `prior_trend_mismatch:${trend.classification}`,
+						indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+					});
+					continue;
+				}
 				const neckline = [
 					{ x: p1.idx, y: p1.price },
 					{ x: p3.idx, y: p3.price },
@@ -287,6 +307,16 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 			const start = candles[p0.idx].isoTime;
 			const end = candles[p4.idx].isoTime;
 			if (!start || !end) continue;
+			const trend = validatePriorTrend(candles, p0.idx, p4.idx - p0.idx, 'up_or_sideways');
+			if (!trend.ok) {
+				debugCandidates.push({
+					type: 'head_and_shoulders',
+					accepted: false,
+					reason: `prior_trend_mismatch:${trend.classification}`,
+					indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+				});
+				continue;
+			}
 			const valleyBetween = allValleys.filter((v: { idx: number }) => v.idx > p0.idx && v.idx < p4.idx);
 			const postValleys = allValleys.filter((v: { idx: number }) => v.idx > p2.idx);
 			const minValley = valleyBetween.length
@@ -388,6 +418,16 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 			const start = candles[p0.idx].isoTime;
 			const end = candles[p4.idx].isoTime;
 			if (!start || !end) continue;
+			const trend = validatePriorTrend(candles, p0.idx, p4.idx - p0.idx, 'down_or_sideways');
+			if (!trend.ok) {
+				debugCandidates.push({
+					type: 'inverse_head_and_shoulders',
+					accepted: false,
+					reason: `prior_trend_mismatch:${trend.classification}`,
+					indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+				});
+				continue;
+			}
 			const peaksBetween = allPeaks.filter((v: { idx: number }) => v.idx > p0.idx && v.idx < p4.idx);
 			const postPeaks = allPeaks.filter((v: { idx: number }) => v.idx > p2.idx);
 			const maxPeak = peaksBetween.length
@@ -499,6 +539,17 @@ function tryFormingHS(ctx: DetectContext): DeduplicablePattern | null {
 	const patternDays = Math.round(formationBars * daysPerBar);
 	if (patternDays < FORMING_MIN_DAYS || patternDays > FORMING_MAX_DAYS) return null;
 
+	const trend = validatePriorTrend(candles, left.idx, rightShoulder.idx - left.idx, 'up_or_sideways');
+	if (!trend.ok) {
+		ctx.debugCandidates.push({
+			type: 'head_and_shoulders',
+			accepted: false,
+			reason: `prior_trend_mismatch:${trend.classification}`,
+			indices: [left.idx, head.idx, postHeadValley.idx, rightShoulder.idx],
+		});
+		return null;
+	}
+
 	// ネックライン
 	const preHeadValleys = allValleys.filter((v) => v.idx > left.idx && v.idx < head.idx);
 	const preHeadValley = preHeadValleys.length
@@ -599,6 +650,17 @@ function tryFormingInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 	const formationBars = Math.max(0, rightShoulder.idx - left.idx);
 	const patternDays = Math.round(formationBars * daysPerBar);
 	if (patternDays < FORMING_MIN_DAYS || patternDays > FORMING_MAX_DAYS) return null;
+
+	const trend = validatePriorTrend(candles, left.idx, rightShoulder.idx - left.idx, 'down_or_sideways');
+	if (!trend.ok) {
+		ctx.debugCandidates.push({
+			type: 'inverse_head_and_shoulders',
+			accepted: false,
+			reason: `prior_trend_mismatch:${trend.classification}`,
+			indices: [left.idx, head.idx, postHeadPeak.idx, rightShoulder.idx],
+		});
+		return null;
+	}
 
 	// ネックライン
 	const preHeadPeaks = allPeaks.filter((p) => p.idx > left.idx && p.idx < head.idx);
