@@ -279,6 +279,86 @@ describe('detectHeadAndShoulders', () => {
 		}
 	});
 
+	// ── HS_SHOULDER_MAX_PCT hard cap（PR: shoulder cap 配線） ──
+
+	it('H&S: tolerancePct=0.06 でも肩 ±6%（HS_SHOULDER_MAX_PCT 超過）なら検出しない', () => {
+		// left=100, right=106 → diff/max = 6/106 ≈ 0.0566 → > 0.05 cap だが ≤ 0.06 tolerancePct
+		// strict near() は通るが isSameLevel(.., 0.05) で弾かれる
+		const { candles, pivots } = buildHS({ leftShoulder: 100, rightShoulder: 106, head: 130 });
+		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.06 });
+		const result = detectHeadAndShoulders(ctx);
+
+		const hs = result.patterns.filter((p) => p.type === 'head_and_shoulders');
+		expect(hs).toHaveLength(0);
+
+		const rejected = ctx.debugCandidates.find(
+			(d) => d.type === 'head_and_shoulders' && d.accepted === false && d.reason === 'shoulders_not_near',
+		);
+		expect(rejected).toBeDefined();
+		const details = rejected?.details as Record<string, unknown> | undefined;
+		expect(details?.shoulderMaxPct).toBe(0.05);
+		expect(details?.shouldersDiffPct).toBeCloseTo(6 / 106, 6);
+	});
+
+	it('Inverse H&S: tolerancePct=0.06 でも肩 ±6%（HS_SHOULDER_MAX_PCT 超過）なら検出しない', () => {
+		const { candles, pivots } = buildInverseHS({ leftShoulder: 100, rightShoulder: 106, head: 70 });
+		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.06 });
+		const result = detectHeadAndShoulders(ctx);
+
+		const ihs = result.patterns.filter((p) => p.type === 'inverse_head_and_shoulders');
+		expect(ihs).toHaveLength(0);
+
+		const rejected = ctx.debugCandidates.find(
+			(d) => d.type === 'inverse_head_and_shoulders' && d.accepted === false && d.reason === 'shoulders_not_near',
+		);
+		expect(rejected).toBeDefined();
+		const details = rejected?.details as Record<string, unknown> | undefined;
+		expect(details?.shoulderMaxPct).toBe(0.05);
+		expect(details?.shouldersDiffPct).toBeCloseTo(6 / 106, 6);
+	});
+
+	it('H&S: relaxed fallback でも肩 ±5% を超える候補は検出しない', () => {
+		// left=100, right=106: strict(0.04) は near() で fail → relaxed パスに落ちる
+		// relaxed factor.shoulder=2.0 で 0.04*2.0=0.08 → 0.0566 ≤ 0.08 で通過していたが
+		// isSameLevel(100, 106, 0.05) で hard reject される
+		const { candles, pivots } = buildHS({ leftShoulder: 100, rightShoulder: 106, head: 130 });
+		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.04 });
+		const result = detectHeadAndShoulders(ctx);
+
+		const hs = result.patterns.filter((p) => p.type === 'head_and_shoulders');
+		expect(hs).toHaveLength(0);
+	});
+
+	it('Inverse H&S: relaxed fallback でも肩 ±5% を超える候補は検出しない', () => {
+		const { candles, pivots } = buildInverseHS({ leftShoulder: 100, rightShoulder: 106, head: 70 });
+		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.04 });
+		const result = detectHeadAndShoulders(ctx);
+
+		const ihs = result.patterns.filter((p) => p.type === 'inverse_head_and_shoulders');
+		expect(ihs).toHaveLength(0);
+	});
+
+	it('H&S: strict 経路で肩差 5% 以内なら引き続き検出される（非退行）', () => {
+		// left=100, right=104 → diff/max = 4/104 ≈ 0.0385 → < 0.05 cap, < 0.04 tolerancePct
+		const { candles, pivots } = buildHS({ leftShoulder: 100, rightShoulder: 104, head: 130 });
+		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.04 });
+		const result = detectHeadAndShoulders(ctx);
+
+		const hs = result.patterns.filter((p) => p.type === 'head_and_shoulders');
+		expect(hs.length).toBeGreaterThanOrEqual(1);
+		expect(hs[0]?._fallback).toBeUndefined();
+	});
+
+	it('Inverse H&S: strict 経路で肩差 5% 以内なら引き続き検出される（非退行）', () => {
+		const { candles, pivots } = buildInverseHS({ leftShoulder: 100, rightShoulder: 104, head: 70 });
+		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.04 });
+		const result = detectHeadAndShoulders(ctx);
+
+		const ihs = result.patterns.filter((p) => p.type === 'inverse_head_and_shoulders');
+		expect(ihs.length).toBeGreaterThanOrEqual(1);
+		expect(ihs[0]?._fallback).toBeUndefined();
+	});
+
 	// ── 形成中 H&S ───────────────────────────────────────────
 
 	it('includeForming=true + 右肩形成中 → forming H&S 検出', () => {

@@ -5,7 +5,13 @@
 import { generatePatternDiagram } from '../../lib/pattern-diagrams.js';
 import { finalizeConf, periodScoreDays } from './helpers.js';
 import { clamp01, marginFromRelDev, relDev } from './regression.js';
-import { HS_NECKLINE_MAX_PCT, validateHorizontalNeckline, validatePriorTrend } from './structural.js';
+import {
+	HS_NECKLINE_MAX_PCT,
+	HS_SHOULDER_MAX_PCT,
+	isSameLevel,
+	validateHorizontalNeckline,
+	validatePriorTrend,
+} from './structural.js';
 import type { DeduplicablePattern, DetectContext, DetectResult } from './types.js';
 
 // ── 定数 ──
@@ -41,7 +47,7 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 			p4.idx - p3.idx < minDist
 		)
 			continue;
-		const shouldersNear = near(p0.price, p4.price);
+		const shouldersNear = near(p0.price, p4.price) && isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
 		const headLower = p2.price < Math.min(p0.price, p4.price) * (1 - tolerancePct);
 		const necklineCheck = validateHorizontalNeckline(p1.price, p3.price, HS_NECKLINE_MAX_PCT);
 		if (shouldersNear && headLower && necklineCheck.ok) {
@@ -125,6 +131,7 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 					rightShoulder: p4.price,
 					shouldersDiff: Math.abs(p0.price - p4.price),
 					shouldersDiffPct: Math.abs(p0.price - p4.price) / Math.max(1, Math.max(p0.price, p4.price)),
+					shoulderMaxPct: HS_SHOULDER_MAX_PCT,
 					head: p2.price,
 					thresholdPct: tolerancePct,
 					necklineP1: p1.price,
@@ -161,7 +168,7 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 			p4.idx - p3.idx < minDist
 		)
 			continue;
-		const shouldersNear = near(p0.price, p4.price);
+		const shouldersNear = near(p0.price, p4.price) && isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
 		const headHigher = p2.price > Math.max(p0.price, p4.price) * (1 + tolerancePct);
 		const necklineCheck = validateHorizontalNeckline(p1.price, p3.price, HS_NECKLINE_MAX_PCT);
 		if (shouldersNear && headHigher && necklineCheck.ok) {
@@ -245,6 +252,7 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 					rightShoulder: p4.price,
 					shouldersDiff: Math.abs(p0.price - p4.price),
 					shouldersDiffPct: Math.abs(p0.price - p4.price) / Math.max(1, Math.max(p0.price, p4.price)),
+					shoulderMaxPct: HS_SHOULDER_MAX_PCT,
 					head: p2.price,
 					thresholdPct: tolerancePct,
 					necklineP1: p1.price,
@@ -281,7 +289,8 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 			)
 				continue;
 			const shouldersNearRelaxed =
-				Math.abs(p0.price - p4.price) / Math.max(1, Math.max(p0.price, p4.price)) <= tolerancePct * factors.shoulder;
+				Math.abs(p0.price - p4.price) / Math.max(1, Math.max(p0.price, p4.price)) <= tolerancePct * factors.shoulder &&
+				isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
 			const headHigherRelaxed = p2.price > Math.max(p0.price, p4.price) * (1 + tolerancePct * factors.head);
 			const necklineCheck = validateHorizontalNeckline(p1.price, p3.price, HS_NECKLINE_MAX_PCT);
 			if (!shouldersNearRelaxed || !headHigherRelaxed || !necklineCheck.ok) {
@@ -392,7 +401,8 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 			)
 				continue;
 			const shouldersNearRelaxed =
-				Math.abs(p0.price - p4.price) / Math.max(1, Math.max(p0.price, p4.price)) <= tolerancePct * factors.shoulder;
+				Math.abs(p0.price - p4.price) / Math.max(1, Math.max(p0.price, p4.price)) <= tolerancePct * factors.shoulder &&
+				isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
 			const headLowerRelaxed = p2.price < Math.min(p0.price, p4.price) * (1 - tolerancePct * factors.head);
 			const necklineCheck = validateHorizontalNeckline(p1.price, p3.price, HS_NECKLINE_MAX_PCT);
 			if (!(shouldersNearRelaxed && headLowerRelaxed && necklineCheck.ok)) {
