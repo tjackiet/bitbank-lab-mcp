@@ -253,6 +253,56 @@ function buildUnequalPeaksDoubleTopCandles(year = 2026): Candle[] {
 	return closes.map((close, index) => makeCandle(index, close, year));
 }
 
+// --- 上昇トレンド継続中の偽 double_bottom (PR #3 prior_trend hard reject) ---
+// idx 0-25 で 100→215 の強い上昇トレンド、その後 idx 26-44 で形成中ダブルボトム
+// らしき形（左谷 200, ミッドピーク 214, 右谷 199, 直近 211）を作る。
+// priorReturn = (close[30]=200 - close[20]=185) / 185 ≈ 0.081 → 'up' 分類で
+// down_or_sideways に矛盾 → hard reject されるべき。
+function buildUptrendThenFakeDoubleBottomCandles(year = 2026): Candle[] {
+	const closes = [
+		// idx 0-9: 上昇トレンド 100 → 140
+		100, 104, 109, 114, 118, 122, 127, 132, 136, 140,
+		// idx 10-19: 上昇継続 140 → 180
+		144, 148, 152, 156, 160, 164, 168, 172, 176, 180,
+		// idx 20-25: 上昇継続 → ピーク 215
+		185, 190, 195, 202, 208, 215,
+		// idx 26-30: 左谷 200 まで小さく押し目
+		212, 208, 205, 203, 200,
+		// idx 31-35: ミッドピーク 214 まで戻り
+		202, 205, 208, 211, 214,
+		// idx 36-40: 右谷 199 まで押し目
+		211, 208, 205, 202, 199,
+		// idx 41-44: 直近の戻り
+		202, 205, 208, 211,
+	];
+	return closes.map((close, index) => makeCandle(index, close, year));
+}
+
+// --- 下降トレンド継続中の偽 head_and_shoulders (PR #3 prior_trend hard reject) ---
+// idx 0-20 で 250→100 の強い下降トレンド、その後 idx 21-45 で
+// H-L-H-L-H (左肩 130 / 谷1 110 / 頭 150 / 谷2 110 / 右肩 130) を形成。
+// priorReturn = (close[25]=130 - close[15]=138) / 138 ≈ -0.058 → 'down' 分類で
+// up_or_sideways に矛盾 → hard reject されるべき。
+function buildDowntrendThenFakeHSCandles(year = 2026): Candle[] {
+	const closes = [
+		// idx 0-20: 下降トレンド 250 → 100
+		250, 243, 235, 228, 220, 213, 205, 198, 190, 183, 175, 168, 160, 153, 145, 138, 130, 123, 115, 108, 100,
+		// idx 21-25: 左肩 130 へ
+		108, 115, 121, 126, 130,
+		// idx 26-30: 谷1 110 へ
+		125, 120, 115, 112, 110,
+		// idx 31-35: 頭 150 へ
+		118, 126, 134, 142, 150,
+		// idx 36-40: 谷2 110 へ
+		143, 135, 126, 118, 110,
+		// idx 41-45: 右肩 130 へ
+		115, 121, 126, 129, 130,
+		// idx 46-48: 続落
+		125, 120, 115,
+	];
+	return closes.map((close, index) => makeCandle(index, close, year));
+}
+
 // --- Double bottom with structurally unequal valleys (PR #2 double hard cap) ---
 // valley1≒100, peak≒120, valley2≒95 → 5% 差。tolerancePct=0.06 では near() を通るが
 // DOUBLE_LEVEL_MAX_PCT=0.03 の hard cap で弾かれるべき
@@ -889,6 +939,86 @@ describe('detect_patterns fixtures', () => {
 			assertOk(res);
 			const ihs = res.data.patterns.filter((p: { type: string }) => p.type === 'inverse_head_and_shoulders');
 			expect(ihs.length).toBeGreaterThanOrEqual(1);
+		});
+	});
+
+	// ── 形成前トレンド方向の hard reject（PR #3） ──
+	describe('反転パターン形成前トレンドの hard reject', () => {
+		it('上昇トレンド継続中は forming の double_bottom を検出しない（priorReturn が up）', async () => {
+			mockedAnalyzeIndicators.mockResolvedValueOnce(
+				asMockResult(indicatorsOk(buildUptrendThenFakeDoubleBottomCandles())),
+			);
+
+			const res = await detectPatterns('btc_jpy', '1day', 45, {
+				patterns: ['double_bottom'],
+				swingDepth: 2,
+				tolerancePct: 0.04,
+				includeForming: true,
+				includeCompleted: true,
+			});
+
+			assertOk(res);
+			const dbs = res.data.patterns.filter((p: { type: string }) => p.type === 'double_bottom');
+			expect(dbs).toHaveLength(0);
+
+			const debugCands =
+				(res.meta?.debug as { candidates?: Array<{ accepted?: boolean; reason?: string }> } | undefined)?.candidates ??
+				[];
+			const priorTrendRejects = debugCands.filter(
+				(c) => !c.accepted && typeof c.reason === 'string' && c.reason.startsWith('prior_trend_mismatch'),
+			);
+			expect(priorTrendRejects.length).toBeGreaterThan(0);
+		});
+
+		it('下降トレンド継続中は head_and_shoulders を検出しない（priorReturn が down）', async () => {
+			mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(indicatorsOk(buildDowntrendThenFakeHSCandles())));
+
+			const res = await detectPatterns('btc_jpy', '1day', 49, {
+				patterns: ['head_and_shoulders'],
+				swingDepth: 2,
+				tolerancePct: 0.04,
+				includeCompleted: true,
+				includeForming: false,
+			});
+
+			assertOk(res);
+			const hsPatterns = res.data.patterns.filter((p: { type: string }) => p.type === 'head_and_shoulders');
+			expect(hsPatterns).toHaveLength(0);
+
+			const debugCands =
+				(res.meta?.debug as { candidates?: Array<{ accepted?: boolean; reason?: string }> } | undefined)?.candidates ??
+				[];
+			const priorTrendRejects = debugCands.filter(
+				(c) => !c.accepted && typeof c.reason === 'string' && c.reason.startsWith('prior_trend_mismatch'),
+			);
+			expect(priorTrendRejects.length).toBeGreaterThan(0);
+		});
+
+		// pattern start がデータ先頭付近（lookback 不足）の場合、
+		// validatePriorTrend は insufficient_data を返し hard reject しない。
+		// 既存 fixture（pattern start idx ≦ 5）で検出が維持されることを確認。
+		it('pattern 開始がデータ先頭付近の場合、prior_trend で reject しない', async () => {
+			mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(indicatorsOk(buildCompletedDoubleTopCandles())));
+
+			const res = await detectPatterns('btc_jpy', '1day', 26, {
+				patterns: ['double_top'],
+				swingDepth: 2,
+				tolerancePct: 0.02,
+				includeCompleted: true,
+				includeForming: false,
+			});
+
+			assertOk(res);
+			const dt = res.data.patterns.filter((p: { type: string }) => p.type === 'double_top');
+			expect(dt).toHaveLength(1);
+
+			const debugCands =
+				(res.meta?.debug as { candidates?: Array<{ accepted?: boolean; reason?: string }> } | undefined)?.candidates ??
+				[];
+			const priorTrendRejects = debugCands.filter(
+				(c) => c.accepted === false && typeof c.reason === 'string' && c.reason.startsWith('prior_trend_mismatch'),
+			);
+			expect(priorTrendRejects).toHaveLength(0);
 		});
 	});
 
