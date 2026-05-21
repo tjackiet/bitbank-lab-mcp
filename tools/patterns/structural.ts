@@ -12,6 +12,8 @@
  * 依存させず、構造検証の観点で純粋な相対差を返す `relDiff` を独立に持つ。
  */
 
+import { linearRegressionWithR2 } from './regression.js';
+
 // ---------- 定数 ----------
 
 /** double_top / double_bottom の2点（山-山、谷-谷）同水準の構造上限 */
@@ -29,6 +31,12 @@ export const PRIOR_TREND_SIDEWAYS_PCT = 0.05;
 /** 前提トレンド判定の lookback バー数（min / max） */
 export const PRIOR_TREND_LOOKBACK_MIN = 10;
 export const PRIOR_TREND_LOOKBACK_MAX = 30;
+
+/** 前提トレンド判定で「方向性のあるトレンド」とみなす efficiency 下限 */
+export const PRIOR_TREND_MIN_EFFICIENCY = 0.55;
+
+/** 前提トレンド判定で「方向性のあるトレンド」とみなす R² 下限 */
+export const PRIOR_TREND_MIN_R2 = 0.35;
 
 // ---------- 純粋関数 ----------
 
@@ -79,6 +87,9 @@ export interface PriorTrendResult {
 	lookbackBars: number;
 	classification: PriorTrendClassification;
 	reason?: string;
+	rangePct?: number;
+	efficiency?: number;
+	r2?: number;
 }
 
 /**
@@ -88,12 +99,25 @@ export interface PriorTrendResult {
  * - `priorStart  = max(0, startIdx - lookbackBars)`
  * - `priorReturn = (close[startIdx] - close[priorStart]) / close[priorStart]`
  *
- * - `expected='up_or_sideways'`  は `priorReturn >= -PRIOR_TREND_SIDEWAYS_PCT` を OK
- * - `expected='down_or_sideways'` は `priorReturn <=  PRIOR_TREND_SIDEWAYS_PCT` を OK
- * - データ不足（`startIdx - lookbackBars < 0`、すなわち `startIdx < lookbackBars`）は
- *   `ok=true`, `classification='insufficient_data'` で返す（hard reject しない）
+ * 補助指標（lookback window 内の close 集合に対する集計）:
+ * - `rangePct   = (maxClose - minClose) / priorClose`
+ * - `efficiency = |startClose - priorClose| / (maxClose - minClose)`
+ * - `r2`         = lookback window の (idx, close) に対する線形回帰 R²
  *
- * 将来 R² やレンジ性判定を追加するため、結果はメタ情報付きの object を返す。
+ * 分類ルール:
+ * - データ不足（`startIdx < lookbackBars`）は `classification='insufficient_data'` で
+ *   `ok=true`（hard reject しない）
+ * - `|priorReturn| <= PRIOR_TREND_SIDEWAYS_PCT` は `classification='sideways'`
+ * - `|priorReturn| > PRIOR_TREND_SIDEWAYS_PCT` でも、
+ *   `efficiency >= PRIOR_TREND_MIN_EFFICIENCY` も `r2 >= PRIOR_TREND_MIN_R2` も
+ *   満たさない場合は `classification='sideways'`（レンジ内の端点移動を弾く）
+ * - 上記を満たす場合のみ `priorReturn > 0 → 'up'` / `priorReturn < 0 → 'down'`
+ *
+ * `ok` 判定:
+ * - `expected='up_or_sideways'`  → `up` / `sideways` / `insufficient_data` を OK
+ * - `expected='down_or_sideways'` → `down` / `sideways` / `insufficient_data` を OK
+ *
+ * close 欠損や window 不正の場合は安全側に `sideways` または `insufficient_data` に倒す。
  */
 export function validatePriorTrend(
 	candles: ReadonlyArray<{ close: number }>,
@@ -106,8 +130,10 @@ export function validatePriorTrend(
 		Math.min(PRIOR_TREND_LOOKBACK_MAX, Math.round(patternBars * 0.5)),
 	);
 	const priorStart = Math.max(0, startIdx - lookbackBars);
-	const startClose = candles[startIdx]?.close ?? 0;
-	const priorClose = candles[priorStart]?.close ?? 0;
+	const startCloseRaw = candles[startIdx]?.close;
+	const priorCloseRaw = candles[priorStart]?.close;
+	const startClose = typeof startCloseRaw === 'number' && Number.isFinite(startCloseRaw) ? startCloseRaw : 0;
+	const priorClose = typeof priorCloseRaw === 'number' && Number.isFinite(priorCloseRaw) ? priorCloseRaw : 0;
 	const priorReturn = priorClose === 0 ? 0 : (startClose - priorClose) / priorClose;
 
 	if (startIdx < lookbackBars) {
@@ -120,17 +146,74 @@ export function validatePriorTrend(
 		};
 	}
 
+	// 両端の close が欠損／不正な場合は安全側に sideways
+	if (priorClose === 0 || startClose === 0) {
+		const okMissing = expected === 'up_or_sideways' || expected === 'down_or_sideways';
+		return {
+			ok: okMissing,
+			priorReturn,
+			lookbackBars,
+			classification: 'sideways',
+			reason: 'missing_close',
+		};
+	}
+
+	// |priorReturn| が sideways 範囲内なら早期 return（補助指標の計算は不要）
+	if (Math.abs(priorReturn) <= PRIOR_TREND_SIDEWAYS_PCT) {
+		return {
+			ok: true,
+			priorReturn,
+			lookbackBars,
+			classification: 'sideways',
+		};
+	}
+
+	// lookback window の集計（priorStart .. startIdx を含む両端）
+	const points: Array<{ x: number; y: number }> = [];
+	let maxClose = Number.NEGATIVE_INFINITY;
+	let minClose = Number.POSITIVE_INFINITY;
+	let hasMissingClose = false;
+	for (let i = priorStart; i <= startIdx; i++) {
+		const c = candles[i]?.close;
+		if (typeof c !== 'number' || !Number.isFinite(c)) {
+			hasMissingClose = true;
+			continue;
+		}
+		if (c > maxClose) maxClose = c;
+		if (c < minClose) minClose = c;
+		points.push({ x: i, y: c });
+	}
+
+	// window 内に欠損があれば安全側に sideways
+	if (hasMissingClose || points.length < 2 || !Number.isFinite(maxClose) || !Number.isFinite(minClose)) {
+		return {
+			ok: true,
+			priorReturn,
+			lookbackBars,
+			classification: 'sideways',
+			reason: 'invalid_window',
+		};
+	}
+
+	const range = maxClose - minClose;
+	const rangePct = range / priorClose;
+	const efficiency = range > 0 ? Math.abs(startClose - priorClose) / range : 0;
+	const { r2 } = linearRegressionWithR2(points);
+
 	let classification: PriorTrendClassification;
-	if (priorReturn > PRIOR_TREND_SIDEWAYS_PCT) {
-		classification = 'up';
-	} else if (priorReturn < -PRIOR_TREND_SIDEWAYS_PCT) {
-		classification = 'down';
-	} else {
+	const isDirectional = efficiency >= PRIOR_TREND_MIN_EFFICIENCY || r2 >= PRIOR_TREND_MIN_R2;
+	if (!isDirectional) {
 		classification = 'sideways';
+	} else if (priorReturn > 0) {
+		classification = 'up';
+	} else {
+		classification = 'down';
 	}
 
 	const ok =
-		expected === 'up_or_sideways' ? priorReturn >= -PRIOR_TREND_SIDEWAYS_PCT : priorReturn <= PRIOR_TREND_SIDEWAYS_PCT;
+		expected === 'up_or_sideways'
+			? classification === 'up' || classification === 'sideways'
+			: classification === 'down' || classification === 'sideways';
 
-	return { ok, priorReturn, lookbackBars, classification };
+	return { ok, priorReturn, lookbackBars, classification, rangePct, efficiency, r2 };
 }

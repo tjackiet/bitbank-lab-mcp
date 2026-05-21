@@ -6,6 +6,8 @@ import {
 	isSameLevel,
 	PRIOR_TREND_LOOKBACK_MAX,
 	PRIOR_TREND_LOOKBACK_MIN,
+	PRIOR_TREND_MIN_EFFICIENCY,
+	PRIOR_TREND_MIN_R2,
 	PRIOR_TREND_SIDEWAYS_PCT,
 	relDiff,
 	validateHorizontalNeckline,
@@ -20,6 +22,8 @@ describe('定数', () => {
 		expect(PRIOR_TREND_SIDEWAYS_PCT).toBe(0.05);
 		expect(PRIOR_TREND_LOOKBACK_MIN).toBe(10);
 		expect(PRIOR_TREND_LOOKBACK_MAX).toBe(30);
+		expect(PRIOR_TREND_MIN_EFFICIENCY).toBe(0.55);
+		expect(PRIOR_TREND_MIN_R2).toBe(0.35);
 	});
 });
 
@@ -214,6 +218,189 @@ describe('validatePriorTrend', () => {
 			const result = validatePriorTrend(makeCandles(closes), 15, 5, 'up_or_sideways');
 			expect(result.ok).toBe(false);
 			expect(result.classification).toBe('down');
+		});
+	});
+
+	// ── レンジ性フィルタ（efficiency / r2） ──
+	describe('レンジ性フィルタ', () => {
+		it('レンジ内の擬似下降は sideways（priorReturn -7% でも efficiency/r2 低い）', () => {
+			// idx 5 から idx 15 まで価格がレンジ内で激しくジグザグに振動する。
+			// close[5]=100 が priorClose、close[15]=93 が startClose → priorReturn=-0.07
+			//   maxClose=120, minClose=80, range=40
+			//   efficiency= |93-100|/40 = 7/40 = 0.175  → < 0.55
+			//   ジグザグデータの線形回帰は slope ≈ 0、r2 も低く < 0.35
+			const closes = [
+				100,
+				100,
+				100,
+				100,
+				100, // idx 0-4: 余白
+				100, // idx 5: priorClose
+				120,
+				80,
+				115,
+				85, // idx 6-9: ジグザグ
+				120,
+				80,
+				115,
+				85,
+				100, // idx 10-14: ジグザグ
+				93, // idx 15: startClose
+			];
+			const result = validatePriorTrend(makeCandles(closes), 15, 5, 'down_or_sideways');
+			expect(result.priorReturn).toBeCloseTo(-0.07, 10);
+			expect(result.classification).toBe('sideways');
+			expect(result.ok).toBe(true);
+			expect(result.efficiency).toBeDefined();
+			expect(result.r2).toBeDefined();
+			expect(result.efficiency).toBeLessThan(PRIOR_TREND_MIN_EFFICIENCY);
+			expect(result.r2).toBeLessThan(PRIOR_TREND_MIN_R2);
+		});
+
+		it('なだらかな下降トレンドは down（efficiency と r2 が共に高い）', () => {
+			// idx 5 → idx 15 で 100 → 92 へほぼ単調下降。priorReturn ≈ -0.08
+			const closes = [
+				100,
+				100,
+				100,
+				100,
+				100, // idx 0-4: 余白
+				100,
+				99,
+				98,
+				97,
+				96,
+				95,
+				94.5,
+				94,
+				93.5,
+				92.5,
+				92,
+			];
+			const result = validatePriorTrend(makeCandles(closes), 15, 5, 'down_or_sideways');
+			expect(result.priorReturn).toBeCloseTo(-0.08, 10);
+			expect(result.classification).toBe('down');
+			expect(result.ok).toBe(true);
+			expect(result.efficiency!).toBeGreaterThanOrEqual(PRIOR_TREND_MIN_EFFICIENCY);
+			expect(result.r2!).toBeGreaterThanOrEqual(PRIOR_TREND_MIN_R2);
+		});
+
+		it('なだらかな上昇トレンドは up（efficiency と r2 が共に高い）', () => {
+			// idx 5 → idx 15 で 100 → 108 へほぼ単調上昇。priorReturn ≈ +0.08
+			const closes = [
+				100,
+				100,
+				100,
+				100,
+				100, // idx 0-4: 余白
+				100,
+				101,
+				102,
+				103,
+				104,
+				105,
+				105.5,
+				106,
+				106.5,
+				107.5,
+				108,
+			];
+			const result = validatePriorTrend(makeCandles(closes), 15, 5, 'up_or_sideways');
+			expect(result.priorReturn).toBeCloseTo(0.08, 10);
+			expect(result.classification).toBe('up');
+			expect(result.ok).toBe(true);
+			expect(result.efficiency!).toBeGreaterThanOrEqual(PRIOR_TREND_MIN_EFFICIENCY);
+			expect(result.r2!).toBeGreaterThanOrEqual(PRIOR_TREND_MIN_R2);
+		});
+
+		it('大きな下降はノイズが多少あっても down', () => {
+			// priorReturn=-15% 程度。中盤に多少のリバウンドがあるが、
+			// efficiency は十分高く trend として残る。
+			const closes = [
+				100,
+				100,
+				100,
+				100,
+				100, // idx 0-4: 余白
+				100,
+				96,
+				92,
+				90,
+				93,
+				88,
+				86,
+				90,
+				88,
+				85,
+				85,
+			];
+			const result = validatePriorTrend(makeCandles(closes), 15, 5, 'down_or_sideways');
+			expect(result.priorReturn).toBeCloseTo(-0.15, 10);
+			expect(result.classification).toBe('down');
+			expect(result.ok).toBe(true);
+			// 大きく下降していて efficiency が閾値以上であること
+			expect(result.efficiency!).toBeGreaterThanOrEqual(PRIOR_TREND_MIN_EFFICIENCY);
+		});
+
+		it('r2 だけが閾値以上の場合も up/down に分類される', () => {
+			// 振幅は小さいが線形にフィットするデータ。
+			// closes = 100, 100, 99, 100, 99, 98, 99, 98, 97, 98, 97 (priorClose=100, startClose=97)
+			// priorReturn = -0.03 → 既に sideways の早期 return を取るため、
+			// |priorReturn| > 0.05 の条件を満たすデータに調整する必要がある。
+			// 線形ノイズ近似: y = 100 - 1*step + small_noise。step=10 で startClose=90 → priorReturn=-0.1
+			// 振幅は noise 由来。
+			const closes = [
+				100,
+				100,
+				100,
+				100,
+				100, // idx 0-4: 余白
+				100,
+				99,
+				99.5,
+				97.5,
+				97,
+				96,
+				95.5,
+				93.5,
+				93,
+				91,
+				90,
+			];
+			const result = validatePriorTrend(makeCandles(closes), 15, 5, 'down_or_sideways');
+			expect(result.priorReturn).toBeCloseTo(-0.1, 10);
+			expect(result.classification).toBe('down');
+			expect(result.r2!).toBeGreaterThanOrEqual(PRIOR_TREND_MIN_R2);
+		});
+
+		it('rangePct / efficiency / r2 は補助指標として戻り値に含まれる', () => {
+			const closes = [100, 100, 100, 100, 100, 100, 101, 102, 103, 104, 105, 105.5, 106, 106.5, 107.5, 108];
+			const result = validatePriorTrend(makeCandles(closes), 15, 5, 'up_or_sideways');
+			expect(typeof result.rangePct).toBe('number');
+			expect(typeof result.efficiency).toBe('number');
+			expect(typeof result.r2).toBe('number');
+			expect(Number.isFinite(result.rangePct!)).toBe(true);
+			expect(Number.isFinite(result.efficiency!)).toBe(true);
+			expect(Number.isFinite(result.r2!)).toBe(true);
+		});
+
+		it('|priorReturn| <= sideways 範囲なら efficiency/r2 を計算せず sideways', () => {
+			// priorReturn=0 → 早期 return パスで rangePct/efficiency/r2 は undefined
+			const closes = Array.from({ length: 16 }, () => 100);
+			const result = validatePriorTrend(makeCandles(closes), 15, 5, 'down_or_sideways');
+			expect(result.classification).toBe('sideways');
+			expect(result.rangePct).toBeUndefined();
+			expect(result.efficiency).toBeUndefined();
+			expect(result.r2).toBeUndefined();
+		});
+
+		it('insufficient_data は rangePct/efficiency/r2 を計算しない', () => {
+			const closes = Array.from({ length: 6 }, () => 100);
+			const result = validatePriorTrend(makeCandles(closes), 5, 5, 'down_or_sideways');
+			expect(result.classification).toBe('insufficient_data');
+			expect(result.rangePct).toBeUndefined();
+			expect(result.efficiency).toBeUndefined();
+			expect(result.r2).toBeUndefined();
 		});
 	});
 });
