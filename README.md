@@ -444,8 +444,10 @@ curl -X POST http://localhost:8787/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 
-# 別ターミナルから Inspector で接続（Inspector の Header 設定で Authorization を追加）
+# 別ターミナルから Inspector で接続
 npx @modelcontextprotocol/inspector http://localhost:8787/mcp
+# Inspector の UI で接続設定 → "Authentication" / "Headers" セクションに
+# `Authorization: Bearer $MCP_HTTP_TOKEN` を追加してから接続する。
 ```
 
 #### HTTP transport 用の環境変数
@@ -454,11 +456,13 @@ npx @modelcontextprotocol/inspector http://localhost:8787/mcp
 |---|---|---|---|
 | `MCP_ENABLE_HTTP` | – | `0` | `1` で HTTP transport を有効化 |
 | `PORT` | HTTP 時必須 | – | HTTP listen ポート |
-| `MCP_HTTP_TOKEN` | HTTP 時必須 | – | Bearer 認証トークン。未設定なら起動拒否 |
-| `RATE_LIMIT_WINDOW_MS` | – | `60000` | rate limit のウィンドウ (ms) |
-| `RATE_LIMIT_MAX` | – | `60` | ウィンドウあたりの最大リクエスト数 |
-| `ALLOWED_HOSTS` | – | `127.0.0.1,localhost` | DNS rebinding 防御用の許可ホスト |
+| `MCP_HTTP_TOKEN` | HTTP 時必須 | – | Bearer 認証トークン。未設定 / 空白のみなら起動拒否 |
+| `RATE_LIMIT_WINDOW_MS` | – | `60000` | rate limit のウィンドウ (ms)。NaN / 0 以下はデフォルトに fallback |
+| `RATE_LIMIT_MAX` | – | `60` | ウィンドウあたりの最大リクエスト数。NaN / 0 以下はデフォルトに fallback |
+| `ALLOWED_HOSTS` | – | `127.0.0.1,localhost` (※1) | DNS rebinding 防御用の許可ホスト |
 | `ALLOWED_ORIGINS` | – | (空) | CORS Origin の許可リスト |
+
+※1 `MCP_ENABLE_HTTP=1` で `src/server.ts` を起動した場合のデフォルト。`tsx src/http.ts` を単独起動した場合のみデフォルトが `localhost,127.0.0.1,*.ngrok-free.dev` になる (ngrok 経由の検証用)。
 
 不正な / 欠落した Authorization ヘッダは `401 { "error": "Unauthorized" }`、レート超過は `429 { "error": "Too many requests. ..." }` を返す。
 

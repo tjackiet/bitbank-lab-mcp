@@ -409,7 +409,10 @@ if (useHttp) {
 			// no stdout/stderr output to avoid STDIO transport contamination
 		});
 	} catch (e) {
+		// useHttp=true のとき stdio は既にスキップされているため、HTTP 起動に失敗した時点で
+		// トランスポート無しのままプロセスが生きてしまう。明示的に再 throw して落とす。
 		// eslint-disable-next-line no-console
-		console.warn('HTTP transport setup skipped:', getErrorMessage(e));
+		console.warn('HTTP transport setup failed:', getErrorMessage(e));
+		throw e;
 	}
 }

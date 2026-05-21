@@ -82,20 +82,23 @@ docker run -it --rm -p 8787:8787 \
   -e NO_COLOR=1 -e LOG_LEVEL=info \
   bitbank-mcp
 
-# 別ターミナルから Inspector で接続（Inspector の Header 設定で
-# Authorization: Bearer $MCP_HTTP_TOKEN を付与する）
+# 別ターミナルから Inspector で接続
 npx @modelcontextprotocol/inspector http://localhost:8787/mcp
+# Inspector の UI で接続設定 → "Authentication" / "Headers" セクションに
+# Authorization: Bearer $MCP_HTTP_TOKEN を追加してから接続する。
 ```
 
 HTTP transport に関連する環境変数:
 
 | 環境変数 | 必須 | デフォルト |
 |---|---|---|
-| `MCP_HTTP_TOKEN` | HTTP 時必須 | – |
-| `RATE_LIMIT_WINDOW_MS` | – | `60000` |
-| `RATE_LIMIT_MAX` | – | `60` |
-| `ALLOWED_HOSTS` | – | `127.0.0.1,localhost` (src/server.ts) / `localhost,127.0.0.1,*.ngrok-free.dev` (src/http.ts) |
+| `MCP_HTTP_TOKEN` | HTTP 時必須 (空白のみは無効) | – |
+| `RATE_LIMIT_WINDOW_MS` | – | `60000` (NaN / 0 以下は fallback) |
+| `RATE_LIMIT_MAX` | – | `60` (NaN / 0 以下は fallback) |
+| `ALLOWED_HOSTS` | – | `127.0.0.1,localhost` (※) |
 | `ALLOWED_ORIGINS` | – | (空) |
+
+※ `MCP_ENABLE_HTTP=1` で `src/server.ts` (本番経路) を起動した場合のデフォルト。`tsx src/http.ts` を単独起動 (ngrok 検証用) した場合のみ `localhost,127.0.0.1,*.ngrok-free.dev` になる。
 
 ログ永続化（任意）:
 

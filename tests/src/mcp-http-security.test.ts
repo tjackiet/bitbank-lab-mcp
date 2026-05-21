@@ -2,7 +2,7 @@ import type http from 'node:http';
 import { createServer } from 'node:http';
 import express from 'express';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createBearerAuthMiddleware, requireMcpHttpToken } from '../../lib/mcp-http-security.js';
+import { createBearerAuthMiddleware, createMcpRateLimiter, requireMcpHttpToken } from '../../lib/mcp-http-security.js';
 
 /**
  * MCP HTTP transport セキュリティヘルパーのユニットテスト。
@@ -79,9 +79,62 @@ describe('requireMcpHttpToken', () => {
 		expect(() => requireMcpHttpToken()).toThrow(/MCP_HTTP_TOKEN is required/);
 	});
 
+	it.each(['   ', '\t', '\n', ' \t\n '])('MCP_HTTP_TOKEN が空白のみなら throw する (%j)', (value) => {
+		process.env.MCP_HTTP_TOKEN = value;
+		expect(() => requireMcpHttpToken()).toThrow(/MCP_HTTP_TOKEN is required/);
+	});
+
 	it('throw されるエラーメッセージに "HTTP transport" の文脈が含まれる (運用者向けヒント)', () => {
 		delete process.env.MCP_HTTP_TOKEN;
 		expect(() => requireMcpHttpToken()).toThrow(/HTTP transport/);
+	});
+});
+
+describe.skipIf(SKIP_NET)('createMcpRateLimiter env validation', () => {
+	const originalEnv = { ...process.env };
+
+	afterEach(() => {
+		process.env = { ...originalEnv };
+	});
+
+	async function probeLimiter(limiterMiddleware: ReturnType<typeof createMcpRateLimiter>) {
+		const app = express();
+		app.use(limiterMiddleware);
+		app.get('/', (_req, res) => res.json({ ok: true }));
+		const srv = await listenLocal(app);
+		try {
+			const { port } = addressOf(srv);
+			const res = await fetch(`http://127.0.0.1:${port}/`);
+			return { status: res.status, ratelimit: res.headers.get('ratelimit') };
+		} finally {
+			await new Promise<void>((resolve, reject) => {
+				srv.close((err) => (err ? reject(err) : resolve()));
+			});
+		}
+	}
+
+	it.each(['NaN', '0', '-1', 'abc', ''])('RATE_LIMIT_MAX=%j ならデフォルト 60 にフォールバック', async (value) => {
+		process.env.RATE_LIMIT_MAX = value;
+		const { status, ratelimit } = await probeLimiter(createMcpRateLimiter());
+		expect(status).toBe(200);
+		expect(ratelimit).toContain('limit=60');
+	});
+
+	it.each([
+		'NaN',
+		'0',
+		'-1',
+		'abc',
+	])('RATE_LIMIT_WINDOW_MS=%j でもデフォルトで起動できる (limiter 構築失敗しない)', async (value) => {
+		process.env.RATE_LIMIT_WINDOW_MS = value;
+		const { status } = await probeLimiter(createMcpRateLimiter());
+		expect(status).toBe(200);
+	});
+
+	it('正の値はそのまま反映される', async () => {
+		process.env.RATE_LIMIT_MAX = '42';
+		const { ratelimit } = await probeLimiter(createMcpRateLimiter());
+		expect(ratelimit).toContain('limit=42');
 	});
 });
 
