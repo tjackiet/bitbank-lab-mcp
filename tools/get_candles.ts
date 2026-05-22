@@ -6,7 +6,7 @@ import {
 	type OhlcvRow,
 	UpstreamApiError,
 } from '../lib/candle-fetch.js';
-import { dayjs, today, toIsoTime, toIsoWithTz } from '../lib/datetime.js';
+import { dayjs, formatDateInTz, today, toIsoTime, toIsoWithTz } from '../lib/datetime.js';
 import { getErrorMessage } from '../lib/error.js';
 import { formatSummary } from '../lib/formatter.js';
 import { BITBANK_API_BASE, DEFAULT_RETRIES, fetchJsonWithRateLimit, type RateLimitInfo } from '../lib/http.js';
@@ -421,7 +421,8 @@ export default async function getCandles(
 
 		// volume (v): base 通貨建ての合算取引量（買い+売り区別なし）
 		// bitbank /candlestick API の OHLCV[4] をそのまま使用
-		const useTz = typeof tz === 'string' && tz.length > 0;
+		// 表示用 TZ: 空文字も含めて未指定なら Asia/Tokyo にフォールバック（既存ツール引数の慣例に合わせる）。
+		const displayTz = typeof tz === 'string' && tz.length > 0 ? tz : 'Asia/Tokyo';
 		const normalized = rows.map(([o, h, l, c, v, ts]) => ({
 			open: Number(o),
 			high: Number(h),
@@ -430,7 +431,7 @@ export default async function getCandles(
 			volume: Number(v),
 			timestamp: Number(ts),
 			isoTime: toIsoTime(ts) ?? undefined,
-			...(useTz ? { isoTimeLocal: toIsoWithTz(Number(ts), tz) ?? undefined } : {}),
+			isoTimeLocal: toIsoWithTz(Number(ts), displayTz) ?? undefined,
 		}));
 
 		// 期間別のキーポイントを抽出
@@ -494,14 +495,14 @@ export default async function getCandles(
 			today: today
 				? {
 						index: totalItems - 1,
-						date: today.isoTime?.split('T')[0] || null,
+						date: formatDateInTz(today.timestamp, displayTz),
 						close: today.close,
 					}
 				: null,
 			sevenDaysAgo: sevenDaysAgo
 				? {
 						index: totalItems - 1 - 7,
-						date: sevenDaysAgo.isoTime?.split('T')[0] || null,
+						date: formatDateInTz(sevenDaysAgo.timestamp, displayTz),
 						close: sevenDaysAgo.close,
 						changePct: calcChange(sevenDaysAgo.close, today?.close),
 					}
@@ -509,7 +510,7 @@ export default async function getCandles(
 			thirtyDaysAgo: thirtyDaysAgo
 				? {
 						index: totalItems - 1 - 30,
-						date: thirtyDaysAgo.isoTime?.split('T')[0] || null,
+						date: formatDateInTz(thirtyDaysAgo.timestamp, displayTz),
 						close: thirtyDaysAgo.close,
 						changePct: calcChange(thirtyDaysAgo.close, today?.close),
 					}
@@ -517,7 +518,7 @@ export default async function getCandles(
 			ninetyDaysAgo: ninetyDaysAgo
 				? {
 						index: ninetyDaysAgo === normalized[0] ? 0 : totalItems - 1 - 90,
-						date: ninetyDaysAgo.isoTime?.split('T')[0] || null,
+						date: formatDateInTz(ninetyDaysAgo.timestamp, displayTz),
 						close: ninetyDaysAgo.close,
 						changePct: calcChange(ninetyDaysAgo.close, today?.close),
 					}
@@ -530,8 +531,8 @@ export default async function getCandles(
 				? {
 						high: Math.max(...normalized.map((c) => c.high)),
 						low: Math.min(...normalized.map((c) => c.low)),
-						periodStart: normalized[0].isoTime?.split('T')[0] || '',
-						periodEnd: normalized[normalized.length - 1].isoTime?.split('T')[0] || '',
+						periodStart: formatDateInTz(normalized[0].timestamp, displayTz) || '',
+						periodEnd: formatDateInTz(normalized[normalized.length - 1].timestamp, displayTz) || '',
 					}
 				: undefined;
 

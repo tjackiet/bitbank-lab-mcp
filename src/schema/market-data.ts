@@ -176,7 +176,7 @@ export const GetOrderbookInputSchema = BasePairInputSchema.extend({
 // === Candles ===
 export const KeyPointSchema = z.object({
 	index: z.number(),
-	date: z.string().nullable(),
+	date: z.string().nullable().describe('YYYY-MM-DD（表示は tz 引数（既定 Asia/Tokyo）の暦日）'),
 	close: z.number(),
 	changePct: z.number().nullable().optional(),
 });
@@ -240,7 +240,9 @@ export const GetCandlesInputSchema = z.object({
 		.string()
 		.optional()
 		.default('Asia/Tokyo')
-		.describe('タイムゾーン（デフォルト: Asia/Tokyo）。各ローソク足に isoTimeLocal フィールドを追加。空文字でUTCのみ'),
+		.describe(
+			'表示用タイムゾーン（デフォルト: Asia/Tokyo）。各ローソク足に isoTimeLocal、keyPoints.date / priceRange.periodStart/End にもこの tz の暦日を出力。空文字も Asia/Tokyo にフォールバック。UTC が必要な場合は明示的に "UTC" を渡す。',
+		),
 });
 
 // === Transactions ===

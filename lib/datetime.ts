@@ -51,6 +51,24 @@ export function toIsoWithTz(ts: number, tz: string): string | null {
 }
 
 /**
+ * タイムスタンプを指定タイムゾーンの暦日 YYYY-MM-DD に変換
+ * @param ms ミリ秒タイムスタンプ
+ * @param tz タイムゾーン（デフォルト: 'Asia/Tokyo'、空文字も Asia/Tokyo にフォールバック）
+ * @returns "YYYY-MM-DD" 形式、ms が null/undefined/NaN または tz が不正なら null
+ */
+export function formatDateInTz(ms: number | undefined | null, tz: string = 'Asia/Tokyo'): string | null {
+	if (ms == null) return null;
+	if (!Number.isFinite(ms)) return null;
+	const effectiveTz = typeof tz === 'string' && tz.length > 0 ? tz : 'Asia/Tokyo';
+	try {
+		const d = dayjs(ms).tz(effectiveTz);
+		return d.isValid() ? d.format('YYYY-MM-DD') : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
  * タイムスタンプを日本語表示形式に変換
  * @param ts ミリ秒タイムスタンプ（未指定時は現在時刻）
  * @param tz タイムゾーン（デフォルト: 'Asia/Tokyo'）
