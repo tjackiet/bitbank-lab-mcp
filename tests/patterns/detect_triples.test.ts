@@ -7,6 +7,11 @@ import type { CandleData, DetectContext } from '../../tools/patterns/types.js';
 
 // ── ヘルパー ──
 
+// detect_triples.ts の BREAKOUT_BUFFER_PCT と揃える（=1.5%）。
+// 丸めで閾値を割らないよう微小マージンを足し、ネックライン突破ギリギリの終値を作る。
+const TEST_BREAKOUT_BUFFER_PCT = 0.015;
+const TEST_BREAKOUT_MARGIN_PCT = 0.001;
+
 function iso(daysAgo: number): string {
 	return dayjs().subtract(daysAgo, 'day').startOf('day').toISOString();
 }
@@ -77,9 +82,9 @@ function buildTripleTop(opts?: {
 	candles[40] = mkCandle(10, pk3 - 1, pk3, pk3 - 3, pk3 - 1);
 
 	if (opts?.withBreakout) {
-		// 谷の平均（ネックライン）を 1.5% 以上下抜けする終値
+		// 谷の平均（ネックライン）を BREAKOUT_BUFFER_PCT 以上下抜けする終値
 		const nlAvg = (v1 + v2) / 2;
-		const breakClose = Math.floor(nlAvg * 0.9);
+		const breakClose = Math.floor(nlAvg * (1 - TEST_BREAKOUT_BUFFER_PCT - TEST_BREAKOUT_MARGIN_PCT));
 		for (let i = 41; i < 50; i++) {
 			candles[i] = mkCandle(50 - i, breakClose, breakClose + 1, breakClose - 3, breakClose);
 		}
@@ -127,9 +132,9 @@ function buildTripleBottom(opts?: {
 	candles[40] = mkCandle(10, v3 + 1, v3 + 3, v3, v3 + 1);
 
 	if (opts?.withBreakout) {
-		// 山の平均（ネックライン）を 1.5% 以上上抜けする終値
+		// 山の平均（ネックライン）を BREAKOUT_BUFFER_PCT 以上上抜けする終値
 		const nlAvg = (p1 + p2) / 2;
-		const breakClose = Math.ceil(nlAvg * 1.1);
+		const breakClose = Math.ceil(nlAvg * (1 + TEST_BREAKOUT_BUFFER_PCT + TEST_BREAKOUT_MARGIN_PCT));
 		for (let i = 41; i < 50; i++) {
 			candles[i] = mkCandle(50 - i, breakClose, breakClose + 3, breakClose - 1, breakClose);
 		}

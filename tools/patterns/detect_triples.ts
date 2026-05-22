@@ -391,7 +391,7 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 				reason: 'confidence_below_min_relaxed',
 				idxs: [a.idx, b.idx, c.idx],
 			});
-			return null; // 構造的に有効な候補だったが confidence 不足 — この factor では停止
+			continue; // 後続候補で confidence が足りるものを探す
 		}
 
 		// ネックライン下抜け検出
@@ -399,7 +399,7 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 		const breakoutIdx = findBreakoutIdx(candles, c.idx, nlAvg, 'below');
 		const isCompleted = breakoutIdx >= 0;
 		const rangeEnd = isCompleted ? candles[breakoutIdx]?.isoTime : structureEnd;
-		if (!rangeEnd) return null;
+		if (!rangeEnd) continue;
 
 		const neckline = [
 			{ x: a.idx, y: nlAvg },
@@ -526,7 +526,7 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 				reason: 'confidence_below_min_relaxed',
 				idxs: [a.idx, b.idx, c.idx],
 			});
-			return null; // 構造的に有効な候補だったが confidence 不足 — この factor では停止
+			continue; // 後続候補で confidence が足りるものを探す
 		}
 
 		// ネックライン上抜け検出
@@ -534,7 +534,7 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 		const breakoutIdx = findBreakoutIdx(candles, c.idx, nlAvg, 'above');
 		const isCompleted = breakoutIdx >= 0;
 		const rangeEnd = isCompleted ? candles[breakoutIdx]?.isoTime : structureEnd;
-		if (!rangeEnd) return null;
+		if (!rangeEnd) continue;
 
 		const neckline = [
 			{ x: a.idx, y: nlAvg },
