@@ -176,7 +176,7 @@ export const GetOrderbookInputSchema = BasePairInputSchema.extend({
 // === Candles ===
 export const KeyPointSchema = z.object({
 	index: z.number(),
-	date: z.string().nullable(),
+	date: z.string().nullable().describe('YYYY-MM-DD（表示は tz 引数（既定 Asia/Tokyo）の暦日）'),
 	close: z.number(),
 	changePct: z.number().nullable().optional(),
 });

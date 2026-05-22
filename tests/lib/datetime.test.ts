@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	dayjs,
 	daysAgo,
+	formatDateInTz,
 	formatDateWithDayOfWeek,
 	nowIso,
 	toDisplayTime,
@@ -90,6 +91,48 @@ describe('today', () => {
 	});
 	it('dayjs と一致する', () => {
 		expect(today('YYYY-MM-DD')).toBe(dayjs().format('YYYY-MM-DD'));
+	});
+});
+
+describe('formatDateInTz', () => {
+	// 2025-10-01T00:00:00Z = JST 2025-10-01 09:00 = New York 2025-09-30 20:00 (EDT)
+	const ms = 1759276800000;
+
+	it('Asia/Tokyo (デフォルト) で JST 暦日を返す', () => {
+		expect(formatDateInTz(ms)).toBe('2025-10-01');
+		expect(formatDateInTz(ms, 'Asia/Tokyo')).toBe('2025-10-01');
+	});
+
+	it('UTC 指定で UTC 暦日を返す', () => {
+		expect(formatDateInTz(ms, 'UTC')).toBe('2025-10-01');
+	});
+
+	it('America/New_York 指定で現地暦日を返す', () => {
+		// EDT (UTC-4) なので 2025-09-30 20:00
+		expect(formatDateInTz(ms, 'America/New_York')).toBe('2025-09-30');
+	});
+
+	it('JST と UTC で日付がずれる timestamp で差が出る', () => {
+		// 2025-09-30T20:00:00Z UTC = JST 2025-10-01 05:00
+		const crossing = Date.UTC(2025, 8, 30, 20, 0, 0);
+		expect(formatDateInTz(crossing, 'UTC')).toBe('2025-09-30');
+		expect(formatDateInTz(crossing, 'Asia/Tokyo')).toBe('2025-10-01');
+	});
+
+	it('null / undefined / NaN は null を返す', () => {
+		expect(formatDateInTz(null)).toBeNull();
+		expect(formatDateInTz(undefined)).toBeNull();
+		expect(formatDateInTz(Number.NaN)).toBeNull();
+		expect(formatDateInTz(Number.POSITIVE_INFINITY)).toBeNull();
+	});
+
+	it('tz が空文字列なら Asia/Tokyo にフォールバック', () => {
+		expect(formatDateInTz(ms, '')).toBe(formatDateInTz(ms, 'Asia/Tokyo'));
+	});
+
+	it('不正な tz は null を返す（呼び出し側でフォールバックを明示できる）', () => {
+		expect(formatDateInTz(ms, 'Invalid/Zone')).toBeNull();
+		expect(formatDateInTz(ms, 'NotAZone')).toBeNull();
 	});
 });
 
