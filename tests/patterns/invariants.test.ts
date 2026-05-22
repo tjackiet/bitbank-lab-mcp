@@ -487,8 +487,8 @@ describe('patterns invariants — 横断契約', () => {
 	// ──────────────────────────────────────────────
 	describe('completed は breakout 成立 fixture でのみ', () => {
 		it('breakout 成立 fixture（bull pennant）→ status=completed のパターンが含まれる', async () => {
-			// 注: detect_doubles / detect_hs は完成済みでも明示的な status='completed' を
-			// 付与しない（status=undefined のまま）。detect_triples はネックラインブレイク
+			// 注: detect_doubles は完成済みでも明示的な status='completed' を付与しない
+			// （status=undefined のまま）。detect_triples / detect_hs はネックラインブレイク
 			// 確認で status='completed' を付与する。
 			// このテストでは明示的に completed が出る pennant / triangle / wedge を使う。
 			const candles = buildBullPennantSuccessCandles();
@@ -649,6 +649,53 @@ describe('patterns invariants — 横断契約', () => {
 			assertOk(res);
 			const formingLike = res.data.patterns.filter((p) => p.status === 'forming' || p.status === 'near_completion');
 			expect(formingLike).toHaveLength(0);
+		});
+	});
+
+	// ──────────────────────────────────────────────
+	// 6.5 H&S / 逆H&S 契約: completed は必ず neckline_breakout を持ち、status は常に存在
+	// ──────────────────────────────────────────────
+	describe('H&S / inverse H&S contract', () => {
+		it('completed の H&S は confirmation.type === neckline_breakout を持つ', async () => {
+			const candles = buildCompletedHeadAndShouldersCandles();
+			mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(indicatorsOk(candles)));
+			const res = await detectPatterns('btc_jpy', '1day', candles.length, {
+				patterns: ['head_and_shoulders'],
+				swingDepth: 2,
+				tolerancePct: 0.04,
+				includeForming: true,
+				includeCompleted: true,
+			});
+			assertOk(res);
+			const hsCompleted = res.data.patterns.filter(
+				(p) => (p.type === 'head_and_shoulders' || p.type === 'inverse_head_and_shoulders') && p.status === 'completed',
+			);
+			// vacuous pass 防止: 少なくとも 1 件は completed が出る fixture を使っている
+			expect(hsCompleted.length).toBeGreaterThan(0);
+			for (const p of hsCompleted) {
+				expect(p.confirmation?.type).toBe('neckline_breakout');
+			}
+		});
+
+		it('H&S / 逆H&S の status は必ず存在する（undefined を返さない）', async () => {
+			const candles = buildCompletedHeadAndShouldersCandles();
+			mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(indicatorsOk(candles)));
+			const res = await detectPatterns('btc_jpy', '1day', candles.length, {
+				patterns: ['head_and_shoulders', 'inverse_head_and_shoulders'],
+				swingDepth: 2,
+				tolerancePct: 0.04,
+				includeForming: true,
+				includeCompleted: true,
+			});
+			assertOk(res);
+			const hsTargets = res.data.patterns.filter(
+				(p) => p.type === 'head_and_shoulders' || p.type === 'inverse_head_and_shoulders',
+			);
+			expect(hsTargets.length).toBeGreaterThan(0);
+			for (const p of hsTargets) {
+				expect(p.status).toBeDefined();
+				expect(['completed', 'near_completion', 'forming']).toContain(p.status);
+			}
 		});
 	});
 
