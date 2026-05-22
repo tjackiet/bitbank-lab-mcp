@@ -25,6 +25,17 @@ import type {
 // 元々日足前提のバー数で書かれていたため、他時間軸では意味がずれていた。
 // 「日数」を基準に統一し、各検出器で bars-per-day を介して換算する。
 // ---------------------------------------------------------------------------
+
+/**
+ * 時間足ごとの「1日あたりのバー本数」を返す。
+ *
+ * 1day を 1 とし、intraday は >1（1hour=24, 1min=1440 等）、
+ * 1week / 1month は <1（1/7, 1/30）。未知の time frame は 1day フォールバック。
+ *
+ * @param tf - 時間足文字列（'1min', '5min', '15min', '30min', '1hour', '4hour',
+ *             '8hour', '12hour', '1day', '1week', '1month'）
+ * @returns 1 日あたりのバー本数
+ */
 export function barsPerDay(tf: string): number {
 	switch (tf) {
 		case '1min':
@@ -54,6 +65,15 @@ export function barsPerDay(tf: string): number {
 	}
 }
 
+/**
+ * 時間足ごとの「1バーあたりの日数」を返す（`barsPerDay` の逆数）。
+ *
+ * 形成中パターンの patternDays 計算（formationBars × daysPerBar）で
+ * intraday / 1week / 1month を正しく日数換算するために使う。
+ *
+ * @param tf - 時間足文字列（`barsPerDay` 参照）
+ * @returns 1 バーあたりの日数
+ */
 export function daysPerBar(tf: string): number {
 	return 1 / barsPerDay(tf);
 }

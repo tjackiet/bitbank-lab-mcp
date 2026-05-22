@@ -399,15 +399,14 @@ describe('detectWedges', () => {
 	it('1hour: 1day と同じスケール感のウィンドウ（数日分のバー）でウェッジを評価する', () => {
 		// 1hour で 80 バー = 約 3.3 日。getWedgeBarParams の formingWindow は
 		// 1day で 20-120 バーだったのが、1hour では 480-2880 バー相当になる。
-		// 80 バーだけでは forming ウィンドウに届かないことを確認する（=
-		// バー数固定だった旧挙動と比較し、1hour で過剰に検出しない）。
+		// 80 バーだけでは forming ウィンドウ最小（480 バー = 20 日）に届かないため、
+		// 検出が 0 件であることを確認する（= バー数固定だった旧挙動と比較し、
+		// 1hour で過剰に検出しないことの回帰検知）。
 		const candles = buildRisingWedge1Hour(80);
 		const pivots: Pivot[] = [];
 		const ctx = buildCtx({ candles, pivots, includeForming: true, type: '1hour' });
 		const result = detectWedges(ctx);
-		// 1hour では 80 バーは形成中ウィンドウの最小（480 バー = 20 日）に届かないため、
-		// パターンが返らないか、ごく少数となる。少なくとも例外なく配列を返すこと。
-		expect(Array.isArray(result.patterns)).toBe(true);
+		expect(result.patterns).toHaveLength(0);
 	});
 
 	it('1hour: バー数を十分に確保すれば forming wedge が検出される', () => {
