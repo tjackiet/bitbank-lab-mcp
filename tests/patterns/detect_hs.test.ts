@@ -116,6 +116,107 @@ function buildInverseHS(opts?: {
 	return { candles, pivots };
 }
 
+/**
+ * H&S 構造の後にネックライン下抜けを付与したフィクスチャ。
+ * - 構造: H(0)-L(15)-H(30)-L(45)-H(60) で buildHS と同じ。
+ * - 右肩(idx=60) 後の `breakIdx` 以降を `breakClose` に書き換えてネックライン下抜け。
+ * - `postBreakLow` を指定すると、ブレイク後の特定 idx の low を強制し、target 到達テスト用。
+ */
+function buildHsWithBreakout(opts?: {
+	breakIdx?: number;
+	breakClose?: number;
+	postBreakLow?: number;
+	postBreakIdx?: number;
+	totalBars?: number;
+}) {
+	const ls = 100;
+	const hd = 130;
+	const rs = 100;
+	const v1 = 85;
+	const v2 = 85;
+	const total = opts?.totalBars ?? 80;
+	const breakIdx = opts?.breakIdx ?? 65;
+	// neckline (v1+v2)/2 = 85; close 80 は 85*(1-0.015)=83.725 を下回る → ブレイク
+	const breakClose = opts?.breakClose ?? 80;
+
+	const candles: CandleData[] = [];
+	for (let i = 0; i < total; i++) candles.push(mkCandle(total - i, 90, 95, 80, 90));
+	candles[0] = mkCandle(total, ls - 1, ls, ls - 3, ls - 1);
+	candles[15] = mkCandle(total - 15, v1 + 1, v1 + 3, v1, v1 + 1);
+	candles[30] = mkCandle(total - 30, hd - 1, hd, hd - 3, hd - 1);
+	candles[45] = mkCandle(total - 45, v2 + 1, v2 + 3, v2, v2 + 1);
+	candles[60] = mkCandle(total - 60, rs - 1, rs, rs - 3, rs - 1);
+	for (let i = breakIdx; i < total; i++) {
+		candles[i] = mkCandle(total - i, breakClose + 2, breakClose + 5, breakClose - 3, breakClose);
+	}
+	// target 到達検証用に、特定 idx で low を強制
+	if (opts?.postBreakLow !== undefined && opts?.postBreakIdx !== undefined) {
+		const idx = opts.postBreakIdx;
+		const lo = opts.postBreakLow;
+		candles[idx] = mkCandle(total - idx, lo + 3, lo + 5, lo, lo + 1);
+	}
+
+	const pivots: Pivot[] = [
+		{ idx: 0, price: ls, kind: 'H' },
+		{ idx: 15, price: v1, kind: 'L' },
+		{ idx: 30, price: hd, kind: 'H' },
+		{ idx: 45, price: v2, kind: 'L' },
+		{ idx: 60, price: rs, kind: 'H' },
+	];
+
+	return { candles, pivots };
+}
+
+/**
+ * Inverse H&S 構造の後にネックライン上抜けを付与したフィクスチャ。
+ * - 構造: L(0)-H(15)-L(30)-H(45)-L(60) で buildInverseHS と同じ。
+ * - 右肩(idx=60) 後の `breakIdx` 以降を `breakClose` に書き換えてネックライン上抜け。
+ * - `postBreakHigh` を指定すると、ブレイク後の特定 idx の high を強制し、target 到達テスト用。
+ */
+function buildInverseHsWithBreakout(opts?: {
+	breakIdx?: number;
+	breakClose?: number;
+	postBreakHigh?: number;
+	postBreakIdx?: number;
+	totalBars?: number;
+}) {
+	const ls = 100;
+	const hd = 70;
+	const rs = 100;
+	const p1 = 115;
+	const p2 = 115;
+	const total = opts?.totalBars ?? 80;
+	const breakIdx = opts?.breakIdx ?? 65;
+	// neckline (p1+p2)/2 = 115; close 120 は 115*(1+0.015)=116.725 を上回る → ブレイク
+	const breakClose = opts?.breakClose ?? 120;
+
+	const candles: CandleData[] = [];
+	for (let i = 0; i < total; i++) candles.push(mkCandle(total - i, 90, 95, 80, 90));
+	candles[0] = mkCandle(total, ls + 1, ls + 3, ls, ls + 1);
+	candles[15] = mkCandle(total - 15, p1 - 1, p1, p1 - 3, p1 - 1);
+	candles[30] = mkCandle(total - 30, hd + 1, hd + 3, hd, hd + 1);
+	candles[45] = mkCandle(total - 45, p2 - 1, p2, p2 - 3, p2 - 1);
+	candles[60] = mkCandle(total - 60, rs + 1, rs + 3, rs, rs + 1);
+	for (let i = breakIdx; i < total; i++) {
+		candles[i] = mkCandle(total - i, breakClose - 2, breakClose + 3, breakClose - 5, breakClose);
+	}
+	if (opts?.postBreakHigh !== undefined && opts?.postBreakIdx !== undefined) {
+		const idx = opts.postBreakIdx;
+		const hi = opts.postBreakHigh;
+		candles[idx] = mkCandle(total - idx, hi - 5, hi, hi - 6, hi - 1);
+	}
+
+	const pivots: Pivot[] = [
+		{ idx: 0, price: ls, kind: 'L' },
+		{ idx: 15, price: p1, kind: 'H' },
+		{ idx: 30, price: hd, kind: 'L' },
+		{ idx: 45, price: p2, kind: 'H' },
+		{ idx: 60, price: rs, kind: 'L' },
+	];
+
+	return { candles, pivots };
+}
+
 afterEach(() => {
 	vi.resetAllMocks();
 });
@@ -637,6 +738,153 @@ describe('detectHeadAndShoulders', () => {
 			(d) => d.type === 'head_and_shoulders' && d.accepted === false && d.reason === 'confidence_below_min_forming',
 		);
 		expect(rejected).toBeDefined();
+	});
+
+	// ── ネックラインブレイク確認（completed への昇格） ─────────
+
+	it('H&S: 右肩後にネックライン下抜け → status=completed, confirmation=neckline_breakout', () => {
+		// neckline (85+85)/2 = 85, head 130
+		// breakIdx=65 で close=80 (< 85*(1-0.015)=83.725) → 下抜け
+		const { candles, pivots } = buildHsWithBreakout({ breakIdx: 65, breakClose: 80 });
+		const ctx = buildCtx({ candles, pivots });
+		const result = detectHeadAndShoulders(ctx);
+
+		const hs = result.patterns.find((p) => p.type === 'head_and_shoulders');
+		expect(hs).toBeDefined();
+		if (!hs) return;
+
+		expect(hs.status).toBe('completed');
+		expect(hs.confirmation?.type).toBe('neckline_breakout');
+		expect(hs.breakoutDirection).toBe('down');
+		expect(hs.outcome).toBe('success');
+		// breakoutBarIndex は右肩(idx=60) より後
+		const breakoutBarIndex = hs.breakoutBarIndex;
+		expect(typeof breakoutBarIndex).toBe('number');
+		if (typeof breakoutBarIndex !== 'number') return;
+		expect(breakoutBarIndex).toBeGreaterThan(60);
+		expect(breakoutBarIndex).toBeLessThanOrEqual(candles.length - 1);
+
+		// range.end = ブレイク日（candles[breakoutIdx].isoTime）
+		expect(hs.range?.end).toBe(candles[breakoutBarIndex]?.isoTime);
+		// structureRange.end = 右肩日（candles[60].isoTime）
+		expect(hs.structureRange?.end).toBe(candles[60].isoTime);
+		// confirmation.date は range.end と一致（ブレイク日）
+		if (hs.confirmation?.type === 'neckline_breakout') {
+			expect(hs.confirmation.date).toBe(hs.range?.end);
+			expect(hs.confirmation.idx).toBe(breakoutBarIndex);
+		}
+	});
+
+	it('H&S: 右肩後にターゲット到達 → targetReachedPct >= 100 または aftermath.targetReached', () => {
+		// target ≈ 85 - (130-85) = 40
+		// breakClose=80 → breakoutPrice=80
+		// 末尾 close を target 以下にして targetReachedPct >= 100 を狙う
+		const total = 80;
+		// 末尾 (idx=total-1=79) を close=30, low=25 にする → low <= 40 (aftermath target reached)
+		// 同時に最終 close=30 が target 40 を割り込むため (curPrice - bp)/(target - bp) = (30-80)/(40-80) = 50/40 = 125%
+		const { candles, pivots } = buildHsWithBreakout({
+			breakIdx: 65,
+			breakClose: 80,
+			postBreakLow: 25,
+			postBreakIdx: 79,
+			totalBars: total,
+		});
+		const ctx = buildCtx({ candles, pivots });
+		const result = detectHeadAndShoulders(ctx);
+
+		const hs = result.patterns.find((p) => p.type === 'head_and_shoulders');
+		expect(hs).toBeDefined();
+		if (!hs) return;
+
+		expect(hs.status).toBe('completed');
+		// target = neckline(85) - (head(130) - neckline(85)) = 40
+		expect(hs.breakoutTarget).toBe(40);
+		const reached = (hs.targetReachedPct !== undefined && hs.targetReachedPct >= 100) || false;
+		expect(reached).toBe(true);
+	});
+
+	it('H&S: 右肩後にブレイクしない → status=near_completion, confirmation=not_confirmed', () => {
+		// 既定 buildHS の末尾は close=90 で neckline 85 を割り込まない（90 > 83.725）
+		const { candles, pivots } = buildHS();
+		const ctx = buildCtx({ candles, pivots });
+		const result = detectHeadAndShoulders(ctx);
+
+		const hs = result.patterns.find((p) => p.type === 'head_and_shoulders');
+		expect(hs).toBeDefined();
+		if (!hs) return;
+
+		expect(hs.status).not.toBe('completed');
+		expect(hs.status).toBe('near_completion');
+		expect(hs.confirmation?.type).toBe('not_confirmed');
+		// range.end = structureRange.end = 右肩日
+		expect(hs.range?.end).toBe(candles[60].isoTime);
+		expect(hs.structureRange?.end).toBe(candles[60].isoTime);
+		expect(hs.breakoutBarIndex).toBeUndefined();
+	});
+
+	it('逆H&S: 右肩後にネックライン上抜け → status=completed, confirmation=neckline_breakout', () => {
+		// neckline (115+115)/2 = 115, head 70
+		// breakIdx=65 で close=120 (> 115*(1+0.015)=116.725) → 上抜け
+		const { candles, pivots } = buildInverseHsWithBreakout({ breakIdx: 65, breakClose: 120 });
+		const ctx = buildCtx({ candles, pivots });
+		const result = detectHeadAndShoulders(ctx);
+
+		const ihs = result.patterns.find((p) => p.type === 'inverse_head_and_shoulders');
+		expect(ihs).toBeDefined();
+		if (!ihs) return;
+
+		expect(ihs.status).toBe('completed');
+		expect(ihs.confirmation?.type).toBe('neckline_breakout');
+		expect(ihs.breakoutDirection).toBe('up');
+		expect(ihs.outcome).toBe('success');
+		const breakoutBarIndex = ihs.breakoutBarIndex;
+		expect(typeof breakoutBarIndex).toBe('number');
+		if (typeof breakoutBarIndex !== 'number') return;
+		expect(breakoutBarIndex).toBeGreaterThan(60);
+		expect(ihs.range?.end).toBe(candles[breakoutBarIndex]?.isoTime);
+		expect(ihs.structureRange?.end).toBe(candles[60].isoTime);
+	});
+
+	it('逆H&S: 右肩後にターゲット到達 → targetReachedPct >= 100 または aftermath.targetReached', () => {
+		// target ≈ 115 + (115-70) = 160
+		// breakClose=120, 末尾 idx=79 で high=170, close=169 (>= target 160)
+		const total = 80;
+		const { candles, pivots } = buildInverseHsWithBreakout({
+			breakIdx: 65,
+			breakClose: 120,
+			postBreakHigh: 170,
+			postBreakIdx: 79,
+			totalBars: total,
+		});
+		const ctx = buildCtx({ candles, pivots });
+		const result = detectHeadAndShoulders(ctx);
+
+		const ihs = result.patterns.find((p) => p.type === 'inverse_head_and_shoulders');
+		expect(ihs).toBeDefined();
+		if (!ihs) return;
+
+		expect(ihs.status).toBe('completed');
+		// target = neckline(115) + (neckline(115) - head(70)) = 160
+		expect(ihs.breakoutTarget).toBe(160);
+		const reached = (ihs.targetReachedPct !== undefined && ihs.targetReachedPct >= 100) || false;
+		expect(reached).toBe(true);
+	});
+
+	it('逆H&S: 右肩後にブレイクしない → status=near_completion, confirmation=not_confirmed', () => {
+		// 既定 buildInverseHS の末尾は close=90 で neckline 115 を超えない
+		const { candles, pivots } = buildInverseHS();
+		const ctx = buildCtx({ candles, pivots });
+		const result = detectHeadAndShoulders(ctx);
+
+		const ihs = result.patterns.find((p) => p.type === 'inverse_head_and_shoulders');
+		expect(ihs).toBeDefined();
+		if (!ihs) return;
+
+		expect(ihs.status).not.toBe('completed');
+		expect(ihs.status).toBe('near_completion');
+		expect(ihs.confirmation?.type).toBe('not_confirmed');
+		expect(ihs.range?.end).toBe(candles[60].isoTime);
+		expect(ihs.structureRange?.end).toBe(candles[60].isoTime);
 	});
 
 	// ── ピボット不足 ─────────────────────────────────────────

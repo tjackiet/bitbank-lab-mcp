@@ -2,11 +2,14 @@
  * Head & Shoulders / Inverse Head & Shoulders 検出（完成済み＋形成中）
  * detect_patterns.ts Section 3 から抽出
  *
- * TODO（別 PR 候補）: H&S 系も detect_triples / detect_doubles と同様に
- * neckline_breakout を確認して confirmation = 'neckline_breakout' を立て、
- * status を completed / near_completion / forming に振り分ける。現状は
- * 完成済み構造でも confirmation: 'not_confirmed' のまま返している。
+ * 完成済み構造の右肩形成後にネックライン突破が確認できた場合は
+ * confirmation = 'neckline_breakout' を立てて status = 'completed' を付与する
+ * （detect_doubles / detect_triples と同方針）。未確認の場合は
+ * status = 'near_completion' + confirmation = 'not_confirmed' で返し、
+ * detect_patterns 側の `!p.status` フォールバックで誤って completed 扱い
+ * されるのを防ぐ。ネックラインは 2 点を結ぶ傾きつきラインとして外挿する。
  */
+import { EPSILON } from '../../lib/math.js';
 import { generatePatternDiagram } from '../../lib/pattern-diagrams.js';
 import { finalizeConf, periodScoreDays } from './helpers.js';
 import { clamp01, marginFromRelDev, relDev } from './regression.js';
@@ -18,7 +21,14 @@ import {
 	validateHorizontalNeckline,
 	validatePriorTrend,
 } from './structural.js';
-import type { CandleData, DeduplicablePattern, DetectContext, DetectResult, PatternPrecedingTrend } from './types.js';
+import type {
+	CandleData,
+	DeduplicablePattern,
+	DetectContext,
+	DetectResult,
+	PatternConfirmation,
+	PatternPrecedingTrend,
+} from './types.js';
 
 // ── Helper: PriorTrendResult → PatternPrecedingTrend ──
 
@@ -52,6 +62,108 @@ const FORMING_MIN_DAYS = 21;
 const FORMING_MIN_COMPLETION = 0.4;
 // detect_triples.ts と同値。形状不十分な forming 候補を上位表示させないための最低 confidence。
 const FORMING_MIN_CONFIDENCE = 0.5;
+
+// ── ネックラインブレイク検出（detect_doubles / detect_triples と同値の 1.5% バッファ） ──
+// H&S は傾きつきネックライン（谷1→谷2 / 山1→山2）を外挿して判定する。
+const HS_BREAKOUT_BUFFER_PCT = 0.015;
+// 右肩から最大何バー後までブレイクをスキャンするか。aftermath.ts と同じ 30 を採用。
+// 例: 日足で右肩から約 4 週間後までのブレイクを拾える。
+const HS_BREAKOUT_MAX_BARS = 30;
+
+// ── Helper: ネックライン補間 ──
+
+type NecklinePt = { x: number; y: number };
+
+function necklineAt(neckline: NecklinePt[] | undefined, i: number): number {
+	if (!Array.isArray(neckline) || neckline.length < 2) return NaN;
+	const [a, b] = neckline;
+	if (!(Number.isFinite(a?.x) && Number.isFinite(b?.x) && Number.isFinite(a?.y) && Number.isFinite(b?.y))) return NaN;
+	if (b.x === a.x) return a.y;
+	return a.y + ((b.y - a.y) * (i - a.x)) / (b.x - a.x);
+}
+
+// ── Helper: 右肩後のネックラインブレイクインデックスを検出 ──
+// direction='below': H&S（close < necklineAt * (1 - buffer)）
+// direction='above': 逆H&S（close > necklineAt * (1 + buffer)）
+
+function findHsBreakoutIdx(
+	candles: CandleData[],
+	neckline: NecklinePt[],
+	rightShoulderIdx: number,
+	direction: 'below' | 'above',
+): number {
+	const end = Math.min(rightShoulderIdx + HS_BREAKOUT_MAX_BARS + 1, candles.length);
+	for (let k = rightShoulderIdx + 1; k < end; k++) {
+		const closeK = Number(candles[k]?.close ?? NaN);
+		if (!Number.isFinite(closeK)) continue;
+		const nlPrice = necklineAt(neckline, k);
+		if (!Number.isFinite(nlPrice)) continue;
+		if (direction === 'below' && closeK < nlPrice * (1 - HS_BREAKOUT_BUFFER_PCT)) return k;
+		if (direction === 'above' && closeK > nlPrice * (1 + HS_BREAKOUT_BUFFER_PCT)) return k;
+	}
+	return -1;
+}
+
+// ── Helper: targetReachedPct（現在価格ベース。detect_doubles / detect_triples と同形式） ──
+
+function computeTargetReachedPct(candles: CandleData[], breakoutPrice: number, target: number): number | undefined {
+	const curPrice = Number(candles[candles.length - 1]?.close ?? NaN);
+	if (!(Number.isFinite(curPrice) && Number.isFinite(breakoutPrice) && Number.isFinite(target))) return undefined;
+	if (Math.abs(target - breakoutPrice) < EPSILON) return undefined;
+	return Math.round(((curPrice - breakoutPrice) / (target - breakoutPrice)) * 100);
+}
+
+// ── Helper: ブレイク確認済み / 未確認に応じた完成フィールド ──
+//
+// 確認済み: status='completed', confirmation=neckline_breakout, breakout 系メタ一式 + outcome='success'
+// 未確認:   status='near_completion', confirmation=not_confirmed
+//
+// `!p.status` を completed 扱いする detect_patterns.ts のフォールバック対策として
+// 未確認時にも status を明示的に設定する。
+
+type HsCompletionFields = {
+	status: 'completed' | 'near_completion';
+	confirmation: PatternConfirmation;
+	breakout?: { idx: number; price: number };
+	breakoutBarIndex?: number;
+	breakoutDate?: string;
+	breakoutDirection?: 'up' | 'down';
+	outcome?: 'success';
+	rangeEnd: string;
+};
+
+function buildHsCompletionFields(
+	candles: CandleData[],
+	breakoutIdx: number,
+	direction: 'down' | 'up',
+	structureEndIso: string,
+): HsCompletionFields | null {
+	if (breakoutIdx < 0) {
+		return {
+			status: 'near_completion',
+			confirmation: { type: 'not_confirmed' },
+			rangeEnd: structureEndIso,
+		};
+	}
+	const breakoutDate = candles[breakoutIdx]?.isoTime;
+	const breakoutPrice = Number(candles[breakoutIdx]?.close ?? NaN);
+	if (!breakoutDate || !Number.isFinite(breakoutPrice)) return null;
+	return {
+		status: 'completed',
+		confirmation: {
+			type: 'neckline_breakout',
+			date: breakoutDate,
+			idx: breakoutIdx,
+			price: breakoutPrice,
+		},
+		breakout: { idx: breakoutIdx, price: breakoutPrice },
+		breakoutBarIndex: breakoutIdx,
+		breakoutDate,
+		breakoutDirection: direction === 'down' ? 'down' : 'up',
+		outcome: 'success',
+		rangeEnd: breakoutDate,
+	};
+}
 
 // ── Helper: Strict Inverse H&S (L-H-L-H-L) ──
 
@@ -109,6 +221,11 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 				const base = (tolMargin + symmetry + per) / 3;
 				const confidence = finalizeConf(base, 'inverse_head_and_shoulders');
 				const nlAvg = (Number(p1.price) + Number(p3.price)) / 2;
+				// 右肩後のネックライン上抜けを確認する。
+				const breakoutIdx = findHsBreakoutIdx(candles, neckline, p4.idx, 'above');
+				const completion = buildHsCompletionFields(candles, breakoutIdx, 'up', end);
+				if (!completion) continue;
+				const rangeEnd = completion.rangeEnd;
 				const diagram = generatePatternDiagram(
 					'inverse_head_and_shoulders',
 					[
@@ -119,24 +236,40 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 						{ ...p4, date: candles[p4.idx]?.isoTime },
 					],
 					{ price: nlAvg },
-					{ start, end },
+					{ start, end: rangeEnd },
 				);
-				const ihsNlAvg = (p1.price + p3.price) / 2;
-				const ihsTarget = Math.round(ihsNlAvg + (ihsNlAvg - p2.price));
+				// ターゲットはブレイク日（または右肩日）時点のネックライン値を基準に算出する。
+				const targetAnchorIdx = breakoutIdx >= 0 ? breakoutIdx : p4.idx;
+				const nlAtAnchor = necklineAt(neckline, targetAnchorIdx);
+				const ihsTarget = Math.round(
+					(Number.isFinite(nlAtAnchor) ? nlAtAnchor : nlAvg) +
+						((Number.isFinite(nlAtAnchor) ? nlAtAnchor : nlAvg) - p2.price),
+				);
+				const targetReachedPct =
+					completion.breakout && Number.isFinite(completion.breakout.price)
+						? computeTargetReachedPct(candles, completion.breakout.price, ihsTarget)
+						: undefined;
 				const ihsPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
 
 				patterns.push({
 					type: 'inverse_head_and_shoulders',
 					confidence,
-					range: { start, end },
+					range: { start, end: rangeEnd },
 					structureRange: { start, end },
-					confirmation: { type: 'not_confirmed' },
+					status: completion.status,
+					confirmation: completion.confirmation,
+					...(completion.breakout ? { breakout: completion.breakout } : {}),
+					...(completion.breakoutBarIndex !== undefined ? { breakoutBarIndex: completion.breakoutBarIndex } : {}),
+					...(completion.breakoutDate ? { breakoutDate: completion.breakoutDate } : {}),
+					...(completion.breakoutDirection ? { breakoutDirection: completion.breakoutDirection } : {}),
+					...(completion.outcome ? { outcome: completion.outcome } : {}),
 					...(ihsPrecedingTrend ? { precedingTrend: ihsPrecedingTrend } : {}),
 					pivots: [p0, p1, p2, p3, p4],
 					neckline,
 					trendlineLabel: 'ネックライン',
 					breakoutTarget: ihsTarget,
 					targetMethod: 'neckline_projection' as const,
+					...(targetReachedPct !== undefined ? { targetReachedPct } : {}),
 					structureDiagram: diagram,
 				});
 				found = true;
@@ -242,6 +375,11 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 				const base = (tolMargin + symmetry + per) / 3;
 				const confidence = finalizeConf(base, 'head_and_shoulders');
 				const nlAvg = (Number(p1.price) + Number(p3.price)) / 2;
+				// 右肩後のネックライン下抜けを確認する。
+				const breakoutIdx = findHsBreakoutIdx(candles, neckline, p4.idx, 'below');
+				const completion = buildHsCompletionFields(candles, breakoutIdx, 'down', end);
+				if (!completion) continue;
+				const rangeEnd = completion.rangeEnd;
 				const diagram = generatePatternDiagram(
 					'head_and_shoulders',
 					[
@@ -252,24 +390,40 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 						{ ...p4, date: candles[p4.idx]?.isoTime },
 					],
 					{ price: nlAvg },
-					{ start, end },
+					{ start, end: rangeEnd },
 				);
-				const hsNlAvg = (p1.price + p3.price) / 2;
-				const hsTarget = Math.round(hsNlAvg - (p2.price - hsNlAvg));
+				// ターゲットはブレイク日（または右肩日）時点のネックライン値を基準に算出する。
+				const targetAnchorIdx = breakoutIdx >= 0 ? breakoutIdx : p4.idx;
+				const nlAtAnchor = necklineAt(neckline, targetAnchorIdx);
+				const hsTarget = Math.round(
+					(Number.isFinite(nlAtAnchor) ? nlAtAnchor : nlAvg) -
+						(p2.price - (Number.isFinite(nlAtAnchor) ? nlAtAnchor : nlAvg)),
+				);
+				const targetReachedPct =
+					completion.breakout && Number.isFinite(completion.breakout.price)
+						? computeTargetReachedPct(candles, completion.breakout.price, hsTarget)
+						: undefined;
 				const hsPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
 
 				patterns.push({
 					type: 'head_and_shoulders',
 					confidence,
-					range: { start, end },
+					range: { start, end: rangeEnd },
 					structureRange: { start, end },
-					confirmation: { type: 'not_confirmed' },
+					status: completion.status,
+					confirmation: completion.confirmation,
+					...(completion.breakout ? { breakout: completion.breakout } : {}),
+					...(completion.breakoutBarIndex !== undefined ? { breakoutBarIndex: completion.breakoutBarIndex } : {}),
+					...(completion.breakoutDate ? { breakoutDate: completion.breakoutDate } : {}),
+					...(completion.breakoutDirection ? { breakoutDirection: completion.breakoutDirection } : {}),
+					...(completion.outcome ? { outcome: completion.outcome } : {}),
 					...(hsPrecedingTrend ? { precedingTrend: hsPrecedingTrend } : {}),
 					pivots: [p0, p1, p2, p3, p4],
 					neckline,
 					trendlineLabel: 'ネックライン',
 					breakoutTarget: hsTarget,
 					targetMethod: 'neckline_projection' as const,
+					...(targetReachedPct !== undefined ? { targetReachedPct } : {}),
 					structureDiagram: diagram,
 				});
 				found = true;
@@ -403,6 +557,11 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 			const base = (tolMargin + symmetry + per) / 3;
 			const confidence = finalizeConf(base * 0.95, 'head_and_shoulders');
 			const nlAvg = (Number(p1.price) + Number(p3.price)) / 2;
+			// 右肩後のネックライン下抜けを確認する。
+			const breakoutIdx = findHsBreakoutIdx(candles, neckline, p4.idx, 'below');
+			const completion = buildHsCompletionFields(candles, breakoutIdx, 'down', end);
+			if (!completion) continue;
+			const rangeEnd = completion.rangeEnd;
 			const diagram = generatePatternDiagram(
 				'head_and_shoulders',
 				[
@@ -413,9 +572,14 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 					{ ...p4, date: candles[p4.idx]?.isoTime },
 				],
 				{ price: nlAvg },
-				{ start, end },
+				{ start, end: rangeEnd },
 			);
+			// nlY は水平ネックラインの y。breakout 時点でも同値なので nlY を直接使う。
 			const hsRelTarget = Math.round(nlY - (p2.price - nlY));
+			const targetReachedPct =
+				completion.breakout && Number.isFinite(completion.breakout.price)
+					? computeTargetReachedPct(candles, completion.breakout.price, hsRelTarget)
+					: undefined;
 			const hsRelPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
 			debugCandidates.push({
 				type: 'head_and_shoulders',
@@ -426,15 +590,22 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 			return {
 				type: 'head_and_shoulders',
 				confidence,
-				range: { start, end },
+				range: { start, end: rangeEnd },
 				structureRange: { start, end },
-				confirmation: { type: 'not_confirmed' },
+				status: completion.status,
+				confirmation: completion.confirmation,
+				...(completion.breakout ? { breakout: completion.breakout } : {}),
+				...(completion.breakoutBarIndex !== undefined ? { breakoutBarIndex: completion.breakoutBarIndex } : {}),
+				...(completion.breakoutDate ? { breakoutDate: completion.breakoutDate } : {}),
+				...(completion.breakoutDirection ? { breakoutDirection: completion.breakoutDirection } : {}),
+				...(completion.outcome ? { outcome: completion.outcome } : {}),
 				...(hsRelPrecedingTrend ? { precedingTrend: hsRelPrecedingTrend } : {}),
 				pivots: [p0, p1, p2, p3, p4],
 				neckline,
 				trendlineLabel: 'ネックライン',
 				breakoutTarget: hsRelTarget,
 				targetMethod: 'neckline_projection' as const,
+				...(targetReachedPct !== undefined ? { targetReachedPct } : {}),
 				structureDiagram: diagram,
 				_fallback: `relaxed_hs_${factors.tag}`,
 			};
@@ -527,6 +698,11 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 			const base = (tolMargin + symmetry + per) / 3;
 			const confidence = finalizeConf(base * 0.95, 'inverse_head_and_shoulders');
 			const nlAvg = (Number(p1.price) + Number(p3.price)) / 2;
+			// 右肩後のネックライン上抜けを確認する。
+			const breakoutIdx = findHsBreakoutIdx(candles, neckline, p4.idx, 'above');
+			const completion = buildHsCompletionFields(candles, breakoutIdx, 'up', end);
+			if (!completion) continue;
+			const rangeEnd = completion.rangeEnd;
 			const diagram = generatePatternDiagram(
 				'inverse_head_and_shoulders',
 				[
@@ -537,9 +713,14 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 					{ ...p4, date: candles[p4.idx]?.isoTime },
 				],
 				{ price: nlAvg },
-				{ start, end },
+				{ start, end: rangeEnd },
 			);
+			// nlY は水平ネックラインの y。breakout 時点でも同値なので nlY を直接使う。
 			const ihsRelTarget = Math.round(nlY + (nlY - p2.price));
+			const targetReachedPct =
+				completion.breakout && Number.isFinite(completion.breakout.price)
+					? computeTargetReachedPct(candles, completion.breakout.price, ihsRelTarget)
+					: undefined;
 			const ihsRelPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
 			debugCandidates.push({
 				type: 'inverse_head_and_shoulders',
@@ -550,15 +731,22 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 			return {
 				type: 'inverse_head_and_shoulders',
 				confidence,
-				range: { start, end },
+				range: { start, end: rangeEnd },
 				structureRange: { start, end },
-				confirmation: { type: 'not_confirmed' },
+				status: completion.status,
+				confirmation: completion.confirmation,
+				...(completion.breakout ? { breakout: completion.breakout } : {}),
+				...(completion.breakoutBarIndex !== undefined ? { breakoutBarIndex: completion.breakoutBarIndex } : {}),
+				...(completion.breakoutDate ? { breakoutDate: completion.breakoutDate } : {}),
+				...(completion.breakoutDirection ? { breakoutDirection: completion.breakoutDirection } : {}),
+				...(completion.outcome ? { outcome: completion.outcome } : {}),
 				...(ihsRelPrecedingTrend ? { precedingTrend: ihsRelPrecedingTrend } : {}),
 				pivots: [p0, p1, p2, p3, p4],
 				neckline,
 				trendlineLabel: 'ネックライン',
 				breakoutTarget: ihsRelTarget,
 				targetMethod: 'neckline_projection' as const,
+				...(targetReachedPct !== undefined ? { targetReachedPct } : {}),
 				structureDiagram: diagram,
 				_fallback: `relaxed_ihs_${factors.tag}`,
 			};
