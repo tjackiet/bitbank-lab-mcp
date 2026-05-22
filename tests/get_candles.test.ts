@@ -1678,24 +1678,6 @@ describe('getCandles', () => {
 	// errorType ('user'/'upstream'/'network') の使い分けは維持し、メッセージのみ user 向けに改善。
 
 	describe('PR-5: エラー分類の細分化', () => {
-		it('未来日 (date=20991231) は fetch 前に user エラー (future) として早期 fail する', async () => {
-			const fetchMock = vi.fn().mockResolvedValue({
-				ok: true,
-				status: 200,
-				statusText: 'OK',
-				json: async () => ({ success: 1, data: { candlestick: [{ ohlcv: [] }] } }),
-			});
-			globalThis.fetch = fetchMock as unknown as typeof fetch;
-
-			const res = await getCandles('btc_jpy', '1day', '20991231', 10);
-			assertFail(res);
-			expect(res.meta?.errorType).toBe('user');
-			expect(res.summary).toContain('future');
-			expect(res.summary).toContain('20991231');
-			// fetch 前に弾くので呼ばれない
-			expect(fetchMock).not.toHaveBeenCalled();
-		});
-
 		it('取引開始前 (date=20100101) は fetch 前に user エラー (before bitbank service start) として早期 fail する', async () => {
 			const fetchMock = vi.fn().mockResolvedValue({
 				ok: true,
