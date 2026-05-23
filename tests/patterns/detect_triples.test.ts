@@ -567,21 +567,23 @@ describe('detectTriples', () => {
 	});
 
 	it('forming triple_top: 3 山の累計 spread が tripleTolerancePct を超えると forming_peaks_not_level で reject', () => {
-		// 階段ではないが（peak1 > peak2 なので monotonic ではない）、
-		// 3 点累計 spread が大きいケース。peak1=110, peak2=100, current=110 → spread=10/110=9.09%。
+		// 階段ではないが（peak1 < peak2 > current で V 字）、3 点累計 spread が大きいケース。
+		// peak1=100, peak2=105, current=99 → spread=(105-99)/105≈5.71% > tripleTolerancePct=4.8%。
+		// 早期 peakDiff（5/105=4.76% < 4.8%）と currentDiff（3.5/102.5=3.41% < 4.8%）は通過させ、
+		// stair-step も V 字配置なので発火しない → level check が確実に発火することを検証する。
 		const total = 51;
 		const candles: CandleData[] = Array.from({ length: total }, (_, i) => mkCandle(total - i, 90, 95, 85, 90));
-		candles[0] = mkCandle(total, 109, 110, 107, 109);
+		candles[0] = mkCandle(total, 99, 100, 97, 99);
 		candles[10] = mkCandle(total - 10, 79, 81, 79, 80);
-		candles[20] = mkCandle(total - 20, 99, 100, 97, 99);
+		candles[20] = mkCandle(total - 20, 104, 105, 102, 104);
 		candles[32] = mkCandle(total - 32, 80, 82, 80, 81);
 		for (let i = 45; i < total; i++) {
-			candles[i] = mkCandle(total - i, 108, 110, 107, 109);
+			candles[i] = mkCandle(total - i, 98, 100, 97, 99);
 		}
 
 		const allPeaks: Pivot[] = [
-			{ idx: 0, price: 110, kind: 'H' },
-			{ idx: 20, price: 100, kind: 'H' },
+			{ idx: 0, price: 100, kind: 'H' },
+			{ idx: 20, price: 105, kind: 'H' },
 		];
 		const allValleys: Pivot[] = [
 			{ idx: 10, price: 80, kind: 'L' },
@@ -594,13 +596,18 @@ describe('detectTriples', () => {
 			allPeaks,
 			allValleys,
 			includeForming: true,
-			tolerancePct: 0.04, // tripleTolerancePct=4.8% → 9.09% で reject
+			tolerancePct: 0.04, // tripleTolerancePct=4.8%, levelSpreadLimit=4.8% → 5.71% で reject
 		});
 		const result = detectTriples(ctx);
 
 		const forming = result.patterns.filter((p) => p.type === 'triple_top' && p.status === 'forming');
 		expect(forming).toHaveLength(0);
-		// 旧実装ではこの状態でも素通りしてしまっていた。
+		// 別経路（早期 peakDiff / currentDiff silent reject）で落ちていないことを担保するため
+		// 明示的に reason を assert する。
+		const rejected = ctx.debugCandidates.find(
+			(d) => d.type === 'triple_top' && d.accepted === false && d.reason === 'forming_peaks_not_level',
+		);
+		expect(rejected).toBeDefined();
 	});
 
 	it('forming triple_top: 谷の乖離が大きいと forming_neckline_not_horizontal で reject', () => {
