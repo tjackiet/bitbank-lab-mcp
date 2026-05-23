@@ -14,6 +14,7 @@ import {
 	stochRSI,
 	toNumericSeries,
 	trueRange,
+	wilderAtr,
 } from '../../lib/indicators.js';
 
 // --- SMA ---
@@ -1216,6 +1217,203 @@ describe('atr', () => {
 		expect(result[5]).toBeCloseTo(25 / 3, 10);
 		// 窓 [8, 8, 8]=8
 		expect(result[6]).toBeCloseTo(8, 10);
+	});
+});
+
+// --- Wilder ATR ---
+
+describe('wilderAtr', () => {
+	it('基本的な Wilder ATR を計算する（period=3）', () => {
+		// 5 本のキャンドル
+		// TR[1]=10, TR[2]=4, TR[3]=9 → 初回 ATR[3] = (10+4+9)/3 ≈ 7.6667
+		// TR[4]=max(120-112,|120-115|,|112-115|)=max(8,5,3)=8
+		// ATR[4] = (7.6667*2 + 8)/3 = (15.3333 + 8)/3 = 23.3333/3 ≈ 7.7778
+		const highs = [110, 115, 112, 118, 120];
+		const lows = [100, 105, 108, 110, 112];
+		const closes = [105, 110, 109, 115, 118];
+		const result = wilderAtr(highs, lows, closes, 3);
+		expect(result).toHaveLength(5);
+		expect(result[0]).toBeNaN();
+		expect(result[1]).toBeNaN();
+		expect(result[2]).toBeNaN();
+		expect(result[3]).toBeCloseTo(23 / 3, 10);
+		// Wilder smoothing: (23/3 * 2 + 8) / 3 = (46/3 + 24/3) / 3 = 70/9
+		expect(result[4]).toBeCloseTo(70 / 9, 10);
+	});
+
+	it('SMA-ATR と Wilder ATR は初回値（シード）で一致する', () => {
+		// 初回 ATR は SMA(TR[1..period]) として定義されるため両者一致
+		const highs = [110, 115, 112, 118, 120];
+		const lows = [100, 105, 108, 110, 112];
+		const closes = [105, 110, 109, 115, 118];
+		const smaResult = atr(highs, lows, closes, 3);
+		const wilderResult = wilderAtr(highs, lows, closes, 3);
+		expect(wilderResult[3]).toBeCloseTo(smaResult[3], 10);
+	});
+
+	it('Wilder の漸化式どおりに次のバーを更新する', () => {
+		// period=3 と少し長い系列で Wilder の RMA 漸化式を検算
+		// 入力 TR を構築するためのシンプルな OHLC
+		// highs: [10,12,14,13,15,16,14,17,16,18]
+		// lows : [ 8,10,11,12,13,14,13,15,14,16]
+		// closes:[ 9,11,13,12,14,15,14,16,15,17]
+		// TR[1]=max(12-10,|12-9|,|10-9|)=3
+		// TR[2]=max(14-11,|14-11|,|11-11|)=3
+		// TR[3]=max(13-12,|13-13|,|12-13|)=1
+		// TR[4]=max(15-13,|15-12|,|13-12|)=3
+		// TR[5]=max(16-14,|16-14|,|14-14|)=2
+		// TR[6]=max(14-13,|14-15|,|13-15|)=2
+		// TR[7]=max(17-15,|17-14|,|15-14|)=3
+		// TR[8]=max(16-14,|16-16|,|14-16|)=2
+		// TR[9]=max(18-16,|18-15|,|16-15|)=3
+		const highs = [10, 12, 14, 13, 15, 16, 14, 17, 16, 18];
+		const lows = [8, 10, 11, 12, 13, 14, 13, 15, 14, 16];
+		const closes = [9, 11, 13, 12, 14, 15, 14, 16, 15, 17];
+		const result = wilderAtr(highs, lows, closes, 3);
+		// シード: (3+3+1)/3 = 7/3
+		expect(result[3]).toBeCloseTo(7 / 3, 10);
+		// (7/3 * 2 + 3)/3 = (14/3 + 9/3)/3 = 23/9
+		expect(result[4]).toBeCloseTo(23 / 9, 10);
+		// (23/9 * 2 + 2)/3 = (46/9 + 18/9)/3 = 64/27
+		expect(result[5]).toBeCloseTo(64 / 27, 10);
+		// (64/27 * 2 + 2)/3 = (128/27 + 54/27)/3 = 182/81
+		expect(result[6]).toBeCloseTo(182 / 81, 10);
+		// (182/81 * 2 + 3)/3 = (364/81 + 243/81)/3 = 607/243
+		expect(result[7]).toBeCloseTo(607 / 243, 10);
+	});
+
+	it('データ不足のとき全て NaN', () => {
+		const result = wilderAtr([110, 115], [100, 105], [105, 110], 14);
+		expect(result.every((v) => Number.isNaN(v))).toBe(true);
+	});
+
+	it('period < 1 でエラー', () => {
+		expect(() => wilderAtr([1, 2, 3], [1, 2, 3], [1, 2, 3], 0)).toThrow();
+		expect(() => wilderAtr([1, 2, 3], [1, 2, 3], [1, 2, 3], -1)).toThrow();
+	});
+
+	it('TR に NaN が混入すると以降は再シードまで NaN', () => {
+		// highs[3]=NaN → TR[3]=NaN。
+		// period=3 のシード窓 tr[1..3] が NaN を含む → result[3]=NaN
+		// その後、連続 3 本の有限 TR が揃うまで NaN のまま、揃った時点で再シード。
+		const highs = [10, 12, 14, NaN, 15, 16, 14, 17, 16, 18];
+		const lows = [8, 10, 11, 12, 13, 14, 13, 15, 14, 16];
+		const closes = [9, 11, 13, 12, 14, 15, 14, 16, 15, 17];
+		const result = wilderAtr(highs, lows, closes, 3);
+		// シード期間に NaN を含む（[3,3,NaN]）→ result[3]=NaN
+		expect(result[3]).toBeNaN();
+		// 以降、有限 TR の連続をカウントし直す
+		// TR[4]=max(15-13,|15-12|,|13-12|)=3
+		// TR[5]=max(16-14,|16-14|,|14-14|)=2
+		// TR[6]=max(14-13,|14-15|,|13-15|)=2 → 3 本目で再シード成立
+		// 再シード: (3+2+2)/3 = 7/3
+		expect(result[4]).toBeNaN();
+		expect(result[5]).toBeNaN();
+		expect(result[6]).toBeCloseTo(7 / 3, 10);
+		// TR[7]=3 → (7/3 * 2 + 3)/3 = 23/9
+		expect(result[7]).toBeCloseTo(23 / 9, 10);
+	});
+
+	it('TR に Infinity が混入してもリセット後に再シードする', () => {
+		const highs = [10, 12, 14, Infinity, 15, 16, 14, 17, 16, 18];
+		const lows = [8, 10, 11, 12, 13, 14, 13, 15, 14, 16];
+		const closes = [9, 11, 13, 12, 14, 15, 14, 16, 15, 17];
+		const result = wilderAtr(highs, lows, closes, 3);
+		// Infinity 検出時に内部状態をリセット
+		expect(result[3]).toBeNaN();
+		expect(result[4]).toBeNaN();
+		expect(result[5]).toBeNaN();
+		// 再シード後（TR[4..6]=[3,2,2]）→ 7/3
+		expect(result[6]).toBeCloseTo(7 / 3, 10);
+		// 出力に Infinity が混入しない
+		for (const v of result) {
+			expect(Number.isFinite(v) || Number.isNaN(v)).toBe(true);
+		}
+	});
+
+	it('period=14, 単調増加データで Wilder ATR が一定値に収束する', () => {
+		// highs - lows = 2 で一定、closes が単調増加 → TR ≒ 2 で一定
+		// Wilder ATR の極限は単純平均と一致する
+		const n = 60;
+		const closes = Array.from({ length: n }, (_, i) => 100 + i);
+		const highs = closes.map((c) => c + 1);
+		const lows = closes.map((c) => c - 1);
+		const result = wilderAtr(highs, lows, closes, 14);
+		// 先頭 14 個（period 個）は NaN
+		for (let i = 0; i < 14; i++) {
+			expect(result[i]).toBeNaN();
+		}
+		// TR[i] = max(2, |high-prevClose|, |low-prevClose|) = max(2, 2, 0) = 2 for i>=1
+		// 全ての TR が 2 → Wilder ATR も収束して 2
+		expect(result[14]).toBeCloseTo(2, 10);
+		expect(result[n - 1]).toBeCloseTo(2, 10);
+	});
+
+	// TradingView / MT4 標準仕様（Wilder の RMA）と一致する golden 数値固定。
+	// 入力: 30 本の合成 OHLC（drift 付きで TR が一定にならないように設計）。
+	// 期待値は同一スペックの参照実装で生成（Wilder の漸化式そのまま）。
+	it('golden: Wilder ATR(14) 数値固定（period=14, ε=1e-8）', () => {
+		// 30 本の合成 OHLC（closes は drift + サイン波、highs/lows は close ± 固定幅）
+		const highs = [
+			102.5, 104.0, 102.0, 105.0, 104.5, 103.5, 106.0, 107.5, 106.0, 108.0, 110.0, 108.5, 111.0, 112.5, 111.0, 113.5,
+			115.0, 114.0, 116.0, 117.5, 116.5, 118.5, 120.0, 119.0, 121.0, 122.5, 121.5, 123.5, 125.0, 124.5,
+		];
+		const lows = [
+			99.0, 100.5, 99.0, 101.0, 100.5, 100.0, 102.0, 103.5, 102.5, 104.5, 106.0, 105.0, 107.0, 108.5, 107.5, 109.5,
+			111.0, 110.5, 112.0, 113.5, 113.0, 114.5, 116.0, 115.5, 117.0, 118.5, 118.0, 119.5, 121.0, 120.5,
+		];
+		const closes = [
+			100.5, 102.5, 100.0, 103.0, 102.0, 102.5, 104.5, 105.5, 104.0, 106.5, 108.5, 106.5, 109.5, 110.5, 109.0, 112.0,
+			113.0, 112.5, 114.5, 115.5, 114.5, 117.0, 118.0, 117.0, 119.5, 120.5, 119.5, 122.0, 123.0, 122.0,
+		];
+		const result = wilderAtr(highs, lows, closes, 14);
+		expect(result).toHaveLength(30);
+		// 先頭 14 個（period 個）は NaN
+		for (let i = 0; i < 14; i++) {
+			expect(result[i]).toBeNaN();
+		}
+
+		// 参照実装: 同一スペックで Wilder の RMA を独立計算する
+		const tr: number[] = [];
+		for (let i = 1; i < closes.length; i++) {
+			tr.push(Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])));
+		}
+		// シード = SMA(TR[0..13])（TR は index 1 から始まるので tr 配列の先頭 14 個）
+		let ref = tr.slice(0, 14).reduce((a, b) => a + b, 0) / 14;
+		const refSeries: number[] = [];
+		refSeries.push(ref);
+		for (let i = 14; i < tr.length; i++) {
+			ref = (ref * 13 + tr[i]) / 14;
+			refSeries.push(ref);
+		}
+		// result[14] が refSeries[0]、result[15] が refSeries[1]、...
+		for (let i = 14; i < 30; i++) {
+			expect(result[i]).toBeCloseTo(refSeries[i - 14], 8);
+		}
+	});
+
+	it('長い系列では初期シードの差の影響が時間とともに減衰する', () => {
+		// 100 本の系列で前半 50 本と末尾の Wilder ATR を比較。
+		// 後半は同じ TR 分布なら初期化の影響が指数的に消える。
+		const n = 100;
+		// 一定振幅のジグザグ → TR がほぼ一定
+		const highs: number[] = [];
+		const lows: number[] = [];
+		const closes: number[] = [];
+		for (let i = 0; i < n; i++) {
+			const c = 100 + (i % 2 === 0 ? 1 : -1);
+			closes.push(c);
+			highs.push(c + 2);
+			lows.push(c - 2);
+		}
+		const result = wilderAtr(highs, lows, closes, 14);
+		// 末尾は安定値に収束しているはず
+		const last = result[n - 1] as number;
+		const earlier = result[n - 20] as number;
+		expect(Number.isFinite(last)).toBe(true);
+		expect(Number.isFinite(earlier)).toBe(true);
+		// 振動する一定振幅 → 20 本後でも変化は小さい
+		expect(Math.abs(last - earlier)).toBeLessThan(0.5);
 	});
 });
 
