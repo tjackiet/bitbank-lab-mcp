@@ -104,13 +104,81 @@ function findHsBreakoutIdx(
 	return -1;
 }
 
-// ── Helper: targetReachedPct（現在価格ベース。detect_doubles / detect_triples と同形式） ──
+// ── Helper: H&S / 逆H&S 用 target reached 判定（high/low ベース） ──
+//
+// 最終 close ベースだと、ブレイク後に一度 target 以下/以上まで動いてから戻ったケースで
+// 未到達扱いされてしまう。実際には「ブレイク後に target を越えたか」を見たいので、
+// breakoutIdx 以降のローソク足を走査して extremum（H&S なら min low / 逆H&S なら max high）を取り、
+// その値で進捗率を計算する。
 
-function computeTargetReachedPct(candles: CandleData[], breakoutPrice: number, target: number): number | undefined {
-	const curPrice = Number(candles[candles.length - 1]?.close ?? NaN);
-	if (!(Number.isFinite(curPrice) && Number.isFinite(breakoutPrice) && Number.isFinite(target))) return undefined;
-	if (Math.abs(target - breakoutPrice) < EPSILON) return undefined;
-	return Math.round(((curPrice - breakoutPrice) / (target - breakoutPrice)) * 100);
+type HsTargetReachInfo = {
+	targetReachedPct: number;
+	targetReached: boolean;
+	targetReachedDate?: string;
+	targetReachedPrice: number;
+};
+
+function computeHsTargetReach(
+	candles: CandleData[],
+	breakoutIdx: number,
+	breakoutPrice: number,
+	target: number,
+	direction: 'down' | 'up',
+): HsTargetReachInfo | undefined {
+	if (!Number.isFinite(breakoutPrice) || !Number.isFinite(target)) return undefined;
+	const targetDistance = Math.abs(target - breakoutPrice);
+	const startIdx = Math.max(0, breakoutIdx);
+	if (startIdx >= candles.length) return undefined;
+	// ブレイク close が target と一致する（距離ゼロ）= ブレイク時点で既に到達。
+	// undefined で metadata を落とさず、reached=true, pct=100 を確定で返す。
+	if (targetDistance <= EPSILON) {
+		const targetReachedDate = candles[startIdx]?.isoTime;
+		return {
+			targetReachedPct: 100,
+			targetReached: true,
+			...(targetReachedDate ? { targetReachedDate } : {}),
+			targetReachedPrice: breakoutPrice,
+		};
+	}
+
+	let extremePrice = direction === 'down' ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY;
+	let extremeIdx = -1;
+	for (let i = startIdx; i < candles.length; i++) {
+		const candle = candles[i];
+		if (!candle) continue;
+		if (direction === 'down') {
+			const lo = Number(candle.low ?? NaN);
+			if (!Number.isFinite(lo)) continue;
+			if (lo < extremePrice) {
+				extremePrice = lo;
+				extremeIdx = i;
+			}
+		} else {
+			const hi = Number(candle.high ?? NaN);
+			if (!Number.isFinite(hi)) continue;
+			if (hi > extremePrice) {
+				extremePrice = hi;
+				extremeIdx = i;
+			}
+		}
+	}
+	if (extremeIdx < 0 || !Number.isFinite(extremePrice)) return undefined;
+
+	const targetReached = direction === 'down' ? extremePrice <= target : extremePrice >= target;
+	// pct は「ブレイク価格から target に向かってどれだけ進んだか」を 100% スケールで返す。
+	// 分母を Math.abs にして方向を明示することで、ブレイク足が深く動いて breakoutPrice が
+	// 既に target を越えていた場合の符号反転（targetReached=true なのに pct<0）を防ぐ。
+	const moveDistance = direction === 'down' ? breakoutPrice - extremePrice : extremePrice - breakoutPrice;
+	let targetReachedPct = Math.round((moveDistance / targetDistance) * 100);
+	if (targetReached) targetReachedPct = Math.max(100, targetReachedPct);
+	targetReachedPct = Math.max(0, targetReachedPct);
+	const targetReachedDate = candles[extremeIdx]?.isoTime;
+	return {
+		targetReachedPct,
+		targetReached,
+		...(targetReachedDate ? { targetReachedDate } : {}),
+		targetReachedPrice: extremePrice,
+	};
 }
 
 // ── Helper: ブレイク確認済み / 未確認に応じた完成フィールド ──
@@ -245,10 +313,9 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 					(Number.isFinite(nlAtAnchor) ? nlAtAnchor : nlAvg) +
 						((Number.isFinite(nlAtAnchor) ? nlAtAnchor : nlAvg) - p2.price),
 				);
-				const targetReachedPct =
-					completion.breakout && Number.isFinite(completion.breakout.price)
-						? computeTargetReachedPct(candles, completion.breakout.price, ihsTarget)
-						: undefined;
+				const ihsReach = completion.breakout
+					? computeHsTargetReach(candles, breakoutIdx, completion.breakout.price, ihsTarget, 'up')
+					: undefined;
 				const ihsPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
 
 				patterns.push({
@@ -269,7 +336,14 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 					trendlineLabel: 'ネックライン',
 					breakoutTarget: ihsTarget,
 					targetMethod: 'neckline_projection' as const,
-					...(targetReachedPct !== undefined ? { targetReachedPct } : {}),
+					...(ihsReach
+						? {
+								targetReachedPct: ihsReach.targetReachedPct,
+								targetReached: ihsReach.targetReached,
+								...(ihsReach.targetReachedDate ? { targetReachedDate: ihsReach.targetReachedDate } : {}),
+								targetReachedPrice: ihsReach.targetReachedPrice,
+							}
+						: {}),
 					structureDiagram: diagram,
 				});
 				found = true;
@@ -399,10 +473,9 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 					(Number.isFinite(nlAtAnchor) ? nlAtAnchor : nlAvg) -
 						(p2.price - (Number.isFinite(nlAtAnchor) ? nlAtAnchor : nlAvg)),
 				);
-				const targetReachedPct =
-					completion.breakout && Number.isFinite(completion.breakout.price)
-						? computeTargetReachedPct(candles, completion.breakout.price, hsTarget)
-						: undefined;
+				const hsReach = completion.breakout
+					? computeHsTargetReach(candles, breakoutIdx, completion.breakout.price, hsTarget, 'down')
+					: undefined;
 				const hsPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
 
 				patterns.push({
@@ -423,7 +496,14 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 					trendlineLabel: 'ネックライン',
 					breakoutTarget: hsTarget,
 					targetMethod: 'neckline_projection' as const,
-					...(targetReachedPct !== undefined ? { targetReachedPct } : {}),
+					...(hsReach
+						? {
+								targetReachedPct: hsReach.targetReachedPct,
+								targetReached: hsReach.targetReached,
+								...(hsReach.targetReachedDate ? { targetReachedDate: hsReach.targetReachedDate } : {}),
+								targetReachedPrice: hsReach.targetReachedPrice,
+							}
+						: {}),
 					structureDiagram: diagram,
 				});
 				found = true;
@@ -575,11 +655,12 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 				{ start, end: rangeEnd },
 			);
 			// nlY は水平ネックラインの y。breakout 時点でも同値なので nlY を直接使う。
+			// TODO: relaxed H&S も strict と同じく 谷1→谷2 の傾きつきネックラインを使うべき。
+			//       別 PR で検討（今回の主目的は target reached の high/low 化）。
 			const hsRelTarget = Math.round(nlY - (p2.price - nlY));
-			const targetReachedPct =
-				completion.breakout && Number.isFinite(completion.breakout.price)
-					? computeTargetReachedPct(candles, completion.breakout.price, hsRelTarget)
-					: undefined;
+			const hsRelReach = completion.breakout
+				? computeHsTargetReach(candles, breakoutIdx, completion.breakout.price, hsRelTarget, 'down')
+				: undefined;
 			const hsRelPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
 			debugCandidates.push({
 				type: 'head_and_shoulders',
@@ -605,7 +686,14 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 				trendlineLabel: 'ネックライン',
 				breakoutTarget: hsRelTarget,
 				targetMethod: 'neckline_projection' as const,
-				...(targetReachedPct !== undefined ? { targetReachedPct } : {}),
+				...(hsRelReach
+					? {
+							targetReachedPct: hsRelReach.targetReachedPct,
+							targetReached: hsRelReach.targetReached,
+							...(hsRelReach.targetReachedDate ? { targetReachedDate: hsRelReach.targetReachedDate } : {}),
+							targetReachedPrice: hsRelReach.targetReachedPrice,
+						}
+					: {}),
 				structureDiagram: diagram,
 				_fallback: `relaxed_hs_${factors.tag}`,
 			};
@@ -716,11 +804,12 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 				{ start, end: rangeEnd },
 			);
 			// nlY は水平ネックラインの y。breakout 時点でも同値なので nlY を直接使う。
+			// TODO: relaxed Inverse H&S も strict と同じく 山1→山2 の傾きつきネックラインを使うべき。
+			//       別 PR で検討（今回の主目的は target reached の high/low 化）。
 			const ihsRelTarget = Math.round(nlY + (nlY - p2.price));
-			const targetReachedPct =
-				completion.breakout && Number.isFinite(completion.breakout.price)
-					? computeTargetReachedPct(candles, completion.breakout.price, ihsRelTarget)
-					: undefined;
+			const ihsRelReach = completion.breakout
+				? computeHsTargetReach(candles, breakoutIdx, completion.breakout.price, ihsRelTarget, 'up')
+				: undefined;
 			const ihsRelPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
 			debugCandidates.push({
 				type: 'inverse_head_and_shoulders',
@@ -746,7 +835,14 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 				trendlineLabel: 'ネックライン',
 				breakoutTarget: ihsRelTarget,
 				targetMethod: 'neckline_projection' as const,
-				...(targetReachedPct !== undefined ? { targetReachedPct } : {}),
+				...(ihsRelReach
+					? {
+							targetReachedPct: ihsRelReach.targetReachedPct,
+							targetReached: ihsRelReach.targetReached,
+							...(ihsRelReach.targetReachedDate ? { targetReachedDate: ihsRelReach.targetReachedDate } : {}),
+							targetReachedPrice: ihsRelReach.targetReachedPrice,
+						}
+					: {}),
 				structureDiagram: diagram,
 				_fallback: `relaxed_ihs_${factors.tag}`,
 			};
