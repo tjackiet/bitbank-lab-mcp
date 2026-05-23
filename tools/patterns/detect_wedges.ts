@@ -475,7 +475,11 @@ function buildRegressionEntry(
 		? {
 				breakoutDate: breakInfo.breakIsoTime,
 				breakoutConfirmed: true,
-				targetReached: false,
+				// top-level の targetReach（high/low ベース）と整合させる。
+				// 旧コードは false 固定だったため、wedge 到達済みケースで
+				// top-level `targetReached: true` と aftermath.targetReached: false が
+				// 同居していた。LLM/クライアントが aftermath を見ても整合するよう揃える。
+				targetReached: targetReach?.targetReached ?? false,
 				outcome: isSuccessfulBreakout
 					? wedgeType === 'falling_wedge'
 						? 'bullish_breakout'
