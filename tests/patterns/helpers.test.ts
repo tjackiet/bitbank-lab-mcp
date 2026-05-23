@@ -625,4 +625,27 @@ describe('computeTargetReach', () => {
 		expect(r?.targetReached).toBe(true);
 		expect(r?.targetReachedPrice).toBe(70);
 	});
+
+	// 丸めの非対称性（reached=false なら 100 に丸めない） ───
+
+	it('reached=false で raw pct が 99.x → 99 にキャップ（100 にせり上がらない）', () => {
+		// breakoutPrice=100, target=0, extremeLow=0.4
+		// targetReached = 0.4 <= 0 → false
+		// rawPct = (100 - 0.4) / 100 * 100 = 99.6
+		// 旧: Math.round(99.6)=100（reached=false なのに pct=100）
+		// 新: Math.min(99, Math.floor(99.6))=99
+		const candles = [c(101, 0.4, 100, 'iso-0')];
+		const r = computeTargetReach(candles, 0, 100, 0, 'down');
+		expect(r?.targetReached).toBe(false);
+		expect(r?.targetReachedPct).toBe(99);
+	});
+
+	it('reached=true なら通常通り round（オーバーシュート/到達の区別を維持）', () => {
+		// breakoutPrice=100, target=80, extremeLow=80（ちょうど到達）
+		// rawPct = 20/20 * 100 = 100 → reached=true & pct=100
+		const candles = [c(95, 80, 90, 'iso-0')];
+		const r = computeTargetReach(candles, 0, 100, 80, 'down');
+		expect(r?.targetReached).toBe(true);
+		expect(r?.targetReachedPct).toBe(100);
+	});
 });

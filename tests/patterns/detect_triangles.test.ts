@@ -401,18 +401,16 @@ describe('detectTriangles — whipsaw boundary tests', () => {
 	});
 
 	it('triangle: ブレイク後に high が target に届かない → targetReached=false, pct<100', () => {
-		// 後続足の high が target に届かない通常ケース
+		// breakoutClose=120, patternHeight≈30 → target=150。後続足 high<=123 で必ず未到達
 		const candles = buildWithBreakoutAndTail([118, 119, 120, 121]);
 		const ctx = buildCtx({ candles, want: new Set(['triangle_symmetrical']) });
 		const result = detectTriangles(ctx);
 
 		const completed = result.patterns.filter((p) => p.type === 'triangle_symmetrical' && p.status === 'completed');
 		expect(completed.length).toBeGreaterThanOrEqual(1);
-		const p = completed[0];
-		// breakoutTarget が breakoutPrice より大きく離れていれば未到達
-		if (p?.targetReached === false) {
-			expect(p?.targetReachedPct).toBeLessThan(100);
-			expect(p?.targetReachedPrice).toBeDefined();
-		}
+		const unreached = completed.find((p) => p.targetReached === false);
+		expect(unreached).toBeDefined();
+		expect(unreached?.targetReachedPct).toBeLessThan(100);
+		expect(unreached?.targetReachedPrice).toBeDefined();
 	});
 });

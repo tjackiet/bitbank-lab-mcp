@@ -160,10 +160,16 @@ export function computeTargetReach(
 	// pct はブレイク価格から target 方向へどれだけ進んだかを 100% スケールで返す。
 	// 分母を Math.abs にしておくことで、ブレイク足が既に target を越えていた場合の
 	// 符号反転（reached=true なのに pct<0）を防ぐ。
+	//
+	// 丸めは reached/unreached で非対称にする:
+	//   - reached=true:  round して max(100, ..) にクランプ（オーバーシュート時の符号反転防止）
+	//   - reached=false: floor して 99 にキャップ（99.6% などが 100 に丸まって
+	//     下流の `pct >= 100` 判定を誤らせるのを防ぐ）
 	const moveDistance = direction === 'down' ? breakoutPrice - extremePrice : extremePrice - breakoutPrice;
-	let targetReachedPct = Math.round((moveDistance / targetDistance) * 100);
-	if (targetReached) targetReachedPct = Math.max(100, targetReachedPct);
-	targetReachedPct = Math.max(0, targetReachedPct);
+	const rawPct = (moveDistance / targetDistance) * 100;
+	const targetReachedPct = targetReached
+		? Math.max(100, Math.round(rawPct))
+		: Math.min(99, Math.max(0, Math.floor(rawPct)));
 	const targetReachedDate = candles[extremeIdx]?.isoTime;
 	return {
 		targetReachedPct,
