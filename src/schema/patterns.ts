@@ -18,8 +18,14 @@ export const PatternTypeEnum = z.enum([
 	// wedge patterns
 	'falling_wedge',
 	'rising_wedge',
-	'pennant',
+	// flag / pennant: 入力フィルタ用のエイリアス（'flag' → bull_flag + bear_flag）。
+	// 出力 type は必ず方向付きの bull_*/bear_* を使う。
 	'flag',
+	'pennant',
+	'bull_flag',
+	'bear_flag',
+	'bull_pennant',
+	'bear_pennant',
 ]);
 
 export const DetectPatternsInputSchema = BasePairInputSchema.extend({
@@ -174,6 +180,19 @@ export const DetectedPatternSchema = z.object({
 	isTrendContinuation: z.boolean().optional(), // ブレイク方向が先行トレンドと一致しているか
 	flagpoleHeight: z.number().optional(), // フラッグポールの値幅
 	retracementRatio: z.number().optional(), // フラッグポールに対する戻し比率（0.38未満ならペナント的）
+	// bull_flag / bear_flag / bull_pennant / bear_pennant の検証情報。
+	// LLM がパターンの妥当性を即座に判断できるよう、pole の急騰/急落条件と
+	// チャネル幾何（傾き・spread）を明示する。
+	poleStartDate: z.string().optional(), // pole 開始日（UTC ISO）
+	poleEndDate: z.string().optional(), // pole 終了日（UTC ISO）
+	poleChangePct: z.number().optional(), // pole の価格変化率（0.15 = +15%）
+	poleBars: z.number().int().optional(), // pole のバー数
+	poleATRMult: z.number().optional(), // pole の magnitude / 局所 ATR
+	flagUpperSlope: z.number().optional(), // チャネル上限ラインの傾き（価格/バー）
+	flagLowerSlope: z.number().optional(), // チャネル下限ラインの傾き（価格/バー）
+	spreadAvg: z.number().optional(), // チャネル幅の平均
+	spreadStability: z.number().optional(), // チャネル幅の安定性（0-1, 1=完全に平行）
+	expectedBreakoutDirection: z.enum(['up', 'down']).optional(), // 期待されるブレイク方向（pole 方向と同じ）
 	aftermath: z
 		.object({
 			breakoutDate: z.string().nullable().optional(),

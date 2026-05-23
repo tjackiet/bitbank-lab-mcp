@@ -528,7 +528,13 @@ export function finalizeConf(base: number, type: string): number {
 			? 1.1
 			: type === 'triple_top' || type === 'triple_bottom'
 				? 1.05
-				: type.startsWith('triangle') || type === 'pennant' || type === 'flag'
+				: type.startsWith('triangle') ||
+						type === 'pennant' ||
+						type === 'flag' ||
+						type === 'bull_flag' ||
+						type === 'bear_flag' ||
+						type === 'bull_pennant' ||
+						type === 'bear_pennant'
 					? 0.95
 					: 1.0;
 	const v = Math.min(1, Math.max(0, base * adj));
@@ -639,6 +645,11 @@ export function globalDedup(patterns: DeduplicablePattern[]): DeduplicablePatter
 		triangle_ascending: 'triangle',
 		triangle_descending: 'triangle',
 		triangle_symmetrical: 'triangle',
+		// flag / pennant の bull/bear は同カテゴリ扱い（同区間重複時は強い方を採用）
+		bull_flag: 'flag',
+		bear_flag: 'flag',
+		bull_pennant: 'pennant',
+		bear_pennant: 'pennant',
 	};
 	function isSameCategory(a: string, b: string): boolean {
 		if (a === b) return true;
