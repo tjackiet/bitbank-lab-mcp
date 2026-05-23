@@ -41,6 +41,24 @@ interface PatternMeta {
 	[key: string]: unknown;
 }
 
+/**
+ * flag / pennant 系パターンに付与される検証メタデータ。
+ * `PatternEntry` には optional フィールドとして既に定義されているが、
+ * view ハンドラからは `unknown` 経由のキャストでアクセスするためここでも形を保持する。
+ */
+interface FlagFamilyViewFields {
+	poleStartDate?: string;
+	poleEndDate?: string;
+	poleChangePct?: number;
+	poleBars?: number;
+	poleATRMult?: number;
+	flagUpperSlope?: number;
+	flagLowerSlope?: number;
+	spreadAvg?: number;
+	spreadStability?: number;
+	expectedBreakoutDirection?: 'up' | 'down';
+}
+
 /** パターン検出結果（res パラメータ用） */
 interface PatternResult {
 	ok?: boolean;
@@ -576,18 +594,7 @@ export function formatPatternLine(
 			if (p.flagpoleHeight != null)
 				parts.push(`フラッグポール値幅: ${Math.round(Number(p.flagpoleHeight)).toLocaleString('ja-JP')}円`);
 			// pole の検証情報（bull/bear flag/pennant 用の新規フィールド）
-			const pAny = p as PatternEntry & {
-				poleStartDate?: string;
-				poleEndDate?: string;
-				poleChangePct?: number;
-				poleBars?: number;
-				poleATRMult?: number;
-				flagUpperSlope?: number;
-				flagLowerSlope?: number;
-				spreadAvg?: number;
-				spreadStability?: number;
-				expectedBreakoutDirection?: 'up' | 'down';
-			};
+			const pAny = p as PatternEntry & FlagFamilyViewFields;
 			if (pAny.poleStartDate && pAny.poleEndDate && pAny.poleChangePct != null) {
 				const psd = toDateOnly(pAny.poleStartDate, tz);
 				const ped = toDateOnly(pAny.poleEndDate, tz);

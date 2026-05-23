@@ -638,18 +638,15 @@ export function globalDedup(patterns: DeduplicablePattern[]): DeduplicablePatter
 		return ov / minD;
 	}
 
-	// 同一カテゴリとして扱うパターン群（期間重複する場合は同カテゴリ内でも dedup 対象）
+	// 同一カテゴリとして扱うパターン群（期間重複する場合は同カテゴリ内でも dedup 対象）。
+	// flag / pennant は detect_pennants.ts 内で方向別 dedup 済みのため categoryMap に含めない
+	// （bull_flag と bear_flag を 'flag' に潰すと globalDedup が方向違いをマージしてしまう）。
 	const categoryMap: Record<string, string> = {
 		rising_wedge: 'wedge',
 		falling_wedge: 'wedge',
 		triangle_ascending: 'triangle',
 		triangle_descending: 'triangle',
 		triangle_symmetrical: 'triangle',
-		// flag / pennant の bull/bear は同カテゴリ扱い（同区間重複時は強い方を採用）
-		bull_flag: 'flag',
-		bear_flag: 'flag',
-		bull_pennant: 'pennant',
-		bear_pennant: 'pennant',
 	};
 	function isSameCategory(a: string, b: string): boolean {
 		if (a === b) return true;

@@ -2,37 +2,51 @@ import { z } from 'zod';
 import { BaseMetaSchema, BasePairInputSchema, CandleTypeEnum, FailResultSchema, toolResultSchema } from './base.js';
 
 // === Pattern Detection ===
-export const PatternTypeEnum = z.enum([
+/**
+ * 出力 type — 検出結果として返される確定方向付きのパターン種別。
+ * 'flag' / 'pennant' / 'triangle' のような umbrella alias は含めない。
+ * 出力スキーマ・visualization_hints・debug.candidates.type に使用。
+ */
+const PATTERN_OUTPUT_TYPES = [
 	'double_top',
 	'double_bottom',
 	'triple_top',
 	'triple_bottom',
 	'head_and_shoulders',
 	'inverse_head_and_shoulders',
-	// legacy umbrella key (kept for filter-compat)
-	'triangle',
-	// new explicit triangle variants
 	'triangle_ascending',
 	'triangle_descending',
 	'triangle_symmetrical',
-	// wedge patterns
 	'falling_wedge',
 	'rising_wedge',
-	// flag / pennant: 入力フィルタ用のエイリアス（'flag' → bull_flag + bear_flag）。
-	// 出力 type は必ず方向付きの bull_*/bear_* を使う。
-	'flag',
-	'pennant',
 	'bull_flag',
 	'bear_flag',
 	'bull_pennant',
 	'bear_pennant',
-]);
+] as const;
+
+/**
+ * 入力フィルタ専用のエイリアス。これらは出力 type としては返されず、
+ * リクエスト側で「方向不問でまとめて検出したい」場合のショートカット。
+ * - 'flag'     → bull_flag + bear_flag
+ * - 'pennant'  → bull_pennant + bear_pennant
+ * - 'triangle' → triangle_ascending + triangle_descending + triangle_symmetrical
+ */
+const PATTERN_FILTER_ALIASES = ['flag', 'pennant', 'triangle'] as const;
+
+export const PatternTypeEnum = z.enum(PATTERN_OUTPUT_TYPES);
+
+/**
+ * 入力フィルタ用 enum — 出力 type に加えて legacy umbrella alias も受け付ける。
+ * DetectPatternsInputSchema.patterns と debug.candidates.type で使用。
+ */
+export const PatternFilterEnum = z.enum([...PATTERN_OUTPUT_TYPES, ...PATTERN_FILTER_ALIASES]);
 
 export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 	type: CandleTypeEnum.optional().default('1day'),
 	limit: z.number().int().min(20).max(365).optional().default(90),
 	patterns: z
-		.array(PatternTypeEnum)
+		.array(PatternFilterEnum)
 		.optional()
 		.describe(
 			[
@@ -41,6 +55,7 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 				'- triple_top/triple_bottom: tolerancePct≈0.05',
 				'- triangle_*: tolerancePct≈0.06',
 				'- pennant: swingDepth≈5, minBarsBetweenSwings≈3',
+				"Aliases: 'flag' → bull_flag + bear_flag, 'pennant' → bull/bear pennant, 'triangle' → asc/desc/sym.",
 			].join('\n'),
 		),
 	// Heuristics
@@ -282,7 +297,8 @@ export const DetectPatternsOutputSchema = z.union([
 					candidates: z
 						.array(
 							z.object({
-								type: PatternTypeEnum,
+								// 候補ラベルは方向分類前の 'flag' / 'pennant' / 'triangle' を含むため filter enum を使う。
+								type: PatternFilterEnum,
 								accepted: z.boolean(),
 								reason: z.string().optional(),
 								indices: z.array(z.number().int()).optional(),

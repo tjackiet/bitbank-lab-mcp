@@ -399,7 +399,10 @@ export function detectPennantsFlags(ctx: DetectContext): DetectResult {
 		const consHighs = relaxedPeaks.filter((p) => p.idx >= consStart && p.idx <= consMaxEnd);
 		const consLows = relaxedValleys.filter((p) => p.idx >= consStart && p.idx <= consMaxEnd);
 
-		if (consHighs.length < 2 || consLows.length < 2) {
+		// 線形回帰の R² ゲートが意味を持つには最低 3 点必要。
+		// 2 点だと回帰線がそのまま 2 点を通って fit 100% になり quality check を素通りする。
+		const minPointsForFit = 3;
+		if (consHighs.length < minPointsForFit || consLows.length < minPointsForFit) {
 			debugCandidates.push({
 				type: 'flag',
 				accepted: false,
@@ -408,6 +411,7 @@ export function detectPennantsFlags(ctx: DetectContext): DetectResult {
 				details: {
 					highs: consHighs.length,
 					lows: consLows.length,
+					minPointsForFit,
 					poleATRMult: Number(pole.atrMult.toFixed(2)),
 					polePerBarImpulse: Number(pole.perBarImpulse.toFixed(2)),
 					polePct: Number((pole.magnitude / Math.max(1e-12, candles[pole.poleStart].close)).toFixed(3)),
@@ -446,8 +450,8 @@ export function detectPennantsFlags(ctx: DetectContext): DetectResult {
 
 		// Robust regression — 最大残差点を順次除去して minPoints まで縮めながら fit。
 		// pole 直後の調整足が外れ値になりやすいため、単純回帰だと R² が落ちて検出を逃す。
+		// minPointsForFit は上の swing-count gate と同じ値 (3) を使う。
 		const minR2 = 0.5;
-		const minPointsForFit = 3;
 		const { line: upperLine, filtered: filteredHighs } = robustFit(consHighs, lrWithR2, minR2, minPointsForFit);
 		const { line: lowerLine, filtered: filteredLows } = robustFit(consLows, lrWithR2, minR2, minPointsForFit);
 

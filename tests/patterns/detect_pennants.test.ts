@@ -302,15 +302,15 @@ describe('detectPennantsFlags — bull/bear 分類とメタデータ', () => {
 		expect(flagsLike).toHaveLength(0);
 	});
 
-	it('同区間の重複候補は dedup される（同 type は最大 1 つ）', () => {
+	it('同区間の重複候補は dedup される（同 type は 1 件まで）', () => {
 		// 同じ pole + 同じ保ち合いから複数 poleEnd 位置で flag が候補化される条件。
+		// dedupFlagPennants が pole-end ±2 日 / 30% 期間重複で潰すため、最終的に 1 件に収束する想定。
 		const candles = closesToCandles(buildBullFlagCloses());
 		const ctx = buildCtx({ candles, want: new Set(['flag']), includeForming: true });
 		const result = detectPennantsFlags(ctx);
 
 		const bullFlags = result.patterns.filter((p) => p.type === 'bull_flag');
-		// 重複排除後は数件以下に抑制される（具体的には同 pole 末端なら 1 件）
-		expect(bullFlags.length).toBeLessThanOrEqual(3);
+		expect(bullFlags.length).toBe(1);
 	});
 
 	it('debug candidate に spread / pole 検証情報が含まれる', () => {

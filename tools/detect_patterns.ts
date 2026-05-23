@@ -2,7 +2,7 @@ import type { z } from 'zod';
 import { formatDateInTz } from '../lib/datetime.js';
 import { fail, failFromError, ok } from '../lib/result.js';
 import { extractUpstreamWarning, prependWarnings } from '../lib/warning-propagation.js';
-import { DetectPatternsOutputSchema, type PatternTypeEnum } from '../src/schemas.js';
+import { DetectPatternsOutputSchema, type PatternFilterEnum } from '../src/schemas.js';
 import analyzeIndicators from './analyze_indicators.js';
 import { buildStatistics } from './patterns/aftermath.js';
 import { resolveParams } from './patterns/config.js';
@@ -18,6 +18,25 @@ import { rankPatterns } from './patterns/ranking.js';
 import { linearRegressionWithR2, near as nearFn, pct as pctFn } from './patterns/regression.js';
 import { type Candle, detectSwingPoints, filterPeaks, filterValleys } from './patterns/swing.js';
 import type { CandDebugEntry, DeduplicablePattern, DetectContext } from './patterns/types.js';
+
+/**
+ * flag / pennant 系パターン固有の検証メタデータ。
+ * `PatternEntry` には optional として既に定義されているが、
+ * `DeduplicablePattern` 経由で扱う summary 生成セクションでは型情報が落ちるため
+ * ここで再宣言してキャストに使う。
+ */
+interface FlagFamilyMetadata {
+	poleStartDate?: string;
+	poleEndDate?: string;
+	poleChangePct?: number;
+	poleBars?: number;
+	poleATRMult?: number;
+	flagUpperSlope?: number;
+	flagLowerSlope?: number;
+	spreadAvg?: number;
+	spreadStability?: number;
+	expectedBreakoutDirection?: 'up' | 'down';
+}
 
 /** Summary generation section で使う拡張型（DeduplicablePattern + パターン固有フィールド） */
 interface SummaryPattern extends DeduplicablePattern {
@@ -65,7 +84,7 @@ export default async function detectPatterns(
 		tolerancePct: number;
 		minBarsBetweenSwings: number;
 		strictPivots: boolean;
-		patterns: Array<z.infer<typeof PatternTypeEnum>>;
+		patterns: Array<z.infer<typeof PatternFilterEnum>>;
 		requireCurrentInPattern: boolean;
 		currentRelevanceDays: number;
 		// 統合オプション
@@ -388,18 +407,7 @@ export default async function detectPatterns(
 						detail += `\n   - フラッグポール値幅: ${Math.round(p.flagpoleHeight).toLocaleString('ja-JP')}円`;
 					}
 					// pole の検証情報
-					const pAny = p as SummaryPattern & {
-						poleStartDate?: string;
-						poleEndDate?: string;
-						poleChangePct?: number;
-						poleBars?: number;
-						poleATRMult?: number;
-						flagUpperSlope?: number;
-						flagLowerSlope?: number;
-						spreadAvg?: number;
-						spreadStability?: number;
-						expectedBreakoutDirection?: 'up' | 'down';
-					};
+					const pAny = p as SummaryPattern & FlagFamilyMetadata;
 					if (pAny.poleStartDate && pAny.poleEndDate && pAny.poleChangePct != null) {
 						const psd = formatDateInTz(Date.parse(pAny.poleStartDate), tz) ?? pAny.poleStartDate;
 						const ped = formatDateInTz(Date.parse(pAny.poleEndDate), tz) ?? pAny.poleEndDate;
