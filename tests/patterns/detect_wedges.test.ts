@@ -260,6 +260,43 @@ describe('detectWedges', () => {
 		}
 	});
 
+	// ── target 到達判定（high/low ベース）────────────────────
+
+	it('breakout が検出された場合、target 到達情報（high/low ベース）が付与される', () => {
+		// breakoutTarget があるとき、targetReach の各フィールドも揃って付与される
+		const candles = buildFallingWedgeCandles(80);
+		const pivots: Pivot[] = [];
+		const ctx = buildCtx({ candles, pivots, includeForming: true });
+		const result = detectWedges(ctx);
+
+		const withTarget = result.patterns.filter((p) => p.breakoutTarget !== undefined);
+		for (const p of withTarget) {
+			// targetReached / pct / price はセットで付与される（または全て undefined）
+			if (p.targetReached !== undefined) {
+				expect(typeof p.targetReachedPct).toBe('number');
+				expect(typeof p.targetReachedPrice).toBe('number');
+				expect(p.targetReachedPct).toBeGreaterThanOrEqual(0);
+			}
+		}
+	});
+
+	it('target 到達済みなら targetReached=true & pct>=100, 未到達なら false & pct<100（クランプ確認）', () => {
+		// 検出されたパターンを横断的に確認: targetReached の値と pct の関係が整合
+		const candles = buildFallingWedgeCandles(80);
+		const pivots: Pivot[] = [];
+		const ctx = buildCtx({ candles, pivots, includeForming: true });
+		const result = detectWedges(ctx);
+
+		const withReach = result.patterns.filter((p) => p.targetReached !== undefined);
+		for (const p of withReach) {
+			if (p.targetReached === true) {
+				expect(p.targetReachedPct).toBeGreaterThanOrEqual(100);
+			} else {
+				expect(p.targetReachedPct).toBeLessThan(100);
+			}
+		}
+	});
+
 	// ── デバッグ候補の検証 ───────────────────────────────────
 
 	it('検出試行後 debugCandidates に情報が記録される', () => {
