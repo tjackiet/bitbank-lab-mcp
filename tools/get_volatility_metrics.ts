@@ -22,6 +22,12 @@ import getCandles from './get_candles.js';
 
 type Candle = { open: number; high: number; low: number; close: number; isoTime?: string | null };
 
+/**
+ * aggregates.atr に使う Wilder ATR の期間（TradingView・MT4 デフォルト）。
+ * ドキュメント文字列・実装の両方を 1 箇所に固定するための定数。
+ */
+export const WILDER_ATR_PERIOD = 14;
+
 export interface RollingEntry {
 	window: number;
 	rv_std: number;
@@ -72,7 +78,7 @@ export function buildVolatilityMetricsText(input: BuildVolatilityMetricsTextInpu
 		rollLines.join('\n') +
 		`\n\n---\n📌 含まれるもの: ボラティリティ指標（RV・Parkinson・GK・RS・ATR）、ローリング分析` +
 		`\n📌 含まれないもの: 価格の方向性・トレンド、出来高フロー、板情報、テクニカル指標` +
-		`\n📌 ATR の定義: aggregates.atr は Wilder ATR（RMA ベース、period=14、TradingView・MT4 標準と一致）。rolling[].atr は SMA-ATR。` +
+		`\n📌 ATR の定義: aggregates.atr は Wilder ATR（RMA ベース、period=${WILDER_ATR_PERIOD}、TradingView・MT4 標準と一致）。rolling[].atr は SMA-ATR。` +
 		`\n📌 補完ツール: get_candles（価格OHLCV）, analyze_indicators（方向性指標）, get_flow_metrics（出来高フロー）`
 	);
 }
@@ -205,9 +211,9 @@ export default async function getVolatilityMetrics(
 		const garmanKlass = componentMeanToVol(gkMean, 'garmanKlass');
 		const rogersSatchell = componentMeanToVol(rsMean, 'rogersSatchell');
 
-		// ATR aggregate: Wilder ATR (RMA-based, period=14 固定、TradingView/MT4 標準)。
+		// ATR aggregate: Wilder ATR (RMA-based, period=WILDER_ATR_PERIOD 固定、TradingView/MT4 標準)。
 		// rolling[].atr は別系統で SMA-ATR を残す（下記 atr() 呼び出し）。
-		const atrAggLatest = wilderAtr(high, low, close, 14).at(-1);
+		const atrAggLatest = wilderAtr(high, low, close, WILDER_ATR_PERIOD).at(-1);
 		const atrAgg = Number.isFinite(atrAggLatest) ? (atrAggLatest as number) : 0;
 
 		const annFactor = withAnn ? Math.sqrt(periodsPerYear(type)) : 1;

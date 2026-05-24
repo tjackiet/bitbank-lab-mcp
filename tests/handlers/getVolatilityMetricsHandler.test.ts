@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../tools/get_volatility_metrics.js', () => ({
 	default: vi.fn(),
+	// Handler が description 文字列で参照するため named export も mock に含める
+	WILDER_ATR_PERIOD: 14,
 }));
 
 import {

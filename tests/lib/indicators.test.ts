@@ -1287,9 +1287,15 @@ describe('wilderAtr', () => {
 		expect(result.every((v) => Number.isNaN(v))).toBe(true);
 	});
 
-	it('period < 1 でエラー', () => {
+	it('period が正の整数以外（< 1 / 非整数 / NaN / Infinity）でエラー', () => {
+		// < 1
 		expect(() => wilderAtr([1, 2, 3], [1, 2, 3], [1, 2, 3], 0)).toThrow();
 		expect(() => wilderAtr([1, 2, 3], [1, 2, 3], [1, 2, 3], -1)).toThrow();
+		// 非整数（RMA の seed/recursion は整数 period 前提）
+		expect(() => wilderAtr([1, 2, 3], [1, 2, 3], [1, 2, 3], 2.5)).toThrow();
+		// 非有限値（NaN < 1 は false なので素通りすると全 NaN を黙って返してしまう）
+		expect(() => wilderAtr([1, 2, 3], [1, 2, 3], [1, 2, 3], NaN)).toThrow();
+		expect(() => wilderAtr([1, 2, 3], [1, 2, 3], [1, 2, 3], Number.POSITIVE_INFINITY)).toThrow();
 	});
 
 	it('TR に NaN が混入すると以降は再シードまで NaN', () => {

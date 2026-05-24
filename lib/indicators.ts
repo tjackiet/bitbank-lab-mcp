@@ -633,8 +633,8 @@ export function atr(highs: number[], lows: number[], closes: number[], period: n
  * @returns Wilder ATR 配列（NaN 埋め、先頭 period 個は NaN）
  */
 export function wilderAtr(highs: number[], lows: number[], closes: number[], period: number = 14): number[] {
-	if (period < 1) {
-		throw new Error('Wilder ATR period must be positive');
+	if (!Number.isInteger(period) || period < 1) {
+		throw new Error('Wilder ATR period must be a positive integer');
 	}
 	const tr = trueRange(highs, lows, closes);
 	const n = tr.length;
