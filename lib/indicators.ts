@@ -585,7 +585,7 @@ export function trueRange(highs: number[], lows: number[], closes: number[]): nu
  * @returns ATR 配列（NaN 埋め、先頭 period 個は NaN）
  */
 export function atr(highs: number[], lows: number[], closes: number[], period: number = 14): number[] {
-	// SMA-ATR（population 窓の単純平均）。`get_volatility_metrics` と同系。Wilder 版が必要なら別関数で追加。
+	// SMA-ATR（population 窓の単純平均）。Wilder の RMA 版は wilderAtr() を参照。
 	const tr = trueRange(highs, lows, closes);
 	const n = tr.length;
 	const result: number[] = nanArray(n);
@@ -610,6 +610,62 @@ export function atr(highs: number[], lows: number[], closes: number[], period: n
 		else sum += newVal;
 
 		result[i] = nanCount === 0 ? sum / period : NaN;
+	}
+
+	return result;
+}
+
+/**
+ * Wilder ATR (RMA-based)
+ *
+ * 初回値は SMA(TR[1..period])。以降は次の漸化式で更新:
+ *   ATR_n = (ATR_{n-1} * (period - 1) + TR_n) / period
+ *
+ * TradingView・MT4/MT5 デフォルトの ATR と一致する。Wilder の元論文準拠。
+ *
+ * 非有限 TR を検出した場合は内部状態をリセットし、次に period 個の連続有限 TR が
+ * 揃った時点で再シードする（ema と同じ挙動）。
+ *
+ * @param highs 高値配列（古い順）
+ * @param lows 安値配列（古い順）
+ * @param closes 終値配列（古い順）
+ * @param period 期間（デフォルト 14、Wilder 元論文 / TradingView 標準）
+ * @returns Wilder ATR 配列（NaN 埋め、先頭 period 個は NaN）
+ */
+export function wilderAtr(highs: number[], lows: number[], closes: number[], period: number = 14): number[] {
+	if (!Number.isInteger(period) || period < 1) {
+		throw new Error('Wilder ATR period must be a positive integer');
+	}
+	const tr = trueRange(highs, lows, closes);
+	const n = tr.length;
+	const result: number[] = nanArray(n);
+
+	if (n < period + 1) return result;
+
+	let prev: number | undefined;
+	let seedSum = 0;
+	let seedCount = 0;
+
+	for (let i = 1; i < n; i++) {
+		const trVal = tr[i];
+		if (!Number.isFinite(trVal)) {
+			prev = undefined;
+			seedSum = 0;
+			seedCount = 0;
+			continue;
+		}
+		if (prev === undefined) {
+			seedSum += trVal;
+			seedCount++;
+			if (seedCount === period) {
+				prev = seedSum / period;
+				result[i] = prev;
+			}
+		} else {
+			const next = (prev * (period - 1) + trVal) / period;
+			prev = next;
+			result[i] = next;
+		}
 	}
 
 	return result;

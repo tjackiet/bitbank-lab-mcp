@@ -227,12 +227,13 @@ describe('get_volatility_metrics', () => {
 			expect(res.data.aggregates.atr).toBeCloseTo(0, 2);
 		});
 
-		// 数値契約: aggregate ATR は「直近 period 本の True Range の SMA」と一致する。
-		// lib/indicators.ts atr() への統合後も同じ数式であることを保証する回帰テスト。
-		it('aggregate ATR は手計算した直近 period 本の TR SMA と一致する', async () => {
-			const rows = makeOhlcvRows(30);
+		// 数値契約: aggregate ATR は Wilder ATR (RMA ベース、period=14 固定) と一致する。
+		// 初回値 = SMA(TR[1..14])、以降は ATR_n = (ATR_{n-1} * 13 + TR_n) / 14。
+		// TradingView・MT4 デフォルトの ATR と同じ。
+		it('aggregate ATR は手計算した Wilder ATR (period=14 固定) と一致する', async () => {
+			const rows = makeOhlcvRows(60);
 			mockFetchWithOhlcv(rows);
-			const res = await getVolatilityMetrics('btc_jpy', '1day', 30, [14]);
+			const res = await getVolatilityMetrics('btc_jpy', '1day', 60, [14]);
 			assertOk(res);
 
 			// rows: [open, high, low, close, volume, ts]（古い順）
@@ -242,16 +243,73 @@ describe('get_volatility_metrics', () => {
 			const period = 14;
 			const n = highs.length;
 
-			// 手計算: TR[i] = max(h-l, |h-prevClose|, |l-prevClose|) for i >= 1
-			// 直近 period 本（index n-period..n-1）を平均
-			let sum = 0;
-			for (let i = n - period; i < n; i++) {
-				const tr = Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1]));
-				sum += tr;
+			// 手計算 TR[i] for i >= 1
+			const tr: number[] = [];
+			for (let i = 1; i < n; i++) {
+				tr.push(Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])));
 			}
-			const expectedAtr = sum / period;
+			// シード: SMA(TR[1..14])
+			let atr = tr.slice(0, period).reduce((a, b) => a + b, 0) / period;
+			// 以降は Wilder の RMA 漸化式
+			for (let i = period; i < tr.length; i++) {
+				atr = (atr * (period - 1) + tr[i]) / period;
+			}
 
-			expect(res.data.aggregates.atr).toBeCloseTo(expectedAtr, 6);
+			expect(res.data.aggregates.atr).toBeCloseTo(atr, 6);
+		});
+
+		// 数値契約: aggregate ATR は windows[0] の影響を受けず常に period=14。
+		it('aggregate ATR は windows[0] に関わらず period=14 固定', async () => {
+			const rows = makeOhlcvRows(60);
+			mockFetchWithOhlcv(rows);
+			const res14 = await getVolatilityMetrics('btc_jpy', '1day', 60, [14, 20, 30]);
+			assertOk(res14);
+			mockFetchWithOhlcv(rows);
+			const res20 = await getVolatilityMetrics('btc_jpy', '1day', 60, [20, 30]);
+			assertOk(res20);
+			expect(res14.data.aggregates.atr).toBeCloseTo(res20.data.aggregates.atr, 8);
+		});
+
+		// 回帰テスト: rolling[].atr は SMA-ATR のまま（仕様変更なし）。
+		it('rolling[].atr は SMA-ATR（直近 window 本の TR 平均）と一致する', async () => {
+			const rows = makeOhlcvRows(60);
+			mockFetchWithOhlcv(rows);
+			const res = await getVolatilityMetrics('btc_jpy', '1day', 60, [14, 20, 30]);
+			assertOk(res);
+
+			const highs = rows.map((r) => r[1]);
+			const lows = rows.map((r) => r[2]);
+			const closes = rows.map((r) => r[3]);
+			const n = highs.length;
+
+			for (const r of res.data.rolling) {
+				const period = r.window;
+				let sum = 0;
+				for (let i = n - period; i < n; i++) {
+					const trv = Math.max(
+						highs[i] - lows[i],
+						Math.abs(highs[i] - closes[i - 1]),
+						Math.abs(lows[i] - closes[i - 1]),
+					);
+					sum += trv;
+				}
+				const expectedSmaAtr = sum / period;
+				expect(r.atr).toBeCloseTo(expectedSmaAtr, 6);
+			}
+		});
+
+		// 回帰テスト: Wilder ATR ≠ SMA-ATR （前提が違うため値が異なる）
+		it('aggregate ATR (Wilder) は rolling w=14 の atr (SMA-ATR) と一般に異なる', async () => {
+			// drift を入れてボラティリティを変化させ Wilder と SMA で値が分かれるようにする
+			const rows = makeOhlcvRows(60, { drift: 0.001, noise: 0.04 });
+			mockFetchWithOhlcv(rows);
+			const res = await getVolatilityMetrics('btc_jpy', '1day', 60, [14]);
+			assertOk(res);
+			const wilder = res.data.aggregates.atr;
+			const sma14 = res.data.rolling.find((r) => r.window === 14)?.atr ?? null;
+			expect(sma14).not.toBeNull();
+			// 値は別の指標になっているはず（完全一致は仕様上発生しない）
+			expect(wilder).not.toBeCloseTo(sma14 as number, 6);
 		});
 	});
 
