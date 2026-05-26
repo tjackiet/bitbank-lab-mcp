@@ -327,6 +327,12 @@ describe('detectWedges', () => {
 		expect(reached?.breakoutDirection).toBe('up');
 	});
 
+	// aftermath.targetReached と top-level targetReached の整合性は detect_wedges.ts の
+	// 回帰ベース（4b）パスでのみ aftermath が付与されるため、現行フィクスチャ
+	// （主に forming_relaxed 4d 経由）では直接 assert できない。
+	// コード上は `targetReached: targetReach?.targetReached ?? false` で同じ
+	// targetReach から導出するため、定義上整合する。
+
 	// ── デバッグ候補の検証 ───────────────────────────────────
 
 	it('検出試行後 debugCandidates に情報が記録される', () => {

@@ -181,9 +181,13 @@ export const DetectedPatternSchema = z.object({
 	// ターゲット価格（ブレイクアウト後の想定到達価格）
 	breakoutTarget: z.number().optional(), // 想定ターゲット価格（円）
 	targetMethod: z.enum(['flagpole_projection', 'pattern_height', 'neckline_projection']).optional(), // 計算根拠
-	targetReachedPct: z.number().optional(), // ターゲットまでの進捗率（%）。H&S 系はブレイク後の最安値/最高値（high/low）ベースで算出。
-	// H&S / 逆H&S 用: ブレイク後の high/low ベース target 到達情報。
-	// 最終 close ベースだと一度到達してから戻したケースを未到達扱いしてしまうため、extremum で評価する。
+	// ターゲットまでの進捗率（%）。全パターン共通でブレイク後の最安値/最高値（high/low）ベースで算出。
+	// reached=true なら 100 以上にクランプ（オーバーシュート時の符号反転防止）、
+	// reached=false なら 99 でキャップ（丸めで 100 にせり上がるのを防ぐ）。
+	targetReachedPct: z.number().optional(),
+	// ブレイク後の high/low ベース target 到達情報。double / triangle / wedge / pennant / flag /
+	// H&S / 逆H&S すべてで付与される。最終 close ベースだと一度到達してから戻したケースを
+	// 未到達扱いしてしまうため、extremum（up=最高 high / down=最安 low）で評価する。
 	targetReached: z.boolean().optional(),
 	targetReachedDate: z.string().optional(),
 	targetReachedPrice: z.number().optional(),
