@@ -155,15 +155,15 @@ export async function withElicitedConfirmation(opts: WithElicitedConfirmationOpt
 	// 「ホスト承認 UI を最終 gate として信頼する」妥協モードに入る。
 	// この経路では token を strip せず caller が用意したレスポンスをそのまま返す。
 	// 詳細は docs/adr/0002-hitl-confirmation-token-delivery.md を参照。
-	const trustHostMode = isHostApprovalTrusted() && opts.trustHostFallback != null;
+	const trustHostFallback = isHostApprovalTrusted() ? opts.trustHostFallback : undefined;
 
 	if (!clientSupportsElicitation(opts.extra)) {
-		return trustHostMode ? opts.trustHostFallback! : safeFallback;
+		return trustHostFallback ?? safeFallback;
 	}
 
 	const server = (opts.extra as { server?: ElicitCapableServer } | undefined)?.server;
 	if (!server || typeof server.elicitInput !== 'function') {
-		return trustHostMode ? opts.trustHostFallback! : safeFallback;
+		return trustHostFallback ?? safeFallback;
 	}
 
 	let elicit: { action: 'accept' | 'decline' | 'cancel'; content?: Record<string, unknown> };
@@ -181,7 +181,7 @@ export async function withElicitedConfirmation(opts: WithElicitedConfirmationOpt
 	} catch {
 		// elicitInput が想定外に失敗した場合はフォールバックに進む。
 		// trust-host モード ON なら iframe ボタン経路を残す trustHostFallback を返す。
-		return trustHostMode ? opts.trustHostFallback! : safeFallback;
+		return trustHostFallback ?? safeFallback;
 	}
 
 	if (elicit.action !== 'accept' || !elicit.content?.confirmed) {
