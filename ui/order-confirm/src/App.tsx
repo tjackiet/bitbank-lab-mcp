@@ -116,6 +116,10 @@ export function App() {
 	const [message, setMessage] = useState<string>('');
 	const [orderId, setOrderId] = useState<number | null>(null);
 	const appRef = useRef<McpApp | null>(null);
+	// ontoolresult は useEffect([]) 内でクロージャ生成され、preview state は
+	// マウント時の値（null）に固定される（stale closure）。preview 受領済みかどうかの
+	// 判定は ref で行い、最新値を参照する。
+	const hasPreviewRef = useRef(false);
 
 	useEffect(() => {
 		const mcpApp = new McpApp({ name: 'bitbank-order-confirm', version: '0.1.0' });
@@ -134,6 +138,7 @@ export function App() {
 			// 「このホストでは確認 UI 未対応」案内を出す。
 			const structured = params?.structuredContent as PreviewResult | undefined;
 			if (structured?.ok && structured.data?.preview) {
+				hasPreviewRef.current = true;
 				setPreview(structured.data.preview);
 				if (structured.data.confirmation_token && structured.data.expires_at != null) {
 					setToken(structured.data.confirmation_token);
@@ -145,6 +150,17 @@ export function App() {
 				setStatus('idle');
 				setMessage('');
 				setOrderId(null);
+				return;
+			}
+			// preview 未受領（preview == null）の iframe に ok:false が来た場合は、
+			// その summary をエラーとして描画する（「待機中…」のまま固まらせない）。
+			// 例: 最小単位違反などの validation_error で preview_order が失敗したケース。
+			//
+			// preview 受領後の ok:false は従来どおり無視する。create_order 失敗は
+			// handleConfirm 側で表示しており、ここで state をリセットしないためのガード。
+			if (structured?.ok === false && !hasPreviewRef.current) {
+				setStatus('error');
+				setMessage(structured.summary ?? '注文プレビューに失敗しました。');
 			}
 		};
 
@@ -241,6 +257,19 @@ export function App() {
 	};
 
 	if (!preview) {
+		// preview を受け取る前に preview_order が失敗した場合は、空の「待機中…」では
+		// なくエラー内容を描画する（validation_error などで iframe が固まらないように）。
+		if (status === 'error') {
+			return (
+				<div className="app">
+					<div className="card">
+						<div className="status status-error" role="alert" aria-live="assertive" aria-atomic="true">
+							❌ {message}
+						</div>
+					</div>
+				</div>
+			);
+		}
 		return (
 			<div className="app">
 				<div className="card">
