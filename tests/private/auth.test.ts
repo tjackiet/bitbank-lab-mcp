@@ -54,7 +54,7 @@ describe('auth.ts 署名テストベクタ', () => {
 		it('requestTime + timeWindow + JSON body を連結する', () => {
 			const body = '{"pair":"xrp_jpy","price":"20","amount":"1","side":"buy","type":"limit"}';
 			const message = buildPostMessage('1721121776490', '5000', body);
-			expect(message).toBe('17211217764905000' + body);
+			expect(message).toBe(`17211217764905000${body}`);
 		});
 	});
 
@@ -82,7 +82,7 @@ describe('auth.ts 署名テストベクタ', () => {
 		it('POST: 公式ドキュメントの署名例と一致する', () => {
 			const body = '{"pair": "xrp_jpy", "price": "20", "amount": "1","side": "buy", "type": "limit"}';
 			const message = buildPostMessage('1721121776490', '1000', body);
-			expect(message).toBe('17211217764901000' + body);
+			expect(message).toBe(`17211217764901000${body}`);
 			const signature = sign('hoge', message);
 			expect(signature).toBe('7868665738ae3f8a796224e0413c1351ddd7ec2af121db12815c0a5b74b8764c');
 		});

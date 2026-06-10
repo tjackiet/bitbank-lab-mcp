@@ -143,13 +143,17 @@ export class BitbankPrivateClient {
 				// 429 Rate Limit（HTTP レベル）
 				if (res.status === 429) {
 					const retryAfter = res.headers.get('Retry-After');
-					const waitMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : 1000;
+					// Retry-After は秒数のほか HTTP-date 形式（RFC 9110）も許容される。
+					// 秒数として解釈できない場合は 1000ms フォールバック（NaN を setTimeout に渡すと 0ms 即リトライになる）
+					const retryAfterSec = retryAfter ? parseInt(retryAfter, 10) : Number.NaN;
+					const hasRetryAfterSec = Number.isFinite(retryAfterSec) && retryAfterSec >= 0;
+					const waitMs = hasRetryAfterSec ? retryAfterSec * 1000 : 1000;
 					if (attempt < maxRetries) {
 						await new Promise((r) => setTimeout(r, waitMs));
 						continue;
 					}
 					throw new PrivateApiError(
-						`レート制限超過。${retryAfter ? `${retryAfter}秒` : 'しばらく'}待ってから再試行してください`,
+						`レート制限超過。${hasRetryAfterSec ? `${retryAfterSec}秒` : 'しばらく'}待ってから再試行してください`,
 						'rate_limit_error',
 						429,
 					);
