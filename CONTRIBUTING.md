@@ -28,6 +28,8 @@
   npm --version   # 11.10.0 以上を確認
   ```
 
+- **`npm config get min-release-age` が `null` を返すことがある。** npm 11.10+ は内部で `before`（絶対日付）に
+  変換するため、設定が効いていても表示は `null` になりうる。実効値は `npm config get before` で確認する。
 - **`npm ci` は対象外。** lockfile 厳密インストールのため、クールダウンは効かない（CI は影響を受けない）。
   守りどころは「依存を**追加・更新**して lockfile を書き換える瞬間」であり、ここは `npm install` /
   `npm update` を使うローカル開発と Dependabot が該当する。
