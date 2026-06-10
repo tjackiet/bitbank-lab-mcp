@@ -5,7 +5,7 @@
  * リトライ・タイムアウト・エラー分類をテストする。
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BitbankPrivateClient, PrivateApiError } from '../../src/private/client.js';
 import { createMockFetcher, jsonResponse, mockBitbankError, mockBitbankSuccess } from '../fixtures/private-api.js';
 
@@ -283,6 +283,89 @@ describe('BitbankPrivateClient', () => {
 				expect(err).toBeInstanceOf(PrivateApiError);
 				expect((err as PrivateApiError).errorType).toBe('upstream_error');
 			}
+		});
+
+		describe('429 Retry-After ヘッダーのパース', () => {
+			afterEach(() => {
+				vi.restoreAllMocks();
+				vi.useRealTimers();
+			});
+
+			it("Retry-After: '2'（数値秒）→ 2000ms 待機してからリトライする", async () => {
+				vi.useFakeTimers();
+				const fetchSpy = vi
+					.spyOn(globalThis, 'fetch')
+					.mockResolvedValueOnce(new Response('', { status: 429, headers: { 'Retry-After': '2' } }))
+					.mockResolvedValueOnce(jsonResponse(mockBitbankSuccess({ ok: true })));
+				const client = new BitbankPrivateClient({ maxRetries: 1, timeoutMs: 5000 });
+
+				const promise = client.get<{ ok: boolean }>('/v1/user/assets');
+
+				// 1999ms 時点ではまだ待機中
+				await vi.advanceTimersByTimeAsync(1999);
+				expect(fetchSpy).toHaveBeenCalledTimes(1);
+				// 2000ms 経過でリトライされる
+				await vi.advanceTimersByTimeAsync(1);
+				expect(await promise).toEqual({ ok: true });
+				expect(fetchSpy).toHaveBeenCalledTimes(2);
+			});
+
+			it('Retry-After が HTTP-date 形式 → NaN にせず 1000ms フォールバックで待機してリトライする', async () => {
+				vi.useFakeTimers();
+				const fetchSpy = vi
+					.spyOn(globalThis, 'fetch')
+					.mockResolvedValueOnce(
+						new Response('', { status: 429, headers: { 'Retry-After': 'Wed, 21 Oct 2026 07:28:00 GMT' } }),
+					)
+					.mockResolvedValueOnce(jsonResponse(mockBitbankSuccess({ ok: true })));
+				const client = new BitbankPrivateClient({ maxRetries: 1, timeoutMs: 5000 });
+
+				const promise = client.get<{ ok: boolean }>('/v1/user/assets');
+
+				// 旧実装では parseInt が NaN → setTimeout(NaN) = 0ms で即リトライされていた（回帰確認）。
+				// 999ms 時点ではまだリトライされない
+				await vi.advanceTimersByTimeAsync(999);
+				expect(fetchSpy).toHaveBeenCalledTimes(1);
+				// 1000ms 経過でリトライされる
+				await vi.advanceTimersByTimeAsync(1);
+				expect(await promise).toEqual({ ok: true });
+				expect(fetchSpy).toHaveBeenCalledTimes(2);
+			});
+
+			it('Retry-After が負数 → 1000ms フォールバックで待機してリトライする', async () => {
+				vi.useFakeTimers();
+				const fetchSpy = vi
+					.spyOn(globalThis, 'fetch')
+					.mockResolvedValueOnce(new Response('', { status: 429, headers: { 'Retry-After': '-5' } }))
+					.mockResolvedValueOnce(jsonResponse(mockBitbankSuccess({ ok: true })));
+				const client = new BitbankPrivateClient({ maxRetries: 1, timeoutMs: 5000 });
+
+				const promise = client.get<{ ok: boolean }>('/v1/user/assets');
+
+				await vi.advanceTimersByTimeAsync(999);
+				expect(fetchSpy).toHaveBeenCalledTimes(1);
+				await vi.advanceTimersByTimeAsync(1);
+				expect(await promise).toEqual({ ok: true });
+				expect(fetchSpy).toHaveBeenCalledTimes(2);
+			});
+
+			it('Retry-After が HTTP-date 形式で maxRetries 超過 → メッセージに HTTP-date を「秒」として含めない', async () => {
+				vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+					new Response('', { status: 429, headers: { 'Retry-After': 'Wed, 21 Oct 2026 07:28:00 GMT' } }),
+				);
+				const client = new BitbankPrivateClient({ maxRetries: 0, timeoutMs: 5000 });
+
+				try {
+					await client.get('/v1/user/assets');
+					expect.fail('should throw');
+				} catch (err) {
+					expect(err).toBeInstanceOf(PrivateApiError);
+					const e = err as PrivateApiError;
+					expect(e.errorType).toBe('rate_limit_error');
+					expect(e.message).toContain('しばらく待ってから再試行');
+					expect(e.message).not.toContain('GMT');
+				}
+			});
 		});
 
 		it('ネットワークエラーでリトライする', async () => {
