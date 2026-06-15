@@ -528,19 +528,8 @@ describe('toolDef.handler', () => {
 	}
 
 	function mockResult(overrides?: Record<string, unknown>) {
-		const series = {
-			SMA_25: Array.from({ length: 20 }, (_, i) => 9700000 + i * 1000),
-			SMA_75: Array.from({ length: 20 }, (_, i) => 9500000 + i * 500),
-			SMA_200: Array.from({ length: 20 }, (_, i) => 9000000 + i * 200),
-			MACD_line: Array.from({ length: 20 }, (_, i) => 1000 + i * 100),
-			MACD_signal: Array.from({ length: 20 }, (_, i) => 800 + i * 100),
-			MACD_hist: Array.from({ length: 20 }, (_, i) => 200 + i * 10),
-			BB_upper: Array.from({ length: 20 }, () => 10200000),
-			BB_lower: Array.from({ length: 20 }, () => 9400000),
-			BB_middle: Array.from({ length: 20 }, () => 9800000),
-			ICHIMOKU_conversion: Array.from({ length: 20 }, (_, i) => 9900000 + i * 100),
-			ICHIMOKU_base: Array.from({ length: 20 }, (_, i) => 9700000 + i * 50),
-		};
+		// 本番（computeAllIndicators）が返す flat 形状を再現する。
+		// ⚠️ 以前は存在しない `series` キーを注入しており、本番が series を返さないバグを隠蔽していた。
 		const indicators = {
 			RSI_14: 55,
 			RSI_14_series: Array.from({ length: 10 }, (_, i) => 50 + i),
@@ -550,12 +539,29 @@ describe('toolDef.handler', () => {
 			BB_middle: 9800000,
 			BB_upper: 10200000,
 			BB_lower: 9400000,
+			MACD_line: 2900,
+			MACD_signal: 2700,
 			MACD_hist: 5000,
 			ICHIMOKU_spanA: 9600000,
 			ICHIMOKU_spanB: 9400000,
 			ICHIMOKU_conversion: 9900000,
 			ICHIMOKU_base: 9700000,
+			// flat な series キー（本番形状）
+			sma_25_series: Array.from({ length: 20 }, (_, i) => 9700000 + i * 1000),
+			sma_75_series: Array.from({ length: 20 }, (_, i) => 9500000 + i * 500),
+			sma_200_series: Array.from({ length: 20 }, (_, i) => 9000000 + i * 200),
+			macd_series: {
+				line: Array.from({ length: 20 }, (_, i) => 1000 + i * 100),
+				signal: Array.from({ length: 20 }, (_, i) => 800 + i * 100),
+				hist: Array.from({ length: 20 }, (_, i) => 200 + i * 10),
+			},
+			bb2_series: {
+				upper: Array.from({ length: 20 }, () => 10200000),
+				middle: Array.from({ length: 20 }, () => 9800000),
+				lower: Array.from({ length: 20 }, () => 9400000),
+			},
 			// 「今日の雲」判定は ichi_series.spanA/B の末尾 26 本前を参照する。
+			// tenkan/kijun は転換線・基準線の slope 計算にも使われる。
 			ichi_series: buildIchiSeries(9600000, 9400000),
 			STOCH_RSI_K: 65,
 			STOCH_RSI_D: 60,
@@ -565,7 +571,6 @@ describe('toolDef.handler', () => {
 			OBV_SMA20: 12000,
 			OBV_trend: 'rising',
 			OBV_prevObv: 12200,
-			series,
 			...overrides,
 		};
 		// 30 本のローソク足（chikou 判定に 27 本必要）
@@ -625,7 +630,7 @@ describe('toolDef.handler', () => {
 
 	it('BB series なしでも crash しない', async () => {
 		const m = mockResult();
-		(m.data.indicators as Record<string, unknown>).series = {};
+		(m.data.indicators as Record<string, unknown>).bb2_series = undefined;
 		mockedAnalyze.mockResolvedValueOnce(m as never);
 		const res = (await toolDef.handler({ pair: 'btc_jpy', type: '1day', limit: 200 })) as {
 			content: Array<{ text: string }>;
@@ -676,9 +681,11 @@ describe('toolDef.handler', () => {
 	it('MACD クロス検出', async () => {
 		const m = mockResult();
 		// MACD_line と MACD_signal がクロスするデータ
-		const series = (m.data.indicators as Record<string, unknown>).series as Record<string, number[]>;
-		series.MACD_line = [...Array.from({ length: 10 }, () => -100), ...Array.from({ length: 10 }, () => 100)];
-		series.MACD_signal = Array.from({ length: 20 }, () => 0);
+		(m.data.indicators as Record<string, unknown>).macd_series = {
+			line: [...Array.from({ length: 10 }, () => -100), ...Array.from({ length: 10 }, () => 100)],
+			signal: Array.from({ length: 20 }, () => 0),
+			hist: Array.from({ length: 20 }, () => 0),
+		};
 		mockedAnalyze.mockResolvedValueOnce(m as never);
 		const res = (await toolDef.handler({ pair: 'btc_jpy', type: '1day', limit: 200 })) as {
 			content: Array<{ text: string }>;
@@ -688,10 +695,10 @@ describe('toolDef.handler', () => {
 
 	it('SMA クロス検出', async () => {
 		const m = mockResult();
-		const series = (m.data.indicators as Record<string, unknown>).series as Record<string, number[]>;
+		const ind = m.data.indicators as Record<string, unknown>;
 		// SMA_25 が SMA_75 を上抜け
-		series.SMA_25 = [...Array.from({ length: 10 }, () => 9400000), ...Array.from({ length: 10 }, () => 9600000)];
-		series.SMA_75 = Array.from({ length: 20 }, () => 9500000);
+		ind.sma_25_series = [...Array.from({ length: 10 }, () => 9400000), ...Array.from({ length: 10 }, () => 9600000)];
+		ind.sma_75_series = Array.from({ length: 20 }, () => 9500000);
 		mockedAnalyze.mockResolvedValueOnce(m as never);
 		const res = (await toolDef.handler({ pair: 'btc_jpy', type: '1day', limit: 200 })) as {
 			content: Array<{ text: string }>;
@@ -849,8 +856,10 @@ describe('toolDef.handler', () => {
 			high: 11100000 - i * 50000,
 			low: 10900000 - i * 50000,
 		}));
-		const series = (m.data.indicators as Record<string, unknown>).series as Record<string, number[]>;
-		series.MACD_hist = Array.from({ length: 30 }, (_, i) => -5000 + i * 200);
+		(m.data.indicators as { macd_series: { hist: number[] } }).macd_series.hist = Array.from(
+			{ length: 30 },
+			(_, i) => -5000 + i * 200,
+		);
 		mockedAnalyze.mockResolvedValueOnce(m as never);
 		const res = (await toolDef.handler({ pair: 'btc_jpy', type: '1day', limit: 200 })) as {
 			content: Array<{ text: string }>;
@@ -860,10 +869,10 @@ describe('toolDef.handler', () => {
 
 	it('SMA デッドクロス検出', async () => {
 		const m = mockResult();
-		const series = (m.data.indicators as Record<string, unknown>).series as Record<string, number[]>;
+		const ind = m.data.indicators as Record<string, unknown>;
 		// SMA_25 が SMA_75 を下抜け
-		series.SMA_25 = [...Array.from({ length: 10 }, () => 9600000), ...Array.from({ length: 10 }, () => 9400000)];
-		series.SMA_75 = Array.from({ length: 20 }, () => 9500000);
+		ind.sma_25_series = [...Array.from({ length: 10 }, () => 9600000), ...Array.from({ length: 10 }, () => 9400000)];
+		ind.sma_75_series = Array.from({ length: 20 }, () => 9500000);
 		mockedAnalyze.mockResolvedValueOnce(m as never);
 		const res = (await toolDef.handler({ pair: 'btc_jpy', type: '1day', limit: 200 })) as {
 			content: Array<{ text: string }>;
@@ -873,9 +882,11 @@ describe('toolDef.handler', () => {
 
 	it('MACD デッドクロス検出', async () => {
 		const m = mockResult();
-		const series = (m.data.indicators as Record<string, unknown>).series as Record<string, number[]>;
-		series.MACD_line = [...Array.from({ length: 10 }, () => 100), ...Array.from({ length: 10 }, () => -100)];
-		series.MACD_signal = Array.from({ length: 20 }, () => 0);
+		(m.data.indicators as Record<string, unknown>).macd_series = {
+			line: [...Array.from({ length: 10 }, () => 100), ...Array.from({ length: 10 }, () => -100)],
+			signal: Array.from({ length: 20 }, () => 0),
+			hist: Array.from({ length: 20 }, () => 0),
+		};
 		mockedAnalyze.mockResolvedValueOnce(m as never);
 		const res = (await toolDef.handler({ pair: 'btc_jpy', type: '1day', limit: 200 })) as {
 			content: Array<{ text: string }>;
@@ -905,19 +916,11 @@ describe('toolDef.handler', () => {
 
 	it('bwTrend 収縮中の検出', async () => {
 		const m = mockResult({
-			series: {
-				SMA_25: Array.from({ length: 20 }, (_, i) => 9700000 + i * 1000),
-				SMA_75: Array.from({ length: 20 }, (_, i) => 9500000 + i * 500),
-				SMA_200: Array.from({ length: 20 }, (_, i) => 9000000 + i * 200),
-				MACD_line: Array.from({ length: 20 }, (_, i) => 1000 + i * 100),
-				MACD_signal: Array.from({ length: 20 }, (_, i) => 800 + i * 100),
-				MACD_hist: Array.from({ length: 20 }, (_, i) => 200 + i * 10),
-				// BB が収縮: 以前は幅広、今は幅狭
-				BB_upper: Array.from({ length: 20 }, (_, i) => (i < 10 ? 10500000 : 10100000)),
-				BB_lower: Array.from({ length: 20 }, (_, i) => (i < 10 ? 9500000 : 9900000)),
-				BB_middle: Array.from({ length: 20 }, () => 10000000),
-				ICHIMOKU_conversion: Array.from({ length: 20 }, (_, i) => 9900000 + i * 100),
-				ICHIMOKU_base: Array.from({ length: 20 }, (_, i) => 9700000 + i * 50),
+			// BB が収縮: 以前は幅広、今は幅狭
+			bb2_series: {
+				upper: Array.from({ length: 20 }, (_, i) => (i < 10 ? 10500000 : 10100000)),
+				lower: Array.from({ length: 20 }, (_, i) => (i < 10 ? 9500000 : 9900000)),
+				middle: Array.from({ length: 20 }, () => 10000000),
 			},
 		});
 		mockedAnalyze.mockResolvedValueOnce(m as never);
@@ -939,8 +942,10 @@ describe('toolDef.handler', () => {
 			high: 9100000 + i * 50000,
 			low: 8900000 + i * 50000,
 		}));
-		const series = (m.data.indicators as Record<string, unknown>).series as Record<string, number[]>;
-		series.MACD_hist = Array.from({ length: 30 }, (_, i) => 5000 - i * 200);
+		(m.data.indicators as { macd_series: { hist: number[] } }).macd_series.hist = Array.from(
+			{ length: 30 },
+			(_, i) => 5000 - i * 200,
+		);
 		mockedAnalyze.mockResolvedValueOnce(m as never);
 		const res = (await toolDef.handler({ pair: 'btc_jpy', type: '1day', limit: 200 })) as {
 			content: Array<{ text: string }>;

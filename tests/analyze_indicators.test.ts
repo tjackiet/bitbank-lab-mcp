@@ -52,6 +52,50 @@ describe('analyze_indicators', () => {
 		expect(Array.isArray(res.data.chart.indicators.SMA_25)).toBe(true);
 	});
 
+	// --- 本番経路の回帰: handler が flat な series キーからシグナルを正しく算出する ---
+	// 以前は handler が存在しない `indicators.series.*` を参照していたため、
+	// MACD クロス・SMA slope・bwTrend・σ推移 が恒常的に欠落していた。
+	// fetch → get_candles → analyzeIndicators → toolDef.handler を素通しで検証する
+	// （mock で series を注入しない＝本番が返す形状そのものを使う）。
+	it('本番経路: 下降→上昇のゴールデンクロスで MACD クロス・slope・bwTrend・σ推移が出る', async () => {
+		// 前半は明確に下降、後半は明確に上昇する V 字データ。
+		// → MACD line が signal を上抜け（直近クロス＝ゴールデン）
+		// → 直近 SMA は上向き（slope 矢印 📈）
+		const startMs = Date.UTC(2025, 0, 1);
+		const rows: OhlcvRow[] = [];
+		for (let i = 0; i < 200; i++) {
+			// 0..99: 30M → 20.1M（下降）, 100..199: 20M → 29.9M（上昇）
+			const base = i < 100 ? 30_000_000 - i * 100_000 : 20_000_000 + (i - 100) * 100_000;
+			rows.push([
+				String(base),
+				String(base + 50_000),
+				String(base - 50_000),
+				String(base),
+				'1.5',
+				String(startMs + i * 86_400_000),
+			]);
+		}
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			status: 200,
+			statusText: 'OK',
+			json: async () => ({ success: 1, data: { candlestick: [{ type: '1day', ohlcv: rows }] } }),
+		}) as unknown as typeof fetch;
+
+		const res = (await toolDef.handler({ pair: 'btc_jpy', type: '1day', limit: 200 })) as {
+			content: Array<{ text: string }>;
+		};
+		const text = res.content[0].text;
+		// MACD の直近クロスがゴールデンとして検出される（以前は「直近クロス: なし」固定だった）
+		expect(text).toContain('ゴールデン');
+		// 直近の SMA slope が上向き矢印として出る（以前は ➡️ 固定だった）
+		expect(text).toContain('📈');
+		// BB バンド幅トレンドが算出される（以前は「—」固定だった）
+		expect(text).toMatch(/バンド幅:.*(拡大中|収縮中|不変)/);
+		// σ 過去推移が表示される（以前は非表示だった）
+		expect(text).toContain('過去推移');
+	});
+
 	it('全取得失敗時は errorType=network を返すべき（現状 user 扱い）', async () => {
 		globalThis.fetch = vi.fn().mockRejectedValue(new TypeError('fetch failed')) as unknown as typeof fetch;
 
