@@ -486,7 +486,6 @@ export const toolDef: ToolDefinition = {
 		const res = await analyzeIndicators(pair, type, limit);
 		if (!res.ok) return res;
 		const ind = (res?.data?.indicators ?? {}) as Record<string, number | null | undefined> & {
-			series?: Record<string, number[]>;
 			OBV_trend?: string | null;
 		};
 		const candles = (Array.isArray(res?.data?.normalized) ? res.data.normalized : []) as Array<{
@@ -521,7 +520,9 @@ export const toolDef: ToolDefinition = {
 		// 🚨 「今日の雲」は ichi_series.spanA/B の末尾 ICHIMOKU_SHIFT(26) 本前を参照する。
 		// ind.ICHIMOKU_spanA/B は「今日計算された先行スパン」＝ 26 本後にプロットされる雲なので、
 		// 価格と比較する「今日の雲」判定には使えない（26 本ズレる）。
-		const ichiSeries = (ind as { ichi_series?: { spanA?: number[]; spanB?: number[] } }).ichi_series;
+		const ichiSeries = (
+			ind as { ichi_series?: { tenkan?: number[]; kijun?: number[]; spanA?: number[]; spanB?: number[] } }
+		).ichi_series;
 		const ichiSpanASeries = Array.isArray(ichiSeries?.spanA) ? ichiSeries.spanA : null;
 		const ichiSpanBSeries = Array.isArray(ichiSeries?.spanB) ? ichiSeries.spanB : null;
 		const ichiLen = ichiSpanASeries && ichiSpanBSeries ? Math.min(ichiSpanASeries.length, ichiSpanBSeries.length) : 0;
@@ -540,9 +541,27 @@ export const toolDef: ToolDefinition = {
 						: 'in_cloud'
 				: 'unknown';
 		const trend = res?.data?.trend ?? 'unknown';
+		// 🚨 本番の指標オブジェクト（computeAllIndicators）は flat 構造で `series` キーを持たない。
+		// slope / cross / divergence 計算用に flat キーから series マップを構築する。
+		// （以前は存在しない ind.series.* を参照し、シグナルが恒常的に欠落していた）
+		const macdSeries = (ind as { macd_series?: { line?: number[]; signal?: number[]; hist?: number[] } }).macd_series;
+		const bb2Series = (ind as { bb2_series?: { upper?: number[]; middle?: number[]; lower?: number[] } }).bb2_series;
+		const series: Record<string, number[] | null> = {
+			SMA_25: (ind as { sma_25_series?: number[] }).sma_25_series ?? null,
+			SMA_75: (ind as { sma_75_series?: number[] }).sma_75_series ?? null,
+			SMA_200: (ind as { sma_200_series?: number[] }).sma_200_series ?? null,
+			MACD_line: macdSeries?.line ?? null,
+			MACD_signal: macdSeries?.signal ?? null,
+			MACD_hist: macdSeries?.hist ?? null,
+			BB_upper: bb2Series?.upper ?? null,
+			BB_lower: bb2Series?.lower ?? null,
+			BB_middle: bb2Series?.middle ?? null,
+			ICHIMOKU_conversion: ichiSeries?.tenkan ?? null,
+			ICHIMOKU_base: ichiSeries?.kijun ?? null,
+		};
 		// Helpers: slope and last cross
 		const slopeOf = (seriesKey: string, n = 5): number | null => {
-			const arr = Array.isArray(ind?.series?.[seriesKey]) ? ind.series[seriesKey] : null;
+			const arr = Array.isArray(series[seriesKey]) ? series[seriesKey] : null;
 			if (!arr || arr.length < 2) return null;
 			const len = Math.min(n, arr.length);
 			const a = Number(arr.at(-len) ?? NaN);
@@ -550,15 +569,8 @@ export const toolDef: ToolDefinition = {
 			if (!Number.isFinite(a) || !Number.isFinite(b) || len <= 1) return null;
 			return (b - a) / (len - 1);
 		};
-		const lastMacdCross = lastCrossover(
-			Array.isArray(ind?.series?.MACD_line) ? ind.series.MACD_line : null,
-			Array.isArray(ind?.series?.MACD_signal) ? ind.series.MACD_signal : null,
-		);
-		const divergence = detectDivergence(
-			candles,
-			Array.isArray(ind?.series?.MACD_hist) ? ind.series.MACD_hist : null,
-			14,
-		);
+		const lastMacdCross = lastCrossover(series.MACD_line, series.MACD_signal);
+		const divergence = detectDivergence(candles, series.MACD_hist, 14);
 		// SMA arrangement and deviations
 		const curNum = Number(close ?? NaN);
 		const s25n = Number(sma25 ?? NaN),
@@ -570,21 +582,9 @@ export const toolDef: ToolDefinition = {
 			s200Slope = slopeOf('SMA_200', 7);
 		// BB width trend and sigma history (last 5-7 bars)
 		const bbSeries = {
-			upper: Array.isArray(ind?.series?.BB_upper)
-				? ind.series.BB_upper
-				: Array.isArray(ind?.series?.BB2_upper)
-					? ind.series.BB2_upper
-					: null,
-			lower: Array.isArray(ind?.series?.BB_lower)
-				? ind.series.BB_lower
-				: Array.isArray(ind?.series?.BB2_lower)
-					? ind.series.BB2_lower
-					: null,
-			middle: Array.isArray(ind?.series?.BB_middle)
-				? ind.series.BB_middle
-				: Array.isArray(ind?.series?.BB2_middle)
-					? ind.series.BB2_middle
-					: null,
+			upper: series.BB_upper,
+			lower: series.BB_lower,
+			middle: series.BB_middle,
 		};
 		const bwTrend = calcBandWidthTrend(bbSeries);
 		const sigmaHistory = calcSigmaHistory(candles, bbSeries);
@@ -598,10 +598,7 @@ export const toolDef: ToolDefinition = {
 		const threeSignals = calcThreeSignals(cloudPos, tenkan, kijun, chikouBull);
 		const toCloudDistance = calcCloudDistance(close, cloudTop, cloudBot, cloudPos);
 		// Simple cross info (SMA 25/75)
-		const crossInfo = findSmaCross(
-			Array.isArray(ind?.series?.SMA_25) ? ind.series.SMA_25 : null,
-			Array.isArray(ind?.series?.SMA_75) ? ind.series.SMA_75 : null,
-		);
+		const crossInfo = findSmaCross(series.SMA_25, series.SMA_75);
 		// Stochastic RSI and OBV values
 		const stochK = ind.STOCH_RSI_K ?? null;
 		const stochD = ind.STOCH_RSI_D ?? null;
