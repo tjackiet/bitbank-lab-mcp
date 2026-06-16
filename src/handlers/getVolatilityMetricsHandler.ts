@@ -9,7 +9,7 @@ import {
 } from '../../lib/formatter.js';
 import { stddev } from '../../lib/math.js';
 import { prependProvisionalNote } from '../../lib/provisional-bar.js';
-import { prependWarnings } from '../../lib/warning-propagation.js';
+import { extractUpstreamWarning, prependWarnings } from '../../lib/warning-propagation.js';
 import getVolatilityMetrics, { WILDER_ATR_PERIOD } from '../../tools/get_volatility_metrics.js';
 import { GetVolMetricsInputSchema } from '../schemas.js';
 import type { ToolDefinition } from '../tool-definition.js';
@@ -19,10 +19,11 @@ import type { ToolDefinition } from '../tool-definition.js';
  * meta.warnings（計算層）を body の先頭に別行で連結する。
  * LLM がデータの不完全性を見落とさないようにするため。
  */
-export function prependVolWarning(body: string, meta: { warning?: string; warnings?: string[] }): string {
+export function prependVolWarning(body: string, meta: unknown): string {
 	// warning（取得層）/ warnings（計算層）の両系統を prependWarnings に委譲する。
 	// 現状 get_volatility_metrics は warning のみ出すが、将来 warnings[] を足しても無言で落とさない。
-	return prependWarnings(body, meta, { separator: '\n\n' });
+	// meta は unknown で受け、extractUpstreamWarning で型検証してから渡す（不正な meta 形でも throw しない）。
+	return prependWarnings(body, extractUpstreamWarning(meta), { separator: '\n\n' });
 }
 
 export interface VolViewInput {
@@ -226,10 +227,7 @@ export const toolDef: ToolDefinition = {
 		// beginner view (plain language for non-experts)
 		if (view === 'beginner') {
 			const body = buildVolatilityBeginnerText(viewInput);
-			const text = prependVolWarning(
-				prependProvisionalNote(body, provisional),
-				res.meta as { warning?: string; warnings?: string[] },
-			);
+			const text = prependVolWarning(prependProvisionalNote(body, provisional), res.meta);
 			return {
 				content: [{ type: 'text', text }],
 				structuredContent: { ...res, data: { ...res.data, tags: tagsAll } } as Record<string, unknown>,
@@ -257,10 +255,7 @@ export const toolDef: ToolDefinition = {
 			},
 		};
 		const body = buildVolatilityDetailedText(detailedInput, view === 'full' ? 'full' : 'detailed');
-		const text = prependVolWarning(
-			prependProvisionalNote(body, provisional),
-			res.meta as { warning?: string; warnings?: string[] },
-		);
+		const text = prependVolWarning(prependProvisionalNote(body, provisional), res.meta);
 		return {
 			content: [{ type: 'text', text }],
 			structuredContent: { ...res, data: { ...res.data, tags: tagsAll } } as Record<string, unknown>,
