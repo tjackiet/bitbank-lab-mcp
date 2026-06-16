@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import { ICHIMOKU_SHIFT } from '../../lib/indicator-config.js';
+import { extractUpstreamWarning, prependWarnings } from '../../lib/warning-propagation.js';
 import analyzeMarketSignal from '../../tools/analyze_market_signal.js';
 import { AnalyzeMarketSignalInputSchema, AnalyzeMarketSignalOutputSchema } from '../schemas.js';
 import type { ToolDefinition } from '../tool-definition.js';
@@ -280,19 +281,9 @@ export const toolDef: ToolDefinition = {
 			// 上流 warning（取得層）/ warnings（計算層）を content 先頭に再連結する。
 			// LLM は structuredContent.meta を参照できないため、tool 層の summary 先頭と
 			// 同じフォーマットで handler 側でも text 先頭に警告を出す（§9.3）。
-			const warningLines: string[] = [];
-			const m = (res as { meta?: { warning?: string; warnings?: string[] } }).meta;
-			if (m?.warning) {
-				for (const line of m.warning.split('\n')) {
-					if (!line) continue;
-					warningLines.push(line.startsWith('⚠️') ? line : `⚠️ ${line}`);
-				}
-			}
-			for (const w of m?.warnings ?? []) {
-				if (!w) continue;
-				warningLines.push(w.startsWith('⚠️') ? w : `⚠️ ${w}`);
-			}
-			const text = warningLines.length > 0 ? `${warningLines.join('\n')}\n${baseText}` : baseText;
+			const text = prependWarnings(baseText, extractUpstreamWarning((res as { meta?: unknown }).meta), {
+				separator: '\n',
+			});
 			return {
 				content: [{ type: 'text', text }],
 				structuredContent: AnalyzeMarketSignalOutputSchema.parse(res) as Record<string, unknown>,

@@ -81,6 +81,21 @@ function formatTransactionsSummary(pair: string, transactions: NormalizedTxn[], 
 	return lines.join('\n');
 }
 
+/** 約定行を LLM 可視テキスト（content）用に整形する。default view / filter view で共用。 */
+function buildTxLines(transactions: NormalizedTxn[]): string[] {
+	return transactions.map((t, i) => {
+		const time = dayjs(t.timestampMs).tz('Asia/Tokyo').format('HH:mm:ss');
+		const idPart = t.transaction_id != null ? ` id:${t.transaction_id}` : '';
+		return `[${i}]${idPart} ${time} ${t.side} ${t.price} x${t.amount}`;
+	});
+}
+
+/** get_transactions が返すデータの「含む/含まない」と補完ツールの定型フッター。 */
+const TX_SCOPE_FOOTER =
+	`\n\n---\n📌 含まれるもの: 個別約定（時刻・売買方向・価格・数量）、買い/売り件数比率` +
+	`\n📌 含まれないもの: 集計済みフロー指標（CVD・Zスコア・スパイク）、OHLCV、板情報` +
+	`\n📌 補完ツール: get_flow_metrics（集計フロー・CVD・スパイク検出）, get_candles（OHLCV）, get_orderbook（板情報）`;
+
 export default async function getTransactions(pair: string = 'btc_jpy', limit: number = 60, date?: string) {
 	const chk = ensurePair(pair);
 	if (!chk.ok) return failFromValidation(chk, GetTransactionsOutputSchema);
@@ -144,19 +159,13 @@ export default async function getTransactions(pair: string = 'btc_jpy', limit: n
 		const sells = latest.filter((t) => t.side === 'sell').length;
 		const baseSummary = formatTransactionsSummary(chk.pair, latest, buys, sells);
 		// テキスト summary に全取引データを含める（LLM が structuredContent.data を読めない対策）
-		const txLines = latest.map((t, i) => {
-			const time = dayjs(t.timestampMs).tz('Asia/Tokyo').format('HH:mm:ss');
-			const idPart = t.transaction_id != null ? ` id:${t.transaction_id}` : '';
-			return `[${i}]${idPart} ${time} ${t.side} ${t.price} x${t.amount}`;
-		});
+		const txLines = buildTxLines(latest);
 		const summary =
 			baseSummary +
 			(warningText ? `\n\n${warningText}` : '') +
 			`\n\n📋 全${latest.length}件の取引:\n` +
 			txLines.join('\n') +
-			`\n\n---\n📌 含まれるもの: 個別約定（時刻・売買方向・価格・数量）、買い/売り件数比率` +
-			`\n📌 含まれないもの: 集計済みフロー指標（CVD・Zスコア・スパイク）、OHLCV、板情報` +
-			`\n📌 補完ツール: get_flow_metrics（集計フロー・CVD・スパイク検出）, get_candles（OHLCV）, get_orderbook（板情報）`;
+			TX_SCOPE_FOOTER;
 
 		const data = { raw: json, normalized: latest };
 		const meta = createMeta(chk.pair, {
@@ -237,9 +246,15 @@ export const toolDef: ToolDefinition = {
 				(minPrice == null || t.price >= minPrice) &&
 				(maxPrice == null || t.price <= maxPrice),
 		);
-		const warningSuffix = res.meta?.warning ? `\n\n${res.meta.warning}` : '';
+		const fBuys = items.filter((t: TxItem) => t.side === 'buy').length;
+		const fSells = items.filter((t: TxItem) => t.side === 'sell').length;
+		const warningBlock = res.meta?.warning ? `\n\n${res.meta.warning}` : '';
+		// フィルタ時も個別約定行を summary に含める。content[0].text しか LLM に見えないため、
+		// 件数だけだとどの約定がヒットしたか不可視になる（非フィルタ経路と同じ並びで出す）。
+		const filteredBody =
+			items.length > 0 ? `\n\n📋 フィルタ後 ${items.length}件の取引:\n${buildTxLines(items).join('\n')}` : '';
 		const summary = hasFilter
-			? `${String(pair).toUpperCase().replace('_', '/')} フィルタ後 ${items.length}件 (buy=${items.filter((t: TxItem) => t.side === 'buy').length} sell=${items.filter((t: TxItem) => t.side === 'sell').length})${warningSuffix}`
+			? `${formatPair(pair ?? 'btc_jpy')} フィルタ後 ${items.length}件 (buy=${fBuys} sell=${fSells})${warningBlock}${filteredBody}${TX_SCOPE_FOOTER}`
 			: res.summary;
 		if (view === 'items') {
 			const text = JSON.stringify(items, null, 2);

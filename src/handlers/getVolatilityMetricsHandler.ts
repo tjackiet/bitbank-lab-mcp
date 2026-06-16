@@ -9,19 +9,20 @@ import {
 } from '../../lib/formatter.js';
 import { stddev } from '../../lib/math.js';
 import { prependProvisionalNote } from '../../lib/provisional-bar.js';
+import { prependWarnings } from '../../lib/warning-propagation.js';
 import getVolatilityMetrics, { WILDER_ATR_PERIOD } from '../../tools/get_volatility_metrics.js';
 import { GetVolMetricsInputSchema } from '../schemas.js';
 import type { ToolDefinition } from '../tool-definition.js';
 
 /**
- * meta.warning（上流 get_candles の fetchWarning + 不正OHLCスキップ件数 + isoTime欠損件数）を
- * body の先頭に別行で連結する。LLM がデータの不完全性を見落とさないようにするため。
+ * meta.warning（取得層: 上流 get_candles の fetchWarning + 不正OHLCスキップ件数 + isoTime欠損件数）と
+ * meta.warnings（計算層）を body の先頭に別行で連結する。
+ * LLM がデータの不完全性を見落とさないようにするため。
  */
-export function prependVolWarning(body: string, meta: { warning?: string }): string {
-	const w = meta?.warning;
-	if (!w) return body;
-	const head = w.startsWith('⚠️') ? w : `⚠️ ${w}`;
-	return `${head}\n\n${body}`;
+export function prependVolWarning(body: string, meta: { warning?: string; warnings?: string[] }): string {
+	// warning（取得層）/ warnings（計算層）の両系統を prependWarnings に委譲する。
+	// 現状 get_volatility_metrics は warning のみ出すが、将来 warnings[] を足しても無言で落とさない。
+	return prependWarnings(body, meta, { separator: '\n\n' });
 }
 
 export interface VolViewInput {
@@ -225,7 +226,10 @@ export const toolDef: ToolDefinition = {
 		// beginner view (plain language for non-experts)
 		if (view === 'beginner') {
 			const body = buildVolatilityBeginnerText(viewInput);
-			const text = prependVolWarning(prependProvisionalNote(body, provisional), res.meta as { warning?: string });
+			const text = prependVolWarning(
+				prependProvisionalNote(body, provisional),
+				res.meta as { warning?: string; warnings?: string[] },
+			);
 			return {
 				content: [{ type: 'text', text }],
 				structuredContent: { ...res, data: { ...res.data, tags: tagsAll } } as Record<string, unknown>,
@@ -253,7 +257,10 @@ export const toolDef: ToolDefinition = {
 			},
 		};
 		const body = buildVolatilityDetailedText(detailedInput, view === 'full' ? 'full' : 'detailed');
-		const text = prependVolWarning(prependProvisionalNote(body, provisional), res.meta as { warning?: string });
+		const text = prependVolWarning(
+			prependProvisionalNote(body, provisional),
+			res.meta as { warning?: string; warnings?: string[] },
+		);
 		return {
 			content: [{ type: 'text', text }],
 			structuredContent: { ...res, data: { ...res.data, tags: tagsAll } } as Record<string, unknown>,

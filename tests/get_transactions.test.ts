@@ -308,6 +308,34 @@ describe('get_transactions', () => {
 			expect(res.summary).toContain('フィルタ後 1件');
 		});
 
+		it('フィルタ指定時も summary にヒットした個別約定行を含める（件数だけにしない）', async () => {
+			fixture(rows);
+			const res = (await toolDef.handler({ pair: 'btc_jpy', limit: 10, minAmount: 1.0 })) as {
+				ok: true;
+				summary: string;
+			};
+			// ヒットした約定（id:3 / id:4）の個別行が content 可視テキストに出る
+			expect(res.summary).toContain('📋 フィルタ後 2件の取引:');
+			expect(res.summary).toContain('id:3');
+			expect(res.summary).toContain('id:4');
+			expect(res.summary).toContain('6000000');
+			expect(res.summary).toContain('7000000');
+			// フィルタ対象外（id:1 / id:2）は summary に漏れない
+			expect(res.summary).not.toContain('id:1');
+			expect(res.summary).not.toContain('id:2');
+		});
+
+		it('フィルタが0件ヒットなら個別行ブロックを出さず件数のみ（フッターは維持）', async () => {
+			fixture(rows);
+			const res = (await toolDef.handler({ pair: 'btc_jpy', limit: 10, minAmount: 100 })) as {
+				ok: true;
+				summary: string;
+			};
+			expect(res.summary).toContain('フィルタ後 0件');
+			expect(res.summary).not.toContain('📋 フィルタ後');
+			expect(res.summary).toContain('補完ツール');
+		});
+
 		it('view=items の場合は content text が JSON 配列', async () => {
 			fixture(rows);
 			const res = (await toolDef.handler({ pair: 'btc_jpy', limit: 10, view: 'items' })) as {
