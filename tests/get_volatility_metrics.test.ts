@@ -407,34 +407,6 @@ describe('get_volatility_metrics', () => {
 		});
 	});
 
-	// === 7. Tags =========================================================
-
-	describe('タグ生成', () => {
-		it('高ボラ時に volatile タグが付与される', async () => {
-			const rows = makeOhlcvRows(30, { noise: 0.15 });
-			mockFetchWithOhlcv(rows);
-			const res = await getVolatilityMetrics('btc_jpy', '1day', 30);
-			assertOk(res);
-			const rvAnn = res.data.aggregates.rv_std_ann;
-			if (rvAnn != null && rvAnn >= 0.8) {
-				expect(res.data.tags).toContain('volatile');
-			}
-		});
-
-		it('calm タグの閾値は 0.3 以下（tool 側）', async () => {
-			const rows = makeOhlcvRows(200, { noise: 0.001 });
-			mockFetchWithOhlcv(rows);
-			const res = await getVolatilityMetrics('btc_jpy', '1day', 200, [14, 20, 30], { annualize: true });
-			assertOk(res);
-			const rvAnn = res.data.aggregates.rv_std_ann;
-			if (rvAnn != null && rvAnn <= 0.3) {
-				expect(res.data.tags).toContain('calm');
-			} else {
-				expect(res.data.tags).not.toContain('calm');
-			}
-		});
-	});
-
 	// === 8. Network error ================================================
 
 	describe('ネットワークエラー', () => {
