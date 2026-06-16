@@ -14,10 +14,11 @@ const OHAYO_TEXT = `今朝の BTC/JPY を「なんとなく把握」する軽量
 - 必要ツールは最初に 1 回でまとめてロードする（tool_search を何度も呼ばない）。
 - 下記 3 ツールは互いに依存しないので **必ず並列で** 呼ぶ（直列にしない）。
 
-【ツール（この 3 つだけ。追加呼び出し禁止）】
+【データ取得・分析ツール（この 3 つだけ。他の分析・データ取得ツールは追加しない）】
 1. get_ticker(pair="btc_jpy") — 現在値・24h 高安・取得時刻
 2. get_candles(pair="btc_jpy", type="1hour", limit=8, view="items") — スパークライン用に直近 8 本の close だけ使う（view="items" で 8 本すべて取得。default view は 5 本しか返さないため不可）
 3. analyze_market_signal(pair="btc_jpy") — 地合い判定。総合スコア（-100〜+100）と bullish/neutral/bearish を 1 行に要約する用途のみ（数値テーブルは展開しない）
+※「3 つだけ」は分析・データ取得ツールの制約。下記の前日比で使う Read/Write ファイルツールはこの数に含めず、呼んでよい。
 
 【前日比（状態保存。要 Read/Write ファイルツール）】
 - 冒頭: 作業ディレクトリ直下の ${OHAYO_STATE_PATH} を Read（絶対パスに解決）。
