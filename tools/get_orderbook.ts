@@ -16,6 +16,7 @@ import { toIsoTime } from '../lib/datetime.js';
 import { estimateZones } from '../lib/depth-analysis.js';
 import { formatSummary, formatTimestampJST } from '../lib/formatter.js';
 import { BITBANK_API_BASE, DEFAULT_RETRIES, fetchJsonWithRateLimit } from '../lib/http.js';
+import { isJpyPair, roundPrice } from '../lib/price.js';
 import { fail, failFromError, failFromValidation, ok, parseAsResult } from '../lib/result.js';
 import { createMeta, ensurePair, validateLimit } from '../lib/validate.js';
 import type { GetOrderbookData, GetOrderbookMeta, OrderbookLevelWithCum } from '../src/schemas.js';
@@ -83,10 +84,11 @@ function buildSummary(pair: string, bidsNum: NumLevel[], asksNum: NumLevel[], to
 	const bids = toLevelsWithCum(bidsNum, topN);
 	const asks = toLevelsWithCum(asksNum, topN);
 
+	const jpyPair = isJpyPair(pair);
 	const bestAsk = asks[0]?.price ?? null;
 	const bestBid = bids[0]?.price ?? null;
 	const spread = bestAsk != null && bestBid != null ? Number((bestAsk - bestBid).toFixed(0)) : null;
-	const mid = bestAsk != null && bestBid != null ? Number(((bestAsk + bestBid) / 2).toFixed(2)) : null;
+	const mid = bestAsk != null && bestBid != null ? roundPrice((bestAsk + bestBid) / 2, jpyPair) : null;
 
 	const summary = formatSummary({
 		pair,
@@ -137,9 +139,12 @@ function buildSummary(pair: string, bidsNum: NumLevel[], asksNum: NumLevel[], to
 
 function buildPressure(pair: string, bidsRaw: RawLevel[], asksRaw: RawLevel[], bandsPct: number[], timestamp: number) {
 	const baseCcy = pair.split('_')[0]?.toUpperCase() ?? '';
+	const jpyPair = isJpyPair(pair);
 	const bestAsk = Number(asksRaw?.[0]?.[0] ?? NaN);
 	const bestBid = Number(bidsRaw?.[0]?.[0] ?? NaN);
+	// 帯域境界の計算には丸め前の生 mid を使い、出力（baseMidOut）のみ共通の丸め規約に通す。
 	const baseMid = Number.isFinite(bestAsk) && Number.isFinite(bestBid) ? (bestAsk + bestBid) / 2 : null;
+	const baseMidOut = baseMid != null ? roundPrice(baseMid, jpyPair) : null;
 
 	function sumInBand(levels: RawLevel[], low: number, high: number) {
 		let s = 0;
@@ -183,7 +188,7 @@ function buildPressure(pair: string, bidsRaw: RawLevel[], asksRaw: RawLevel[], b
 
 		return {
 			widthPct: w,
-			baseMid: baseMid as number,
+			baseMid: baseMidOut as number,
 			baseBidSize: Number(buyVol.toFixed(8)),
 			baseAskSize: Number(sellVol.toFixed(8)),
 			bidDelta: Number(buyVol.toFixed(8)),
@@ -204,7 +209,7 @@ function buildPressure(pair: string, bidsRaw: RawLevel[], asksRaw: RawLevel[], b
 
 	const summary = formatSummary({
 		pair,
-		latest: baseMid ?? undefined,
+		latest: baseMidOut ?? undefined,
 		extra: `bands=${bandsPct.join(',')}; tag=${strongestTag ?? 'none'}`,
 	});
 
@@ -229,7 +234,7 @@ function buildPressure(pair: string, bidsRaw: RawLevel[], asksRaw: RawLevel[], b
 		bands,
 		aggregates: { netDelta: Number(bands.reduce((s, b) => s + b.netDelta, 0).toFixed(8)), strongestTag },
 	};
-	return { text, data, mid: baseMid };
+	return { text, data, mid: baseMidOut };
 }
 
 // ─── mode=statistics ───
@@ -243,12 +248,14 @@ function buildStatistics(
 	timestamp: number,
 ) {
 	const baseCcy = pair.split('_')[0]?.toUpperCase() ?? '';
+	const jpyPair = isJpyPair(pair);
 	const bestBid = bidsNum.length ? Math.max(...bidsNum.map(([p]) => p)) : null;
 	const bestAsk = asksNum.length ? Math.min(...asksNum.map(([p]) => p)) : null;
+	// レンジ集計・ゾーン分割・距離%には丸め前の生 mid を使い、出力 currentPrice のみ共通の丸め規約に通す。
 	const mid = bestBid != null && bestAsk != null ? (bestBid + bestAsk) / 2 : null;
 
 	const basic = {
-		currentPrice: mid != null ? Math.round(mid) : null,
+		currentPrice: mid != null ? roundPrice(mid, jpyPair) : null,
 		bestBid: bestBid != null ? Number(bestBid) : null,
 		bestAsk: bestAsk != null ? Number(bestAsk) : null,
 		spread: bestBid != null && bestAsk != null ? Number(bestAsk) - Number(bestBid) : null,
@@ -424,9 +431,10 @@ function buildRaw(
 	asksRaw: RawLevel[],
 	timestamp: number,
 ) {
+	const jpyPair = isJpyPair(pair);
 	const bestAsk = asksRaw[0]?.[0] != null ? Number(asksRaw[0][0]) : null;
 	const bestBid = bidsRaw[0]?.[0] != null ? Number(bidsRaw[0][0]) : null;
-	const mid = bestBid != null && bestAsk != null ? Number(((Number(bestBid) + Number(bestAsk)) / 2).toFixed(2)) : null;
+	const mid = bestBid != null && bestAsk != null ? roundPrice((bestBid + bestAsk) / 2, jpyPair) : null;
 
 	const bidsNum: NumLevel[] = bidsRaw.map(([p, s]) => [Number(p), Number(s)]);
 	const asksNum: NumLevel[] = asksRaw.map(([p, s]) => [Number(p), Number(s)]);
