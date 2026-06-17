@@ -12,16 +12,12 @@
 import { toIsoTime } from '../lib/datetime.js';
 import { buildCumulativeSteps } from '../lib/depth-analysis.js';
 import getDepth from '../lib/get-depth.js';
+import { isJpyPair, roundPrice } from '../lib/price.js';
 import { fail, failFromError, failFromValidation, ok, parseAsResult, toStructured } from '../lib/result.js';
 import { createMeta, ensurePair } from '../lib/validate.js';
 import type { FailResult, OkResult, Pair } from '../src/schemas.js';
 import { PrepareDepthDataInputSchema, PrepareDepthDataOutputSchema } from '../src/schemas.js';
 import type { ToolDefinition } from '../src/tool-definition.js';
-
-/** 価格を「JPY ペアなら整数、それ以外は小数2桁」で丸める */
-function roundPrice(p: number, jpyPair: boolean): number {
-	return jpyPair ? Math.round(p) : Number(p.toFixed(2));
-}
 
 /** Volume は固定小数桁に丸める */
 function roundVolume(v: number): number {
@@ -113,7 +109,7 @@ export default async function prepareDepthData(
 	if (!chk.ok) return failFromValidation(chk);
 
 	const maxLevels = Math.max(10, Math.min(1000, Math.floor(levels)));
-	const jpyPair = chk.pair.endsWith('_jpy');
+	const jpyPair = isJpyPair(chk.pair);
 
 	try {
 		const depth = await getDepth(chk.pair, { maxLevels });

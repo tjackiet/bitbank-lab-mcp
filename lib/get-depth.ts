@@ -2,6 +2,7 @@ import { GetDepthOutputSchema } from '../src/schemas.js';
 import { estimateZones } from './depth-analysis.js';
 import { formatSummary, formatTimestampJST } from './formatter.js';
 import { BITBANK_API_BASE, DEFAULT_RETRIES, fetchJsonWithRateLimit } from './http.js';
+import { isJpyPair, roundPrice } from './price.js';
 import { fail, failFromError, failFromValidation, ok } from './result.js';
 import { createMeta, ensurePair } from './validate.js';
 
@@ -85,7 +86,7 @@ export default async function getDepth(pair: string, { timeoutMs = 3000, maxLeve
 		// 簡易サマリ（最良気配と件数）
 		const bestAsk = asks[0]?.[0] ?? null;
 		const bestBid = bids[0]?.[0] ?? null;
-		const mid = bestBid && bestAsk ? Number(((Number(bestBid) + Number(bestAsk)) / 2).toFixed(2)) : null;
+		const mid = bestBid && bestAsk ? roundPrice((Number(bestBid) + Number(bestAsk)) / 2, isJpyPair(chk.pair)) : null;
 		const summary = formatSummary({
 			pair: chk.pair,
 			latest: mid ?? undefined,

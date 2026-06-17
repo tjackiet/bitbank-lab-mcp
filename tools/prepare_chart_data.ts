@@ -10,6 +10,7 @@
  */
 
 import { dayjs, toIsoWithTz } from '../lib/datetime.js';
+import { isJpyPair, roundPrice } from '../lib/price.js';
 import { fail, failFromError, ok, toStructured } from '../lib/result.js';
 import { createMeta, ensurePair } from '../lib/validate.js';
 import { extractUpstreamWarning, prependWarnings } from '../lib/warning-propagation.js';
@@ -38,15 +39,9 @@ const MAIN_SERIES_KEYS: Record<string, string[]> = {
 	ICHIMOKU: ['ICHI_tenkan', 'ICHI_kijun', 'ICHI_spanA', 'ICHI_spanB', 'ICHI_chikou'],
 };
 
-/** JPY ペアかどうか判定 */
-function isJpyPair(pair: string): boolean {
-	return pair.endsWith('_jpy');
-}
-
-/** 数値を丸める（JPY ペアは整数、それ以外は小数2桁） */
+/** 数値を丸める（null パススルー。丸め規約は lib/price.ts に集約）。 */
 function roundValue(v: number | null, jpyPair: boolean): number | null {
-	if (v === null) return null;
-	return jpyPair ? Math.round(v) : Number(v.toFixed(2));
+	return v === null ? null : roundPrice(v, jpyPair);
 }
 
 /** 系列が全て null かどうか判定 */
