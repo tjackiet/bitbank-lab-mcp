@@ -17,7 +17,7 @@
 
 bitbank の公開 API から取得した価格・取引データを、指標計算・統合・可視化用データの整形まで行った上で LLM に渡します（必要に応じてサーバー側で SVG 描画も可能）。生データを渡すだけのサーバーとは異なり、各ツールの description に「いつ使うべきか」「他ツールとの使い分け」を明示しているため、LLM が自律的に適切なツールを選択できます。
 
-姉妹プロジェクトとして、同じ bitbank API に対する真逆のアプローチを提供する **CLI** ([bitbank-cli-skills](https://github.com/tjackiet/bitbank-cli-skills)) もあります。
+姉妹プロジェクトとして、同じ bitbank API に対する真逆のアプローチを提供する **CLI** ([bitbank-lab-cli](https://github.com/bitbankinc/bitbank-lab-cli)) もあります。
 
 - **この MCP サーバー** はサーバー側で計算済みの結論を LLM に渡す
 - **CLI** は生データを高速に取得し、LLM 自身に計算させる
