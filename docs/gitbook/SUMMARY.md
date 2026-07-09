@@ -4,7 +4,7 @@
 
 ## MCP サーバー
 
-* [クイックスタート（5分）](getting-started/quickstart.md)
+* [クイックスタート](getting-started/quickstart.md)
 * [セットアップ詳細](getting-started/setup.md)
   * [Claude Desktop](getting-started/claude-desktop.md)
   * [Plugin 導入（Claude Code / Cursor / Codex / Gemini CLI）](getting-started/plugin-clients.md)
@@ -37,7 +37,7 @@
 
 * [よくある質問（FAQ）](reference/faq.md)
 * [免責事項](reference/disclaimer.md)
-* [GitHubリポジトリ（MCP サーバー）](https://github.com/tjackiet/bitbank-lab-mcp)
-* [GitHubリポジトリ（CLI）](https://github.com/tjackiet/bitbank-cli-skills)
-* [全ツール一覧（docs/tools.md）](https://github.com/tjackiet/bitbank-lab-mcp/blob/main/docs/tools.md)
-* [変更履歴（CHANGELOG）](https://github.com/tjackiet/bitbank-lab-mcp/blob/main/CHANGELOG.md)
+* [GitHubリポジトリ（MCP サーバー）](https://github.com/bitbankinc/bitbank-lab-mcp)
+* [GitHubリポジトリ（CLI）](https://github.com/bitbankinc/bitbank-lab-cli)
+* [全ツール一覧（docs/tools.md）](https://github.com/bitbankinc/bitbank-lab-mcp/blob/main/docs/tools.md)
+* [変更履歴（CHANGELOG）](https://github.com/bitbankinc/bitbank-lab-mcp/blob/main/CHANGELOG.md)
