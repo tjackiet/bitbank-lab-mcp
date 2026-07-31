@@ -211,7 +211,7 @@ export default async function getTransactions(
 			? `⚠️ ${hasFilter ? '条件に合致する' : '取得した'}${matched}件のうち最新側${returned}件のみを返却しています` +
 				`（返却範囲: ${toDisplayTime(latest[0].timestampMs) ?? '?'}〜${toDisplayTime(latest[returned - 1].timestampMs) ?? '?'}` +
 				` / 取得全体: ${toDisplayTime(sorted[0].timestampMs) ?? '?'}〜${toDisplayTime(sorted[totalFetched - 1].timestampMs) ?? '?'}）。` +
-				`切り捨て区間の分析が必要な場合は minAmount 等の条件で絞り込むか、期間を分割してください`
+				`切り捨て区間の分析が必要な場合は minAmount / minPrice 等の条件で対象を絞り込んでください（単一 date 内の時間範囲指定は未対応）`
 			: undefined;
 
 		const warningText = [dropWarning, truncationWarning].filter(Boolean).join('\n') || undefined;
