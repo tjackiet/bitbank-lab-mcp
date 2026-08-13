@@ -25,7 +25,13 @@ const server = new McpServer(
 );
 
 type TextContent = { type: 'text'; text: string; _meta?: Record<string, unknown> };
-type ToolReturn = { content: TextContent[]; structuredContent?: Record<string, unknown> };
+type ToolReturn = {
+	content: TextContent[];
+	structuredContent?: Record<string, unknown>;
+	// PROBE ONLY (probe/meta-visibility): ツール結果レベルの `_meta`（CallToolResult._meta）。
+	// ツール定義側の `_meta`（ui.resourceUri 等、registerTool に渡すもの）とは別物。
+	_meta?: Record<string, unknown>;
+};
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -79,9 +85,13 @@ const respond = (result: unknown): ToolReturn => {
 			? result.structuredContent
 			: result
 		: undefined;
+	// PROBE ONLY (probe/meta-visibility): handler が結果レベル `_meta` を返した場合そのまま透過する。
+	// 通常経路では handler は `_meta` を返さないため、この分岐は計測時のみ効く。
+	const resultMeta = isPlainObject(result) && isPlainObject(result._meta) ? result._meta : undefined;
 	return {
 		content: [{ type: 'text', text }],
 		...(structured ? { structuredContent: structured } : {}),
+		...(resultMeta ? { _meta: resultMeta } : {}),
 	};
 };
 

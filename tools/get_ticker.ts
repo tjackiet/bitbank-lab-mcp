@@ -6,7 +6,7 @@ import { fail, failFromError, failFromValidation, ok, parseAsResult } from '../l
 import { createMeta, ensurePair } from '../lib/validate.js';
 import type { FailResult, GetTickerData, GetTickerMeta, OkResult } from '../src/schemas.js';
 import { GetTickerInputSchema, GetTickerOutputSchema } from '../src/schemas.js';
-import type { ToolDefinition } from '../src/tool-definition.js';
+import type { McpResponse, ToolDefinition } from '../src/tool-definition.js';
 
 export interface GetTickerOptions {
 	timeoutMs?: number;
@@ -127,5 +127,16 @@ export const toolDef: ToolDefinition = {
 	description:
 		'[Ticker / Price] 単一ペアのティッカー（ticker / price / 24h change）を取得。現在価格・出来高・24h高安。',
 	inputSchema: GetTickerInputSchema,
-	handler: async ({ pair }: { pair?: string }) => getTicker(pair ?? 'btc_jpy'),
+	// PROBE ONLY (probe/meta-visibility): 3 チャネルへ互いに素なマーカーを載せる計測用改変。
+	// マージしない。マーカーは 3 つのチャネルのいずれか 1 つにのみ出現させる（重複させると
+	// 「どのチャネルが見えたのか」が判別できなくなり計測が無意味になる）。
+	// 上流 API が不通でも 3 マーカーが必ず載るよう ok / fail を問わず付与する。
+	handler: async ({ pair }: { pair?: string }) => {
+		const result = await getTicker(pair ?? 'btc_jpy');
+		return {
+			content: [{ type: 'text', text: `${result.summary}\n\nPROBE-A-4471` }],
+			structuredContent: { ...result, probe_b: 'PROBE-B-8123' },
+			_meta: { probe_c: 'PROBE-C-9350' },
+		} as unknown as McpResponse;
+	},
 };
