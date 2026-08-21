@@ -1070,6 +1070,43 @@ describe('resolveDepositWithdrawalStatus / flowUnavailableReasonFor', () => {
 		expect(resolveDepositWithdrawalStatus(true, null)).toBe('fallback');
 		expect(flowUnavailableReasonFor('fallback', null)).toBe('dw_fetch_failed');
 	});
+
+	it('不変条件: 履歴が完全なときだけ理由コードが undefined になる（全状態の直積）', () => {
+		// 個別ケースの積み上げだと「塞ぎ漏れた組み合わせ」が残りうるので、
+		// DepositWithdrawalData の完全性に関わる 3 フラグ × 履歴有無を全通り回して、
+		// 「4 チャネル全成功かつ打ち切りなし」以外では必ず理由コードが立つことを固定する。
+		const someDw = { uuid: 'd', asset: 'jpy', amount: '1000', status: 'DONE', found_at: 1, confirmed_at: 1 };
+		for (const allFailed of [false, true]) {
+			for (const warnings of [[], ['暗号資産出庫履歴の取得に失敗: 10007']]) {
+				for (const isComplete of [true, false]) {
+					for (const hasHistory of [false, true]) {
+						const dw = makeDw({
+							allFailed,
+							warnings,
+							isComplete,
+							deposits: hasHistory ? [someDw] : [],
+						});
+						const label = `allFailed=${allFailed} warnings=${warnings.length} isComplete=${isComplete} hasHistory=${hasHistory}`;
+						const reason = flowUnavailableReasonFor(resolveDepositWithdrawalStatus(true, dw), dw);
+						const historyIsComplete = !allFailed && warnings.length === 0 && isComplete;
+						if (historyIsComplete) {
+							expect(reason, label).toBeUndefined();
+						} else {
+							expect(reason, label).toBeDefined();
+						}
+					}
+				}
+			}
+		}
+	});
+
+	it('不変条件: include_deposit_withdrawal=false なら dw の状態に関わらず理由コードが立つ', () => {
+		for (const dw of [null, makeDw(), makeDw({ isComplete: false })]) {
+			expect(flowUnavailableReasonFor(resolveDepositWithdrawalStatus(false, dw), dw)).toBe(
+				'withdrawal_history_not_fetched',
+			);
+		}
+	});
 });
 
 // ── 期間別パフォーマンス（評価額比較） ──
