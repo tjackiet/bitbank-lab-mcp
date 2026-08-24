@@ -37,6 +37,16 @@ function makePairSpec(overrides: Partial<PairSpec> = {}): PairSpec {
 		stop_margin_short_order: false,
 		stop_buy_order: false,
 		stop_sell_order: false,
+		// 手数料率は PairSpec の必須フィールド（欠損は null 表現）。
+		// 従来は base 側に無く ...overrides の Partial 経由で「埋まっているつもり」になっていた。
+		taker_fee_rate_quote: null,
+		maker_fee_rate_quote: null,
+		taker_fee_rate_base: null,
+		maker_fee_rate_base: null,
+		margin_open_maker_fee_rate_quote: null,
+		margin_open_taker_fee_rate_quote: null,
+		margin_close_maker_fee_rate_quote: null,
+		margin_close_taker_fee_rate_quote: null,
 		...overrides,
 	};
 }

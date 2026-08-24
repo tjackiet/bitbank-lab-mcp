@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { PrepareDepthDataOutputSchema } from '../src/schemas.js';
+import { PrepareDepthDataInputSchema, PrepareDepthDataOutputSchema } from '../src/schemas.js';
 import prepareDepthData, { toolDef } from '../tools/prepare_depth_data.js';
 import { asMockResult, assertFail, assertOk } from './_assertResult.js';
 import { asMcp } from './helpers/mcp.js';
@@ -60,7 +60,9 @@ describe('prepare_depth_data', () => {
 	});
 
 	it('inputSchema: デフォルト値が適用される', () => {
-		const parsed = toolDef.inputSchema.parse({});
+		// toolDef.inputSchema は ToolDefinition 上 ZodTypeAny に広がり parse が unknown を返すため、
+		// デフォルト値の検証は同一スキーマ（toolDef が参照している実体）を直接 parse して行う。
+		const parsed = PrepareDepthDataInputSchema.parse({});
 		expect(parsed.pair).toBe('btc_jpy');
 		expect(parsed.levels).toBe(200);
 		expect(parsed.bandPct).toBe(0.01);

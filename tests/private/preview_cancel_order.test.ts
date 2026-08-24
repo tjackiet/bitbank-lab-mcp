@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { assertOk } from '../_assertResult.js';
+import { assertFail, assertOk } from '../_assertResult.js';
 
 const originalFetch = globalThis.fetch;
 
@@ -289,7 +289,7 @@ describe('preview_cancel_order — handler (toolDef)', () => {
 		const previewCancelOrder = await loadPreviewCancelOrder();
 		const result = await previewCancelOrder({ pair: 'btc_jpy', order_id: 2001 });
 
-		expect(result.ok).toBe(false);
+		assertFail(result);
 		expect(result.summary).toContain('既にキャンセル済み');
 		expect(result.meta.errorType).toBe('validation_error');
 	});
