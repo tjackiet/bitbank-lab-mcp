@@ -38,6 +38,7 @@
     "stat": "tsx scripts/stat.ts",
     "report": "tsx scripts/report.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json",
     "ci:typecheck": "npm run gen:types && tsc --noEmit -p tsconfig.json",
     "build": "npm run ci:typecheck",
     "gen:types": "tsx scripts/gen_types.ts",
