@@ -6567,7 +6567,12 @@ describe('analyze_my_portfolio — 復元数量と許容誤差の露出（#87）
 		if (eth == null) throw new Error('eth holding が無い');
 		// 追加先は structuredContent だけ。保有数量は `.claude/rules/sensitive-data.md` の
 		// HIGH 分類に近く、既に出している amount を超えて text に増やさない
-		for (const text of [result.summary, ...(result.meta.warnings ?? [])]) {
+		for (const raw of [result.summary, ...(result.meta.warnings ?? [])]) {
+			// 取得時刻等の ISO タイムスタンプを除去してから部分文字列判定する。
+			// reconstructed_qty は "2.5" のような短い数値文字列になりうるため、
+			// 素のテキストだと `取得時刻: ...T12:39:12.528Z` の "12.528" に偶然含まれて
+			// 秒が 2 で終わり かつ ミリ秒が 5 で始まる実行だけ落ちる（実際に CI で発生）。
+			const text = raw.replace(/\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:\d{2})/g, '<ts>');
 			expect(text).not.toContain('reconstructed_qty');
 			expect(text).not.toContain('qty_invariant_tolerance');
 			expect(text).not.toContain(String(eth.reconstructed_qty));
