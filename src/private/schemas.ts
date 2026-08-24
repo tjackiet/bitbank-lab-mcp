@@ -304,6 +304,8 @@ export const PortfolioChangePctUnavailableReasonEnum = z.enum([
 	'start_value_zero',
 	/** 期初評価額が現在評価額の `MIN_START_VALUE_RATIO`（1%）未満で、率が運用成績ではなく「期初がほぼ空だった」ことを表す数になる */
 	'start_value_negligible',
+	/** 期初の始値（1day candle open）を解決できなかった暗号資産を評価に含められず、期初評価額が過小になっている（当日足が未取得の時間帯など。時間帯依存で自然に解消しうる） */
+	'start_boundary_unpriced',
 ]);
 
 /** @see PortfolioChangePctUnavailableReasonEnum */
@@ -701,7 +703,7 @@ const PeriodPerformanceSchema = z
 			.number()
 			.optional()
 			.describe(
-				'単純増減率（%）= change_jpy / start_value_jpy。**期初評価額が小さすぎて率が意味を持たない場合は undefined**（理由は change_pct_unavailable_reason）: (1) start_value_jpy が 0、(2) start_value_jpy が current_value_jpy の 1% 未満。(2) は年初にほぼ空だった口座に入金して運用を始めた場合に起き、率は運用成績ではなく「期初がほぼ空だった」ことを表す数になるため出さない（増減額 change_jpy は出す）。undefined は「率がゼロ」ではない',
+				'単純増減率（%）= change_jpy / start_value_jpy。**期初評価額が小さすぎて率が意味を持たない場合は undefined**（理由は change_pct_unavailable_reason）: (1) start_value_jpy が 0、(2) start_value_jpy が current_value_jpy の 1% 未満、(3) 期初の始値を解決できなかった暗号資産があり start_value_jpy が過小。(2) は年初にほぼ空だった口座に入金して運用を始めた場合に起き、率は運用成績ではなく「期初がほぼ空だった」ことを表す数になるため出さない。(3) は当日足が未取得の時間帯などで起き、過小な分母では率が運用成績を表さないため出さない（資産名は unpriced_start_assets）。いずれも増減額 change_jpy は出す。undefined は「率がゼロ」ではない',
 			),
 		net_flow_jpy: z
 			.number()
@@ -726,7 +728,7 @@ const PeriodPerformanceSchema = z
 			.nullable()
 			.optional()
 			.describe(
-				'調整後増減率（%）= adjusted_change_jpy / start_value_jpy。null=純入出金が未計測で算出不能。undefined=change_pct と同じ理由で分母が使えない（start_value_jpy が 0、または current_value_jpy の 1% 未満。理由は change_pct_unavailable_reason）。分母が change_pct と共通なので抑止は必ず両方同時に起きる',
+				'調整後増減率（%）= adjusted_change_jpy / start_value_jpy。null=純入出金が未計測で算出不能。undefined=change_pct と同じ理由で分母が使えない（start_value_jpy が 0、current_value_jpy の 1% 未満、または期初始値の解決欠損で start_value_jpy が過小。理由は change_pct_unavailable_reason）。分母が change_pct と共通なので抑止は必ず両方同時に起きる',
 			),
 		period_start: z.string().describe('期間の開始日時（ISO8601 JST）'),
 		period_end: z.string().describe('期間の終了日時（ISO8601 JST）'),
@@ -748,8 +750,14 @@ const PeriodPerformanceSchema = z
 		flow_valuation: FlowValuationSchema.optional().describe(
 			'net_flow_jpy に計上した暗号資産入出庫の換算方式の内訳。期間中に暗号資産の入出庫が無い / 全件で価格を解決できなかった場合は undefined（JPY のみの入出金は換算不要なので数えない）',
 		),
+		unpriced_start_assets: z
+			.array(z.string())
+			.optional()
+			.describe(
+				'期初評価額の算出時に、当該期間の始値（1day candle open）を boundaryPrices から解決できなかった暗号資産シンボル一覧（小文字・昇順・重複なし）。他境界（年始/月初/日初）のいずれかは解決済みで当該期間だけ欠損したケースが対象（当日足未取得の時間帯など。足データが丸ごと欠けている場合は equitySeriesQuality 側が申告する）。該当資産は start_value_jpy に含まれていない（過小）。JPY のみ保有のときは undefined。資産名のみ出し金額は出さない（unpriced_flow_assets と同じ粒度）',
+			),
 		change_pct_unavailable_reason: PortfolioChangePctUnavailableReasonEnum.optional().describe(
-			'change_pct / adjusted_change_pct を出せなかった理由。start_value_zero=期初評価額が 0、start_value_negligible=期初評価額が現在評価額の 1% 未満（相対基準。絶対額固定は口座規模に依存するため採らない）。設定されている場合 change_pct は undefined で、adjusted_change_pct は undefined（純入出金が未計測なら null が優先）。増減額 change_jpy / adjusted_change_jpy は通常どおり出るので、成績はそちらで読むこと。率を出せている場合は undefined',
+			'change_pct / adjusted_change_pct を出せなかった理由。start_value_zero=期初評価額が 0、start_value_negligible=期初評価額が現在評価額の 1% 未満（相対基準。絶対額固定は口座規模に依存するため採らない）、start_boundary_unpriced=期初の始値を解決できなかった暗号資産があり期初評価額が過小（unpriced_start_assets を参照。start_value_negligible とは原因が異なる）。設定されている場合 change_pct は undefined で、adjusted_change_pct は undefined（純入出金が未計測なら null が優先）。増減額 change_jpy / adjusted_change_jpy は通常どおり出るので、成績はそちらで読むこと。率を出せている場合は undefined',
 		),
 	})
 	.optional();
@@ -1008,7 +1016,7 @@ export const AnalyzeMyPortfolioMetaSchema = z.object({
 		.array(z.enum(['daily', 'monthly', 'yearly']))
 		.optional()
 		.describe(
-			'増減率（change_pct / adjusted_change_pct）を出さなかった期間の一覧。期初評価額が 0、または現在評価額の 1% 未満で率が意味を持たない期間が対象で、期間ごとの理由コードは *_performance.change_pct_unavailable_reason に載る。該当なしのときは undefined（「全期間で率が出ている」の意味であり、率がゼロという意味ではない）。',
+			'増減率（change_pct / adjusted_change_pct）を出さなかった期間の一覧。期初評価額が 0、現在評価額の 1% 未満、または期初始値の解決欠損で率が意味を持たない期間が対象で、期間ごとの理由コードは *_performance.change_pct_unavailable_reason に載る。該当なしのときは undefined（「全期間で率が出ている」の意味であり、率がゼロという意味ではない）。',
 		),
 	warnings: z
 		.array(z.string())

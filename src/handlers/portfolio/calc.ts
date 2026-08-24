@@ -1567,7 +1567,7 @@ export function calcPeriodNetFlow(
 // ── 期間別パフォーマンス（評価額比較） ──
 
 export const PERFORMANCE_NOTE =
-	'期初評価額は現在の保有状態から約定・入出金を逆算して復元し、期初時点の始値（1day candle open）で評価。暗号資産の入出庫は入出庫日（入庫: confirmed_at / 出庫: requested_at）の始値で JPY 換算し、その日の価格を取得できなかった分のみ現在価格で仮評価する（内訳は flow_valuation）。純入出金は元本移動のみ（出金手数料を含まない）。調整後増減 = 単純増減 - 純入出金（市場変動 + 出金手数料コスト）。増減率（change_pct / adjusted_change_pct）は期初評価額が 0、または現在評価額の 1% 未満のときは出さない（分母が小さすぎて率が運用成績ではなく「期初がほぼ空だった」ことを表す数になるため。理由は change_pct_unavailable_reason、増減額は通常どおり出る）。';
+	'期初評価額は現在の保有状態から約定・入出金を逆算して復元し、期初時点の始値（1day candle open）で評価。暗号資産の入出庫は入出庫日（入庫: confirmed_at / 出庫: requested_at）の始値で JPY 換算し、その日の価格を取得できなかった分のみ現在価格で仮評価する（内訳は flow_valuation）。純入出金は元本移動のみ（出金手数料を含まない）。調整後増減 = 単純増減 - 純入出金（市場変動 + 出金手数料コスト）。増減率（change_pct / adjusted_change_pct）は期初評価額が 0、現在評価額の 1% 未満、または期初の始値を解決できなかった暗号資産があり期初評価額が過小のときは出さない（分母が小さすぎて率が運用成績を表さない、または過小な分母になるため。理由は change_pct_unavailable_reason、過小時の資産名は unpriced_start_assets、増減額は通常どおり出る）。期初評価額そのものは過小である場合でも金額を出すが、過小であることは unpriced_start_assets と理由コードで申告する（黙って出さない）。';
 
 export type PeriodPerformanceKey = 'daily' | 'monthly' | 'yearly';
 
@@ -1675,6 +1675,40 @@ function pickBoundaryPrice(
 }
 
 /**
+ * 期初保有のうち、当該期間の始値（boundaryPrices）を解決できなかった非 JPY 資産を列挙する。
+ *
+ * 数量ゼロ・数値不正の保有は元から評価に寄与しないため対象外（`calcPeriodNetFlow` の
+ * `unpriced_assets` 判定と同じ基準）。
+ *
+ * 足データが丸ごと欠けている（当該資産の boundaryPrices が空、または 3 境界すべて undefined）
+ * 場合は対象外。`equitySeriesQuality` や candle 取得失敗の経路が別に申告する。#86 の
+ * 「当日足だけ未取得で year/month は取れる」ケースだけを拾う。
+ */
+function unpricedStartAssets(
+	startHoldings: Map<string, number>,
+	boundaryPrices: CandlePriceData['boundaryPrices'],
+	key: PeriodPerformanceKey,
+): string[] | undefined {
+	const unpriced = new Set<string>();
+	for (const [asset, amount] of startHoldings) {
+		if (asset === 'jpy') continue;
+		if (!Number.isFinite(amount) || amount <= 0) continue;
+		const pp = boundaryPrices.get(asset);
+		if (!pp) continue;
+		if (pickBoundaryPrice(key, pp) != null) continue;
+		// 当該期間だけ欠損（他境界は解決済み）のときだけ拾う
+		const hasOtherBoundary =
+			(key !== 'yearly' && pp.yearStart != null) ||
+			(key !== 'monthly' && pp.monthStart != null) ||
+			(key !== 'daily' && pp.dayStart != null);
+		if (!hasOtherBoundary) continue;
+		unpriced.add(asset);
+	}
+	if (unpriced.size === 0) return undefined;
+	return [...unpriced].sort();
+}
+
+/**
  * 期間開始時点の保有を復元し、期初始値で評価したうえで現在評価額との差分・
  * 入出金調整後の差分を含む `PeriodPerformance` を構築する。
  *
@@ -1706,9 +1740,13 @@ export function buildPeriodPerformance(spec: PeriodSpec, ctx: PortfolioPerforman
 		? unmeasuredNetFlow()
 		: calcPeriodNetFlow(ctx.dwData, spec.startMs, ctx.flowPricing);
 	const change = ctx.currentValue - startValue;
+	const unpricedStart = unpricedStartAssets(startHoldings, ctx.candlePriceData.boundaryPrices, spec.key);
 	// 増減率の分母（期初評価額）が使えるか。change_pct / adjusted_change_pct は分母が同じなので
 	// 判定を 1 回で共有し、片方だけ率が出る状態を作らない。
-	const pctUnavailableReason = changePctUnavailableReasonFor(startValue, ctx.currentValue);
+	// 始値解決欠損は start_value_negligible より優先（過小の原因が異なるため区別する）。
+	const pctUnavailableReason: PortfolioChangePctUnavailableReason | undefined = unpricedStart
+		? 'start_boundary_unpriced'
+		: changePctUnavailableReasonFor(startValue, ctx.currentValue);
 	// 未計測のフローを 0 とみなして引かない。引いてしまうと adjusted_change が
 	// 「入出金ゼロの口座の成績」という誤った確定値になる（それが -60.9% 型の表示の一因）。
 	const adjusted = flow.net_flow_jpy != null ? change - flow.net_flow_jpy : null;
@@ -1733,6 +1771,7 @@ export function buildPeriodPerformance(spec: PeriodSpec, ctx: PortfolioPerforman
 	if (unavailableReason) performance.flow_unavailable_reason = unavailableReason;
 	if (flow.unpriced_assets) performance.unpriced_flow_assets = flow.unpriced_assets;
 	if (flow.valuation) performance.flow_valuation = flow.valuation;
+	if (unpricedStart) performance.unpriced_start_assets = unpricedStart;
 	if (pctUnavailableReason) performance.change_pct_unavailable_reason = pctUnavailableReason;
 	return performance;
 }

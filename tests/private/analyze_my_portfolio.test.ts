@@ -5168,6 +5168,101 @@ describe('analyze_my_portfolio — 期初評価額が極小のときの増減率
 });
 
 /**
+ * #86: 当日足が未取得の時間帯に前日比の期初評価額が JPY だけになり、過大な増減率が出る。
+ * 始値解決欠損は start_value_negligible とは別理由コードで抑止する。
+ */
+describe('analyze_my_portfolio — 期初の始値が解決できないときの増減率の抑止', () => {
+	/** 2026-05-16T00:00:00Z = JST 2026-05-16 09:00（issue #86 の検証時刻帯に近い） */
+	const fixedNowMs = Date.UTC(2026, 4, 16, 0);
+	/** JST 2026-05-15 00:00 = UTC 2026-05-14 15:00 */
+	const yesterdayJstMidnightMs = Date.UTC(2026, 4, 14, 15, 0, 0, 0);
+
+	function btcJpyAssets(btcAmount: string, jpyOnhand: string) {
+		return {
+			assets: [
+				{ ...assetFixture('btc'), free_amount: btcAmount, onhand_amount: btcAmount, locked_amount: '0' },
+				{
+					asset: 'jpy',
+					free_amount: jpyOnhand,
+					amount_precision: 0,
+					onhand_amount: jpyOnhand,
+					locked_amount: '0',
+					withdrawing_amount: '0',
+					withdrawal_fee: { under: '550', over: '770', threshold: '30000' },
+					stop_deposit: false,
+					stop_withdrawal: false,
+					collateral_ratio: '1',
+				},
+			],
+		};
+	}
+
+	function setupMissingDayStartMock() {
+		const candlesWithoutToday = {
+			success: 1,
+			data: {
+				candlestick: [
+					{
+						type: '1day',
+						ohlcv: generateOhlcv(120, 86400000, 15_000_000, yesterdayJstMidnightMs - 119 * 86400000),
+					},
+				],
+			},
+		};
+		setupFetchMock({
+			assets: btcJpyAssets('0.1', '63314'),
+			trades: { trades: [] },
+			deposits: { deposits: [] },
+			withdrawals: { withdrawals: [] },
+			candles: candlesWithoutToday,
+		});
+	}
+
+	async function analyze() {
+		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
+		return handler({ include_technical: false, include_pnl: true, include_deposit_withdrawal: true });
+	}
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(fixedNowMs);
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it('当日足未取得: 前日比の率を抑止し start_boundary_unpriced を付ける', async () => {
+		setupMissingDayStartMock();
+
+		const result = await analyze();
+		assertOk(result);
+
+		const daily = result.data.daily_performance;
+		expect(daily.start_value_jpy).toBe(63_314);
+		expect(daily.change_pct).toBeUndefined();
+		expect(daily.adjusted_change_pct).toBeUndefined();
+		expect(daily.change_pct_unavailable_reason).toBe('start_boundary_unpriced');
+		expect(daily.unpriced_start_assets).toEqual(['btc']);
+		expect(JSON.stringify(result.data)).not.toMatch(/2394|26929/);
+	});
+
+	it('summary に理由と期初過小の申告が出る', async () => {
+		setupMissingDayStartMock();
+
+		const result = await analyze();
+		assertOk(result);
+
+		expect(result.summary).toContain('期初の始値を解決できなかった');
+		expect(result.summary).toContain('期初評価額は過小');
+		expect(result.summary).toContain('BTC');
+		const warning = (result.meta.warnings ?? []).find((w: string) => w.includes('期初の始値'));
+		expect(warning).toBeDefined();
+		expect(warning).toContain('過小');
+	});
+});
+
+/**
  * 原価に算入できなかった入庫の申告（issue #77）。
  *
  * `calcPnl` は入庫日の始値を解決できた入庫だけを取得原価に算入し、解決できなかったものは

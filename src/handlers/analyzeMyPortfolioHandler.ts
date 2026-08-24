@@ -205,6 +205,8 @@ const FLOW_UNAVAILABLE_NOTE: Record<PortfolioFlowUnavailableReason, string> = {
 const CHANGE_PCT_UNAVAILABLE_NOTE: Record<PortfolioChangePctUnavailableReason, string> = {
 	start_value_zero: '期初評価額が 0 で率を定義できないため',
 	start_value_negligible: `期初評価額が現在評価額の ${MIN_START_VALUE_RATIO * 100}% 未満で、率が運用成績ではなく「期初がほぼ空だった」ことを表す数になるため`,
+	start_boundary_unpriced:
+		'期初の始値を解決できなかった暗号資産を評価に含められず期初評価額が過小になっているため。過小な分母では率が運用成績を表さない',
 };
 
 /** 数量乖離の理由コードごとの原因表示（銘柄名に添える短句）。 */
@@ -350,6 +352,11 @@ function buildPerformanceLines(label: string, p: PeriodPerformance): string[] {
 	if (p.change_pct_unavailable_reason) {
 		lines.push(
 			`  ※ 増減率・入出金調整後増減率は非表示（${CHANGE_PCT_UNAVAILABLE_NOTE[p.change_pct_unavailable_reason]}）。増減額で読んでください`,
+		);
+	}
+	if (p.unpriced_start_assets && p.unpriced_start_assets.length > 0) {
+		lines.push(
+			`  ※ 上の期初評価額は過小: ${p.unpriced_start_assets.map((a) => a.toUpperCase()).join(', ')} の始値を解決できず含めていません`,
 		);
 	}
 
@@ -1695,6 +1702,13 @@ export default async function analyzeMyPortfolioHandler(args: {
 				...(yearlyPerformance?.unpriced_flow_assets ?? []),
 			]),
 		].sort();
+		const startBoundaryUnpricedAssets = [
+			...new Set([
+				...(dailyPerformance?.unpriced_start_assets ?? []),
+				...(monthlyPerformance?.unpriced_start_assets ?? []),
+				...(yearlyPerformance?.unpriced_start_assets ?? []),
+			]),
+		].sort();
 		// 増減率（change_pct / adjusted_change_pct）を抑止した期間（#71）。
 		// 理由は各期間の summary 注記行にも出るが、content 先頭の warning にも出す
 		// （`.claude/rules/tools.md`。率が undefined な理由を LLM が説明できないと「ゼロ %」と読まれる）。
@@ -1749,6 +1763,11 @@ export default async function analyzeMyPortfolioHandler(args: {
 		if (netFlowUnpricedAssets.length > 0) {
 			calcWarnings.push(
 				`${netFlowUnpricedAssets.map((a) => a.toUpperCase()).join(', ')} は入出庫日価格・現在価格のいずれも取得できず、期間中の入出庫を純入出金に計上できませんでした（未計上が入庫なら純入出金は過小・入出金調整後増減は過大、出庫なら逆向きにずれます）`,
+			);
+		}
+		if (startBoundaryUnpricedAssets.length > 0) {
+			calcWarnings.push(
+				`${startBoundaryUnpricedAssets.map((a) => a.toUpperCase()).join(', ')} は期初の始値を解決できず期初評価額に含めていません（当日足が未取得の時間帯では数十分後に解消しうる）。期初評価額は過小です`,
 			);
 		}
 		// 期間ごとに理由が割れうる（前日比は期初 0、年初比は期初が極小、など）ので理由コード単位でまとめる。
