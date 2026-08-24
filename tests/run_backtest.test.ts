@@ -166,8 +166,7 @@ describe('run_backtest', () => {
 			end_date: '2024-01-01',
 			strategy: { type: 'rsi', params: {} },
 		});
-		expect((parsed as { start_date: string }).start_date).toBe('2024-01-01');
-		expect((parsed as { end_date: string }).end_date).toBe('2024-01-01');
+		expect(parsed).toMatchObject({ start_date: '2024-01-01', end_date: '2024-01-01' });
 	});
 
 	it('toolDef.handler は inputSchema の既定値 savePng=false / includeSvg=false を尊重するべき', async () => {

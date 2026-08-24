@@ -52,7 +52,7 @@ describe('get_transactions', () => {
 
 	it('inputSchema: date が 8 桁数字なら通る', () => {
 		const parsed = toolDef.inputSchema.parse({ pair: 'btc_jpy', date: '20240101' });
-		expect((parsed as { date: string }).date).toBe('20240101');
+		expect(parsed).toMatchObject({ date: '20240101' });
 	});
 
 	it('inputSchema: 9 桁の日付らしき文字列は拒否する（^\\d{8}$ 想定）', () => {
