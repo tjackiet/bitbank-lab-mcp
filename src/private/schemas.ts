@@ -304,7 +304,7 @@ export const PortfolioChangePctUnavailableReasonEnum = z.enum([
 	'start_value_zero',
 	/** 期初評価額が現在評価額の `MIN_START_VALUE_RATIO`（1%）未満で、率が運用成績ではなく「期初がほぼ空だった」ことを表す数になる */
 	'start_value_negligible',
-	/** 期初の始値（1day candle open）を解決できなかった暗号資産を評価に含められず、期初評価額が過小になっている（当日足が未取得の時間帯など。時間帯依存で自然に解消しうる） */
+	/** 期初の始値（1day candle open）を解決できなかった暗号資産を評価に含められず、期初評価額が過小になっている。当日足のみ未取得（時間経過で解消しうる）と足データ丸ごと欠損（取得失敗等で恒久的な可能性）の両方を同じコードで扱う——ユーザーへの帰結（過小な分母で率が意味を持たない）は同一のため。原因の切り分けは `equitySeriesQuality`（資産推移）が別系統で補助する */
 	'start_boundary_unpriced',
 ]);
 
@@ -703,7 +703,7 @@ const PeriodPerformanceSchema = z
 			.number()
 			.optional()
 			.describe(
-				'単純増減率（%）= change_jpy / start_value_jpy。**期初評価額が小さすぎて率が意味を持たない場合は undefined**（理由は change_pct_unavailable_reason）: (1) start_value_jpy が 0、(2) start_value_jpy が current_value_jpy の 1% 未満、(3) 期初の始値を解決できなかった暗号資産があり start_value_jpy が過小。(2) は年初にほぼ空だった口座に入金して運用を始めた場合に起き、率は運用成績ではなく「期初がほぼ空だった」ことを表す数になるため出さない。(3) は当日足が未取得の時間帯などで起き、過小な分母では率が運用成績を表さないため出さない（資産名は unpriced_start_assets）。いずれも増減額 change_jpy は出す。undefined は「率がゼロ」ではない',
+				'単純増減率（%）= change_jpy / start_value_jpy。**期初評価額が小さすぎて率が意味を持たない場合は undefined**（理由は change_pct_unavailable_reason）: (1) start_value_jpy が 0、(2) start_value_jpy が current_value_jpy の 1% 未満、(3) 期初の始値を解決できなかった暗号資産があり start_value_jpy が過小（当該期間のみ欠損・boundaryPrices 未登録・3 境界すべて欠損のいずれも含む）。(2) は年初にほぼ空だった口座に入金して運用を始めた場合に起き、率は運用成績ではなく「期初がほぼ空だった」ことを表す数になるため出さない。(3) は過小な分母では率が運用成績を表さないため出さない（資産名は unpriced_start_assets）。いずれも増減額 change_jpy は出す。undefined は「率がゼロ」ではない',
 			),
 		net_flow_jpy: z
 			.number()
@@ -754,7 +754,7 @@ const PeriodPerformanceSchema = z
 			.array(z.string())
 			.optional()
 			.describe(
-				'期初評価額の算出時に、当該期間の始値（1day candle open）を boundaryPrices から解決できなかった暗号資産シンボル一覧（小文字・昇順・重複なし）。他境界（年始/月初/日初）のいずれかは解決済みで当該期間だけ欠損したケースが対象（当日足未取得の時間帯など。足データが丸ごと欠けている場合は equitySeriesQuality 側が申告する）。該当資産は start_value_jpy に含まれていない（過小）。JPY のみ保有のときは undefined。資産名のみ出し金額は出さない（unpriced_flow_assets と同じ粒度）',
+				'期初評価額の算出時に、当該期間の始値（1day candle open）を boundaryPrices から解決できなかった暗号資産シンボル一覧（小文字・昇順・重複なし）。boundaryPrices に未登録、または登録済みだが当該期間の始値が undefined（3 境界すべて undefined も含む）のいずれか。該当資産は start_value_jpy に含まれていない（過小）。JPY のみ保有のときは undefined。資産名のみ出し金額は出さない（unpriced_flow_assets と同じ粒度）。資産推移の equitySeriesQuality は別系統の申告であり、本フィールドが無いことは「始値が取れた」の意味ではない',
 			),
 		change_pct_unavailable_reason: PortfolioChangePctUnavailableReasonEnum.optional().describe(
 			'change_pct / adjusted_change_pct を出せなかった理由。start_value_zero=期初評価額が 0、start_value_negligible=期初評価額が現在評価額の 1% 未満（相対基準。絶対額固定は口座規模に依存するため採らない）、start_boundary_unpriced=期初の始値を解決できなかった暗号資産があり期初評価額が過小（unpriced_start_assets を参照。start_value_negligible とは原因が異なる）。設定されている場合 change_pct は undefined で、adjusted_change_pct は undefined（純入出金が未計測なら null が優先）。増減額 change_jpy / adjusted_change_jpy は通常どおり出るので、成績はそちらで読むこと。率を出せている場合は undefined',

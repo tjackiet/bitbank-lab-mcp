@@ -1680,9 +1680,11 @@ function pickBoundaryPrice(
  * 数量ゼロ・数値不正の保有は元から評価に寄与しないため対象外（`calcPeriodNetFlow` の
  * `unpriced_assets` 判定と同じ基準）。
  *
- * 足データが丸ごと欠けている（当該資産の boundaryPrices が空、または 3 境界すべて undefined）
- * 場合は対象外。`equitySeriesQuality` や candle 取得失敗の経路が別に申告する。#86 の
- * 「当日足だけ未取得で year/month は取れる」ケースだけを拾う。
+ * 検出対象: (1) `boundaryPrices` に未登録、(2) 登録済みだが当該期間の始値が undefined、
+ * (3) 3 境界すべて undefined。いずれも `calcPortfolioValue` は暗号資産を素通しし
+ * `start_value_jpy` が過小になる。#86 の「当日足のみ未取得」と足データ丸ごと欠損は
+ * 解消の見込みが異なるが、率抑止の帰結は同じなので `start_boundary_unpriced` に統一する。
+ * 資産推移の `equitySeriesQuality` は別系統の申告であり、本検出とは独立する。
  */
 function unpricedStartAssets(
 	startHoldings: Map<string, number>,
@@ -1694,14 +1696,7 @@ function unpricedStartAssets(
 		if (asset === 'jpy') continue;
 		if (!Number.isFinite(amount) || amount <= 0) continue;
 		const pp = boundaryPrices.get(asset);
-		if (!pp) continue;
-		if (pickBoundaryPrice(key, pp) != null) continue;
-		// 当該期間だけ欠損（他境界は解決済み）のときだけ拾う
-		const hasOtherBoundary =
-			(key !== 'yearly' && pp.yearStart != null) ||
-			(key !== 'monthly' && pp.monthStart != null) ||
-			(key !== 'daily' && pp.dayStart != null);
-		if (!hasOtherBoundary) continue;
+		if (pp != null && pickBoundaryPrice(key, pp) != null) continue;
 		unpriced.add(asset);
 	}
 	if (unpriced.size === 0) return undefined;

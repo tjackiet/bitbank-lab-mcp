@@ -2829,17 +2829,62 @@ describe('buildPeriodPerformance', () => {
 		});
 
 		it('daily / monthly / yearly の 3 期間で同じ判定になる（共通経路 buildPeriodPerformance）', () => {
-			const cases: Array<{ key: 'daily' | 'monthly' | 'yearly'; ctx: PortfolioPerformanceContext }> = [
-				{ key: 'daily', ctx: btcJpyStartCtx({ yearStart: 10_000_000, monthStart: 10_000_000 }) },
-				{ key: 'monthly', ctx: btcJpyStartCtx({ yearStart: 10_000_000, dayStart: 11_000_000 }) },
-				{ key: 'yearly', ctx: btcJpyStartCtx({ monthStart: 10_000_000, dayStart: 11_000_000 }) },
-			];
-			for (const { key, ctx } of cases) {
+			const ctx = makeCtx({
+				currentHoldings: [
+					{ asset: 'btc', amount: '0.1' },
+					{ asset: 'jpy', amount: '63314' },
+				],
+				dwData: makeEmptyDw(),
+				candlePriceData: { boundaryPrices: new Map(), dailyPrices: new Map() },
+				flowPricing: currentPriceOnly(new Map([['btc', 15_000_000]])),
+				currentValue: Math.round(0.1 * 15_000_000 + 63_314),
+			});
+			for (const key of ['daily', 'monthly', 'yearly'] as const) {
 				const result = buildPeriodPerformance({ key, startMs: 1000, startIso: 's' }, ctx);
 				expect(result.change_pct, key).toBeUndefined();
 				expect(result.change_pct_unavailable_reason, key).toBe('start_boundary_unpriced');
 				expect(result.unpriced_start_assets, key).toEqual(['btc']);
 			}
+		});
+
+		it('boundaryPrices にエントリが無い資産: 過大な率を出さない（CodeRabbit 回帰）', () => {
+			const ctx = makeCtx({
+				currentHoldings: [
+					{ asset: 'btc', amount: '0.1' },
+					{ asset: 'jpy', amount: '1000000' },
+				],
+				dwData: makeEmptyDw(),
+				candlePriceData: { boundaryPrices: new Map(), dailyPrices: new Map() },
+				flowPricing: currentPriceOnly(new Map([['btc', 15_000_000]])),
+				currentValue: 2_500_000,
+			});
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.start_value_jpy).toBe(1_000_000);
+			expect(result.change_pct).toBeUndefined();
+			expect(result.adjusted_change_pct).toBeUndefined();
+			expect(result.change_pct_unavailable_reason).toBe('start_boundary_unpriced');
+			expect(result.unpriced_start_assets).toEqual(['btc']);
+		});
+
+		it('エントリはあるが 3 境界すべて undefined: 過大な率を出さない', () => {
+			const ctx = makeCtx({
+				currentHoldings: [
+					{ asset: 'btc', amount: '0.1' },
+					{ asset: 'jpy', amount: '1000000' },
+				],
+				dwData: makeEmptyDw(),
+				candlePriceData: {
+					boundaryPrices: makeBoundaryPrices([['btc', {}]]),
+					dailyPrices: new Map(),
+				},
+				flowPricing: currentPriceOnly(new Map([['btc', 15_000_000]])),
+				currentValue: 2_500_000,
+			});
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.start_value_jpy).toBe(1_000_000);
+			expect(result.change_pct).toBeUndefined();
+			expect(result.change_pct_unavailable_reason).toBe('start_boundary_unpriced');
+			expect(result.unpriced_start_assets).toEqual(['btc']);
 		});
 	});
 
