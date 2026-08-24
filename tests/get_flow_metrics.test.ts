@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FlowMetricsBucket } from '../tools/get_flow_metrics.js';
 import getFlowMetrics, { buildFlowMetricsText, toolDef } from '../tools/get_flow_metrics.js';
 import { assertFail, assertOk } from './_assertResult.js';
+import { asMcp } from './helpers/mcp.js';
 
 function txPayload(txs?: Array<{ price: string; amount: string; side: string; executed_at: string }>) {
 	return {
@@ -301,16 +302,15 @@ describe('get_flow_metrics', () => {
 	// （GetFlowMetricsDataSchemaOut は series.buckets を必須で宣言）どおり全バケットを保つ。
 	it('handler: view=summary でも structuredContent には全バケットが入る（content からは省く）', async () => {
 		mockFetch(txPayload());
-		const res = (await toolDef.handler({
-			pair: 'btc_jpy',
-			limit: 3,
-			date: '20240101',
-			bucketMs: 60_000,
-			view: 'summary',
-		})) as {
-			content: Array<{ text: string }>;
-			structuredContent: { ok: boolean; data: { series: { buckets: FlowMetricsBucket[] } } };
-		};
+		const res = asMcp<{ ok: boolean; data: { series: { buckets: FlowMetricsBucket[] } } }>(
+			await toolDef.handler({
+				pair: 'btc_jpy',
+				limit: 3,
+				date: '20240101',
+				bucketMs: 60_000,
+				view: 'summary',
+			}),
+		);
 		expect(res.structuredContent.ok).toBe(true);
 		expect('buckets' in res.structuredContent.data.series).toBe(true);
 		expect(res.structuredContent.data.series.buckets).toHaveLength(3);
@@ -330,16 +330,15 @@ describe('get_flow_metrics', () => {
 			},
 		};
 		mockFetch(payload);
-		const res = (await toolDef.handler({
-			pair: 'btc_jpy',
-			limit: 10,
-			date: '20240101',
-			bucketMs: 60_000,
-			view: 'compact',
-		})) as {
-			content: Array<{ text: string }>;
-			structuredContent: { data: { series: { buckets: FlowMetricsBucket[] } } };
-		};
+		const res = asMcp<{ data: { series: { buckets: FlowMetricsBucket[] } } }>(
+			await toolDef.handler({
+				pair: 'btc_jpy',
+				limit: 10,
+				date: '20240101',
+				bucketMs: 60_000,
+				view: 'compact',
+			}),
+		);
 		const buckets = res.structuredContent.data.series.buckets;
 		// structuredContent は絞らない: 先頭 + 欠損 19 + 末尾 = 21 バケット全件
 		expect(buckets).toHaveLength(21);
@@ -363,16 +362,15 @@ describe('get_flow_metrics', () => {
 			},
 		};
 		mockFetch(payload);
-		const res = (await toolDef.handler({
-			pair: 'btc_jpy',
-			limit: 10,
-			date: '20240101',
-			bucketMs: 60_000,
-			view: 'compact',
-		})) as {
-			content: Array<{ text: string }>;
-			structuredContent: { data: { series: { buckets: FlowMetricsBucket[] } } };
-		};
+		const res = asMcp<{ data: { series: { buckets: FlowMetricsBucket[] } } }>(
+			await toolDef.handler({
+				pair: 'btc_jpy',
+				limit: 10,
+				date: '20240101',
+				bucketMs: 60_000,
+				view: 'compact',
+			}),
+		);
 		const buckets = res.structuredContent.data.series.buckets;
 		// 0/1/2/3/4 分の 5 バケット全件。真のゼロ（1・3 分目）も structuredContent には残る
 		expect(buckets).toHaveLength(5);

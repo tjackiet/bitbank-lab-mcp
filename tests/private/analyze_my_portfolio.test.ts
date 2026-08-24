@@ -21,6 +21,7 @@ import {
 	rawTradeHistoryResponse,
 	rawWithdrawalHistoryResponse,
 } from '../fixtures/private-api.js';
+import { asMcp } from '../helpers/mcp.js';
 
 /** rawAssetsResponse から指定 asset のエントリを取り出す（整合 fixture の組み立て用） */
 function assetFixture(asset: string) {
@@ -1527,7 +1528,7 @@ describe('analyze_my_portfolio — 信頼できない損益値の null 化', () 
 		expect(warningIndex).toBeLessThan(jsonIndex);
 		expect(text.split('\n')[0]).toContain('⚠️');
 
-		const structured = (result as { structuredContent: { meta: { warnings?: string[] } } }).structuredContent;
+		const structured = asMcp<{ meta: { warnings?: string[] } }>(result).structuredContent;
 		expect(structured.meta.warnings?.some((w) => w.includes('評価損益・取得原価は算出していません'))).toBe(true);
 	});
 
@@ -4232,7 +4233,7 @@ describe('analyze_my_portfolio — 復元数量 vs 実残高の不変条件', ()
 		expect(warningIndex).toBeLessThan(jsonIndex);
 		expect(text.split('\n')[0]).toContain('⚠️');
 
-		const structured = (result as { structuredContent: { meta: { warnings?: string[] } } }).structuredContent;
+		const structured = asMcp<{ meta: { warnings?: string[] } }>(result).structuredContent;
 		expect(structured.meta.warnings?.some((w) => w.includes('ETH（販売所取引など API に現れない取引の可能性）'))).toBe(
 			true,
 		);
