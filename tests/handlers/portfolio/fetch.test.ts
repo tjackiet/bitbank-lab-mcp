@@ -9,8 +9,10 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { dayjs } from '../../../lib/datetime.js';
+import { fail, ok } from '../../../lib/result.js';
 import { paginateMarginTrades, paginateTrades } from '../../../src/handlers/portfolio/fetch.js';
 import type { FlowValuationTarget } from '../../../src/handlers/portfolio/types.js';
+import type { GetCandlesData, GetCandlesMeta } from '../../../src/schemas.js';
 import getCandles from '../../../tools/get_candles.js';
 
 vi.mock('../../../tools/get_candles.js', () => ({
@@ -100,6 +102,38 @@ function makeWithdrawal(overrides: { uuid: string; requested_at: number; asset?:
 		status: 'DONE',
 		requested_at: overrides.requested_at,
 	};
+}
+
+// ── get_candles モックの共通ビルダ ──
+//
+// `getCandles` の戻り値は `OkResult<GetCandlesData, GetCandlesMeta> | FailResult`。
+// モックを手書きすると `data.raw` / `meta.fetchedAt` / `meta.errorType` が欠けた
+// 「実装が絶対に返さない形」で被テストコードを叩くことになり、`fetchFlowDatePrices` の
+// `isTransientFailure`（`res.meta.errorType` を読む）のような分岐が入った瞬間に
+// 偽グリーンになる。ここでは本番と同じ `lib/result.ts` の `ok()` / `fail()` を通し、
+// 形のズレを typecheck で検出できる状態に保つ。
+
+/** `GetCandlesData['normalized']` の 1 要素（1day 足 1 本） */
+type NormalizedCandle = GetCandlesData['normalized'][number];
+
+/** get_candles の成功レスポンス。`raw` はテストで参照しないので null を入れる */
+function candlesOk(normalized: NormalizedCandle[]) {
+	return ok<GetCandlesData, GetCandlesMeta>(
+		'ok',
+		{ raw: null, normalized },
+		{ pair: 'btc_jpy', fetchedAt: '2026-08-24T00:00:00.000Z', type: '1day', count: normalized.length },
+	);
+}
+
+/**
+ * get_candles の失敗レスポンス。
+ *
+ * `errorType` の既定は `upstream`（HTTP エラー・レート制限）＝ **再実行で解消しうる失敗**で、
+ * `fetchFlowDatePrices` はリトライし `chunkFetchFailed` に計上する。
+ * `user`（その年に足が無い）はリトライも計上もされない別経路なので、明示的に渡す。
+ */
+function candlesFail(errorType = 'upstream') {
+	return fail(`get_candles failed (${errorType})`, errorType);
 }
 
 describe('paginateTrades — ページネーション境界', () => {
@@ -967,17 +1001,12 @@ describe('fetchCandlePriceData', () => {
 		const monthStartMs = day1Ms;
 		const dayStartMs = day1Ms;
 
-		mockedGetCandles.mockResolvedValue({
-			ok: true,
-			summary: 'ok',
-			data: {
-				normalized: [
-					{ open: 1_000_000, high: 1_010_000, low: 990_000, close: 1_005_000, volume: 1, timestamp: day1Ms },
-					{ open: 1_100_000, high: 1_110_000, low: 1_090_000, close: 1_105_000, volume: 1, timestamp: day2Ms },
-				],
-			},
-			meta: { pair: 'btc_jpy', type: '1day', count: 2 },
-		});
+		mockedGetCandles.mockResolvedValue(
+			candlesOk([
+				{ open: 1_000_000, high: 1_010_000, low: 990_000, close: 1_005_000, volume: 1, timestamp: day1Ms },
+				{ open: 1_100_000, high: 1_110_000, low: 1_090_000, close: 1_105_000, volume: 1, timestamp: day2Ms },
+			]),
+		);
 
 		const { fetchCandlePriceData } = await import('../../../src/handlers/portfolio/fetch.js');
 		const result = await fetchCandlePriceData(['btc_jpy'], yearStartMs, monthStartMs, dayStartMs);
@@ -998,7 +1027,7 @@ describe('fetchCandlePriceData', () => {
 
 	it('get_candles が失敗したペアはスキップする', async () => {
 		const nowJst = dayjs().tz('Asia/Tokyo');
-		mockedGetCandles.mockResolvedValue({ ok: false, error: 'upstream', message: 'fail' });
+		mockedGetCandles.mockResolvedValue(candlesFail());
 
 		const { fetchCandlePriceData } = await import('../../../src/handlers/portfolio/fetch.js');
 		const result = await fetchCandlePriceData(
@@ -1025,19 +1054,14 @@ describe('fetchCandlePriceData', () => {
 		const aug1 = jstMs(2026, 8, 1);
 		const aug2 = jstMs(2026, 8, 2);
 
-		mockedGetCandles.mockResolvedValue({
-			ok: true,
-			summary: 'ok',
-			data: {
-				normalized: [
-					// JST 8/1 23:59:59.999（= 2026-08-01T14:59:59.999Z）→ 8/1 のキー
-					{ open: 1_000_000, high: 1, low: 1, close: 1, volume: 1, timestamp: aug2 - 1 },
-					// JST 8/2 09:00（= 2026-08-02T00:00:00Z）→ UTC 暦日で丸めると別キーになる足
-					{ open: 3_000_000, high: 1, low: 1, close: 1, volume: 1, timestamp: jstMs(2026, 8, 2, 9) },
-				],
-			},
-			meta: { pair: 'btc_jpy', type: '1day', count: 2 },
-		});
+		mockedGetCandles.mockResolvedValue(
+			candlesOk([
+				// JST 8/1 23:59:59.999（= 2026-08-01T14:59:59.999Z）→ 8/1 のキー
+				{ open: 1_000_000, high: 1, low: 1, close: 1, volume: 1, timestamp: aug2 - 1 },
+				// JST 8/2 09:00（= 2026-08-02T00:00:00Z）→ UTC 暦日で丸めると別キーになる足
+				{ open: 3_000_000, high: 1, low: 1, close: 1, volume: 1, timestamp: jstMs(2026, 8, 2, 9) },
+			]),
+		);
 
 		const { fetchCandlePriceData } = await import('../../../src/handlers/portfolio/fetch.js');
 		// 当日 = JST 8/2。dayStart 価格は 8/2 00:00 以降の最初の足＝ JST 09:00 の足になる。
@@ -1082,12 +1106,7 @@ describe('fetchFlowDatePrices', () => {
 
 	/** 指定 JST 暦日の 1day 足 1 本だけを返す get_candles レスポンス */
 	function candleAt(dayMs: number, open: number) {
-		return {
-			ok: true as const,
-			summary: 'ok',
-			data: { normalized: [{ open, high: open, low: open, close: open, volume: 1, timestamp: dayMs }] },
-			meta: { pair: 'btc_jpy', type: '1day', count: 1 },
-		};
+		return candlesOk([{ open, high: open, low: open, close: open, volume: 1, timestamp: dayMs }]);
 	}
 
 	beforeEach(() => {
@@ -1149,7 +1168,7 @@ describe('fetchFlowDatePrices', () => {
 	});
 
 	it('リトライを使い切っても取得できない (資産, 年) は日次価格に載らない（呼び出し側が現在価格に落とす）', async () => {
-		mockedGetCandles.mockResolvedValue({ ok: false, error: 'upstream', message: 'fail' });
+		mockedGetCandles.mockResolvedValue(candlesFail());
 
 		const { fetchFlowDatePrices } = await import('../../../src/handlers/portfolio/fetch.js');
 		const result = await fetchFlowDatePrices(new Map(), [deposit('btc', jstMs(2023, 4, 20, 12))]);
@@ -1324,7 +1343,7 @@ describe('fetchFlowDatePrices', () => {
 	 */
 	describe('取れなかった理由の申告', () => {
 		it('取得失敗は truncated ではなく chunkFetchFailed に、入庫・出庫別で数える', async () => {
-			mockedGetCandles.mockResolvedValue({ ok: false, error: 'upstream', message: 'fail' });
+			mockedGetCandles.mockResolvedValue(candlesFail());
 
 			const { fetchFlowDatePrices } = await import('../../../src/handlers/portfolio/fetch.js');
 			const result = await fetchFlowDatePrices(new Map(), [
@@ -1350,12 +1369,7 @@ describe('fetchFlowDatePrices', () => {
 		});
 
 		it('空応答（normalized が空配列）も取得失敗として数える', async () => {
-			mockedGetCandles.mockResolvedValue({
-				ok: true as const,
-				summary: 'ok',
-				data: { normalized: [] },
-				meta: { pair: 'btc_jpy', type: '1day', count: 0 },
-			});
+			mockedGetCandles.mockResolvedValue(candlesOk([]));
 
 			const { fetchFlowDatePrices } = await import('../../../src/handlers/portfolio/fetch.js');
 			const result = await fetchFlowDatePrices(new Map(), [deposit('btc', jstMs(2018, 3, 1, 12))]);
@@ -1370,12 +1384,7 @@ describe('fetchFlowDatePrices', () => {
 		 * 恒久的に価格を解決できない入庫のせいで当該銘柄の原価が永久に出せなくなる。
 		 */
 		it('その年に足が無い失敗（errorType=user）は取得失敗に数えない', async () => {
-			mockedGetCandles.mockResolvedValue({
-				ok: false as const,
-				summary: 'Error: No candle data',
-				data: {},
-				meta: { errorType: 'user' },
-			} as unknown as Awaited<ReturnType<typeof getCandles>>);
+			mockedGetCandles.mockResolvedValue(candlesFail('user'));
 
 			const { fetchFlowDatePrices } = await import('../../../src/handlers/portfolio/fetch.js');
 			const result = await fetchFlowDatePrices(new Map(), [deposit('btc', jstMs(2018, 3, 1, 12))]);
@@ -1423,11 +1432,7 @@ describe('fetchFlowDatePrices', () => {
 		const oldDeposit = () => [deposit('btc', jstMs(2023, 4, 20, 12))];
 
 		it('1 回失敗しても次で成功すれば入庫日価格が解決され、取得失敗に計上されない', async () => {
-			mockedGetCandles
-				.mockResolvedValueOnce({ ok: false, error: 'upstream', message: 'fail' } as unknown as Awaited<
-					ReturnType<typeof getCandles>
-				>)
-				.mockResolvedValue(candleAt(oldDayMs, 4_000_000));
+			mockedGetCandles.mockResolvedValueOnce(candlesFail()).mockResolvedValue(candleAt(oldDayMs, 4_000_000));
 
 			const { fetchFlowDatePrices } = await import('../../../src/handlers/portfolio/fetch.js');
 			const result = await fetchFlowDatePrices(new Map(), oldDeposit());
@@ -1454,14 +1459,7 @@ describe('fetchFlowDatePrices', () => {
 		});
 
 		it('空応答（normalized が空配列）もリトライの対象', async () => {
-			mockedGetCandles
-				.mockResolvedValueOnce({
-					ok: true as const,
-					summary: 'ok',
-					data: { normalized: [] },
-					meta: { pair: 'btc_jpy', type: '1day', count: 0 },
-				} as unknown as Awaited<ReturnType<typeof getCandles>>)
-				.mockResolvedValue(candleAt(oldDayMs, 4_000_000));
+			mockedGetCandles.mockResolvedValueOnce(candlesOk([])).mockResolvedValue(candleAt(oldDayMs, 4_000_000));
 
 			const { fetchFlowDatePrices } = await import('../../../src/handlers/portfolio/fetch.js');
 			const result = await fetchFlowDatePrices(new Map(), oldDeposit());
@@ -1486,12 +1484,7 @@ describe('fetchFlowDatePrices', () => {
 		 * レート制限を自分で誘発して**他の chunk の成功率を下げる**。
 		 */
 		it('その年に足が無い失敗（errorType=user）はリトライしない', async () => {
-			mockedGetCandles.mockResolvedValue({
-				ok: false as const,
-				summary: 'Error: No candle data',
-				data: {},
-				meta: { errorType: 'user' },
-			} as unknown as Awaited<ReturnType<typeof getCandles>>);
+			mockedGetCandles.mockResolvedValue(candlesFail('user'));
 
 			const { fetchFlowDatePrices } = await import('../../../src/handlers/portfolio/fetch.js');
 			const result = await fetchFlowDatePrices(new Map(), [deposit('btc', jstMs(2018, 3, 1, 12))]);
@@ -1501,9 +1494,7 @@ describe('fetchFlowDatePrices', () => {
 		});
 
 		it('リトライを使い切った失敗は従来どおり chunkFetchFailed に計上する（#80 の抑止経路を維持）', async () => {
-			mockedGetCandles.mockResolvedValue({ ok: false, error: 'upstream', message: 'fail' } as unknown as Awaited<
-				ReturnType<typeof getCandles>
-			>);
+			mockedGetCandles.mockResolvedValue(candlesFail());
 
 			const { fetchFlowDatePrices } = await import('../../../src/handlers/portfolio/fetch.js');
 			const result = await fetchFlowDatePrices(new Map(), oldDeposit());
@@ -1530,7 +1521,7 @@ describe('fetchFlowDatePrices', () => {
 
 		it('1 つの chunk がリトライしても他の chunk の解決は妨げない', async () => {
 			mockedGetCandles.mockImplementation(async (pair: string) => {
-				if (pair === 'eth_jpy') return { ok: false, error: 'upstream', message: 'fail' } as never;
+				if (pair === 'eth_jpy') return candlesFail();
 				return candleAt(oldDayMs, 4_000_000);
 			});
 

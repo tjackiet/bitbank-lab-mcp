@@ -1432,6 +1432,21 @@ describe('calcPeriodMarginPnl', () => {
 	});
 });
 
+/**
+ * `AccountPnl.spot_realized_pnl` / `total` は #80 の抑止で `undefined` になりうる
+ * （`number | undefined`）ため、確定値どうしの検算にそのまま使うと TS18048 になる。
+ *
+ * `!` で潰すと抑止が誤って発火したときに `undefined + number = NaN` の比較失敗になり、
+ * 「どのフィールドが出ていないのか」がテスト出力から読めない。先に `toBeDefined()` を
+ * 表明してから絞ることで、失敗時はフィールド名つきのアサーション失敗として出る。
+ */
+function definedAmount(value: number | undefined, label: string): number {
+	expect(value, label).toBeDefined();
+	// expect() は TypeScript の型を絞らないので、表明が通ったことをここで型にも反映させる。
+	if (value === undefined) throw new Error(`${label} が undefined（上の toBeDefined が失敗しているはず）`);
+	return value;
+}
+
 describe('buildAccountPnl', () => {
 	it('total = spot + margin - interest - fee を返す', () => {
 		const result = buildAccountPnl(1000, {
@@ -1483,14 +1498,11 @@ describe('buildAccountPnl', () => {
 			margin_interest_cost: 1,
 			margin_fee_cost: 149,
 		});
-		expect(result.total).toBe(
-			result.spot_realized_pnl + result.margin_realized_pnl - result.margin_interest_cost - result.margin_fee_cost,
-		);
+		const spot = definedAmount(result.spot_realized_pnl, 'spot_realized_pnl');
+		expect(result.total).toBe(spot + result.margin_realized_pnl - result.margin_interest_cost - result.margin_fee_cost);
 		expect(result.total).toBe(5850);
 		// 足し込むと 150 円ぶんずれる = 符号規約を取り違えたときの誤差
-		expect(
-			result.spot_realized_pnl + result.margin_realized_pnl + result.margin_interest_cost + result.margin_fee_cost,
-		).toBe(6150);
+		expect(spot + result.margin_realized_pnl + result.margin_interest_cost + result.margin_fee_cost).toBe(6150);
 	});
 });
 
@@ -1548,9 +1560,8 @@ describe('buildPeriodAccountPnl', () => {
 		expect(result.margin_fee_cost).toBe(75);
 		expect(result.margin_interest).toBe(15);
 		expect(result.margin_fee).toBe(75);
-		expect(result.total).toBe(
-			result.spot_realized_pnl + result.margin_realized_pnl - result.margin_interest_cost - result.margin_fee_cost,
-		);
+		const spot = definedAmount(result.spot_realized_pnl, 'spot_realized_pnl');
+		expect(result.total).toBe(spot + result.margin_realized_pnl - result.margin_interest_cost - result.margin_fee_cost);
 		expect(result.total).toBe(410);
 		expect(result.period_start).toBe('2026-01-01T00:00:00+09:00');
 		expect(result.period_end).toBe('2026-08-23T00:00:00+09:00');
@@ -2183,8 +2194,13 @@ describe('入出庫日価格での JPY 換算', () => {
 		 * ポートフォリオ分析ごと失わせるのは割に合わない。代わりに不変条件をここで固定する。
 		 */
 		it('不変条件: basis は 2 つの件数から一意に決まり、件数は必ず非負整数', () => {
-			const dated = { asset: 'btc', atMs: FLOW_MS };
-			const fallback = { asset: 'eth', atMs: FLOW_MS };
+			// `summarizeFlowValuation` は `kind` を読まない（換算方式は asset と atMs だけで決まる）が、
+			// 母集合の型は `FlowValuationTarget` なので入庫・出庫のどちらかを名乗る必要がある。
+			// 上の `targets` と揃えて入庫にする——この describe が見ているのは `deposit_date_price` /
+			// `current_price_fallback` の件数であって、入庫・出庫の区別（#76 の chunk 予算分離）は
+			// `collectFlowValuationTargets` の describe が別に固定している。
+			const dated: FlowValuationTarget = { asset: 'btc', atMs: FLOW_MS, kind: 'deposit' };
+			const fallback: FlowValuationTarget = { asset: 'eth', atMs: FLOW_MS, kind: 'deposit' };
 			const pricing = withDailyPrices(
 				[{ asset: 'btc', atMs: FLOW_MS, price: FLOW_DAY_PRICE }],
 				new Map([['eth', 400_000]]),

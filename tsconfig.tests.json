@@ -7,8 +7,6 @@
     "node_modules",
     "tests/analyze_mtf_sma.test.ts",
     "tests/get_candles.test.ts",
-    "tests/handlers/portfolio/calc.test.ts",
-    "tests/handlers/portfolio/fetch.test.ts",
     "tests/private/analyze_my_portfolio.test.ts",
     "tests/run_backtest.test.ts",
     "tests/trading_process/lib/backtest_engine.test.ts"
