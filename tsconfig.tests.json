@@ -3,12 +3,5 @@
   "include": ["src/**/*", "tools/**/*", "lib/**/*", "tests/**/*"],
   "//": "tests/ を型検査するための構成。tsconfig.json 本体は tests を除外しているため CI では検査されない。",
   "//exclude": "以下は既存の型エラーを抱えるファイル。1 ファイルずつ修正して、このリストから削除していく（空になったら本ファイルを廃し tsconfig.json 本体へ統合する）。",
-  "exclude": [
-    "node_modules",
-    "tests/analyze_mtf_sma.test.ts",
-    "tests/get_candles.test.ts",
-    "tests/private/analyze_my_portfolio.test.ts",
-    "tests/run_backtest.test.ts",
-    "tests/trading_process/lib/backtest_engine.test.ts"
-  ]
+  "exclude": ["node_modules", "tests/private/analyze_my_portfolio.test.ts"]
 }
