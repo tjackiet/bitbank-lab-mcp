@@ -2711,6 +2711,183 @@ describe('buildPeriodPerformance', () => {
 		});
 	});
 
+	describe('期初の始値が解決できないときの増減率の抑止（#86）', () => {
+		function btcJpyStartCtx(opts: {
+			yearStart?: number;
+			monthStart?: number;
+			dayStart?: number;
+			btcAmount?: string;
+			jpyAmount?: string;
+			currentBtcPrice?: number;
+		}) {
+			const btcAmount = opts.btcAmount ?? '0.1';
+			const jpyAmount = opts.jpyAmount ?? '63314';
+			const currentBtcPrice = opts.currentBtcPrice ?? 15_000_000;
+			const boundary: { yearStart?: number; monthStart?: number; dayStart?: number } = {};
+			if (opts.yearStart != null) boundary.yearStart = opts.yearStart;
+			if (opts.monthStart != null) boundary.monthStart = opts.monthStart;
+			if (opts.dayStart != null) boundary.dayStart = opts.dayStart;
+			return makeCtx({
+				currentHoldings: [
+					{ asset: 'btc', amount: btcAmount },
+					{ asset: 'jpy', amount: jpyAmount },
+				],
+				dwData: makeEmptyDw(),
+				candlePriceData: {
+					boundaryPrices: makeBoundaryPrices([['btc', boundary]]),
+					dailyPrices: new Map(),
+				},
+				flowPricing: currentPriceOnly(new Map([['btc', currentBtcPrice]])),
+				currentValue: Math.round(Number(btcAmount) * currentBtcPrice + Number(jpyAmount)),
+			});
+		}
+
+		it('daily: dayStart 欠損 → 率 undefined + start_boundary_unpriced + unpriced_start_assets', () => {
+			// issue #86 の機序: 当日足 open が未取得で暗号資産が期初評価から落ち、JPY だけになる。
+			// 63,314 円は 1% 閾値を超えるため start_value_negligible では抑止されなかった。
+			const ctx = btcJpyStartCtx({ yearStart: 10_000_000, monthStart: 10_000_000 });
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.start_value_jpy).toBe(63_314);
+			expect(result.change_pct).toBeUndefined();
+			expect(result.adjusted_change_pct).toBeUndefined();
+			expect(result.change_pct_unavailable_reason).toBe('start_boundary_unpriced');
+			expect(result.unpriced_start_assets).toEqual(['btc']);
+			// 過大な率が出ないこと（+2394% 型）
+			expect(JSON.stringify(result)).not.toMatch(/"change_pct":\s*\d{4,}/);
+		});
+
+		it('価格が揃っている通常時: 従来どおり率が出る（回帰）', () => {
+			const ctx = btcJpyStartCtx({
+				yearStart: 10_000_000,
+				monthStart: 10_000_000,
+				dayStart: 11_000_000,
+				jpyAmount: '0',
+				btcAmount: '1',
+			});
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.start_value_jpy).toBe(11_000_000);
+			expect(result.change_pct).toBeDefined();
+			expect(result.change_pct_unavailable_reason).toBeUndefined();
+			expect(result.unpriced_start_assets).toBeUndefined();
+		});
+
+		it('一部資産だけ欠損: 欠損資産のみ unpriced_start_assets に載る', () => {
+			const ctx = makeCtx({
+				currentHoldings: [
+					{ asset: 'btc', amount: '0.1' },
+					{ asset: 'eth', amount: '1' },
+				],
+				dwData: makeEmptyDw(),
+				candlePriceData: {
+					boundaryPrices: makeBoundaryPrices([
+						['btc', { dayStart: 15_000_000 }],
+						['eth', { yearStart: 400_000 }],
+					]),
+					dailyPrices: new Map(),
+				},
+				flowPricing: currentPriceOnly(
+					new Map([
+						['btc', 15_000_000],
+						['eth', 380_000],
+					]),
+				),
+				currentValue: Math.round(0.1 * 15_000_000 + 1 * 380_000),
+			});
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.unpriced_start_assets).toEqual(['eth']);
+			expect(result.change_pct_unavailable_reason).toBe('start_boundary_unpriced');
+		});
+
+		it('全暗号資産の当該期間始値欠損: 期初評価額は JPY だけ', () => {
+			const ctx = btcJpyStartCtx({ yearStart: 10_000_000, monthStart: 10_000_000 });
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.start_value_jpy).toBe(63_314);
+			expect(result.unpriced_start_assets).toEqual(['btc']);
+			expect(result.change_pct_unavailable_reason).toBe('start_boundary_unpriced');
+		});
+
+		it('JPY のみ保有: unpriced_start_assets を誤検知しない', () => {
+			const ctx = makeCtx({
+				currentHoldings: [{ asset: 'jpy', amount: '100000' }],
+				dwData: makeEmptyDw(),
+				candlePriceData: { boundaryPrices: new Map(), dailyPrices: new Map() },
+				flowPricing: currentPriceOnly(),
+				currentValue: 100_000,
+			});
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.unpriced_start_assets).toBeUndefined();
+			expect(result.change_pct_unavailable_reason).toBeUndefined();
+			expect(result.change_pct).toBe(0);
+		});
+
+		it('start_value_negligible と start_boundary_unpriced を取り違えない（始値欠損を優先）', () => {
+			// 期初 JPY 5,000 + BTC（dayStart 欠損）。JPY だけだと negligible だが原因は始値欠損。
+			const ctx = btcJpyStartCtx({ yearStart: 10_000_000, jpyAmount: '5000' });
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.change_pct_unavailable_reason).toBe('start_boundary_unpriced');
+			expect(result.change_pct_unavailable_reason).not.toBe('start_value_negligible');
+		});
+
+		it('daily / monthly / yearly の 3 期間で同じ判定になる（共通経路 buildPeriodPerformance）', () => {
+			const ctx = makeCtx({
+				currentHoldings: [
+					{ asset: 'btc', amount: '0.1' },
+					{ asset: 'jpy', amount: '63314' },
+				],
+				dwData: makeEmptyDw(),
+				candlePriceData: { boundaryPrices: new Map(), dailyPrices: new Map() },
+				flowPricing: currentPriceOnly(new Map([['btc', 15_000_000]])),
+				currentValue: Math.round(0.1 * 15_000_000 + 63_314),
+			});
+			for (const key of ['daily', 'monthly', 'yearly'] as const) {
+				const result = buildPeriodPerformance({ key, startMs: 1000, startIso: 's' }, ctx);
+				expect(result.change_pct, key).toBeUndefined();
+				expect(result.change_pct_unavailable_reason, key).toBe('start_boundary_unpriced');
+				expect(result.unpriced_start_assets, key).toEqual(['btc']);
+			}
+		});
+
+		it('boundaryPrices にエントリが無い資産: 過大な率を出さない（CodeRabbit 回帰）', () => {
+			const ctx = makeCtx({
+				currentHoldings: [
+					{ asset: 'btc', amount: '0.1' },
+					{ asset: 'jpy', amount: '1000000' },
+				],
+				dwData: makeEmptyDw(),
+				candlePriceData: { boundaryPrices: new Map(), dailyPrices: new Map() },
+				flowPricing: currentPriceOnly(new Map([['btc', 15_000_000]])),
+				currentValue: 2_500_000,
+			});
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.start_value_jpy).toBe(1_000_000);
+			expect(result.change_pct).toBeUndefined();
+			expect(result.adjusted_change_pct).toBeUndefined();
+			expect(result.change_pct_unavailable_reason).toBe('start_boundary_unpriced');
+			expect(result.unpriced_start_assets).toEqual(['btc']);
+		});
+
+		it('エントリはあるが 3 境界すべて undefined: 過大な率を出さない', () => {
+			const ctx = makeCtx({
+				currentHoldings: [
+					{ asset: 'btc', amount: '0.1' },
+					{ asset: 'jpy', amount: '1000000' },
+				],
+				dwData: makeEmptyDw(),
+				candlePriceData: {
+					boundaryPrices: makeBoundaryPrices([['btc', {}]]),
+					dailyPrices: new Map(),
+				},
+				flowPricing: currentPriceOnly(new Map([['btc', 15_000_000]])),
+				currentValue: 2_500_000,
+			});
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.start_value_jpy).toBe(1_000_000);
+			expect(result.change_pct).toBeUndefined();
+			expect(result.change_pct_unavailable_reason).toBe('start_boundary_unpriced');
+			expect(result.unpriced_start_assets).toEqual(['btc']);
+		});
+	});
+
 	it('期間内に売買あり: reconstructHoldingsAtDate で期初保有が逆算される', () => {
 		// 現在保有 0.5 BTC、期間内 (t=2000) に 0.5 BTC 売却 → 期初は 1.0 BTC
 		// 期初評価 1.0 * 10_000_000 = 10_000_000、現在 0.5 * 12_000_000 = 6_000_000

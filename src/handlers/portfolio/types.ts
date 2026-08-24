@@ -451,6 +451,17 @@ export interface PeriodPerformance {
 	 */
 	flow_valuation?: FlowValuationBreakdown;
 	/**
+	 * 期初評価額の算出時に当該期間の始値を解決できなかった暗号資産のシンボル一覧
+	 * （小文字・昇順・重複なし）。該当資産は `start_value_jpy` に含まれていない（過小）。
+	 *
+	 * `boundaryPrices` 未登録・当該期間の始値 undefined・3 境界すべて undefined のいずれも対象。
+	 * JPY のみ保有のときは `undefined`。`unpriced_flow_assets` と同じ粒度（資産名のみ、金額は出さない）。
+	 * `equitySeriesQuality`（資産推移）は別系統の申告で、本フィールドの有無と独立する。
+	 * 既存の出力フィールド順を崩さないため末尾に置き、該当なしのときは `undefined`
+	 * （JSON.stringify でキーごと落ちるため従来出力と一致する）。
+	 */
+	unpriced_start_assets?: string[];
+	/**
 	 * `change_pct` / `adjusted_change_pct` を出せなかった理由（出せた場合は `undefined`）。
 	 *
 	 * 両フィールドは分母が同じ `start_value_jpy` なので、抑止は必ず同時に起きる。

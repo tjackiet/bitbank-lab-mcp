@@ -7,7 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { assertFail, assertOk } from '../_assertResult.js';
-import { candlesBtcJpy1day120, generateOhlcv, tickersJpy } from '../fixtures/bitbank-api.js';
+import { candlesBtcJpy1day120, candlesBtcJpy1day120Near, generateOhlcv, tickersJpy } from '../fixtures/bitbank-api.js';
 import {
 	mockBitbankError,
 	mockBitbankSuccess,
@@ -2116,7 +2116,12 @@ describe('analyze_my_portfolio — 純入出金の価格解決 warning', () => {
 	it('価格を引けない入出庫がある: 資産名が meta.warnings と summary 先頭に出る', async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(fixedNowMs);
-		setupFetchMock({ deposits: unpricedDeposits, withdrawals: unpricedWithdrawals });
+		setupFetchMock({
+			deposits: unpricedDeposits,
+			withdrawals: unpricedWithdrawals,
+			// 既定の静的 candle（2024 起点）。near candle は全ペアに同じ OHLCV を返すため
+			// doge_jpy / mona_jpy の入出庫日価格まで誤って解決し、本テストの net flow 未計上が検証できなくなる。
+		});
 
 		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
 		const result = await handler({
@@ -2127,18 +2132,16 @@ describe('analyze_my_portfolio — 純入出金の価格解決 warning', () => {
 
 		assertOk(result);
 		// 計算層 warning（meta.warnings）に資産名が載る。金額は含めない。
-		// doge はこのフィクスチャでは残高・約定のどちらも無い（既定 fixture 由来）ため、
-		// 入出金履歴に入庫記録があるこの構成では #93 の検出（untracked_trade_suspected）も
-		// 独立に発火し、warning が 2 本になる（doge の入庫由来 + 本テスト本来の netFlow 由来）。
-		expect(result.meta.warnings).toHaveLength(2);
-		const depositOnlyWarning = result.meta.warnings?.[0] ?? '';
-		expect(depositOnlyWarning).toContain('DOGE');
-		expect(depositOnlyWarning).not.toContain('MONA');
-		const warning = result.meta.warnings?.[1] ?? '';
-		expect(warning).toContain('DOGE');
-		expect(warning).toContain('MONA');
-		expect(warning).not.toContain('1000');
-		expect(warning).not.toContain('10');
+		const warnings = result.meta.warnings ?? [];
+		// doge は残高・約定のどちらも無いため #93 の検出（untracked_trade_suspected）も独立に発火する。
+		expect(warnings.some((w) => w.includes('DOGE') && (w.includes('入庫') || w.includes('販売所')))).toBe(true);
+		expect(warnings.some((w) => w.includes('DOGE') && w.includes('純入出金'))).toBe(true);
+		expect(
+			warnings.some((w) => w.includes('MONA') && (w.includes('純入出金') || w.includes('期初の始値を解決できず'))),
+		).toBe(true);
+		expect(warnings.some((w) => w.includes('DOGE') && w.includes('MONA'))).toBe(true);
+		expect(warnings.join('\n')).not.toContain('1000');
+		expect(warnings.join('\n')).not.toMatch(/\b10円/);
 
 		// data 側にも資産名が残る（3 期間とも同じ入出庫が対象）
 		expect(result.data.daily_performance?.unpriced_flow_assets).toEqual(['doge', 'mona']);
@@ -2186,10 +2189,13 @@ describe('analyze_my_portfolio — 純入出金の価格解決 warning', () => {
 		// 現在価格フォールバックの申告が残る（#57 (a) の 3 経路目。unpriced とは別系統）。
 		// もう 1 本は同じ入庫が取得原価に算入されなかったことの申告（#77）。純入出金には
 		// 現在価格で計上されるのに原価には入らない、という非対称をここで固定する。
-		// 並びは原価の完全性（銘柄単位）→ 換算のフォールバック（レスポンス全体）の順。
-		expect(result.meta.warnings).toHaveLength(2);
+		// #86: 静的 candle では期初始値も欠損するため start_boundary / 増減率抑止の warning が加わる。
+		// 並びは原価の完全性（銘柄単位）→ 期初始値欠損 → 増減率抑止 → 換算フォールバックの順。
+		expect(result.meta.warnings).toHaveLength(4);
 		expect(result.meta.warnings?.[0]).toContain('BTC（1件）');
-		expect(result.meta.warnings?.[1]).toContain('現在価格で仮評価');
+		expect(result.meta.warnings?.[1]).toContain('期初の始値を解決できず期初評価額に含めていません');
+		expect(result.meta.warnings?.[2]).toContain('増減率');
+		expect(result.meta.warnings?.[3]).toContain('現在価格で仮評価');
 		expect(result.data.holdings.find((h) => h.asset === 'btc')?.unpriced_deposit_count).toBe(1);
 		// 入庫は現在価格で引けているので net_flow に載る（0.1 BTC * 15_500_000 = 1_550_000）
 		expect(result.data.daily_performance?.net_flow_jpy).toBe(1_550_000);
@@ -3474,11 +3480,12 @@ describe('analyze_my_portfolio — API asset の取得境界正規化', () => {
 		// BTC 入出庫は価格解決できるので unpriced 系 warning は出ない。一方 onhand 0.6 は
 		// 復元数量（出庫按分後 0）と乖離しているため、数量不変条件の warning が出る。
 		// 大文字レスポンスの入庫（'BTC', DONE）が正規化されて has_crypto_deposits に一致することも兼ねて固定する。
-		// 2 本目は入出庫日価格の申告: candle fixture が 2024 年分のみで 2026 年の入出庫日を
-		// 解決できず現在価格フォールバックに落ちるため（#57 (a)）。
-		expect(result.meta.warnings).toHaveLength(2);
+		// 静的 candle では 2026 年の入出庫日価格はフォールバックし、期初始値も欠損する（#86）。
+		expect(result.meta.warnings).toHaveLength(4);
 		expect(result.meta.warnings?.[0]).toContain('BTC（入庫日の価格を解決できない暗号資産の入庫あり）');
-		expect(result.meta.warnings?.[1]).toContain('現在価格で仮評価');
+		expect(result.meta.warnings?.[1]).toContain('期初の始値を解決できず期初評価額に含めていません');
+		expect(result.meta.warnings?.[2]).toContain('増減率');
+		expect(result.meta.warnings?.[3]).toContain('現在価格で仮評価');
 		expect(result.data.daily_performance?.unpriced_flow_assets).toBeUndefined();
 		expect(result.data.daily_performance?.net_flow_jpy).toBe(Math.round(300_000 + 0.1 * 15_500_000 - 0.2 * 15_500_000));
 	});
@@ -3680,11 +3687,13 @@ describe('analyze_my_portfolio — API pair の取得境界正規化', () => {
 		expect(result.data.holdings.map((h) => h.asset).sort()).toEqual(['btc', 'jpy']);
 		// PR #37 の warning 経路。BTC の価格は引けているので誤検知してはいけない
 		expect(result.data.daily_performance?.unpriced_flow_assets).toBeUndefined();
-		// 残るのは入出庫日価格を解決できなかった申告と、その入庫を原価に算入していない申告（#77）。
-		// 上の cost_basis 6,000,000 は 0.1 BTC の入庫を除外した値なので、黙って出してはいけない。
-		expect(result.meta.warnings).toHaveLength(2);
+		// 静的 candle では期初始値も欠損するため start_boundary / 増減率抑止の warning が加わる（#86）。
+		// 並びは原価の完全性（銘柄単位）→ 期初始値欠損 → 増減率抑止 → 換算フォールバックの順。
+		expect(result.meta.warnings).toHaveLength(4);
 		expect(result.meta.warnings?.[0]).toContain('BTC（1件）');
-		expect(result.meta.warnings?.[1]).toContain('現在価格で仮評価');
+		expect(result.meta.warnings?.[1]).toContain('期初の始値を解決できず期初評価額に含めていません');
+		expect(result.meta.warnings?.[2]).toContain('増減率');
+		expect(result.meta.warnings?.[3]).toContain('現在価格で仮評価');
 		expect(btc?.cost_basis_reliable).toBe(true);
 		expect(btc?.unpriced_deposit_count).toBe(1);
 		expect(result.data.daily_performance?.net_flow_jpy).toBe(Math.round(0.1 * 15_500_000));
@@ -3747,7 +3756,12 @@ describe('analyze_my_portfolio — 復元数量 vs 実残高の不変条件', ()
 	it('受け入れ: ETH 型（約 1000 倍乖離）で確定値ではなく cost_basis_reliable=false + 理由コードが出る', async () => {
 		// 出庫は withdrawals に無い（入出金取得は成功・complete）ので入出金起因の抑止は掛からず、
 		// 数量不変条件だけが乖離を検出する。他に具体的な手掛かりが無いので untracked_trade_suspected（#93）。
-		setupFetchMock({ assets: ethAssets('2.0'), trades: tinyEthBuy, ...emptyDw });
+		setupFetchMock({
+			assets: ethAssets('2.0'),
+			trades: tinyEthBuy,
+			...emptyDw,
+			candles: candlesBtcJpy1day120Near(),
+		});
 
 		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
 		const result = await handler({
@@ -3892,7 +3906,11 @@ describe('analyze_my_portfolio — 復元数量 vs 実残高の不変条件', ()
 
 	it('回帰: 整合した銘柄は cost_basis_reliable=true で数値がそのまま出る', async () => {
 		// 既定 fixture（consistentAssetsResponse + 既定履歴）は数量整合している
-		setupFetchMock();
+		setupFetchMock({
+			candles: candlesBtcJpy1day120Near(),
+			deposits: { deposits: [] },
+			withdrawals: { withdrawals: [] },
+		});
 
 		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
 		const result = await handler({
@@ -3986,7 +4004,12 @@ describe('analyze_my_portfolio — 復元数量 vs 実残高の不変条件', ()
 				},
 			],
 		};
-		setupFetchMock({ assets: ethAssets('0.00000004'), trades: buyThenSellAll, ...emptyDw });
+		setupFetchMock({
+			assets: ethAssets('0.00000004'),
+			trades: buyThenSellAll,
+			...emptyDw,
+			candles: candlesBtcJpy1day120Near(),
+		});
 
 		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
 		const result = await handler({
@@ -5164,6 +5187,101 @@ describe('analyze_my_portfolio — 期初評価額が極小のときの増減率
 		expect(result.data.yearly_performance.change_pct_unavailable_reason).toBeUndefined();
 		expect(result.meta.changePctUnavailablePeriods).toBeUndefined();
 		expect(result.summary).not.toContain('※ 増減率・入出金調整後増減率は非表示');
+	});
+});
+
+/**
+ * #86: 当日足が未取得の時間帯に前日比の期初評価額が JPY だけになり、過大な増減率が出る。
+ * 始値解決欠損は start_value_negligible とは別理由コードで抑止する。
+ */
+describe('analyze_my_portfolio — 期初の始値が解決できないときの増減率の抑止', () => {
+	/** 2026-05-16T00:00:00Z = JST 2026-05-16 09:00（issue #86 の検証時刻帯に近い） */
+	const fixedNowMs = Date.UTC(2026, 4, 16, 0);
+	/** JST 2026-05-15 00:00 = UTC 2026-05-14 15:00 */
+	const yesterdayJstMidnightMs = Date.UTC(2026, 4, 14, 15, 0, 0, 0);
+
+	function btcJpyAssets(btcAmount: string, jpyOnhand: string) {
+		return {
+			assets: [
+				{ ...assetFixture('btc'), free_amount: btcAmount, onhand_amount: btcAmount, locked_amount: '0' },
+				{
+					asset: 'jpy',
+					free_amount: jpyOnhand,
+					amount_precision: 0,
+					onhand_amount: jpyOnhand,
+					locked_amount: '0',
+					withdrawing_amount: '0',
+					withdrawal_fee: { under: '550', over: '770', threshold: '30000' },
+					stop_deposit: false,
+					stop_withdrawal: false,
+					collateral_ratio: '1',
+				},
+			],
+		};
+	}
+
+	function setupMissingDayStartMock() {
+		const candlesWithoutToday = {
+			success: 1,
+			data: {
+				candlestick: [
+					{
+						type: '1day',
+						ohlcv: generateOhlcv(120, 86400000, 15_000_000, yesterdayJstMidnightMs - 119 * 86400000),
+					},
+				],
+			},
+		};
+		setupFetchMock({
+			assets: btcJpyAssets('0.1', '63314'),
+			trades: { trades: [] },
+			deposits: { deposits: [] },
+			withdrawals: { withdrawals: [] },
+			candles: candlesWithoutToday,
+		});
+	}
+
+	async function analyze() {
+		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
+		return handler({ include_technical: false, include_pnl: true, include_deposit_withdrawal: true });
+	}
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(fixedNowMs);
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it('当日足未取得: 前日比の率を抑止し start_boundary_unpriced を付ける', async () => {
+		setupMissingDayStartMock();
+
+		const result = await analyze();
+		assertOk(result);
+
+		const daily = result.data.daily_performance;
+		expect(daily.start_value_jpy).toBe(63_314);
+		expect(daily.change_pct).toBeUndefined();
+		expect(daily.adjusted_change_pct).toBeUndefined();
+		expect(daily.change_pct_unavailable_reason).toBe('start_boundary_unpriced');
+		expect(daily.unpriced_start_assets).toEqual(['btc']);
+		expect(JSON.stringify(result.data)).not.toMatch(/2394|26929/);
+	});
+
+	it('summary に理由と期初過小の申告が出る', async () => {
+		setupMissingDayStartMock();
+
+		const result = await analyze();
+		assertOk(result);
+
+		expect(result.summary).toContain('期初の始値を解決できなかった');
+		expect(result.summary).toContain('期初評価額は過小');
+		expect(result.summary).toContain('BTC');
+		const warning = (result.meta.warnings ?? []).find((w: string) => w.includes('期初の始値'));
+		expect(warning).toBeDefined();
+		expect(warning).toContain('過小');
 	});
 });
 
