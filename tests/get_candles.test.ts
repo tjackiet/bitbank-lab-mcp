@@ -20,7 +20,7 @@ function timestampsOf(candles: readonly { timestamp?: number }[]): number[] {
 describe('GetCandlesInputSchema (limit 上限契約)', () => {
 	it('limit=10000 は schema レベルで通る（multi-day 経路の実上限と整合）', () => {
 		const parsed = GetCandlesInputSchema.parse({ pair: 'btc_jpy', type: '1min', limit: 10000 });
-		expect((parsed as { limit: number }).limit).toBe(10000);
+		expect(parsed.limit).toBe(10000);
 	});
 
 	it('limit=10001 は schema レベルで弾かれる', () => {
@@ -34,7 +34,7 @@ describe('GetCandlesInputSchema (limit 上限契約)', () => {
 		expect(GetCandlesInputSchema.safeParse({ pair: 'btc_jpy', type: '1day', limit: 1 }).success).toBe(true);
 		// 省略時は default(200) が適用される
 		const parsed = GetCandlesInputSchema.parse({ pair: 'btc_jpy', type: '1day' });
-		expect((parsed as { limit: number }).limit).toBe(200);
+		expect(parsed.limit).toBe(200);
 	});
 
 	it('limit=0 / limit=-1 / 小数は引き続き弾かれる', () => {
