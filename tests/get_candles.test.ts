@@ -5,6 +5,18 @@ import getCandles, { toolDef } from '../tools/get_candles.js';
 import { assertFail, assertOk } from './_assertResult.js';
 import { candlesError } from './fixtures/bitbank-api.js';
 
+/**
+ * normalized から timestamp 列を取り出す。
+ * `CandleSchema.timestamp` はスキーマ上 optional だが get_candles は全経路で必ず埋めるため、
+ * 欠損は契約違反としてここで落とす（`c.timestamp!` で握りつぶさない）。
+ */
+function timestampsOf(candles: readonly { timestamp?: number }[]): number[] {
+	return candles.map((c, i) => {
+		if (c.timestamp === undefined) throw new Error(`normalized[${i}] に timestamp がありません`);
+		return c.timestamp;
+	});
+}
+
 describe('GetCandlesInputSchema (limit 上限契約)', () => {
 	it('limit=10000 は schema レベルで通る（multi-day 経路の実上限と整合）', () => {
 		const parsed = GetCandlesInputSchema.parse({ pair: 'btc_jpy', type: '1min', limit: 10000 });
@@ -667,10 +679,10 @@ describe('getCandles', () => {
 
 		// dedupe により ts=ts の行は 1 件のみ
 		expect(res.data.normalized).toHaveLength(2);
-		const tsList = res.data.normalized.map((c: { timestamp: number }) => c.timestamp);
+		const tsList = timestampsOf(res.data.normalized);
 		expect(tsList.filter((t: number) => t === ts)).toHaveLength(1);
 		// 残ったのは非プレースホルダ行
-		const kept = res.data.normalized.find((c: { timestamp: number }) => c.timestamp === ts);
+		const kept = res.data.normalized.find((c) => c.timestamp === ts);
 		expect(kept?.open).toBe(100);
 		expect(kept?.volume).toBe(1.5);
 	});
@@ -1199,7 +1211,7 @@ describe('getCandles', () => {
 			assertOk(res);
 
 			expect(res.data.normalized).toHaveLength(3);
-			const tsList = res.data.normalized.map((c: { timestamp: number }) => c.timestamp);
+			const tsList = timestampsOf(res.data.normalized);
 			expect(tsList).toEqual([dayMs('2025-09-30'), dayMs('2025-10-01'), dayMs('2025-10-02')]);
 			// 10/3, 10/4 は含まれない
 			expect(tsList).not.toContain(dayMs('2025-10-03'));
@@ -1229,7 +1241,7 @@ describe('getCandles', () => {
 			assertOk(res);
 			expect(res.data.normalized).toHaveLength(3);
 			// 末尾 3 本: 10/2, 10/3, 10/4
-			const tsList = res.data.normalized.map((c: { timestamp: number }) => c.timestamp);
+			const tsList = timestampsOf(res.data.normalized);
 			expect(tsList).toEqual([dayMs('2025-10-02'), dayMs('2025-10-03'), dayMs('2025-10-04')]);
 		});
 
@@ -1261,7 +1273,7 @@ describe('getCandles', () => {
 			const res = await getCandles('btc_jpy', '1hour', '20251002', 5);
 			assertOk(res);
 
-			const tsList = res.data.normalized.map((c: { timestamp: number }) => c.timestamp);
+			const tsList = timestampsOf(res.data.normalized);
 			// すべて JST 10/2 終端（= UTC 10/2 14:59:59.999）以前であること
 			const jstEndOfDayMs = dayMs('2025-10-02') + 15 * 3600000 - 1; // JST 10/2 23:59:59.999
 			for (const ts of tsList) expect(ts).toBeLessThanOrEqual(jstEndOfDayMs);
@@ -1424,7 +1436,7 @@ describe('getCandles', () => {
 			assertOk(res);
 
 			expect(res.data.normalized).toHaveLength(24);
-			const tsList = res.data.normalized.map((c: { timestamp: number }) => c.timestamp);
+			const tsList = timestampsOf(res.data.normalized);
 			// 最古 = JST 10/2 0:00 = UTC 10/1 15:00
 			expect(tsList[0]).toBe(hourMs('2025-10-01', 15));
 			// 最新 = JST 10/2 23:00 = UTC 10/2 14:00
@@ -1463,7 +1475,7 @@ describe('getCandles', () => {
 			assertOk(res);
 
 			expect(res.data.normalized).toHaveLength(24);
-			const tsList = res.data.normalized.map((c: { timestamp: number }) => c.timestamp);
+			const tsList = timestampsOf(res.data.normalized);
 			// tz=UTC の暦日 anchor: UTC 10/2 0:00..23:00 ぴったり
 			expect(tsList[0]).toBe(hourMs('2025-10-02', 0));
 			expect(tsList.at(-1)).toBe(hourMs('2025-10-02', 23));
@@ -1518,7 +1530,7 @@ describe('getCandles', () => {
 
 			const res = await getCandles('btc_jpy', '1hour', '20251002', 24, '');
 			assertOk(res);
-			const tsList = res.data.normalized.map((c: { timestamp: number }) => c.timestamp);
+			const tsList = timestampsOf(res.data.normalized);
 			// JST anchor の結果 (= 上の Asia/Tokyo ケースと同じ)
 			expect(tsList[0]).toBe(hourMs('2025-10-01', 15));
 			expect(tsList.at(-1)).toBe(hourMs('2025-10-02', 14));
@@ -1551,7 +1563,7 @@ describe('getCandles', () => {
 
 			const res = await getCandles('btc_jpy', '1hour', '20251002', 24, 'Invalid/Zone');
 			assertOk(res);
-			const tsList = res.data.normalized.map((c: { timestamp: number }) => c.timestamp);
+			const tsList = timestampsOf(res.data.normalized);
 			// Asia/Tokyo フォールバックの結果
 			expect(tsList[0]).toBe(hourMs('2025-10-01', 15));
 			expect(tsList.at(-1)).toBe(hourMs('2025-10-02', 14));
@@ -1613,7 +1625,7 @@ describe('getCandles', () => {
 			const res = await getCandles('btc_jpy', '1day', '2025', 1000, 'Asia/Tokyo');
 			assertOk(res);
 			// 翌年 1/1 の足は除外、365 本のみ
-			const tsList = res.data.normalized.map((c: { timestamp: number }) => c.timestamp);
+			const tsList = timestampsOf(res.data.normalized);
 			expect(tsList.find((ts: number) => ts >= Date.UTC(2026, 0, 1))).toBeUndefined();
 			// 末尾は UTC 2025-12-31 00:00（= JST 12/31 09:00）
 			expect(tsList.at(-1)).toBe(Date.UTC(2025, 11, 31));
@@ -1668,7 +1680,7 @@ describe('getCandles', () => {
 
 			// normalized 24 本が NY 10/2 0:00..23:00 = UTC 10/2 04:00..10/3 03:00 に収まる。
 			expect(res.data.normalized).toHaveLength(24);
-			const tsList = res.data.normalized.map((c: { timestamp: number }) => c.timestamp);
+			const tsList = timestampsOf(res.data.normalized);
 			expect(tsList[0]).toBe(hourMs('2025-10-02', 4));
 			expect(tsList.at(-1)).toBe(hourMs('2025-10-03', 3));
 		});
@@ -1684,7 +1696,7 @@ describe('getCandles', () => {
 			expect(calledUrls.some((u) => u.endsWith('/1hour/20251003'))).toBe(true);
 
 			expect(res.data.normalized).toHaveLength(24);
-			const tsList = res.data.normalized.map((c: { timestamp: number }) => c.timestamp);
+			const tsList = timestampsOf(res.data.normalized);
 			expect(tsList[0]).toBe(hourMs('2025-10-02', 7));
 			expect(tsList.at(-1)).toBe(hourMs('2025-10-03', 6));
 		});
@@ -1715,7 +1727,7 @@ describe('getCandles', () => {
 			expect(calledUrls.some((u) => u.endsWith('/1hour/20251003'))).toBe(false);
 
 			expect(res.data.normalized).toHaveLength(24);
-			const tsList = res.data.normalized.map((c: { timestamp: number }) => c.timestamp);
+			const tsList = timestampsOf(res.data.normalized);
 			expect(tsList[0]).toBe(hourMs('2025-10-02', 0));
 			expect(tsList.at(-1)).toBe(hourMs('2025-10-02', 23));
 		});
@@ -1798,7 +1810,7 @@ describe('getCandles', () => {
 
 			// anchor も繰り上げ後の JST 3/2 終端で切られる
 			expect(res.data.normalized).toHaveLength(24);
-			const tsList = res.data.normalized.map((c: { timestamp: number }) => c.timestamp);
+			const tsList = timestampsOf(res.data.normalized);
 			expect(tsList[0]).toBe(hourMs('2026-03-01', 15));
 			expect(tsList.at(-1)).toBe(hourMs('2026-03-02', 14));
 		});
@@ -2259,7 +2271,7 @@ describe('上場前 chunk の 404 に巻き込まれない（#84）', () => {
 		assertOk(res);
 		expect(res.data.normalized.length).toBeGreaterThan(0);
 		// 取得できた 2020 年の足が返っていること（404 の巻き添えで捨てられていない）
-		expect(res.data.normalized.every((c) => c.timestamp >= Date.UTC(2020, 0, 1))).toBe(true);
+		expect(timestampsOf(res.data.normalized).every((ts) => ts >= Date.UTC(2020, 0, 1))).toBe(true);
 		// 実失敗ではないので ⚠️ ではなく ℹ️ で申告する
 		expect(res.meta.warning).toContain('ℹ️');
 		expect(res.meta.warning).toContain('2019');
