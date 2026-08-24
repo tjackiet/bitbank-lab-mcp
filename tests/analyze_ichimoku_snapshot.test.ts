@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dayjs } from '../lib/datetime.js';
+import type { Candle } from '../src/schemas.js';
 import { asMockResult, assertFail, assertOk } from './_assertResult.js';
 
 vi.mock('../tools/analyze_indicators.js', () => ({
@@ -10,7 +11,9 @@ import analyzeIchimokuSnapshot, { toolDef } from '../tools/analyze_ichimoku_snap
 import analyzeIndicators from '../tools/analyze_indicators.js';
 
 function buildMockIndicatorSuccess() {
-	const normalized = Array.from({ length: 40 }, (_, i) => ({
+	// 型は CandleSchema 由来にする。provisional 判定は normalized.at(-1).timestamp を読むため、
+	// リテラル推論のままだと最新足に timestamp を後付けするテストが型エラーになる。
+	const normalized: Pick<Candle, 'close' | 'timestamp'>[] = Array.from({ length: 40 }, (_, i) => ({
 		close: i === 39 ? 80 : 120 - i,
 	}));
 
