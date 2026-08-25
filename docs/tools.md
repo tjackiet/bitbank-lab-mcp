@@ -442,9 +442,14 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 | `1week` | 4 | 16 | 5 |
 | `1month` | 2 | 16 | 5 |
 
-`limit` の上限は 365 なので、**この表の値が 365 を超える組み合わせはどう指定しても検出できない**
-（`1hour` の forming triple / wedge、`30min` 以下の大半）。`4hour` は既定 `limit=90` では
-forming triple も完成済み wedge も出ないので、必要なら `limit≥151` を指定する。
+実効的な制約は `limit` そのものではなく **`meta.scan.bars`（実際に走査した本数）**。
+`analyze_indicators` は `chart.meta.pastBuffer` を常に返すので `meta.scan.bars ≤ limit ≤ 365` が成り立ち、
+**この表の値が 365 を超える組み合わせは実運用では検出できない**
+（`1hour` の forming triple / wedge、`30min` 以下の大半）。例外は `pastBuffer` が取れなかった場合の
+全件走査フォールバックで、このときだけ `meta.scan.bars` が `limit` を超えうる（上流の形が変わらない限り
+起きない）。**到達可否の判断は `limit` ではなく `meta.scan.bars` を見ること。**
+
+`4hour` は既定 `limit=90` では forming triple も完成済み wedge も出ないので、必要なら `limit≥151` を指定する。
 
 `detect_doubles` / `detect_hs` の forming 判定だけは `helpers.daysPerBar` ではなく独自の換算
 （`1day`→1 / `1week`→7 / **それ以外→1**）を使っており、この表の対象外。intraday では
