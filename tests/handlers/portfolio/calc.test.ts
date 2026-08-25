@@ -36,6 +36,7 @@ import {
 	PERFORMANCE_NOTE,
 	PERFORMANCE_NOTE_CHANGE_DIRECTION_UNKNOWN,
 	PERFORMANCE_NOTE_CHANGE_OVERSTATED,
+	PERFORMANCE_NOTE_CHANGE_UNDERSTATED,
 	type PortfolioPerformanceContext,
 	qtyInvariantHolds,
 	qtyInvariantTolerance,
@@ -3081,6 +3082,266 @@ describe('buildPeriodPerformance', () => {
 			expect(result.change_pct).toBeUndefined();
 			expect(result.change_pct_unavailable_reason).toBe('start_boundary_unpriced');
 			expect(result.unpriced_start_assets).toEqual(['btc']);
+		});
+	});
+
+	/**
+	 * 現在価格を解決できないときの増減率の抑止（#109）。
+	 *
+	 * `start_boundary_unpriced`（#86 / #97 / #105）の**対称形**。あちらは期初評価額（分母）が
+	 * 過小で増減額が過大、こちらは現在評価額（分子）が過小で増減額が過小になる。
+	 *
+	 * 最悪ケースは ticker（`tickers_jpy`）の全失敗。期初価格が資産ごとに年 chunk を引く
+	 * （＝部分失敗が普通）のと違い、現在価格は 1 回の取得で全銘柄ぶんを取るため、その 1 回が
+	 * 落ちると全暗号資産が一斉に脱落して現在評価額が JPY 残高だけに縮退する。
+	 */
+	describe('現在価格が解決できないときの増減率の抑止（#109）', () => {
+		/**
+		 * 期初は BTC / ETH とも始値が引ける口座。現在 ticker 価格だけを振って現在側の欠損を作る。
+		 *
+		 * `currentValue` は**価格を引けた銘柄だけ**を積む（handler の `totalJpyValue` と同じ規約）。
+		 * ここを手で揃えないと「現在評価額から落ちているのに合計には入っている」という
+		 * 実装ではありえない状態になり、テストが機序を写さなくなる。
+		 */
+		function currentUnpricedCtx(currentPrices: Map<string, number>) {
+			const holdings: Array<[string, number]> = [
+				['btc', 0.1],
+				['eth', 1],
+			];
+			const jpy = 63_314;
+			const currentValue =
+				jpy + holdings.reduce((sum, [asset, amount]) => sum + amount * (currentPrices.get(asset) ?? 0), 0);
+			return makeCtx({
+				currentHoldings: [
+					...holdings.map(([asset, amount]) => ({ asset, amount: String(amount) })),
+					{ asset: 'jpy', amount: String(jpy) },
+				],
+				dwData: makeEmptyDw(),
+				candlePriceData: {
+					boundaryPrices: makeBoundaryPrices([
+						['btc', { yearStart: 10_000_000, monthStart: 10_000_000, dayStart: 10_000_000 }],
+						['eth', { yearStart: 300_000, monthStart: 300_000, dayStart: 300_000 }],
+					]),
+					dailyPrices: new Map(),
+				},
+				flowPricing: currentPriceOnly(currentPrices),
+				currentValue: Math.round(currentValue),
+			});
+		}
+
+		it('1 銘柄だけ現在価格が引けない: 率を抑止し理由コードと資産名を出す', () => {
+			// ETH だけ ticker から落ちる。期初評価額（BTC + ETH + JPY）は正しいまま、
+			// 現在評価額から ETH だけが抜けるので増減額はその分だけ過小になる。
+			const ctx = currentUnpricedCtx(new Map([['btc', 15_000_000]]));
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.change_pct).toBeUndefined();
+			expect(result.adjusted_change_pct).toBeUndefined();
+			expect(result.change_pct_unavailable_reason).toBe('current_value_unpriced');
+			expect(result.unpriced_current_assets).toEqual(['eth']);
+			// 期初側は無傷（対称形の取り違えを防ぐ）
+			expect(result.unpriced_start_assets).toBeUndefined();
+			expect(result.change_jpy_understated).toBe(true);
+			expect(result.change_jpy_overstated).toBeUndefined();
+		});
+
+		it('change_jpy は出したまま change_jpy_understated=true を付ける（#105 と同じ「値 + フラグ」）', () => {
+			const ctx = currentUnpricedCtx(new Map([['btc', 15_000_000]]));
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.change_jpy).toBe(result.current_value_jpy - result.start_value_jpy);
+			// adjusted_change_jpy も同じ額だけ過小（純入出金は両端の評価額と無関係）
+			expect(result.adjusted_change_jpy).toBe(result.change_jpy);
+			expect(result.note).toBe(`${PERFORMANCE_NOTE}${PERFORMANCE_NOTE_CHANGE_UNDERSTATED}`);
+			expect(result.note).toContain('増減額を運用成績として読まないこと');
+		});
+
+		it('ticker 全失敗で全銘柄脱落: 巨額の偽損失に率を付けない（本 issue の核）', () => {
+			// `fetchTickerPricesMap` はエラーを握り潰して空 Map を返す（lib/tickers.ts）。
+			// その結果 currentValue は JPY 残高だけに縮退し、change_jpy は口座が消し飛んだ
+			// ように見える巨額のマイナスになる。ここに率を付けると #54 の -60.9% と同じ型の
+			// 「信頼できない確定値」になる。
+			const ctx = currentUnpricedCtx(new Map());
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			// 期初 1,363,314（BTC 1,000,000 + ETH 300,000 + JPY 63,314）→ 現在は JPY だけ
+			expect(result.start_value_jpy).toBe(1_363_314);
+			expect(result.current_value_jpy).toBe(63_314);
+			expect(result.change_jpy).toBe(-1_300_000);
+			// 率は出さない（-95.36% 相当の偽損失率を確定値として出さない）
+			expect(result.change_pct).toBeUndefined();
+			expect(result.adjusted_change_pct).toBeUndefined();
+			expect(JSON.stringify(result)).not.toContain('"change_pct":');
+			expect(result.change_pct_unavailable_reason).toBe('current_value_unpriced');
+			expect(result.unpriced_current_assets).toEqual(['btc', 'eth']);
+			expect(result.change_jpy_understated).toBe(true);
+			expect(result.note).toContain('JPY 残高だけに縮退');
+			expect(result.note).toContain('口座の損失ではなく価格取得の失敗を表す数');
+		});
+
+		it('期初側の欠損と同時成立: 優先順位どおり start_boundary_unpriced になり向きは確定しない', () => {
+			// BTC は期初始値も現在価格も引けない ＝ 両端から落ちる。ETH は両方引ける。
+			// 増減額のずれは過大とも過小とも言えないので、どちらのフラグも立てない。
+			const ctx = makeCtx({
+				currentHoldings: [
+					{ asset: 'btc', amount: '0.1' },
+					{ asset: 'eth', amount: '1' },
+				],
+				dwData: makeEmptyDw(),
+				candlePriceData: {
+					boundaryPrices: makeBoundaryPrices([['eth', { dayStart: 300_000 }]]),
+					dailyPrices: new Map(),
+				},
+				flowPricing: currentPriceOnly(new Map([['eth', 380_000]])),
+				currentValue: 380_000,
+			});
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.change_pct_unavailable_reason).toBe('start_boundary_unpriced');
+			expect(result.unpriced_start_assets).toEqual(['btc']);
+			expect(result.unpriced_current_assets).toEqual(['btc']);
+			expect(result.change_jpy_overstated).toBeUndefined();
+			expect(result.change_jpy_understated).toBeUndefined();
+			expect(result.note).toBe(`${PERFORMANCE_NOTE}${PERFORMANCE_NOTE_CHANGE_DIRECTION_UNKNOWN}`);
+		});
+
+		it('期初側と現在側で脱落資産が違っても向きは確定しない（合計のずれが決まらない）', () => {
+			// BTC は期初だけ落ちる（過大要因）、ETH は現在だけ落ちる（過小要因）。
+			// 片方だけ見てフラグを立てると、合計としては決まらない向きを確定値として出すことになる。
+			const ctx = makeCtx({
+				currentHoldings: [
+					{ asset: 'btc', amount: '0.1' },
+					{ asset: 'eth', amount: '1' },
+				],
+				dwData: makeEmptyDw(),
+				candlePriceData: {
+					boundaryPrices: makeBoundaryPrices([['eth', { dayStart: 300_000 }]]),
+					dailyPrices: new Map(),
+				},
+				flowPricing: currentPriceOnly(new Map([['btc', 15_000_000]])),
+				currentValue: 1_500_000,
+			});
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.unpriced_start_assets).toEqual(['btc']);
+			expect(result.unpriced_current_assets).toEqual(['eth']);
+			expect(result.change_jpy_overstated).toBeUndefined();
+			expect(result.change_jpy_understated).toBeUndefined();
+		});
+
+		it('start_value_negligible より優先する（増減額へ誘導しない側を必ず選ぶ）', () => {
+			// 期初がほぼ空 + 現在価格の欠損。start_value_negligible を選ぶと
+			// 「増減額で読んでください」という誘導が出るが、その増減額も壊れている。
+			const ctx = makeCtx({
+				currentHoldings: [
+					{ asset: 'btc', amount: '0.1' },
+					{ asset: 'eth', amount: '1' },
+					{ asset: 'jpy', amount: '1500000' },
+				],
+				trades: [],
+				dwData: {
+					deposits: [],
+					withdrawals: [],
+					warnings: [],
+					allFailed: false,
+					isComplete: true,
+				},
+				candlePriceData: {
+					boundaryPrices: makeBoundaryPrices([
+						['btc', { dayStart: 15_000_000 }],
+						['eth', { dayStart: 380_000 }],
+					]),
+					dailyPrices: new Map(),
+				},
+				flowPricing: currentPriceOnly(new Map([['btc', 15_000_000]])),
+				currentValue: 3_000_000,
+			});
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.change_pct_unavailable_reason).toBe('current_value_unpriced');
+		});
+
+		it('start_value_zero より優先する（0 除算の説明より分子の欠損を先に出す）', () => {
+			// 期初保有ゼロ（全額が期間中の入金）+ 現在価格の欠損。start_value_zero を選ぶと
+			// 「増減額で読んでください」になるが、現在評価額が縮退した増減額は読めない。
+			const depositMs = 1500;
+			const ctx = makeCtx({
+				currentHoldings: [
+					{ asset: 'btc', amount: '0.1' },
+					{ asset: 'jpy', amount: '0' },
+				],
+				dwData: {
+					deposits: [
+						{
+							uuid: 'dep-btc',
+							asset: 'btc',
+							amount: '0.1',
+							status: 'DONE',
+							confirmed_at: depositMs,
+						},
+					],
+					withdrawals: [],
+					warnings: [],
+					allFailed: false,
+					isComplete: true,
+				},
+				candlePriceData: { boundaryPrices: new Map(), dailyPrices: new Map() },
+				flowPricing: currentPriceOnly(),
+				currentValue: 0,
+			});
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.start_value_jpy).toBe(0);
+			expect(result.change_pct_unavailable_reason).toBe('current_value_unpriced');
+			expect(result.change_pct).toBeUndefined();
+		});
+
+		it('JPY のみ保有では誤検知しない', () => {
+			const ctx = makeCtx({
+				currentHoldings: [{ asset: 'jpy', amount: '1000000' }],
+				dwData: makeEmptyDw(),
+				flowPricing: currentPriceOnly(),
+				currentValue: 1_000_000,
+			});
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.unpriced_current_assets).toBeUndefined();
+			expect(result.change_jpy_understated).toBeUndefined();
+			expect(result.change_pct_unavailable_reason).toBeUndefined();
+		});
+
+		it('数量ゼロ・数値不正の保有は対象外（評価に寄与しないため）', () => {
+			const ctx = makeCtx({
+				currentHoldings: [
+					{ asset: 'btc', amount: '0' },
+					{ asset: 'eth', amount: 'not-a-number' },
+					{ asset: 'jpy', amount: '1000000' },
+				],
+				dwData: makeEmptyDw(),
+				flowPricing: currentPriceOnly(),
+				currentValue: 1_000_000,
+			});
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.unpriced_current_assets).toBeUndefined();
+			expect(result.change_pct_unavailable_reason).toBeUndefined();
+		});
+
+		it('daily / monthly / yearly の 3 期間で一貫する', () => {
+			const ctx = currentUnpricedCtx(new Map([['btc', 15_000_000]]));
+			for (const key of ['daily', 'monthly', 'yearly'] as const) {
+				const result = buildPeriodPerformance({ key, startMs: 1000, startIso: 's' }, ctx);
+				expect(result.change_pct_unavailable_reason, key).toBe('current_value_unpriced');
+				expect(result.unpriced_current_assets, key).toEqual(['eth']);
+				expect(result.change_jpy_understated, key).toBe(true);
+				expect(result.note, key).toContain(PERFORMANCE_NOTE_CHANGE_UNDERSTATED);
+			}
+		});
+
+		it('価格がすべて引けている通常時: 新設キーも note の追記も出ない（JSON 一致の回帰）', () => {
+			const ctx = currentUnpricedCtx(
+				new Map([
+					['btc', 15_000_000],
+					['eth', 380_000],
+				]),
+			);
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.change_pct).toBeCloseTo(Math.round((result.change_jpy / result.start_value_jpy) * 10000) / 100);
+			expect(result.note).toBe(PERFORMANCE_NOTE);
+			// PERFORMANCE_NOTE 本文がフィールド名に言及するので、キーとしての出現だけを見る
+			expect(JSON.stringify(result)).not.toContain('"unpriced_current_assets":');
+			expect(JSON.stringify(result)).not.toContain('"change_jpy_understated":');
 		});
 	});
 

@@ -1567,7 +1567,7 @@ export function calcPeriodNetFlow(
 // ── 期間別パフォーマンス（評価額比較） ──
 
 export const PERFORMANCE_NOTE =
-	'期初評価額は現在の保有状態から約定・入出金を逆算して復元し、期初時点の始値（1day candle open）で評価。暗号資産の入出庫は入出庫日（入庫: confirmed_at / 出庫: requested_at）の始値で JPY 換算し、その日の価格を取得できなかった分のみ現在価格で仮評価する（内訳は flow_valuation）。純入出金は元本移動のみ（出金手数料を含まない）。調整後増減 = 単純増減 - 純入出金（市場変動 + 出金手数料コスト）。増減率（change_pct / adjusted_change_pct）は期初評価額が 0、現在評価額の 1% 未満、または期初の始値を解決できなかった暗号資産があり期初評価額が過小のときは出さない（分母が小さすぎて率が運用成績を表さない、または過小な分母になるため。理由は change_pct_unavailable_reason、過小時の資産名は unpriced_start_assets、増減額は通常どおり出る）。期初評価額そのものは過小である場合でも金額を出すが、過小であることは unpriced_start_assets と理由コードで申告する（黙って出さない）。';
+	'期初評価額は現在の保有状態から約定・入出金を逆算して復元し、期初時点の始値（1day candle open）で評価。暗号資産の入出庫は入出庫日（入庫: confirmed_at / 出庫: requested_at）の始値で JPY 換算し、その日の価格を取得できなかった分のみ現在価格で仮評価する（内訳は flow_valuation）。純入出金は元本移動のみ（出金手数料を含まない）。調整後増減 = 単純増減 - 純入出金（市場変動 + 出金手数料コスト）。増減率（change_pct / adjusted_change_pct）は期初評価額が 0、現在評価額の 1% 未満、期初の始値を解決できなかった暗号資産があり期初評価額が過小、または現在価格を解決できなかった保有があり現在評価額が過小のときは出さない（分母が小さすぎて率が運用成績を表さない、過小な分母になる、または分子が過小になるため。理由は change_pct_unavailable_reason、資産名は unpriced_start_assets / unpriced_current_assets、増減額は通常どおり出る）。期初評価額・現在評価額そのものは過小である場合でも金額を出すが、過小であることは unpriced_start_assets / unpriced_current_assets と理由コードで申告する（黙って出さない）。';
 
 /**
  * 期初始値の解決欠損（`start_boundary_unpriced`）が起きた期間の `note` に追記する文（#105）。
@@ -1588,9 +1588,27 @@ export const PERFORMANCE_NOTE_CHANGE_OVERSTATED =
  * 現在評価額は現在 ticker 価格を引けなかった保有を除外しているため、期初・現在の両端から
  * 落ちる資産では、その資産の値動きがどちらにも入らず増減額のずれが過大とも過小とも言えない。
  * ここで「過大」と書くと、抑止したはずの確定値を別の形で出すことになる。
+ *
+ * この文が出る期間では現在側の資産名も `unpriced_current_assets` に並ぶ（#109）。本文で
+ * 現在側にも言及しているため、`PERFORMANCE_NOTE_CHANGE_UNDERSTATED` は重ねない。
  */
 export const PERFORMANCE_NOTE_CHANGE_DIRECTION_UNKNOWN =
 	'この期間は期初の始値を解決できなかった暗号資産があり（change_pct_unavailable_reason=start_boundary_unpriced）、change_jpy / adjusted_change_jpy もその欠損の影響を受ける。現在評価額でも価格を解決できない保有があるため**ずれの向きは確定できない**（change_jpy_overstated は付かない）。増減額を運用成績として読まないこと。この期間の値動きはこの結果からは算出できない（資産推移シリーズも同じ日次価格に依存するため代替にならない）。';
+
+/**
+ * 現在価格の解決欠損（`current_value_unpriced`）が起きた期間の `note` に追記する文（#109）。
+ *
+ * `start_boundary_unpriced` の対称形。あちらは期初評価額（分母）が過小で増減額が過大、
+ * こちらは現在評価額（分子）が過小で増減額が**過小**になる。現在価格は `tickers_jpy` を
+ * 1 回叩いて全銘柄ぶんを取るため、その 1 回が失敗すると全暗号資産が一斉に脱落し、増減額が
+ * 「口座が消し飛んだ」ように見える偽の巨額損失になる。
+ *
+ * 本文が付くのは理由コードが `current_value_unpriced` の期間だけ ＝ 期初側からは何も
+ * 脱落していない構成なので、ずれの向き（過小）は常に確定する。両端から落ちる構成は
+ * `PERFORMANCE_NOTE_CHANGE_DIRECTION_UNKNOWN` 側が受け持つ。
+ */
+export const PERFORMANCE_NOTE_CHANGE_UNDERSTATED =
+	'この期間は現在価格を解決できなかった暗号資産の保有があり（change_pct_unavailable_reason=current_value_unpriced）、現在評価額から脱落した分がそのまま増減額から欠けるため change_jpy / adjusted_change_jpy は同じ額だけ過小（change_jpy_understated=true）。保有暗号資産が全て脱落している場合は現在評価額が JPY 残高だけに縮退しており、増減額は口座の損失ではなく価格取得の失敗を表す数になる。増減額を運用成績として読まないこと。この期間の値動きはこの結果からは算出できない（資産推移シリーズも最終点に同じ現在評価額を使うため代替にならない）。';
 
 export type PeriodPerformanceKey = 'daily' | 'monthly' | 'yearly';
 
@@ -1618,9 +1636,13 @@ export interface PortfolioPerformanceContext {
 	 *
 	 * **`flowPricing.currentPrices` はこの値を作ったのと同じ現在 ticker 価格 Map であること。**
 	 * 現在評価額は価格を引けなかった保有を除外して積む（`analyzeMyPortfolioHandler` の
-	 * `totalJpyValue`）ため、`changeJpyOverstated` は「その資産が現在評価額に載っているか」を
-	 * `flowPricing.currentPrices` の有無で代理判定する。別ソースを渡すと増減額のずれの向きを
-	 * 誤って確定値として申告することになる。
+	 * `totalJpyValue`）ため、`unpricedCurrentAssets` は「その資産が現在評価額に載っているか」を
+	 * `flowPricing.currentPrices` の有無で代理判定する（#109）。別ソースを渡すと現在評価額の
+	 * 欠損を検出できず、増減額のずれの向きも誤って確定値として申告することになる。
+	 *
+	 * この代理判定は `analyzeMyPortfolioHandler` 側の合計評価損益ガード
+	 * （`holdings[].jpy_value != null` の銘柄だけを `validJpyValue` / `validCostBasis` に積む）
+	 * と**同じ `prices` Map を起点にしている**ので、両者の対象銘柄は食い違わない。
 	 */
 	currentValue: number;
 	nowIso: string;
@@ -1736,36 +1758,51 @@ function unpricedStartAssets(
 }
 
 /**
- * `change_jpy` の**過大が確定する**かを判定する（#105 / CodeRabbit 指摘）。
+ * 現在保有のうち、現在 ticker 価格を解決できなかった非 JPY 資産を列挙する（#109）。
  *
- * `change_jpy = current_value_jpy - start_value_jpy` の両端は価格ソースが別で、現在評価額
- * （`ctx.currentValue`）は現在 ticker 価格を引けなかった保有を除外している
- * （`analyzeMyPortfolioHandler` の `totalJpyValue`）。つまり期初評価額から落ちた資産が
- * 現在評価額には正しく載っているときだけ、落ちた期初評価額がそのまま過大分になる。
+ * 該当資産は `ctx.currentValue`（handler の `totalJpyValue`）に積まれていないので、
+ * 現在評価額＝`change_jpy` の**分子**がその分だけ過小になる。`unpricedStartAssets`
+ * （期初側・分母）の対称形。
  *
- * 資産ごとの現在側の扱い:
- *
- * | 現在 ticker 価格 | 現在の保有 | 現在評価額 | 増減額へのずれ |
- * |---|---|---|---|
- * | あり | あり / なし | 正しく計上 | 期初の脱落分だけ**過大**（確定） |
- * | なし | なし（期間中に売り切り） | 寄与が本当に 0 なので正しい | 同上、**過大**（確定） |
- * | なし | あり | 保有ごと脱落 | 値動きが両端に入らず**向きが確定しない** |
- *
- * 1 資産でも最下段に該当したら false を返す（`every`）。過大な資産と向き不明の資産が
- * 混ざると合計のずれの向きも決まらないため、「確定できるときだけ確定値を出す」に倒す。
+ * 数量ゼロ・数値不正の保有は元から評価に寄与しないため対象外（`unpricedStartAssets` /
+ * `calcPeriodNetFlow` の `unpriced_assets` と同じ基準）。期間中に売り切った資産も
+ * `ctx.currentHoldings` に現れないので自動的に対象外になる——寄与が本当に 0 だからで、
+ * 現在側は正しい。
  *
  * 現在価格の有無は `ctx.flowPricing.currentPrices` で見る。呼び出し側（handler）が
  * `ctx.currentValue` を作ったのと**同じ ticker 価格 Map** を渡す契約になっている
- * （`PortfolioPerformanceContext.currentValue` の doc 参照）。
+ * （`PortfolioPerformanceContext.currentValue` の doc 参照）。現在価格は期間に依存しないので
+ * 3 期間で同じ結果になる。
  */
-function changeJpyOverstated(unpricedStart: string[], ctx: PortfolioPerformanceContext): boolean {
-	const currentAmounts = new Map(ctx.currentHoldings.map((h) => [h.asset, Number(h.amount)]));
-	return unpricedStart.every((asset) => {
-		if (ctx.flowPricing.currentPrices.has(asset)) return true;
-		const amount = currentAmounts.get(asset);
-		// 現在の保有がゼロ / 未保有なら現在評価額への寄与は本当に 0 で、現在側は正しい。
-		return !(amount != null && Number.isFinite(amount) && amount > 0);
-	});
+function unpricedCurrentAssets(ctx: PortfolioPerformanceContext): string[] | undefined {
+	const unpriced = new Set<string>();
+	for (const { asset, amount: rawAmount } of ctx.currentHoldings) {
+		if (asset === 'jpy') continue;
+		const amount = Number(rawAmount);
+		if (!Number.isFinite(amount) || amount <= 0) continue;
+		if (ctx.flowPricing.currentPrices.has(asset)) continue;
+		unpriced.add(asset);
+	}
+	if (unpriced.size === 0) return undefined;
+	return [...unpriced].sort();
+}
+
+/**
+ * `note` に足す追記文を理由コードから選ぶ（#105 / #109）。
+ *
+ * 追記が付くのは価格の解決欠損 2 種だけ。`start_value_zero` / `start_value_negligible` は
+ * 期初評価額が本当に小さいだけで増減額は正しく読めるので、`PERFORMANCE_NOTE` を延長しない。
+ *
+ * `start_boundary_unpriced` はずれの向きが確定するかで 2 変種に分かれる。
+ * `current_value_unpriced` が選ばれている時点で期初側は欠けていない（優先順位より）ので、
+ * 向きは常に「過小」で確定する。
+ */
+function performanceNote(reason: PortfolioChangePctUnavailableReason | undefined, changeOverstated: boolean): string {
+	if (reason === 'start_boundary_unpriced') {
+		return `${PERFORMANCE_NOTE}${changeOverstated ? PERFORMANCE_NOTE_CHANGE_OVERSTATED : PERFORMANCE_NOTE_CHANGE_DIRECTION_UNKNOWN}`;
+	}
+	if (reason === 'current_value_unpriced') return `${PERFORMANCE_NOTE}${PERFORMANCE_NOTE_CHANGE_UNDERSTATED}`;
+	return PERFORMANCE_NOTE;
 }
 
 /**
@@ -1801,14 +1838,29 @@ export function buildPeriodPerformance(spec: PeriodSpec, ctx: PortfolioPerforman
 		: calcPeriodNetFlow(ctx.dwData, spec.startMs, ctx.flowPricing);
 	const change = ctx.currentValue - startValue;
 	const unpricedStart = unpricedStartAssets(startHoldings, ctx.candlePriceData.boundaryPrices, spec.key);
-	// 増減額のずれの向きが確定するか（#105）。確定しない構成では「過大」と言い切らない。
-	const changeOverstated = unpricedStart != null && changeJpyOverstated(unpricedStart, ctx);
-	// 増減率の分母（期初評価額）が使えるか。change_pct / adjusted_change_pct は分母が同じなので
-	// 判定を 1 回で共有し、片方だけ率が出る状態を作らない。
-	// 始値解決欠損は start_value_negligible より優先（過小の原因が異なるため区別する）。
+	// 現在評価額（分子）から脱落した保有（#109）。期初側（分母）の unpricedStart と対称。
+	const unpricedCurrent = unpricedCurrentAssets(ctx);
+	// 増減額のずれの向きが確定するか。片端だけが欠けているときだけ向きが決まる（#105 / #109）:
+	//   - 期初側だけ欠ける → 脱落した期初評価額がそのまま**過大**分
+	//   - 現在側だけ欠ける → 脱落した現在評価額がそのまま**過小**分
+	//   - 両端で欠ける     → その資産の値動きがどちらにも入らず、過大とも過小とも言えない
+	// 「確定できるときだけ確定値を出す」に倒す。2 フラグが同時に立つことは無い。
+	const changeOverstated = unpricedStart != null && unpricedCurrent == null;
+	const changeUnderstated = unpricedCurrent != null && unpricedStart == null;
+	// 増減率を出せるか。change_pct / adjusted_change_pct は抑止条件が同じなので判定を 1 回で
+	// 共有し、片方だけ率が出る状態を作らない。優先順位は
+	//   start_boundary_unpriced > current_value_unpriced > start_value_zero > start_value_negligible
+	// で固定する（`PortfolioChangePctUnavailableReasonEnum` の doc）。価格の解決欠損 2 種は
+	// 「増減額を成績として読ませない」系なので、「増減額で読んでください」と誘導する
+	// start_value_* より必ず先に選ぶ。2 種のあいだの並びは表示上の選択でしかない
+	// （どちらでも率を抑止し誘導も止める）ので、既存コードを先に置いて #86 / #97 / #105 の
+	// 契約を変えない。両方成立していることは unpriced_start_assets と unpriced_current_assets が
+	// 同時に出ることで読める。
 	const pctUnavailableReason: PortfolioChangePctUnavailableReason | undefined = unpricedStart
 		? 'start_boundary_unpriced'
-		: changePctUnavailableReasonFor(startValue, ctx.currentValue);
+		: unpricedCurrent
+			? 'current_value_unpriced'
+			: changePctUnavailableReasonFor(startValue, ctx.currentValue);
 	// 未計測のフローを 0 とみなして引かない。引いてしまうと adjusted_change が
 	// 「入出金ゼロの口座の成績」という誤った確定値になる（それが -60.9% 型の表示の一因）。
 	const adjusted = flow.net_flow_jpy != null ? change - flow.net_flow_jpy : null;
@@ -1828,21 +1880,26 @@ export function buildPeriodPerformance(spec: PeriodSpec, ctx: PortfolioPerforman
 		period_start: spec.startIso,
 		period_end: ctx.nowIso,
 		// 増減額が欠損の影響を受ける期間だけ note を延長する（それ以外の期間は従来と同一文字列）。
-		note: unpricedStart
-			? `${PERFORMANCE_NOTE}${changeOverstated ? PERFORMANCE_NOTE_CHANGE_OVERSTATED : PERFORMANCE_NOTE_CHANGE_DIRECTION_UNKNOWN}`
-			: PERFORMANCE_NOTE,
+		// 追記文は**理由コードで選ぶ**——両端が欠ける構成では理由コードが start_boundary_unpriced に
+		// なり、その DIRECTION_UNKNOWN 文が「現在評価額でも価格を引けない保有がある」ことまで
+		// 述べるので、現在側の文を重ねない（#105 の note 文字列も 1 バイト変わらない）。
+		note: performanceNote(pctUnavailableReason, changeOverstated),
 		flow_measured: flow.measured,
 	};
 	if (unavailableReason) performance.flow_unavailable_reason = unavailableReason;
 	if (flow.unpriced_assets) performance.unpriced_flow_assets = flow.unpriced_assets;
 	if (flow.valuation) performance.flow_valuation = flow.valuation;
 	if (unpricedStart) performance.unpriced_start_assets = unpricedStart;
+	if (unpricedCurrent) performance.unpriced_current_assets = unpricedCurrent;
 	if (pctUnavailableReason) performance.change_pct_unavailable_reason = pctUnavailableReason;
 	// 分子（増減額）が過大であることの機械可読な申告（#105）。起点は率の抑止と同じ
 	// `unpricedStart`——分母を壊した欠損がそのまま分子の欠損なので、別条件を立てると
 	// 率と増減額の申告が食い違う。そのうえで**向きが確定する構成でだけ**立てる
-	// （`changeJpyOverstated`）。値を null にせずフラグで申告する理由は
-	// `PeriodPerformance.change_jpy_overstated` の doc を参照。
+	// （現在側から何も落ちていない ＝ `unpricedCurrent` が空のとき）。値を null にせず
+	// フラグで申告する理由は `PeriodPerformance.change_jpy_overstated` の doc を参照。
 	if (changeOverstated) performance.change_jpy_overstated = true;
+	// 分子（増減額）が**過小**であることの申告（#109）。起点は率の抑止と同じ `unpricedCurrent`。
+	// `change_jpy_overstated` とは排他（片方が立つのは他方の欠損が無いときだけ）。
+	if (changeUnderstated) performance.change_jpy_understated = true;
 	return performance;
 }

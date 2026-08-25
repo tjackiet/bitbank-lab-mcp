@@ -2907,10 +2907,13 @@ describe('analyze_my_portfolio — 入出庫日価格での評価', () => {
 			'crypto_withdrawal_estimated_jpy',
 		]);
 
-		// performance 側も同様に、新設 2 フィールドが既存キーの後ろに並ぶ
+		// performance 側も同様に、新設フィールドが既存キーの後ろに並ぶ
 		const perfKeys = Object.keys(result.data.daily_performance ?? {});
-		expect(perfKeys.at(-1)).toBe('flow_valuation');
 		expect(perfKeys.indexOf('note')).toBeLessThan(perfKeys.indexOf('flow_valuation'));
+		// #109 の申告も flow_valuation より後ろ。このフィクスチャの tickers は btc_jpy しか
+		// 返さないので ETH / XRP が現在評価額から落ち、実際に両フィールドが出る。
+		expect(perfKeys.indexOf('flow_valuation')).toBeLessThan(perfKeys.indexOf('unpriced_current_assets'));
+		expect(perfKeys.at(-1)).toBe('change_jpy_understated');
 
 		// 期間 DW サマリーも同様
 		const periodKeys = Object.keys(result.data.yearly_dw_summary ?? {});
@@ -5418,6 +5421,257 @@ describe('analyze_my_portfolio — 期初の始値が解決できないときの
 			expect(result.summary).not.toContain('増減額で読んでください');
 			expect(result.summary.match(/成績として読まないでください/g)).toHaveLength(3);
 		});
+	});
+});
+
+/**
+ * #109: 現在価格（ticker）を解決できない保有があると現在評価額が過小になり、
+ * `change_jpy` / `change_pct` が同じだけ**過小**になる。#105（期初側が過小で増減額が過大）の対称形。
+ *
+ * 最悪ケースは ticker の全失敗。`lib/tickers.ts` の `fetchTickerPricesMap` はエラーを握り潰して
+ * 空 Map を返すため、現在評価額が JPY 残高だけに縮退し「口座が消し飛んだ」ように見える
+ * 巨額の偽損失が出る。
+ */
+describe('analyze_my_portfolio — 現在価格が解決できないときの増減率の抑止（#109）', () => {
+	/** 2026-05-16T00:00:00Z = JST 2026-05-16 09:00 */
+	const fixedNowMs = Date.UTC(2026, 4, 16, 0);
+	/** JST 2026-05-16 00:00 = UTC 2026-05-15 15:00（当日足まで揃える起点） */
+	const todayJstMidnightMs = Date.UTC(2026, 4, 15, 15, 0, 0, 0);
+	/** 全期間の境界より前（期初保有が現在保有と一致する構成にする） */
+	const oldTradeMs = Date.UTC(2025, 0, 5);
+
+	function jpyAsset(onhand: string) {
+		return {
+			asset: 'jpy',
+			free_amount: onhand,
+			amount_precision: 0,
+			onhand_amount: onhand,
+			locked_amount: '0',
+			withdrawing_amount: '0',
+			withdrawal_fee: { under: '550', over: '770', threshold: '30000' },
+			stop_deposit: false,
+			stop_withdrawal: false,
+			collateral_ratio: '1',
+		};
+	}
+
+	function cryptoAsset(asset: string, amount: string) {
+		return { ...assetFixture(asset), free_amount: amount, onhand_amount: amount, locked_amount: '0' };
+	}
+
+	function buyTrade(tradeId: number, pair: string, amount: string, price: string) {
+		return {
+			trade_id: tradeId,
+			pair,
+			order_id: tradeId,
+			side: 'buy',
+			type: 'limit',
+			amount,
+			price,
+			maker_taker: 'maker',
+			fee_amount_base: '0',
+			fee_amount_quote: '0',
+			executed_at: oldTradeMs,
+		};
+	}
+
+	/** 年初・月初・当日すべての境界が解ける 1day 足（期初側は無傷にして現在側だけを壊す） */
+	function candlesThroughToday() {
+		return {
+			success: 1,
+			data: {
+				candlestick: [
+					{ type: '1day', ohlcv: generateOhlcv(120, 86400000, 15_000_000, todayJstMidnightMs - 119 * 86400000) },
+				],
+			},
+		};
+	}
+
+	/** BTC 0.1 + ETH 1.0 + JPY 63,314。tickers だけを差し替えて現在側の欠損を作る */
+	function setupMock(tickers?: unknown) {
+		setupFetchMock({
+			assets: { assets: [cryptoAsset('btc', '0.1'), cryptoAsset('eth', '1'), jpyAsset('63314')] },
+			trades: { trades: [buyTrade(1, 'btc_jpy', '0.1', '10000000'), buyTrade(2, 'eth_jpy', '1', '300000')] },
+			deposits: { deposits: [] },
+			withdrawals: { withdrawals: [] },
+			candles: candlesThroughToday(),
+			tickers,
+		});
+	}
+
+	/** ticker が丸ごと失敗した状態（`fetchTickerPricesMap` は空 Map を返す） */
+	const TICKERS_ALL_FAILED = { success: 0, data: { code: 10000 } };
+
+	async function analyze() {
+		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
+		return handler({ include_technical: false, include_pnl: true, include_deposit_withdrawal: true });
+	}
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(fixedNowMs);
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it('ticker 全失敗: 巨額の偽損失に率を付けず 3 期間とも current_value_unpriced で抑止する（本 issue の核）', async () => {
+		setupMock(TICKERS_ALL_FAILED);
+
+		const result = await analyze();
+		assertOk(result);
+
+		// 現在評価額は JPY 残高だけに縮退している
+		expect(result.data.daily_performance.current_value_jpy).toBe(63_314);
+		for (const key of ['daily_performance', 'monthly_performance', 'yearly_performance'] as const) {
+			const p = result.data[key];
+			expect(p.change_pct, key).toBeUndefined();
+			expect(p.adjusted_change_pct, key).toBeUndefined();
+			expect(p.change_pct_unavailable_reason, key).toBe('current_value_unpriced');
+			expect(p.unpriced_current_assets, key).toEqual(['btc', 'eth']);
+			expect(p.change_jpy_understated, key).toBe(true);
+			// 期初側は無傷（対称形を取り違えていないこと）
+			expect(p.unpriced_start_assets, key).toBeUndefined();
+			expect(p.change_jpy_overstated, key).toBeUndefined();
+		}
+		// -96% 型の偽の増減率が JSON のどこにも出ない
+		expect(JSON.stringify(result.data)).not.toMatch(/"(adjusted_)?change_pct":/);
+	});
+
+	it('ticker 全失敗: 申告 3 箇所（冒頭 warning / ※ 行 / note）が整合し増減額へ誘導しない', async () => {
+		setupMock(TICKERS_ALL_FAILED);
+
+		const result = await analyze();
+		assertOk(result);
+
+		// (1) content 先頭の warning（`.claude/rules/tools.md`: JSON より前）
+		const warning = (result.meta.warnings ?? []).find((w: string) => w.includes('増減率'));
+		expect(warning).toBeDefined();
+		expect(warning).not.toContain('そちらで読むこと');
+		expect(warning).toContain('change_jpy_understated=true');
+		expect(warning).toContain('成績として読まないこと');
+		expect(warning).toContain('「ゼロ %」の意味ではありません');
+		const currentWarning = (result.meta.warnings ?? []).find((w: string) => w.includes('現在価格を解決できず'));
+		expect(currentWarning).toContain('BTC, ETH');
+		expect(currentWarning).toContain('保有する暗号資産が全て脱落しています');
+		expect(currentWarning).toContain('total_unrealized_pnl');
+		expect(result.summary.split('\n').slice(0, 8).join('\n')).toContain('増減率');
+
+		// (2) 各期間ブロックの ※ 行
+		expect(result.summary.match(/※ 増減率・入出金調整後増減率は非表示/g)).toHaveLength(3);
+		expect(result.summary).not.toContain('増減額で読んでください');
+		expect(result.summary.match(/成績として読まないでください/g)).toHaveLength(3);
+		expect(result.summary).toContain('※ 上の現在評価額は過小');
+		expect(result.summary).toContain('脱落した分がそのまま上の増減額の過小分です');
+
+		// (3) note
+		expect(result.data.daily_performance.note).toContain('change_jpy_understated=true');
+		expect(result.data.daily_performance.note).toContain('増減額を運用成績として読まないこと');
+	});
+
+	it('ticker 全失敗: 合計評価損益の既存ガードと抑止条件が食い違わない', async () => {
+		setupMock(TICKERS_ALL_FAILED);
+
+		const result = await analyze();
+		assertOk(result);
+
+		// 現在価格を引けた銘柄が 1 つも無いので評価損益は元から抑止されている（handler の既存ガード）
+		expect(result.data.total_unrealized_pnl).toBeUndefined();
+		expect(result.data.total_cost_basis).toBeUndefined();
+		// performance 側も同じ銘柄集合を根拠に抑止する（片方だけ守られる非対称を作らない）
+		const unpriced = result.data.daily_performance.unpriced_current_assets ?? [];
+		const excludedFromPnl = (result.data.holdings ?? [])
+			.filter((h: { asset: string; jpy_value?: number }) => h.asset !== 'jpy' && h.jpy_value == null)
+			.map((h: { asset: string }) => h.asset)
+			.sort();
+		expect(unpriced).toEqual(excludedFromPnl);
+	});
+
+	it('1 銘柄だけ現在価格が引けない: どの銘柄が落ちたかを出力だけで特定できる', async () => {
+		// btc_jpy だけ返す ticker。ETH が現在評価額から落ちる。
+		setupMock({
+			success: 1,
+			data: [{ pair: 'btc_jpy', sell: '15500000', buy: '15490000', last: '15500000', vol: '1', timestamp: fixedNowMs }],
+		});
+
+		const result = await analyze();
+		assertOk(result);
+
+		const daily = result.data.daily_performance;
+		expect(daily.change_pct_unavailable_reason).toBe('current_value_unpriced');
+		expect(daily.unpriced_current_assets).toEqual(['eth']);
+		expect(daily.change_jpy_understated).toBe(true);
+		expect(result.summary).toContain('ETH');
+		const currentWarning = (result.meta.warnings ?? []).find((w: string) => w.includes('現在価格を解決できず'));
+		expect(currentWarning).toContain('ETH');
+		// 全滅ではないので ticker 全失敗の断定はしない
+		expect(currentWarning).not.toContain('保有する暗号資産が全て脱落しています');
+		// 合計評価損益は BTC ぶんだけで立つ（既存ガードと同じ銘柄集合）
+		expect(result.data.total_unrealized_pnl).toBeDefined();
+	});
+
+	it('現在価格がすべて引けている通常時: 従来どおり率が出て新設キーも出ない（回帰）', async () => {
+		setupMock({
+			success: 1,
+			data: [
+				{ pair: 'btc_jpy', sell: '15500000', buy: '15490000', last: '15500000', vol: '1', timestamp: fixedNowMs },
+				{ pair: 'eth_jpy', sell: '380000', buy: '379000', last: '380000', vol: '1', timestamp: fixedNowMs },
+			],
+		});
+
+		const result = await analyze();
+		assertOk(result);
+
+		expect(result.data.daily_performance.change_pct).toBeDefined();
+		expect(result.data.daily_performance.change_pct_unavailable_reason).toBeUndefined();
+		expect(JSON.stringify(result.data)).not.toContain('"unpriced_current_assets":');
+		expect(JSON.stringify(result.data)).not.toContain('"change_jpy_understated":');
+		expect(result.summary).not.toContain('※ 上の現在評価額は過小');
+	});
+
+	it('JPY のみ保有では誤検知しない', async () => {
+		setupFetchMock({
+			assets: { assets: [jpyAsset('1000000')] },
+			trades: { trades: [] },
+			deposits: { deposits: [] },
+			withdrawals: { withdrawals: [] },
+			candles: candlesThroughToday(),
+			tickers: TICKERS_ALL_FAILED,
+		});
+
+		const result = await analyze();
+		assertOk(result);
+
+		for (const key of ['daily_performance', 'monthly_performance', 'yearly_performance'] as const) {
+			expect(result.data[key].unpriced_current_assets, key).toBeUndefined();
+			expect(result.data[key].change_jpy_understated, key).toBeUndefined();
+		}
+		expect(JSON.stringify(result.data)).not.toContain('"current_value_unpriced"');
+	});
+
+	it('期初側の欠損と同時成立: start_boundary_unpriced が優先され向きは確定しない', async () => {
+		// 足も ticker も引けない ＝ 両端から落ちる。#105 の向き不明分岐がそのまま効く。
+		setupFetchMock({
+			assets: { assets: [cryptoAsset('btc', '0.1'), jpyAsset('63314')] },
+			trades: { trades: [buyTrade(1, 'btc_jpy', '0.1', '10000000')] },
+			deposits: { deposits: [] },
+			withdrawals: { withdrawals: [] },
+			candleFail: () => true,
+			tickers: TICKERS_ALL_FAILED,
+		});
+
+		const result = await analyze();
+		assertOk(result);
+
+		const daily = result.data.daily_performance;
+		expect(daily.change_pct_unavailable_reason).toBe('start_boundary_unpriced');
+		expect(daily.unpriced_start_assets).toEqual(['btc']);
+		expect(daily.unpriced_current_assets).toEqual(['btc']);
+		expect(daily.change_jpy_overstated).toBeUndefined();
+		expect(daily.change_jpy_understated).toBeUndefined();
+		expect(daily.note).toContain('ずれの向きは確定できない');
+		expect(result.summary).not.toContain('増減額で読んでください');
 	});
 });
 
