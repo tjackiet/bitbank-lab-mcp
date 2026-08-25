@@ -213,7 +213,11 @@ describe('analyze_ichimoku_snapshot', () => {
 		// summary は 1 行のラベルではなく、数値データを含む本文であること
 		// （.claude/rules/tools.md: LLM は content[0].text しか読めない）。
 		expect(res.summary).toContain('一目均衡表分析');
+		// 見出しだけでなく、モックの入力値がそのまま数値として本文に出ていることまで見る
+		// （見出しだけの検証だと【数値データ】が空でも通ってしまう）。
 		expect(res.summary).toContain('【数値データ】');
+		expect(res.summary).toContain('転換線: 90 / 基準線: 95');
+		expect(res.summary).toContain('雲(今日): spanA=100 spanB=110');
 		expect(res.summary.split('\n').length).toBeGreaterThan(1);
 	});
 

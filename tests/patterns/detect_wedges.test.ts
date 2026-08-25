@@ -294,7 +294,8 @@ describe('detectWedges', () => {
 		const ctx = buildCtx({ candles, pivots, includeForming: true });
 		const result = detectWedges(ctx);
 
-		const withTarget = result.patterns.filter((p) => p.breakoutTarget !== undefined);
+		// 他のウェッジ種別が breakoutTarget を持つことで通ってしまわないよう falling_wedge に絞る
+		const withTarget = result.patterns.filter((p) => p.type === 'falling_wedge' && p.breakoutTarget !== undefined);
 		expect(withTarget.length).toBeGreaterThan(0);
 		expect(withTarget[0]?.targetMethod).toBe('pattern_height');
 	});
