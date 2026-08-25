@@ -1569,6 +1569,18 @@ export function calcPeriodNetFlow(
 export const PERFORMANCE_NOTE =
 	'期初評価額は現在の保有状態から約定・入出金を逆算して復元し、期初時点の始値（1day candle open）で評価。暗号資産の入出庫は入出庫日（入庫: confirmed_at / 出庫: requested_at）の始値で JPY 換算し、その日の価格を取得できなかった分のみ現在価格で仮評価する（内訳は flow_valuation）。純入出金は元本移動のみ（出金手数料を含まない）。調整後増減 = 単純増減 - 純入出金（市場変動 + 出金手数料コスト）。増減率（change_pct / adjusted_change_pct）は期初評価額が 0、現在評価額の 1% 未満、または期初の始値を解決できなかった暗号資産があり期初評価額が過小のときは出さない（分母が小さすぎて率が運用成績を表さない、または過小な分母になるため。理由は change_pct_unavailable_reason、過小時の資産名は unpriced_start_assets、増減額は通常どおり出る）。期初評価額そのものは過小である場合でも金額を出すが、過小であることは unpriced_start_assets と理由コードで申告する（黙って出さない）。';
 
+/**
+ * 期初始値の解決欠損（`start_boundary_unpriced`）が起きた期間の `note` に追記する文（#105）。
+ *
+ * `PERFORMANCE_NOTE` は「増減額は通常どおり出る」としか言っておらず、**その増減額が
+ * 信用できるかは言っていない**。期初評価額から脱落した分はそのまま `change_jpy` の
+ * 過大分になるので、率を抑止した理由がそのまま分子の欠損でもあることをここで明示する。
+ *
+ * 該当期間にだけ連結する（抑止が起きていない期間の `note` は従来と 1 バイトも変えない）。
+ */
+export const PERFORMANCE_NOTE_CHANGE_OVERSTATED =
+	'この期間は期初の始値を解決できなかった暗号資産があり（change_pct_unavailable_reason=start_boundary_unpriced）、期初評価額から脱落した分がそのまま増減額に乗るため change_jpy / adjusted_change_jpy も同じ額だけ過大（change_jpy_overstated=true）。増減額を運用成績として読まないこと。この期間の値動きはこの結果からは算出できない（資産推移シリーズも同じ日次価格に依存するため代替にならない）。';
+
 export type PeriodPerformanceKey = 'daily' | 'monthly' | 'yearly';
 
 export interface PeriodSpec {
@@ -1760,7 +1772,8 @@ export function buildPeriodPerformance(spec: PeriodSpec, ctx: PortfolioPerforman
 		adjusted_change_pct: adjustedChangePct(adjusted, startValue, pctUnavailableReason),
 		period_start: spec.startIso,
 		period_end: ctx.nowIso,
-		note: PERFORMANCE_NOTE,
+		// 増減額が過大な期間だけ note を延長する（それ以外の期間は従来と同一文字列）。
+		note: unpricedStart ? `${PERFORMANCE_NOTE}${PERFORMANCE_NOTE_CHANGE_OVERSTATED}` : PERFORMANCE_NOTE,
 		flow_measured: flow.measured,
 	};
 	if (unavailableReason) performance.flow_unavailable_reason = unavailableReason;
@@ -1768,5 +1781,10 @@ export function buildPeriodPerformance(spec: PeriodSpec, ctx: PortfolioPerforman
 	if (flow.valuation) performance.flow_valuation = flow.valuation;
 	if (unpricedStart) performance.unpriced_start_assets = unpricedStart;
 	if (pctUnavailableReason) performance.change_pct_unavailable_reason = pctUnavailableReason;
+	// 分子（増減額）が過大であることの機械可読な申告（#105）。判定は率の抑止と同じ
+	// `unpricedStart` を単一ソースにする——分母を壊した欠損がそのまま分子の欠損なので、
+	// 別条件を立てると率と増減額の申告が食い違う。値を null にせずフラグで申告する理由は
+	// `PeriodPerformance.change_jpy_overstated` の doc を参照。
+	if (unpricedStart) performance.change_jpy_overstated = true;
 	return performance;
 }

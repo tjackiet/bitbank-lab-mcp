@@ -209,6 +209,43 @@ const CHANGE_PCT_UNAVAILABLE_NOTE: Record<PortfolioChangePctUnavailableReason, s
 		'期初の始値を解決できなかった暗号資産を評価に含められず期初評価額が過小になっているため。過小な分母では率が運用成績を表さない',
 };
 
+/**
+ * 理由コードごとの「増減額をどう読むか」（summary の注記行に足す短句）。
+ *
+ * 率を抑止した理由は 2 系統ある（#105）:
+ *
+ * - `start_value_zero` / `start_value_negligible` — 期初評価額が**本当に**小さい。分子
+ *   （`change_jpy`）は正しいので、従来どおり増減額で読ませる。
+ * - `start_boundary_unpriced` — 期初の始値が引けず暗号資産が期初評価から**脱落**している。
+ *   分母を壊した欠損がそのまま分子の欠損なので、増減額も同じ額だけ過大。ここで増減額へ
+ *   誘導すると、率より壊れた数字を確定値として読ませることになる（#54 と同じ構造）。
+ *
+ * 代替の読み方は**示さない**。資産推移シリーズ（`*_equity_series`）は同じ 1day candle の
+ * 始値に依存し、引けなかった日付は現在価格にフォールバックするため、始値が欠けている
+ * まさにその期間では値動きを表さない（`buildEquitySeries` の `fallbackPrices`）。
+ * 壊れた代替へ誘導するくらいなら「算出できません」と言い切る。
+ */
+const CHANGE_JPY_GUIDANCE_LINE: Record<PortfolioChangePctUnavailableReason, string> = {
+	start_value_zero: '増減額で読んでください',
+	start_value_negligible: '増減額で読んでください',
+	start_boundary_unpriced:
+		'増減額（change_jpy / adjusted_change_jpy）も脱落した期初評価額の分だけ過大なので、成績として読まないでください。この期間の値動きはこの結果からは算出できません',
+};
+
+/**
+ * 理由コードごとの「増減額をどう読むか」（content 先頭の warning に足す文）。
+ *
+ * 分岐の理由は `CHANGE_JPY_GUIDANCE_LINE` と同じ。warning は LLM が最初に読む行なので、
+ * `start_boundary_unpriced` では代替として資産推移シリーズを持ち出さないことまで明示する
+ * （テキストだけ読む LLM は「じゃあ series を見よう」と動き、そこも現在価格代替で埋まっている）。
+ */
+const CHANGE_JPY_GUIDANCE_WARNING: Record<PortfolioChangePctUnavailableReason, string> = {
+	start_value_zero: '増減額（change_jpy / adjusted_change_jpy）は出しているので成績はそちらで読むこと',
+	start_value_negligible: '増減額（change_jpy / adjusted_change_jpy）は出しているので成績はそちらで読むこと',
+	start_boundary_unpriced:
+		'増減額（change_jpy / adjusted_change_jpy）も期初評価額から脱落した分だけ過大なので（change_jpy_overstated=true）、成績として読まないこと。該当期間の値動きはこの結果からは算出できません（資産推移シリーズも同じ日次価格に依存し、始値を引けなかった日付は現在価格で代替されるため代替になりません）',
+};
+
 /** 数量乖離の理由コードごとの原因表示（銘柄名に添える短句）。 */
 const QTY_MISMATCH_CAUSE: Record<PortfolioQtyMismatchReason, string> = {
 	has_crypto_deposits: '入庫日の価格を解決できない暗号資産の入庫あり',
@@ -341,6 +378,9 @@ function qtyInvariantInputsOf(
  * 落とさず**金額 + なぜ率が出ないか**を 1 行足す。率が消えた理由が分からないと
  * 「率を取れなかった」のか「ゼロ %」なのかを読み手が区別できない。注記は増減額の直後に置く
  * （`change_pct` と `adjusted_change_pct` は分母が同じで必ず同時に落ちるため 1 行で両方を説明する）。
+ *
+ * その注記に足す「増減額をどう読むか」は**理由コードで分岐する**（`CHANGE_JPY_GUIDANCE_LINE`）。
+ * `start_boundary_unpriced` では分子（`change_jpy`）も同じ欠損で過大なので、増減額へ誘導しない。
  */
 function buildPerformanceLines(label: string, p: PeriodPerformance): string[] {
 	const lines: string[] = [];
@@ -351,12 +391,12 @@ function buildPerformanceLines(label: string, p: PeriodPerformance): string[] {
 	);
 	if (p.change_pct_unavailable_reason) {
 		lines.push(
-			`  ※ 増減率・入出金調整後増減率は非表示（${CHANGE_PCT_UNAVAILABLE_NOTE[p.change_pct_unavailable_reason]}）。増減額で読んでください`,
+			`  ※ 増減率・入出金調整後増減率は非表示（${CHANGE_PCT_UNAVAILABLE_NOTE[p.change_pct_unavailable_reason]}）。${CHANGE_JPY_GUIDANCE_LINE[p.change_pct_unavailable_reason]}`,
 		);
 	}
 	if (p.unpriced_start_assets && p.unpriced_start_assets.length > 0) {
 		lines.push(
-			`  ※ 上の期初評価額は過小: ${p.unpriced_start_assets.map((a) => a.toUpperCase()).join(', ')} の始値を解決できず含めていません`,
+			`  ※ 上の期初評価額は過小: ${p.unpriced_start_assets.map((a) => a.toUpperCase()).join(', ')} の始値を解決できず含めていません（脱落した分がそのまま上の増減額の過大分です）`,
 		);
 	}
 
@@ -1767,7 +1807,7 @@ export default async function analyzeMyPortfolioHandler(args: {
 		}
 		if (startBoundaryUnpricedAssets.length > 0) {
 			calcWarnings.push(
-				`${startBoundaryUnpricedAssets.map((a) => a.toUpperCase()).join(', ')} は期初の始値を解決できず期初評価額に含めていません（当日足が未取得の時間帯では数十分後に解消しうる）。期初評価額は過小です`,
+				`${startBoundaryUnpricedAssets.map((a) => a.toUpperCase()).join(', ')} は期初の始値を解決できず期初評価額に含めていません（当日足が未取得の時間帯では数十分後に解消しうる）。期初評価額は過小で、脱落した分だけ該当期間の増減額（change_jpy / adjusted_change_jpy）が過大になります（該当期間には change_jpy_overstated=true が付きます）`,
 			);
 		}
 		// 期間ごとに理由が割れうる（前日比は期初 0、年初比は期初が極小、など）ので理由コード単位でまとめる。
@@ -1776,7 +1816,7 @@ export default async function analyzeMyPortfolioHandler(args: {
 			const labels = changePctSuppressed.filter((e) => e.reason === reason).map((e) => e.label);
 			if (labels.length === 0) continue;
 			calcWarnings.push(
-				`${labels.join(' / ')}の増減率（change_pct / adjusted_change_pct）は出していません（${CHANGE_PCT_UNAVAILABLE_NOTE[reason]}）。増減額（change_jpy / adjusted_change_jpy）は出しているので成績はそちらで読むこと。率が無いのは「ゼロ %」の意味ではありません`,
+				`${labels.join(' / ')}の増減率（change_pct / adjusted_change_pct）は出していません（${CHANGE_PCT_UNAVAILABLE_NOTE[reason]}）。${CHANGE_JPY_GUIDANCE_WARNING[reason]}。率が無いのは「ゼロ %」の意味ではありません`,
 			);
 		}
 		// 入出庫日の日次価格を解決できず現在価格に落ちた分は、評価額が相場と連動して動く

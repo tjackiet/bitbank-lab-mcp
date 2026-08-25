@@ -34,6 +34,7 @@ import {
 	flowUnavailableReasonFor,
 	getJstPeriodBoundaries,
 	PERFORMANCE_NOTE,
+	PERFORMANCE_NOTE_CHANGE_OVERSTATED,
 	type PortfolioPerformanceContext,
 	qtyInvariantHolds,
 	qtyInvariantTolerance,
@@ -2703,6 +2704,31 @@ describe('buildPeriodPerformance', () => {
 			expect(result.change_pct_unavailable_reason).toBe('start_value_negligible');
 		});
 
+		it('start_value_negligible では増減額の過大を申告しない（#105 回帰: 分子は正しい）', () => {
+			// 期初が本当に小さいだけで change_jpy は実際の増減そのもの。フラグを立てると
+			// 「読める値」を「読めない値」と誤って申告することになる。
+			const result = buildPeriodPerformance(
+				{ key: 'yearly', startMs: 1000, startIso: 's' },
+				jpyDepositCtx(1_552_826, 1_547_081),
+			);
+			expect(result.change_pct_unavailable_reason).toBe('start_value_negligible');
+			expect(result.change_jpy_overstated).toBeUndefined();
+			expect(result.note).toBe(PERFORMANCE_NOTE);
+			expect(JSON.stringify(result)).not.toContain('change_jpy_overstated');
+		});
+
+		it('start_value_zero でも増減額の過大を申告しない（#105 回帰）', () => {
+			// 期初は空口座（全額が期間中の入金）。期初が本当に 0 なので change_jpy は正しい。
+			const result = buildPeriodPerformance(
+				{ key: 'yearly', startMs: 1000, startIso: 's' },
+				jpyDepositCtx(1_000_000, 1_000_000),
+			);
+			expect(result.start_value_jpy).toBe(0);
+			expect(result.change_pct_unavailable_reason).toBe('start_value_zero');
+			expect(result.change_jpy_overstated).toBeUndefined();
+			expect(result.note).toBe(PERFORMANCE_NOTE);
+		});
+
 		it('全額出金して現在評価額が 0 になった口座は抑止しない（-100% は意味のある率）', () => {
 			// 期初 1,000,000 → 全額出金して現在 0。相対基準は分母（期初）側を見るので、
 			// 現在評価額が小さいことを理由に率を落としてはいけない。
@@ -2880,6 +2906,86 @@ describe('buildPeriodPerformance', () => {
 			expect(result.adjusted_change_pct).toBeUndefined();
 			expect(result.change_pct_unavailable_reason).toBe('start_boundary_unpriced');
 			expect(result.unpriced_start_assets).toEqual(['btc']);
+		});
+
+		it('change_jpy は出したまま change_jpy_overstated=true を付ける（#105: 値 + フラグ）', () => {
+			// 期初 63,314 円（JPY のみ）→ 現在 1,563,314 円。差の 1,500,000 円は BTC が期初評価から
+			// 脱落した分そのものであって値動きではない。値は消さずフラグで申告する
+			// （change_jpy = current_value_jpy - start_value_jpy なので消費者が再計算できてしまい、
+			//   null 化は隠蔽にならず契約を壊すだけ）。
+			const ctx = btcJpyStartCtx({ yearStart: 10_000_000, monthStart: 10_000_000 });
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.change_jpy).toBe(result.current_value_jpy - result.start_value_jpy);
+			expect(result.change_jpy_overstated).toBe(true);
+			// adjusted_change_jpy も同じ額だけ過大（純入出金は分母と無関係なので過大分が残る）
+			expect(result.adjusted_change_jpy).toBe(result.change_jpy);
+		});
+
+		it('note に増減額も過大である旨を追記する（#105）', () => {
+			const ctx = btcJpyStartCtx({ yearStart: 10_000_000, monthStart: 10_000_000 });
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.note).toBe(`${PERFORMANCE_NOTE}${PERFORMANCE_NOTE_CHANGE_OVERSTATED}`);
+			expect(result.note).toContain('増減額を運用成績として読まないこと');
+			expect(result.note).toContain('算出できない');
+		});
+
+		it('一部資産だけ欠損でもフラグは立つ（脱落分だけ過大）', () => {
+			const ctx = makeCtx({
+				currentHoldings: [
+					{ asset: 'btc', amount: '0.1' },
+					{ asset: 'eth', amount: '1' },
+				],
+				dwData: makeEmptyDw(),
+				candlePriceData: {
+					boundaryPrices: makeBoundaryPrices([
+						['btc', { dayStart: 15_000_000 }],
+						['eth', { yearStart: 400_000 }],
+					]),
+					dailyPrices: new Map(),
+				},
+				flowPricing: currentPriceOnly(
+					new Map([
+						['btc', 15_000_000],
+						['eth', 380_000],
+					]),
+				),
+				currentValue: Math.round(0.1 * 15_000_000 + 1 * 380_000),
+			});
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.unpriced_start_assets).toEqual(['eth']);
+			expect(result.change_jpy_overstated).toBe(true);
+		});
+
+		it('daily / monthly / yearly の 3 期間でフラグと note が一貫する（#105）', () => {
+			const ctx = makeCtx({
+				currentHoldings: [
+					{ asset: 'btc', amount: '0.1' },
+					{ asset: 'jpy', amount: '63314' },
+				],
+				dwData: makeEmptyDw(),
+				candlePriceData: { boundaryPrices: new Map(), dailyPrices: new Map() },
+				flowPricing: currentPriceOnly(new Map([['btc', 15_000_000]])),
+				currentValue: Math.round(0.1 * 15_000_000 + 63_314),
+			});
+			for (const key of ['daily', 'monthly', 'yearly'] as const) {
+				const result = buildPeriodPerformance({ key, startMs: 1000, startIso: 's' }, ctx);
+				expect(result.change_jpy_overstated, key).toBe(true);
+				expect(result.note, key).toContain(PERFORMANCE_NOTE_CHANGE_OVERSTATED);
+			}
+		});
+
+		it('価格が揃っている通常時: フラグも note の追記も出ない（JSON 一致の回帰）', () => {
+			const ctx = btcJpyStartCtx({
+				yearStart: 10_000_000,
+				monthStart: 10_000_000,
+				dayStart: 11_000_000,
+				jpyAmount: '0',
+				btcAmount: '1',
+			});
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.change_jpy_overstated).toBeUndefined();
+			expect(result.note).toBe(PERFORMANCE_NOTE);
+			expect(JSON.stringify(result)).not.toContain('change_jpy_overstated');
 		});
 
 		it('エントリはあるが 3 境界すべて undefined: 過大な率を出さない', () => {

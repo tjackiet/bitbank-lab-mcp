@@ -5188,6 +5188,26 @@ describe('analyze_my_portfolio — 期初評価額が極小のときの増減率
 		expect(result.data.yearly_performance.change_pct_unavailable_reason).toBeUndefined();
 		expect(result.meta.changePctUnavailablePeriods).toBeUndefined();
 		expect(result.summary).not.toContain('※ 増減率・入出金調整後増減率は非表示');
+		// #105: 抑止が起きない通常時の出力は従来と JSON 一致する（キーごと増えない）
+		expect(JSON.stringify(result.data)).not.toContain('change_jpy_overstated');
+	});
+
+	it('start_value_negligible では従来どおり増減額へ誘導する（#105 回帰: 分子は正しい）', async () => {
+		// 期初が本当に小さいだけで change_jpy は実際の増減。ここの誘導文を変えてはいけない。
+		setupJpyDepositMock({ onhand: '1552826', amount: '1547081', confirmedAt: todayDepositAtMs });
+
+		const result = await analyze();
+		assertOk(result);
+
+		expect(result.summary).toContain('増減額で読んでください');
+		expect(result.summary).not.toContain('成績として読まないでください');
+		const warning = (result.meta.warnings ?? []).find((w: string) => w.includes('増減率'));
+		expect(warning).toContain('増減額（change_jpy / adjusted_change_jpy）は出しているので成績はそちらで読むこと');
+		expect(warning).toContain('「ゼロ %」の意味ではありません');
+		for (const key of ['daily_performance', 'monthly_performance', 'yearly_performance'] as const) {
+			expect(result.data[key].change_jpy_overstated, key).toBeUndefined();
+		}
+		expect(JSON.stringify(result.data)).not.toContain('change_jpy_overstated');
 	});
 });
 
@@ -5283,6 +5303,89 @@ describe('analyze_my_portfolio — 期初の始値が解決できないときの
 		const warning = (result.meta.warnings ?? []).find((w: string) => w.includes('期初の始値'));
 		expect(warning).toBeDefined();
 		expect(warning).toContain('過小');
+	});
+
+	/**
+	 * #105: 率を抑止した欠損はそのまま分子（増減額）の欠損でもある。
+	 * 抑止の申告は 3 箇所（content 先頭の warning / 期間ブロックの ※ 行 / *_performance.note）に
+	 * 出るので、いずれも増減額へ誘導しないことを 3 箇所とも確認する。
+	 */
+	describe('増減額への誘導の抑止（#105）', () => {
+		it('summary の ※ 行が増減額へ誘導せず、算出できないことを明示する', async () => {
+			setupMissingDayStartMock();
+
+			const result = await analyze();
+			assertOk(result);
+
+			const dailyBlock = result.summary.split('\n').filter((l: string) => l.includes('※ 増減率・入出金調整後増減率'));
+			expect(dailyBlock).toHaveLength(1);
+			expect(dailyBlock[0]).not.toContain('増減額で読んでください');
+			expect(dailyBlock[0]).toContain('成績として読まないでください');
+			expect(dailyBlock[0]).toContain('算出できません');
+			// 期初過小の行も、脱落分が増減額の過大分であることまで言う
+			expect(result.summary).toContain('脱落した分がそのまま上の増減額の過大分です');
+		});
+
+		it('content 先頭の warning が増減額へ誘導しない（「ゼロ %」の一文は維持）', async () => {
+			setupMissingDayStartMock();
+
+			const result = await analyze();
+			assertOk(result);
+
+			const warning = (result.meta.warnings ?? []).find((w: string) => w.includes('増減率'));
+			expect(warning).toBeDefined();
+			expect(warning).not.toContain('そちらで読むこと');
+			expect(warning).toContain('change_jpy_overstated=true');
+			expect(warning).toContain('成績として読まないこと');
+			expect(warning).toContain('資産推移シリーズも同じ日次価格に依存');
+			expect(warning).toContain('「ゼロ %」の意味ではありません');
+			// 期初過小の warning 側も増減額の過大に言及する（3 箇所の整合）
+			const startWarning = (result.meta.warnings ?? []).find((w: string) => w.includes('期初の始値'));
+			expect(startWarning).toContain('増減額（change_jpy / adjusted_change_jpy）が過大');
+			// `.claude/rules/tools.md`: 計算層 warning は content 先頭（JSON より前）
+			expect(result.summary.split('\n').slice(0, 6).join('\n')).toContain('増減率');
+		});
+
+		it('change_jpy は残したまま change_jpy_overstated=true と note で申告する', async () => {
+			setupMissingDayStartMock();
+
+			const result = await analyze();
+			assertOk(result);
+
+			const daily = result.data.daily_performance;
+			expect(daily.change_jpy).toBe(daily.current_value_jpy - daily.start_value_jpy);
+			expect(daily.change_jpy_overstated).toBe(true);
+			expect(daily.note).toContain('change_jpy_overstated=true');
+			expect(daily.note).toContain('増減額を運用成績として読まないこと');
+			// 抑止が起きていない期間には付かない（当日足だけが欠けている構成）
+			expect(result.data.monthly_performance.change_jpy_overstated).toBeUndefined();
+			expect(result.data.yearly_performance.change_jpy_overstated).toBeUndefined();
+			expect(result.data.monthly_performance.note).not.toContain('change_jpy_overstated');
+		});
+
+		it('3 期間すべて始値を解決できないとき 3 期間ともフラグが立つ', async () => {
+			// 足を丸ごと引けない構成（boundaryPrices にエントリが無い）。daily 固有の対処に
+			// なっていないこと＝ buildPeriodPerformance 共通経路で効いていることの確認。
+			setupFetchMock({
+				assets: btcJpyAssets('0.1', '63314'),
+				trades: { trades: [] },
+				deposits: { deposits: [] },
+				withdrawals: { withdrawals: [] },
+				candleFail: () => true,
+			});
+
+			const result = await analyze();
+			assertOk(result);
+
+			for (const key of ['daily_performance', 'monthly_performance', 'yearly_performance'] as const) {
+				const p = result.data[key];
+				expect(p.change_pct_unavailable_reason, key).toBe('start_boundary_unpriced');
+				expect(p.change_jpy_overstated, key).toBe(true);
+				expect(p.note, key).toContain('change_jpy_overstated=true');
+			}
+			expect(result.summary).not.toContain('増減額で読んでください');
+			expect(result.summary.match(/成績として読まないでください/g)).toHaveLength(3);
+		});
 	});
 });
 
