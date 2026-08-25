@@ -1536,4 +1536,77 @@ describe('detect_patterns fixtures', () => {
 			expect(sliced.data.patterns.length).toBeLessThan(unsliced.data.patterns.length);
 		});
 	});
+	// スキャン窓 = 直近 limit 本になった結果、limit をスキーマ下限（20）付近まで小さくすると
+	// swingDepth 分が前後から落ちてピボット候補が残らず「構造上ゼロ件」の窓が作れるようになった。
+	// candles.length < 20 のガードは「ちょうど 20」で通ってしまうので、警告で申告する。
+	describe('スキャン窓不足の警告', () => {
+		/** 平坦でない適当な足を count 本作る（本数だけが論点なので形は問わない）。 */
+		function noisyCandles(count: number): Candle[] {
+			return Array.from({ length: count }, (_, i) => makeCandle(i, 100 + (i % 5) * 2));
+		}
+
+		it('日足 limit=20 では limit_too_small_for_timeframe を data.warnings に載せる', async () => {
+			const candles = noisyCandles(20);
+			mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(indicatorsOk(candles)));
+
+			const res = await detectPatterns('btc_jpy', '1day', 20);
+
+			assertOk(res);
+			const warning = res.data.warnings?.find((w) => w.type === 'limit_too_small_for_timeframe');
+			expect(warning).toBeDefined();
+			expect(warning?.suggestedParams).toEqual({ limit: 23 });
+			// data.warnings は LLM から見えないので summary にも同じ内容が出ていること。
+			expect(res.summary.startsWith('⚠️ ')).toBe(true);
+			expect(res.summary).toContain('limit≥23');
+		});
+
+		it('日足 limit=23 では警告を出さない（off-by-one）', async () => {
+			const candles = noisyCandles(23);
+			mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(indicatorsOk(candles)));
+
+			const res = await detectPatterns('btc_jpy', '1day', 23);
+
+			assertOk(res);
+			expect(res.data.warnings?.some((w) => w.type === 'limit_too_small_for_timeframe')).toBe(false);
+			expect(res.summary.startsWith('⚠️ ')).toBe(false);
+		});
+
+		it('pastBuffer 切り出し後の本数で判定する（warmup は窓に数えない）', async () => {
+			// chart.candles は 50 本あるが、表示窓は 20 本しかない。
+			const window = noisyCandles(20);
+			const warmup = Array.from({ length: 30 }, (_, i) => makeCandle(-30 + i, 100));
+			mockedAnalyzeIndicators.mockResolvedValueOnce(
+				asMockResult({
+					ok: true,
+					summary: 'ok',
+					data: { chart: { candles: [...warmup, ...window], meta: { pastBuffer: warmup.length } } },
+				}),
+			);
+
+			const res = await detectPatterns('btc_jpy', '1day', 20);
+
+			assertOk(res);
+			expect(res.meta.scan?.bars).toBe(20);
+			expect(res.data.warnings?.some((w) => w.type === 'limit_too_small_for_timeframe')).toBe(true);
+		});
+
+		it('上流 warning と併記され、上流が先に出る', async () => {
+			const candles = noisyCandles(20);
+			mockedAnalyzeIndicators.mockResolvedValueOnce(
+				asMockResult({
+					ok: true,
+					summary: 'ok',
+					data: { chart: { candles } },
+					meta: { warning: 'partial fetch' },
+				}),
+			);
+
+			const res = await detectPatterns('btc_jpy', '1day', 20);
+
+			assertOk(res);
+			const lines = res.summary.split('\n');
+			expect(lines[0]).toBe('⚠️ partial fetch');
+			expect(lines[1]).toContain('limit≥23');
+		});
+	});
 });

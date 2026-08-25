@@ -404,6 +404,52 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 本の中での位置」ではなかった。今回スキャン窓と一致したことで、`meta.scan` が示す範囲で
 インデックスの意味が閉じるようになった。
 
+#### `limit` の実効下限
+
+スキャン窓が `limit` 本に一致した以上、**`limit` は「何本見るか」であると同時に「何が検出可能か」を決める**。
+下限は 2 段ある。
+
+**1. 構造的下限（警告あり）** — `detectSwingPoints` は窓の前後 `swingDepth` 本をピボット候補から外す。
+最小構成の反転パターン（3 ピボット × 最小間隔 5 本）を張るには
+`2 × swingDepth + 2 × max(minBarsBetweenSwings, 5) + 1` 本が要る。これを下回ると
+`data.warnings` に `limit_too_small_for_timeframe` が載り、**`content` の先頭にも警告行が出る**
+（`data.warnings` は LLM から見えないため）。時間足既定パラメータでの下限:
+
+| 時間足 | 既定 `swingDepth` | 構造的下限 |
+|---|---|---|
+| `1min` / `5min` | 2 | 15 |
+| `15min` / `30min` / `1hour` | 3 | 17 |
+| `4hour` / `8hour` / `12hour` | 5 | 21 |
+| `1day` | 6 | 23 |
+| `1week` | 7 | 25 |
+| `1month` | 8 | 29 |
+
+**2. 日数閾値由来の下限（警告なし）** — 各検出器は日数の閾値を `barsPerDay` でバー数に換算する
+（`patterns/helpers.ts`）。窓が狭いとバー数の要求が窓を超え、**そのパターン種別だけが静かに 0 件になる**。
+主な要求本数:
+
+| 時間足 | forming triple（21日） | 完成済み wedge（25日窓） | flag / pennant（最小 1+2日） |
+|---|---|---|---|
+| `1min` | 29521 | 36001 | 4320 |
+| `5min` | 5905 | 7201 | 864 |
+| `15min` | 1969 | 2401 | 288 |
+| `30min` | 985 | 1201 | 144 |
+| `1hour` | 493 | 601 | 72 |
+| `4hour` | 124 | 151 | 18 |
+| `8hour` | 63 | 76 | 9 |
+| `12hour` | 42 | 51 | 6 |
+| `1day` | 22 | 26 | 5 |
+| `1week` | 4 | 16 | 5 |
+| `1month` | 2 | 16 | 5 |
+
+`limit` の上限は 365 なので、**この表の値が 365 を超える組み合わせはどう指定しても検出できない**
+（`1hour` の forming triple / wedge、`30min` 以下の大半）。`4hour` は既定 `limit=90` では
+forming triple も完成済み wedge も出ないので、必要なら `limit≥151` を指定する。
+
+`detect_doubles` / `detect_hs` の forming 判定だけは `helpers.daysPerBar` ではなく独自の換算
+（`1day`→1 / `1week`→7 / **それ以外→1**）を使っており、この表の対象外。intraday では
+日数閾値が実質バー数閾値（14〜90 本 / 21〜90 本）として効き、月足では約 30 倍厳しく効く。
+
 ### 内部仕様メモ
 
 - bitbank `/candlestick` の UTC グルーピング実測ログ: [docs/internal/bitbank-candle-tz.md](internal/bitbank-candle-tz.md)

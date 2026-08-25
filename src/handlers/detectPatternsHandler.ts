@@ -5,6 +5,7 @@ import { ensurePair } from '../../lib/validate.js';
 import { prependWarnings } from '../../lib/warning-propagation.js';
 import detectPatterns from '../../tools/detect_patterns.js';
 import { buildPeriodBlock } from '../../tools/patterns/period.js';
+import { extractScanWindowWarnings } from '../../tools/patterns/scan-window.js';
 import { DetectPatternsInputSchema, DetectPatternsOutputSchema } from '../schemas.js';
 import type { McpResponse, ToolDefinition } from '../tool-definition.js';
 import {
@@ -19,8 +20,14 @@ type DetectPatternsInput = z.infer<typeof DetectPatternsInputSchema>;
 type DetectPatternsOutput = z.infer<typeof DetectPatternsOutputSchema>;
 
 /**
- * 上流 warning（取得層 / 計算層）を view formatter が返す content[0].text の先頭に連結する。
+ * warning 行を view formatter が返す content[0].text の先頭に連結する。
  * 各 view（debug / summary / full / detailed）で warning 行が消えないように handler 側で統一して付与する。
+ *
+ * 対象は上流 warning（取得層 = `meta.warning` / 計算層 = `meta.warnings`）に加えて、
+ * 本ツール自身の検出層 warning のうち content に出す必要があるもの
+ * （スキャン窓不足 = `data.warnings[].type === 'limit_too_small_for_timeframe'`）。
+ * `data.warnings` は structuredContent 側にしか無く LLM からは見えないため、
+ * ここで content に出さないと「0 件検出」としか伝わらない。
  */
 function prependWarningToResponse(
 	response: McpResponse,
@@ -79,10 +86,14 @@ export const toolDef: ToolDefinition = {
 		const count = Number(meta.count ?? pats.length ?? 0);
 		const tfLabel = timeframeLabel(String(type));
 		const hdr = `${String(pair).toUpperCase()} ${tfLabel}（${String(type)}） ${limit ?? count}本から${pats.length}件を検出`;
-		const upstream = { warning: meta.warning, warnings: meta.warnings };
+		// 上流 warning ＋ 検出層 warning（スキャン窓不足）を content 先頭にまとめて出す。
+		const contentWarnings = {
+			warning: meta.warning,
+			warnings: [...(meta.warnings ?? []), ...extractScanWindowWarnings(res.data.warnings)],
+		};
 
 		if (view === 'debug') {
-			return prependWarningToResponse(formatDebugView(hdr, meta, pats, res, effectiveTz), upstream);
+			return prependWarningToResponse(formatDebugView(hdr, meta, pats, res, effectiveTz), contentWarnings);
 		}
 
 		// スキャン範囲（meta.scan = 検出器に渡した足）＋ 検出パターン分布期間の 2 行。
@@ -93,19 +104,19 @@ export const toolDef: ToolDefinition = {
 		if ((view || 'detailed') === 'summary') {
 			return prependWarningToResponse(
 				formatSummaryView(hdr, pats, periodBlock, typeSummary, patterns, includeForming, res, effectiveTz),
-				upstream,
+				contentWarnings,
 			);
 		}
 		if ((view || 'detailed') === 'full') {
 			return prependWarningToResponse(
 				formatFullView(hdr, pats, periodBlock, typeSummary, meta, res, effectiveTz),
-				upstream,
+				contentWarnings,
 			);
 		}
 		// detailed (default)
 		return prependWarningToResponse(
 			formatDetailedView(hdr, pats, periodBlock, typeSummary, meta, tolerancePct, patterns, res, effectiveTz),
-			upstream,
+			contentWarnings,
 		);
 	},
 };

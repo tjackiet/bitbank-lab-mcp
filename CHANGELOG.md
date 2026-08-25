@@ -7,6 +7,20 @@
 
 ## [Unreleased]
 
+### Added（`detect_patterns` が時間足に対して `limit` が小さすぎる窓を申告する）
+- **スキャン窓が構造上パターンを張れない狭さのとき `data.warnings` に `limit_too_small_for_timeframe` を載せ、`content` 先頭にも警告行を出す。** スキャン窓を `limit` 本に絞った（下記 #114）結果、`limit` をスキーマ下限の 20 付近まで下げると「0 件検出」しか返らない崖ができていた。崖の正体は `detectSwingPoints` が窓の前後 `swingDepth` 本をピボット候補から外すこと——日足の既定 `swingDepth=6` では `limit=20` に対してピボット候補が 8 本しか残らず、最小構成のダブルトップ（3 ピボット × 最小間隔 5 本 = 11 本）が張れない。`tools/detect_patterns.ts` の `candles.length < 20` ガードはこれを「ちょうど 20」で通してしまう。
+- **判定は `tools/patterns/scan-window.ts` に切り出した。** 必要本数は `2 × swingDepth + 2 × max(minBarsBetweenSwings, 5) + 1`。既定パラメータでの下限は 1hour 以下が 17 本、4hour / 8hour / 12hour が 21 本、日足 23 本、週足 25 本、月足 29 本。既定 `limit=90` ではどの時間足でも発火しない。
+- **`content` にも出すのは `data.warnings` が LLM から見えないため**（`.claude/rules/tools.md`）。`summary` / `detailed` / `full` / `debug` の全 view で先頭行に出る。上流 warning（取得層 / 計算層）がある場合は上流が先。`low_detection_count` は従来どおり `structuredContent` のみ（窓が足りていない状況で「`tolerancePct` を緩めろ」は的外れな助言になるため、新しい警告を先に積む）。
+- **スキーマの `limit` 下限 20 は変更していない。** 公開契約の変更には alias 猶予期間が要る（`.claude/rules/tools.md` 規約 7）。代わりに `limit` の description に構造的下限を明記した。
+
+### Fixed（**挙動変更**: `detect_patterns` のスキャン窓を直近 `limit` 本に一致させた）
+- **走査範囲が `limit + 199` 本から `limit` 本になった（#114）。** `analyze_indicators` は表示窓の前に指標の warmup（`SMA_200` / `EMA_200` のぶん 199 本）を足した配列を返し、その本数を `chart.meta.pastBuffer` で伝える。表示窓が要る側が `slice(pastBuffer)` する契約（`render_chart_svg` の `items.slice(pastBuffer)` が同じ idiom）だが、`detect_patterns` だけがこれを忘れて全件を走査しており、`limit=200` の要求に 399 本を走査してヘッダの `{limit}本から` が虚偽表示になっていた。
+- **検出件数が減る。** 合成データ（1day / `limit=90`）で走査 289 本 → 90 本、検出 19→8 件 / 11→5 件 / 17→9 件 / 18→8 件。要求どおりの窓で走査するようになった結果であって取りこぼしではない。`pastBuffer` が取れない場合は 0 に畳んで全件走査へフォールバックする。
+- **`meta.scan`（`start` / `end` / `bars`）を追加**し、`content` に `スキャン範囲` 行を出すようにした。ヘッダの `{limit}本から`・`スキャン範囲`・`meta.scan` の 3 者が一致する。
+- **ラベル改名: `検出対象期間` → `検出パターン分布期間`。** 旧ラベルはスキャン窓を指しているように読めるため「1時間足で直近1日分がスキャンされていない」という誤読を招いていた。実際は**検出されたパターンの分布**（全 `range.start` の最小 〜 全 `range.end` の最大）であって、データの終端ではない。あわせて `range.end` の意味論を description に明記した。
+- **出力インデックス（`pivots[].idx` / `breakoutBarIndex` / `confirmation.idx` / `meta.debug.*`）の基準がスキャン窓で閉じた。** slice 導入前も基準は `chart.candles`（`limit + 199` 本）であって「直近 `limit` 本の中の位置」ではなかったが、`meta.scan` の示す範囲と一致するようになった。
+- **副作用（未対応・別 issue）: 日数ベース閾値が窓に対して相対的に厳しくなった。** 各検出器は日数閾値を `barsPerDay` でバー数に換算しており、窓が狭まるとバー数の要求が窓を超える。4hour の既定 `limit=90` では forming triple（124 本必要）と完成済み wedge（151 本必要）が構造上出なくなり（`limit≥151` で復帰）、1hour の forming triple（493 本必要）は最大 `limit=365` でも届かなくなった。`detect_doubles` / `detect_hs` の forming は独自の `daysPerBar`（`1day`→1 / `1week`→7 / それ以外→1）を持つため影響を受けていないが、これ自体が intraday と月足で誤っている。
+
 ### Changed（`analyze_my_portfolio` の期間損益の入庫件数を `_all_time` で全履歴と明示）
 - **`yearly_realized_pnl` / `monthly_realized_pnl` の `priced_deposit_count` / `unpriced_deposit_count` を `priced_deposit_count_all_time` / `unpriced_deposit_count_all_time` に改名した（#85）。** 件数は #77 導入時から全履歴・全銘柄で、description にもそう書いてあった。問題は配置（期間オブジェクト内）と名前が期間スコープに読めること。実口座検証では年初来と月初来に同じ `unpriced 1` が出て、2024 年の未解決入庫が「この期間の数字も汚染されている」と誤読された。値の計算は一切変えていない（命名と description のみ）。
 - **「期間内に売却があった銘柄に限定する」案は採らなかった。** 期間内に売却が無くても保有原価には影響しているため、「0 件だから期間の数字は完全」という別の誤読を生む。名前で全履歴と示す方が実態に忠実。

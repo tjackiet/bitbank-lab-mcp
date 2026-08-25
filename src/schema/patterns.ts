@@ -51,7 +51,20 @@ export const PatternFilterEnum = z.enum([...PATTERN_OUTPUT_TYPES, ...PATTERN_FIL
 
 export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 	type: CandleTypeEnum.optional().default('1day'),
-	limit: z.number().int().min(20).max(365).optional().default(90),
+	limit: z
+		.number()
+		.int()
+		.min(20)
+		.max(365)
+		.optional()
+		.default(90)
+		.describe(
+			'スキャン窓の本数。**直近 limit 本がそのまま検出器に渡る**（指標 warmup 分は含まない）。\n' +
+				'スイング検出で窓の前後 swingDepth 本ずつがピボット候補から外れるため、' +
+				'時間足の既定 swingDepth に対して小さすぎると構造上ほぼ何も検出できない' +
+				'（日足の既定 swingDepth=6 では 23 本未満）。その場合は data.warnings に ' +
+				'`limit_too_small_for_timeframe` を載せ、content 先頭にも警告行を出す。',
+		),
 	patterns: z
 		.array(PatternFilterEnum)
 		.optional()
@@ -314,7 +327,13 @@ export const DetectPatternsOutputSchema = z.union([
 						suggestedParams: z.record(z.string(), z.any()).optional(),
 					}),
 				)
-				.optional(),
+				.optional()
+				.describe(
+					'本ツール自身の検出層 warning（上流の meta.warning / meta.warnings とは別系統）。\n' +
+						'- `limit_too_small_for_timeframe`: スキャン窓が時間足の swingDepth に対して狭すぎ、' +
+						'構造上パターンを張れない。**この type だけは content 先頭にも警告行として出る**。\n' +
+						'- `low_detection_count`: 検出数が 1 件以下。content には出ない（structuredContent のみ）。',
+				),
 			statistics: z
 				.record(
 					z.string(),
