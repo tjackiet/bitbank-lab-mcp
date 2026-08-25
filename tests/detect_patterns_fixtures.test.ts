@@ -1378,4 +1378,162 @@ describe('detect_patterns fixtures', () => {
 			expect(resUtc.summary).toContain('検出パターン分布期間: 2026-10-06 ~ 2026-10-21');
 		});
 	});
+
+	// スキャン窓 = 表示窓（直近 limit 本）。
+	//
+	// analyze_indicators は指標の warmup 分を先頭に足した配列を返し、その本数を
+	// chart.meta.pastBuffer で伝える（render_chart_svg も `slice(pastBuffer)` で切る）。
+	// 本ツールはこれを無視して全件走査しており、`limit=200` の要求に 399 本を走査して
+	// ヘッダの `{limit}本から` が虚偽表示になっていた。
+	describe('スキャン窓の pastBuffer 切り出し', () => {
+		/** warmup 本を先頭に付けた chart を返す（本番 analyze_indicators と同じ形）。 */
+		function indicatorsOkWithBuffer(warmup: Candle[], window: Candle[]) {
+			return {
+				ok: true,
+				summary: 'ok',
+				data: {
+					chart: {
+						candles: [...warmup, ...window],
+						meta: { pastBuffer: warmup.length, shift: 26 },
+					},
+				},
+			};
+		}
+
+		/** 平坦な warmup 足（パターンを作らないので検出結果に影響しないことが確認できる）。 */
+		function flatCandles(count: number, startOffset: number): Candle[] {
+			return Array.from({ length: count }, (_, i) => makeCandle(startOffset + i, 100));
+		}
+
+		it('pastBuffer 分を捨て、meta.scan が表示窓だけを指す', async () => {
+			const window = buildCompletedDoubleTopCandles();
+			const warmup = flatCandles(30, -30);
+			mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(indicatorsOkWithBuffer(warmup, window)));
+
+			const res = await detectPatterns('btc_jpy', '1day', window.length, {
+				patterns: ['double_top'],
+				swingDepth: 2,
+				tolerancePct: 0.02,
+			});
+
+			assertOk(res);
+			// warmup 30 本は走査対象外。scan は表示窓の先頭足から始まる。
+			expect(res.meta.scan).toEqual({
+				start: window[0].isoTime,
+				end: window[window.length - 1].isoTime,
+				bars: window.length,
+			});
+			expect(res.summary).toContain(`（${window.length}本）`);
+		});
+
+		it('pastBuffer が無いときは全件を走査する（上流の形が変わっても落とさない）', async () => {
+			const window = buildCompletedDoubleTopCandles();
+			mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(indicatorsOk(window)));
+
+			const res = await detectPatterns('btc_jpy', '1day', window.length, {
+				patterns: ['double_top'],
+				swingDepth: 2,
+				tolerancePct: 0.02,
+			});
+
+			assertOk(res);
+			expect(res.meta.scan?.bars).toBe(window.length);
+			expect(res.meta.scan?.start).toBe(window[0].isoTime);
+		});
+
+		it('warmup 側にあるパターンは検出されない（窓の外は見ない）', async () => {
+			// warmup 側に double_top を、表示窓側は平坦にする。
+			const warmupPattern = buildCompletedDoubleTopCandles();
+			const flatWindow = flatCandles(26, 100);
+			mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(indicatorsOkWithBuffer(warmupPattern, flatWindow)));
+
+			const res = await detectPatterns('btc_jpy', '1day', flatWindow.length, {
+				patterns: ['double_top'],
+				swingDepth: 2,
+				tolerancePct: 0.02,
+			});
+
+			assertOk(res);
+			expect(res.data.patterns).toEqual([]);
+		});
+
+		// インデックス契約: 出力の idx はスキャン窓基準（warmup を含む chart.candles の添字ではない）。
+		// slice で意味が変わった箇所なので、実際の足に解決できることを固定する。
+		it('pivots[].idx / breakoutBarIndex はスキャン窓基準で、該当足に解決できる', async () => {
+			const window = buildCompletedDoubleTopCandles();
+			const warmup = flatCandles(30, -30);
+			mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(indicatorsOkWithBuffer(warmup, window)));
+
+			const res = await detectPatterns('btc_jpy', '1day', window.length, {
+				patterns: ['double_top'],
+				swingDepth: 2,
+				tolerancePct: 0.02,
+			});
+
+			assertOk(res);
+			const pattern = res.data.patterns[0];
+			expect(pattern).toBeDefined();
+
+			const pivots = pattern.pivots ?? [];
+			expect(pivots.length).toBeGreaterThan(0);
+			for (const pivot of pivots) {
+				// window（= スキャン窓）の添字として有効な範囲に収まる
+				expect(pivot.idx).toBeGreaterThanOrEqual(0);
+				expect(pivot.idx).toBeLessThan(window.length);
+				// 価格がその足の高安に含まれる = 正しい足を指している
+				const bar = window[pivot.idx];
+				expect(pivot.price).toBeGreaterThanOrEqual(bar.low);
+				expect(pivot.price).toBeLessThanOrEqual(bar.high);
+			}
+
+			// range の端は pivot が指す足の日時と整合する（ISO 側との突き合わせ）
+			expect(pattern.range.start).toBe(window[pivots[0].idx].isoTime);
+
+			// breakoutBarIndex も同じ基準。bounds だけでなく、指す足が confirmation.date と
+			// 一致することまで見る——bounds だけだと窓内に収まる誤りを見逃す。
+			const breakoutBarIndex = pattern.breakoutBarIndex;
+			expect(breakoutBarIndex).toBeDefined();
+			expect(breakoutBarIndex).toBeGreaterThanOrEqual(0);
+			expect(breakoutBarIndex).toBeLessThan(window.length);
+
+			// confirmation.idx も出力に現れるインデックス。breakoutBarIndex と同じ足を指す。
+			const confirmation = pattern.confirmation;
+			expect(confirmation?.type).toBe('neckline_breakout');
+			if (confirmation?.type !== 'neckline_breakout') throw new Error('unreachable');
+			expect(confirmation.idx).toBe(breakoutBarIndex);
+			expect(window[confirmation.idx].isoTime).toBe(confirmation.date);
+
+			// warmup を含む配列の添字ではない: そちらに解決すると平坦足（100）に当たってしまう
+			const all = [...warmup, ...window];
+			expect(all[pivots[0].idx].isoTime).not.toBe(pattern.range.start);
+			expect(all[confirmation.idx].isoTime).not.toBe(confirmation.date);
+		});
+
+		it('pastBuffer を無視した場合と結果が変わる（回帰の検出力を担保する）', async () => {
+			const window = buildCompletedDoubleTopCandles();
+			const warmupPattern = buildCompletedDoubleTopCandles(2025);
+
+			// slice あり: 表示窓の 1 件だけ
+			mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(indicatorsOkWithBuffer(warmupPattern, window)));
+			const sliced = await detectPatterns('btc_jpy', '1day', window.length, {
+				patterns: ['double_top'],
+				swingDepth: 2,
+				tolerancePct: 0.02,
+			});
+
+			// slice なし（pastBuffer を伝えない）: warmup 側のパターンも拾ってしまう
+			mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(indicatorsOk([...warmupPattern, ...window])));
+			const unsliced = await detectPatterns('btc_jpy', '1day', window.length, {
+				patterns: ['double_top'],
+				swingDepth: 2,
+				tolerancePct: 0.02,
+			});
+
+			assertOk(sliced);
+			assertOk(unsliced);
+			expect(sliced.meta.scan?.bars).toBe(window.length);
+			expect(unsliced.meta.scan?.bars).toBe(warmupPattern.length + window.length);
+			expect(sliced.data.patterns.length).toBeLessThan(unsliced.data.patterns.length);
+		});
+	});
 });

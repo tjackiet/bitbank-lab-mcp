@@ -368,9 +368,41 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 「1時間足で直近1日分がスキャンされていない」という誤読を招いていた（分布期間の終端は
 最後に検出されたパターンの終わりであって、データの終端ではない）。
 
-ヘッダの `{limit}本から` は**要求本数**であってスキャン本数ではないため、`スキャン範囲` の本数と
-食い違うことがある（例: `limit=200` に対し `399本`）。`debug` view は出力を置換する階梯外の
-view なので、この 2 行は出ない。
+`debug` view は出力を置換する階梯外の view なので、この 2 行は出ない。
+
+### スキャン窓 = 直近 `limit` 本
+
+`analyze_indicators` は「表示窓 `limit` 本」の前に指標の warmup 分を足した配列を返す
+（`SMA_200` / `EMA_200` のぶん `fetchCount = limit + 199`）。先頭の warmup 本数は
+`chart.meta.pastBuffer` で伝えられ、**表示窓が必要な側が `slice(pastBuffer)` する契約**
+（`render_chart_svg` の `items.slice(pastBuffer)` が同じ idiom）。
+
+`detect_patterns` はこの slice を忘れて全件を走査していたため、`limit=200` の要求に対し
+399 本を走査し、ヘッダの `{limit}本から` が虚偽表示になっていた。現在は `pastBuffer` 分を
+落としてから検出器に渡すので、ヘッダ・`スキャン範囲`・`meta.scan` の 3 者が一致する。
+
+`pastBuffer` が取れない場合は 0 に畳んで全件走査にフォールバックする（上流の形が変わっても
+検出を落とさないため）。データが `limit` に満たない場合はヘッダの要求本数と `スキャン範囲` の
+実本数が食い違うが、実際に走査した本数は常に `スキャン範囲` / `meta.scan` が示す。
+
+#### インデックスの基準（スキャン窓相対）
+
+出力に現れるローソク足インデックスは **`meta.scan` が示すスキャン窓を基準とした 0 始まりの位置**。
+
+| フィールド | 基準 |
+|---|---|
+| `data.patterns[*].pivots[].idx` | スキャン窓 |
+| `data.patterns[*].breakoutBarIndex` | スキャン窓 |
+| `data.patterns[*].confirmation.idx` | スキャン窓 |
+| `meta.debug.swings[].idx` / `meta.debug.candidates[].indices` / `…points[].idx` | スキャン窓 |
+
+`analyze_indicators` の `chart.candles` は warmup 分（`chart.meta.pastBuffer` 本）を先頭に含む
+**別配列**なので、これらをそのまま添字として使ってはいけない（使うなら `pastBuffer` を足す）。
+日時で突き合わせるなら `range` / `date` 等の ISO 文字列を使うのが安全。
+
+なお slice 導入前もインデックスは `chart.candles`（= `limit + 199` 本）基準であって「直近 `limit`
+本の中での位置」ではなかった。今回スキャン窓と一致したことで、`meta.scan` が示す範囲で
+インデックスの意味が閉じるようになった。
 
 ### 内部仕様メモ
 

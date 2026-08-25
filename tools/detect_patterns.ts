@@ -124,15 +124,28 @@ export default async function detectPatterns(
 		// data.warnings は本ツール独自の検出系警告で、上流とは別フィールドで保持する。
 		const upstream = extractUpstreamWarning(res.meta);
 
-		const candles = res.data.chart.candles as Array<{
+		const allCandles = res.data.chart.candles as Array<{
 			open: number;
 			close: number;
 			high: number;
 			low: number;
 			isoTime?: string;
 		}>;
-		// 検出器に実際に渡す配列のレンジ。ヘッダの `{limit}本から` とは別物で、
-		// スキャン窓を機械的に検証できるよう meta.scan として出す。
+
+		// analyze_indicators は「表示窓 limit 本」の前に指標の warmup 分を足した配列を返す
+		// （SMA_200 / EMA_200 のぶん fetchCount = limit + 199）。その先頭 warmup 本数が
+		// `chart.meta.pastBuffer` で、表示窓を得る側が slice する契約になっている
+		// （render_chart_svg の `items.slice(pastBuffer)` が同じ idiom）。
+		//
+		// 本ツールはこれを無視して全件をスキャンしていたため、`limit=200` の要求に対して
+		// 399 本を走査し、ヘッダの `{limit}本から` が虚偽表示になっていた。
+		// pastBuffer が無い場合は 0 に畳む（= 全件）——上流の形が変わっても落とさないため。
+		const pastBuffer = Math.max(0, Math.trunc(res.data.chart.meta?.pastBuffer ?? 0));
+		// Array.isArray を先に見る——不正な上流応答でも従来どおり 'insufficient data' に落とす
+		// （slice を先に呼ぶと例外になり、graceful path が失われる）。
+		const candles = Array.isArray(allCandles) && pastBuffer > 0 ? allCandles.slice(pastBuffer) : allCandles;
+
+		// 検出器に実際に渡す配列のレンジ。slice 後の配列から出す。
 		const scan = buildScanRange(candles);
 		if (!Array.isArray(candles) || candles.length < 20) {
 			return DetectPatternsOutputSchema.parse(
