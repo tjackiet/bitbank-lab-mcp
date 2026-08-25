@@ -462,9 +462,27 @@ export interface PeriodPerformance {
 	 */
 	unpriced_start_assets?: string[];
 	/**
+	 * 現在評価額の算出時に現在 ticker 価格を解決できなかった暗号資産のシンボル一覧
+	 * （小文字・昇順・重複なし、#109）。該当資産は `current_value_jpy` に含まれていない（過小）。
+	 *
+	 * `unpriced_start_assets`（期初側・分母）の**対称形**で、こちらは現在側＝分子が欠ける。
+	 * 現在価格は `tickers_jpy` 1 回で全銘柄ぶんを取るため、期初価格のような部分失敗ではなく
+	 * **全銘柄が一斉に脱落する**のが最悪ケースになる（現在評価額が JPY 残高だけに縮退する）。
+	 *
+	 * 現在価格は期間に依存しないので 3 期間で同じ値になる。数量ゼロ・数値不正の保有は元から
+	 * 評価に寄与しないため対象外（`unpricedStartAssets` と同じ基準）。JPY のみ保有のときは
+	 * `undefined`。`unpriced_start_assets` と同じ粒度（資産名のみ、金額は出さない）。
+	 * 既存の出力フィールド順を崩さないため末尾に置き、該当なしのときは `undefined`
+	 * （JSON.stringify でキーごと落ちるため従来出力と一致する）。
+	 */
+	unpriced_current_assets?: string[];
+	/**
 	 * `change_pct` / `adjusted_change_pct` を出せなかった理由（出せた場合は `undefined`）。
 	 *
-	 * 両フィールドは分母が同じ `start_value_jpy` なので、抑止は必ず同時に起きる。
+	 * 両フィールドは抑止条件が同じなので、抑止は必ず同時に起きる。
+	 * 複数の理由が同時に成立しうるため、優先順位は
+	 * `start_boundary_unpriced` > `current_value_unpriced` > `start_value_zero` >
+	 * `start_value_negligible` に固定してある（`PortfolioChangePctUnavailableReasonEnum` の doc）。
 	 * 既存の出力フィールド順を崩さないため末尾に置き、該当なしのときは `undefined`
 	 * （JSON.stringify でキーごと落ちるため従来出力と一致する）。
 	 */
@@ -478,10 +496,10 @@ export interface PeriodPerformance {
 	 * `change_jpy - net_flow_jpy` で純入出金が分母側と無関係なため、**同じ額だけ**過大になる。
 	 *
 	 * ただし立つのは `change_pct_unavailable_reason === 'start_boundary_unpriced'` の
-	 * **一部**——脱落した資産が現在評価額には正しく載っているときだけ。現在評価額も現在
-	 * ticker 価格を引けなかった保有を落とすため、両端から落ちる資産があるとずれの向きが
-	 * 確定せず、そこで「過大」と申告すると抑止したはずの確定値を別の形で出すことになる
-	 * （判定は `changeJpyOverstated`）。**本フラグが無いことは「増減額が正しい」の意味ではない**。
+	 * **一部**——現在評価額から脱落した保有が 1 つも無いときだけ（`unpriced_current_assets`
+	 * が空）。現在評価額も現在 ticker 価格を引けなかった保有を落とすため、そこに 1 つでも
+	 * 該当があるとずれの向きが確定せず、「過大」と申告すると抑止したはずの確定値を別の形で
+	 * 出すことになる。**本フラグが無いことは「増減額が正しい」の意味ではない**。
 	 * `unpriced_start_assets` がありフラグが無い期間は「ずれの向きが確定しない」であり、
 	 * どちらの期間でも増減額を運用成績として読んではいけない。
 	 *
@@ -500,6 +518,26 @@ export interface PeriodPerformance {
 	 * 既存の出力フィールド順を崩さないため末尾に置く。
 	 */
 	change_jpy_overstated?: boolean;
+	/**
+	 * `change_jpy` / `adjusted_change_jpy` が**過小**であることの申告（#109）。
+	 * `change_jpy_overstated` の対称形で、立たない期間では `undefined`。
+	 *
+	 * `change_jpy = current_value_jpy - start_value_jpy` なので、`unpriced_current_assets` で
+	 * 現在評価額から脱落した分はそのまま増減額の過小分になる。`adjusted_change_jpy` は
+	 * `change_jpy - net_flow_jpy` で純入出金が両端の評価額と無関係なため、**同じ額だけ**過小になる。
+	 *
+	 * 立つのは `change_pct_unavailable_reason === 'current_value_unpriced'` のとき、つまり
+	 * 期初評価額からは何も脱落していない（`unpriced_start_assets` が空）ときだけ。両端から
+	 * 落ちる構成では向きが確定しないため立てない（そのとき理由コードは
+	 * `start_boundary_unpriced` 側になる）。**`change_jpy_overstated` と同時に true にはならない。**
+	 *
+	 * 値を `null` にせずフラグで申告する理由は `change_jpy_overstated` と同じ
+	 * （#86 の「過小でも金額を出して申告する」方針に揃える。両端の評価額から消費者が
+	 * 再計算できるので null 化は隠蔽にならず契約だけを壊す）。
+	 *
+	 * 既存の出力フィールド順を崩さないため末尾に置く。
+	 */
+	change_jpy_understated?: boolean;
 }
 
 export interface CandlePriceData {
