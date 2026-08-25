@@ -19,7 +19,11 @@ import {
 } from './types.js';
 
 // ── Configuration ──
-const MIN_PIVOT_DISTANCE_BARS = 5;
+/**
+ * ダブルトップ / ボトムのピボット間の最小距離（本）。
+ * `patterns/scan-window.ts` がスキャン窓の構造的下限を出すのに参照するため export する。
+ */
+export const MIN_PIVOT_DISTANCE_BARS = 5;
 const MIN_PATTERN_HEIGHT_PCT = 0.03;
 const MIN_DEPTH_PCT = 0.05;
 const BREAKOUT_BUFFER_PCT = 0.015;

@@ -17,6 +17,7 @@ import { globalDedup } from './patterns/helpers.js';
 import { buildPeriodBlock, buildScanRange } from './patterns/period.js';
 import { rankPatterns } from './patterns/ranking.js';
 import { linearRegressionWithR2, near as nearFn, pct as pctFn } from './patterns/regression.js';
+import { buildScanWindowWarning } from './patterns/scan-window.js';
 import { type Candle, detectSwingPoints, filterPeaks, filterValleys } from './patterns/swing.js';
 import type { CandDebugEntry, DeduplicablePattern, DetectContext } from './patterns/types.js';
 
@@ -289,6 +290,15 @@ export default async function detectPatterns(
 		// overlays: パターン範囲をそのまま帯描画できるように提供
 		const ranges = summaryPatterns.map((p) => ({ start: p.range.start, end: p.range.end, label: p.type }));
 		const warnings: Array<{ type: string; message: string; suggestedParams?: Record<string, unknown> }> = [];
+		// 窓が構造上足りていない（= 検出 0 件が「パターンが無い」ではなく「張れない」）ケースを先に申告する。
+		// low_detection_count の「tolerancePct を緩めろ」は、窓が足りていない状況では的外れな助言になる。
+		const scanWindowWarning = buildScanWindowWarning({
+			type: String(type),
+			bars: candles.length,
+			swingDepth,
+			minBarsBetweenSwings: minDist,
+		});
+		if (scanWindowWarning) warnings.push(scanWindowWarning);
 		if (patterns.length <= 1) {
 			warnings.push({
 				type: 'low_detection_count',
@@ -487,9 +497,15 @@ export default async function detectPatterns(
 			`\n\n---\n📌 含まれるもの: チャートパターン検出（種類・整合度・期間）、ブレイク情報、統計` +
 			`\n📌 含まれないもの: 出来高によるパターン確認、テクニカル指標値、板情報` +
 			`\n📌 補完ツール: analyze_indicators（指標でパターンを裏付け）, get_flow_metrics（出来高確認）, get_orderbook（板情報）`;
-		// summary 先頭に上流 warning を別行で連結（separator='\n'）。
-		// LLM が summary だけ見ても取得層 / 計算層の不完全性に気づけるようにする。
-		const summaryText = prependWarnings(baseSummary, upstream, { separator: '\n' });
+		// summary 先頭に warning を別行で連結（separator='\n'）。上流（取得層 / 計算層）→ 検出層の順。
+		// LLM が summary だけ見ても不完全性に気づけるようにするためで、
+		// data.warnings は structuredContent 側にしか無く LLM から見えない（`.claude/rules/tools.md`）。
+		const summaryWithScanWarning = prependWarnings(
+			baseSummary,
+			scanWindowWarning ? { warnings: [scanWindowWarning.message] } : undefined,
+			{ separator: '\n' },
+		);
+		const summaryText = prependWarnings(summaryWithScanWarning, upstream, { separator: '\n' });
 
 		const out = ok(
 			summaryText,
