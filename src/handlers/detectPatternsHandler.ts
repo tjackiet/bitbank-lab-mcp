@@ -46,7 +46,16 @@ function prependWarningToResponse(
 export const toolDef: ToolDefinition = {
 	name: 'detect_patterns',
 	description:
-		'[Chart Patterns / Double Top / Head and Shoulders / Triangle] チャートパターン検出（chart patterns / double top / double bottom / head and shoulders / triangle / wedge / flag）。形成中+完成済みを統合検出。表示日時は tz（既定 Asia/Tokyo）で整形。\n\n視覚確認: 結果の overlays を render_chart_svg に渡して描画可能。\n描画結果は必ずビジュアルとしてレンダリングして表示すること。\nチャット本文へのSVGコード直接出力は禁止。\n\n構造化データ (data.patterns[*].range.start/end 等) は後方互換のため UTC ISO 文字列のまま。',
+		'[Chart Patterns / Double Top / Head and Shoulders / Triangle] チャートパターン検出（chart patterns / double top / double bottom / head and shoulders / triangle / wedge / flag）。形成中+完成済みを統合検出。表示日時は tz（既定 Asia/Tokyo）で整形。\n\n' +
+		'検出の意味論:\n' +
+		'- 直近の一方向トレンド（上げ続け / 下げ続け）はパターンを構成しないため検出対象に入らない。「直近の値動きが結果に出ない」は多くの場合これであってデータ欠落ではない。実際に走査した範囲は meta.scan（content の「スキャン範囲」行）で確認すること。\n' +
+		'- ピボットの確定には前後 swingDepth 本が要るため、スキャン窓の両端 swingDepth 本はピボットにならない（swingDepth は時間足ごとに自動スケールする。例: 1hour の実効値は 3）。\n' +
+		'- limit はスキャン窓の本数であり、同時に「何が検出可能か」も決める。小さすぎる場合は data.warnings に limit_too_small_for_timeframe が載る（content 先頭にも警告行を出す）。\n' +
+		'- 既知の制約: 各検出器が持つ日数閾値のため、窓が狭いと**特定の種別だけが静かに 0 件になる**ことがある（下限の表は docs/tools.md の「limit の実効下限」）。\n\n' +
+		'視覚確認: 結果の overlays を render_chart_svg に渡して描画可能。\n' +
+		'描画結果は必ずビジュアルとしてレンダリングして表示すること。\n' +
+		'チャット本文へのSVGコード直接出力は禁止。\n\n' +
+		'構造化データ (data.patterns[*].range.start/end 等) は後方互換のため UTC ISO 文字列のまま。',
 	inputSchema: DetectPatternsInputSchema,
 	handler: async ({
 		pair,
