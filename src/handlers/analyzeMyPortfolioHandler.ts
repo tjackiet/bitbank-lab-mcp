@@ -217,8 +217,9 @@ const CHANGE_PCT_UNAVAILABLE_NOTE: Record<PortfolioChangePctUnavailableReason, s
  * - `start_value_zero` / `start_value_negligible` — 期初評価額が**本当に**小さい。分子
  *   （`change_jpy`）は正しいので、従来どおり増減額で読ませる。
  * - `start_boundary_unpriced` — 期初の始値が引けず暗号資産が期初評価から**脱落**している。
- *   分母を壊した欠損がそのまま分子の欠損なので、増減額も同じ額だけ過大。ここで増減額へ
+ *   分母を壊した欠損がそのまま分子の欠損なので、増減額も信用できない。ここで増減額へ
  *   誘導すると、率より壊れた数字を確定値として読ませることになる（#54 と同じ構造）。
+ *   文言は `changeJpyGuidanceLine` / `changeJpyGuidanceWarning` がずれの向きで振り分ける。
  *
  * 代替の読み方は**示さない**。資産推移シリーズ（`*_equity_series`）は同じ 1day candle の
  * 始値に依存し、引けなかった日付は現在価格にフォールバックするため、始値が欠けている
@@ -233,6 +234,16 @@ const CHANGE_JPY_GUIDANCE_LINE: Record<PortfolioChangePctUnavailableReason, stri
 };
 
 /**
+ * `start_boundary_unpriced` で**ずれの向きが確定しない**ときの短句（summary の注記行）。
+ *
+ * 現在評価額も価格を引けない保有を落としているため、期初・現在の両端から落ちる資産では
+ * ずれが過大とも過小とも言えない（`changeJpyOverstated`）。ここで「過大」と書くと、
+ * 抑止したはずの確定値を文言のほうから出すことになる（CodeRabbit 指摘）。
+ */
+const CHANGE_JPY_DIRECTION_UNKNOWN_LINE =
+	'増減額（change_jpy / adjusted_change_jpy）も同じ欠損の影響を受けており、現在評価額でも価格を引けない保有があるためずれの向きも確定できません。成績として読まないでください。この期間の値動きはこの結果からは算出できません';
+
+/**
  * 理由コードごとの「増減額をどう読むか」（content 先頭の warning に足す文）。
  *
  * 分岐の理由は `CHANGE_JPY_GUIDANCE_LINE` と同じ。warning は LLM が最初に読む行なので、
@@ -245,6 +256,27 @@ const CHANGE_JPY_GUIDANCE_WARNING: Record<PortfolioChangePctUnavailableReason, s
 	start_boundary_unpriced:
 		'増減額（change_jpy / adjusted_change_jpy）も期初評価額から脱落した分だけ過大なので（change_jpy_overstated=true）、成績として読まないこと。該当期間の値動きはこの結果からは算出できません（資産推移シリーズも同じ日次価格に依存し、始値を引けなかった日付は現在価格で代替されるため代替になりません）',
 };
+
+/** `start_boundary_unpriced` で向きが確定しないときの warning 文（`CHANGE_JPY_DIRECTION_UNKNOWN_LINE` と対） */
+const CHANGE_JPY_DIRECTION_UNKNOWN_WARNING =
+	'増減額（change_jpy / adjusted_change_jpy）も同じ欠損の影響を受けますが、現在評価額でも価格を解決できない保有があるためずれの向きは確定できません（change_jpy_overstated は付きません）。成績として読まないこと。該当期間の値動きはこの結果からは算出できません（資産推移シリーズも同じ日次価格に依存し、始値を引けなかった日付は現在価格で代替されるため代替になりません）';
+
+/**
+ * summary の注記行に足す「増減額をどう読むか」を選ぶ。
+ *
+ * `start_boundary_unpriced` だけ、ずれの向きが確定するか（`change_jpy_overstated`）で
+ * 文言が変わる。他の理由コードでは分子が正しいので分岐しない。
+ */
+function changeJpyGuidanceLine(reason: PortfolioChangePctUnavailableReason, overstated: boolean): string {
+	if (reason === 'start_boundary_unpriced' && !overstated) return CHANGE_JPY_DIRECTION_UNKNOWN_LINE;
+	return CHANGE_JPY_GUIDANCE_LINE[reason];
+}
+
+/** content 先頭の warning 用。分岐の条件は `changeJpyGuidanceLine` と同じ。 */
+function changeJpyGuidanceWarning(reason: PortfolioChangePctUnavailableReason, overstated: boolean): string {
+	if (reason === 'start_boundary_unpriced' && !overstated) return CHANGE_JPY_DIRECTION_UNKNOWN_WARNING;
+	return CHANGE_JPY_GUIDANCE_WARNING[reason];
+}
 
 /** 数量乖離の理由コードごとの原因表示（銘柄名に添える短句）。 */
 const QTY_MISMATCH_CAUSE: Record<PortfolioQtyMismatchReason, string> = {
@@ -391,12 +423,15 @@ function buildPerformanceLines(label: string, p: PeriodPerformance): string[] {
 	);
 	if (p.change_pct_unavailable_reason) {
 		lines.push(
-			`  ※ 増減率・入出金調整後増減率は非表示（${CHANGE_PCT_UNAVAILABLE_NOTE[p.change_pct_unavailable_reason]}）。${CHANGE_JPY_GUIDANCE_LINE[p.change_pct_unavailable_reason]}`,
+			`  ※ 増減率・入出金調整後増減率は非表示（${CHANGE_PCT_UNAVAILABLE_NOTE[p.change_pct_unavailable_reason]}）。${changeJpyGuidanceLine(p.change_pct_unavailable_reason, p.change_jpy_overstated === true)}`,
 		);
 	}
 	if (p.unpriced_start_assets && p.unpriced_start_assets.length > 0) {
+		// 「脱落分 = 増減額の過大分」と言えるのは、その資産が現在評価額には載っている場合だけ
+		// （両端から落ちる資産があると向きが決まらない）。確定するときだけ向きを書く。
+		const overstatedNote = p.change_jpy_overstated ? '（脱落した分がそのまま上の増減額の過大分です）' : '';
 		lines.push(
-			`  ※ 上の期初評価額は過小: ${p.unpriced_start_assets.map((a) => a.toUpperCase()).join(', ')} の始値を解決できず含めていません（脱落した分がそのまま上の増減額の過大分です）`,
+			`  ※ 上の期初評価額は過小: ${p.unpriced_start_assets.map((a) => a.toUpperCase()).join(', ')} の始値を解決できず含めていません${overstatedNote}`,
 		);
 	}
 
@@ -1754,9 +1789,24 @@ export default async function analyzeMyPortfolioHandler(args: {
 		// （`.claude/rules/tools.md`。率が undefined な理由を LLM が説明できないと「ゼロ %」と読まれる）。
 		// 並びは summary の期間ブロックと同じ（前日比 → 年初比 → 月初比）。
 		const changePctSuppressed = [
-			{ key: 'daily' as const, label: '前日比', reason: dailyPerformance?.change_pct_unavailable_reason },
-			{ key: 'yearly' as const, label: '年初比', reason: yearlyPerformance?.change_pct_unavailable_reason },
-			{ key: 'monthly' as const, label: '月初比', reason: monthlyPerformance?.change_pct_unavailable_reason },
+			{
+				key: 'daily' as const,
+				label: '前日比',
+				reason: dailyPerformance?.change_pct_unavailable_reason,
+				overstated: dailyPerformance?.change_jpy_overstated === true,
+			},
+			{
+				key: 'yearly' as const,
+				label: '年初比',
+				reason: yearlyPerformance?.change_pct_unavailable_reason,
+				overstated: yearlyPerformance?.change_jpy_overstated === true,
+			},
+			{
+				key: 'monthly' as const,
+				label: '月初比',
+				reason: monthlyPerformance?.change_pct_unavailable_reason,
+				overstated: monthlyPerformance?.change_jpy_overstated === true,
+			},
 		].filter((e): e is typeof e & { reason: PortfolioChangePctUnavailableReason } => e.reason != null);
 		const calcWarnings: string[] = [];
 		// 取得原価が確定できない件は content 先頭に出す。summary 本文の「算出不能」行だけだと
@@ -1807,17 +1857,24 @@ export default async function analyzeMyPortfolioHandler(args: {
 		}
 		if (startBoundaryUnpricedAssets.length > 0) {
 			calcWarnings.push(
-				`${startBoundaryUnpricedAssets.map((a) => a.toUpperCase()).join(', ')} は期初の始値を解決できず期初評価額に含めていません（当日足が未取得の時間帯では数十分後に解消しうる）。期初評価額は過小で、脱落した分だけ該当期間の増減額（change_jpy / adjusted_change_jpy）が過大になります（該当期間には change_jpy_overstated=true が付きます）`,
+				`${startBoundaryUnpricedAssets.map((a) => a.toUpperCase()).join(', ')} は期初の始値を解決できず期初評価額に含めていません（当日足が未取得の時間帯では数十分後に解消しうる）。期初評価額は過小で、該当期間の増減額（change_jpy / adjusted_change_jpy）も同じ欠損の影響を受けます（ずれの向きが確定する期間には change_jpy_overstated=true が付きます）`,
 			);
 		}
 		// 期間ごとに理由が割れうる（前日比は期初 0、年初比は期初が極小、など）ので理由コード単位でまとめる。
 		// キーの網羅は CHANGE_PCT_UNAVAILABLE_NOTE（Record<理由コード, string>）が型で保証する。
+		// 同じ理由でも増減額のずれの向きが確定する期間としない期間は混ざりうる（例: 当日足だけ
+		// 欠けた資産と、現在価格ごと引けない資産が同居する構成）ので、向きでも分けて行を出す。
+		// 混ぜると片方の期間に誤った向きを付けることになる。
 		for (const reason of Object.keys(CHANGE_PCT_UNAVAILABLE_NOTE) as PortfolioChangePctUnavailableReason[]) {
-			const labels = changePctSuppressed.filter((e) => e.reason === reason).map((e) => e.label);
-			if (labels.length === 0) continue;
-			calcWarnings.push(
-				`${labels.join(' / ')}の増減率（change_pct / adjusted_change_pct）は出していません（${CHANGE_PCT_UNAVAILABLE_NOTE[reason]}）。${CHANGE_JPY_GUIDANCE_WARNING[reason]}。率が無いのは「ゼロ %」の意味ではありません`,
-			);
+			for (const overstated of [true, false]) {
+				const labels = changePctSuppressed
+					.filter((e) => e.reason === reason && e.overstated === overstated)
+					.map((e) => e.label);
+				if (labels.length === 0) continue;
+				calcWarnings.push(
+					`${labels.join(' / ')}の増減率（change_pct / adjusted_change_pct）は出していません（${CHANGE_PCT_UNAVAILABLE_NOTE[reason]}）。${changeJpyGuidanceWarning(reason, overstated)}。率が無いのは「ゼロ %」の意味ではありません`,
+				);
+			}
 		}
 		// 入出庫日の日次価格を解決できず現在価格に落ちた分は、評価額が相場と連動して動く
 		// （本来これを止めるのが入出庫日評価の目的）。黙って混ぜず件数で申告する。

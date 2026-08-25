@@ -5339,9 +5339,10 @@ describe('analyze_my_portfolio — 期初の始値が解決できないときの
 			expect(warning).toContain('成績として読まないこと');
 			expect(warning).toContain('資産推移シリーズも同じ日次価格に依存');
 			expect(warning).toContain('「ゼロ %」の意味ではありません');
-			// 期初過小の warning 側も増減額の過大に言及する（3 箇所の整合）
+			// 期初過小の warning 側も増減額が同じ欠損の影響を受けることに言及する（3 箇所の整合）
 			const startWarning = (result.meta.warnings ?? []).find((w: string) => w.includes('期初の始値'));
-			expect(startWarning).toContain('増減額（change_jpy / adjusted_change_jpy）が過大');
+			expect(startWarning).toContain('増減額（change_jpy / adjusted_change_jpy）も同じ欠損の影響を受けます');
+			expect(startWarning).toContain('change_jpy_overstated=true');
 			// `.claude/rules/tools.md`: 計算層 warning は content 先頭（JSON より前）
 			expect(result.summary.split('\n').slice(0, 6).join('\n')).toContain('増減率');
 		});
@@ -5361,6 +5362,37 @@ describe('analyze_my_portfolio — 期初の始値が解決できないときの
 			expect(result.data.monthly_performance.change_jpy_overstated).toBeUndefined();
 			expect(result.data.yearly_performance.change_jpy_overstated).toBeUndefined();
 			expect(result.data.monthly_performance.note).not.toContain('change_jpy_overstated');
+		});
+
+		it('現在価格も引けない保有では過大と断定せず、向き不明として申告する（CodeRabbit 回帰）', async () => {
+			// 現在評価額は現在 ticker 価格を引けなかった保有を除外して積むため、期初・現在の
+			// 両端から落ちる資産では増減額のずれの向きが決まらない。ここで「過大」と書くと
+			// 抑止したはずの確定値を文言から出すことになる。
+			setupFetchMock({
+				assets: btcJpyAssets('0.1', '63314'),
+				trades: { trades: [] },
+				deposits: { deposits: [] },
+				withdrawals: { withdrawals: [] },
+				// btc は ticker にも足にも現れない
+				tickers: { success: 1, data: [] },
+				candleFail: () => true,
+			});
+
+			const result = await analyze();
+			assertOk(result);
+
+			const daily = result.data.daily_performance;
+			expect(daily.unpriced_start_assets).toEqual(['btc']);
+			expect(daily.change_pct_unavailable_reason).toBe('start_boundary_unpriced');
+			expect(daily.change_jpy_overstated).toBeUndefined();
+			expect(daily.note).toContain('ずれの向きは確定できない');
+			expect(result.summary).toContain('ずれの向きも確定できません');
+			expect(result.summary).not.toContain('増減額の過大分です');
+			expect(result.summary).not.toContain('増減額で読んでください');
+			const warning = (result.meta.warnings ?? []).find((w: string) => w.includes('増減率'));
+			expect(warning).toContain('ずれの向きは確定できません');
+			expect(warning).not.toContain('分だけ過大');
+			expect(warning).toContain('「ゼロ %」の意味ではありません');
 		});
 
 		it('3 期間すべて始値を解決できないとき 3 期間ともフラグが立つ', async () => {

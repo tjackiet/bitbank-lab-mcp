@@ -34,6 +34,7 @@ import {
 	flowUnavailableReasonFor,
 	getJstPeriodBoundaries,
 	PERFORMANCE_NOTE,
+	PERFORMANCE_NOTE_CHANGE_DIRECTION_UNKNOWN,
 	PERFORMANCE_NOTE_CHANGE_OVERSTATED,
 	type PortfolioPerformanceContext,
 	qtyInvariantHolds,
@@ -2986,6 +2987,79 @@ describe('buildPeriodPerformance', () => {
 			expect(result.change_jpy_overstated).toBeUndefined();
 			expect(result.note).toBe(PERFORMANCE_NOTE);
 			expect(JSON.stringify(result)).not.toContain('change_jpy_overstated');
+		});
+
+		it('現在価格も引けない保有: 過大と断定せず向き不明として扱う（CodeRabbit 回帰）', () => {
+			// 現在評価額は現在 ticker 価格を引けなかった保有を除外して積む（handler の totalJpyValue）。
+			// 期初・現在の両端から落ちる資産では、その資産の値動きがどちらにも入らないため
+			// ずれが過大とも過小とも言えない。ここで change_jpy_overstated を立てると、
+			// 抑止したはずの確定値（向き）を出してしまう。
+			const ctx = makeCtx({
+				currentHoldings: [
+					{ asset: 'btc', amount: '0.1' },
+					{ asset: 'jpy', amount: '63314' },
+				],
+				dwData: makeEmptyDw(),
+				candlePriceData: { boundaryPrices: new Map(), dailyPrices: new Map() },
+				// 現在価格 Map に btc が無い ＝ 現在評価額にも載っていない
+				flowPricing: currentPriceOnly(),
+				currentValue: 63_314,
+			});
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.unpriced_start_assets).toEqual(['btc']);
+			expect(result.change_pct_unavailable_reason).toBe('start_boundary_unpriced');
+			expect(result.change_jpy_overstated).toBeUndefined();
+			expect(result.note).toBe(`${PERFORMANCE_NOTE}${PERFORMANCE_NOTE_CHANGE_DIRECTION_UNKNOWN}`);
+			expect(result.note).toContain('ずれの向きは確定できない');
+			expect(result.note).not.toContain('同じ額だけ過大');
+		});
+
+		it('過大が確定する資産と向き不明の資産が混在: 過大と断定しない', () => {
+			// btc は現在価格あり（現在側に載る = 過大が確定）、eth は現在価格なしで保有継続（向き不明）。
+			// 合計のずれの向きは決まらないので立てない。
+			const ctx = makeCtx({
+				currentHoldings: [
+					{ asset: 'btc', amount: '0.1' },
+					{ asset: 'eth', amount: '1' },
+				],
+				dwData: makeEmptyDw(),
+				candlePriceData: { boundaryPrices: new Map(), dailyPrices: new Map() },
+				flowPricing: currentPriceOnly(new Map([['btc', 15_000_000]])),
+				currentValue: 1_500_000,
+			});
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.unpriced_start_assets).toEqual(['btc', 'eth']);
+			expect(result.change_jpy_overstated).toBeUndefined();
+		});
+
+		it('期間中に売り切った資産は現在価格が無くても過大が確定する', () => {
+			// 現在保有ゼロ ＝ 現在評価額への寄与が本当に 0 なので現在側は正しく、
+			// 脱落するのは期初側だけ。向きは確定する。
+			const soldTrade: RawTrade = {
+				order_id: 1,
+				trade_id: 1,
+				pair: 'btc_jpy',
+				side: 'sell',
+				type: 'limit',
+				amount: '0.1',
+				price: '15000000',
+				maker_taker: 'taker',
+				fee_amount_base: '0',
+				fee_amount_quote: '0',
+				executed_at: 1500,
+			};
+			const ctx = makeCtx({
+				currentHoldings: [{ asset: 'jpy', amount: '1563314' }],
+				trades: [soldTrade],
+				dwData: makeEmptyDw(),
+				candlePriceData: { boundaryPrices: new Map(), dailyPrices: new Map() },
+				flowPricing: currentPriceOnly(),
+				currentValue: 1_563_314,
+			});
+			const result = buildPeriodPerformance({ key: 'daily', startMs: 1000, startIso: 'd' }, ctx);
+			expect(result.unpriced_start_assets).toEqual(['btc']);
+			expect(result.change_jpy_overstated).toBe(true);
+			expect(result.note).toContain(PERFORMANCE_NOTE_CHANGE_OVERSTATED);
 		});
 
 		it('エントリはあるが 3 境界すべて undefined: 過大な率を出さない', () => {

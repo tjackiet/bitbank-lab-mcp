@@ -471,13 +471,19 @@ export interface PeriodPerformance {
 	change_pct_unavailable_reason?: PortfolioChangePctUnavailableReason;
 	/**
 	 * `change_jpy` / `adjusted_change_jpy` が**過大**であることの申告（#105）。
-	 * 過大でない期間では `undefined`（キーごと落ちるので従来出力と JSON 一致する）。
+	 * 立たない期間では `undefined`（キーごと落ちるので従来出力と JSON 一致する）。
 	 *
 	 * `change_jpy = current_value_jpy - start_value_jpy` なので、`unpriced_start_assets` で
 	 * 期初評価額から脱落した分はそのまま増減額の過大分になる。`adjusted_change_jpy` は
 	 * `change_jpy - net_flow_jpy` で純入出金が分母側と無関係なため、**同じ額だけ**過大になる。
-	 * 立つ条件は `change_pct_unavailable_reason === 'start_boundary_unpriced'` と同値
-	 * （率を抑止した欠損がそのまま分子の欠損）。
+	 *
+	 * ただし立つのは `change_pct_unavailable_reason === 'start_boundary_unpriced'` の
+	 * **一部**——脱落した資産が現在評価額には正しく載っているときだけ。現在評価額も現在
+	 * ticker 価格を引けなかった保有を落とすため、両端から落ちる資産があるとずれの向きが
+	 * 確定せず、そこで「過大」と申告すると抑止したはずの確定値を別の形で出すことになる
+	 * （判定は `changeJpyOverstated`）。**本フラグが無いことは「増減額が正しい」の意味ではない**。
+	 * `unpriced_start_assets` がありフラグが無い期間は「ずれの向きが確定しない」であり、
+	 * どちらの期間でも増減額を運用成績として読んではいけない。
 	 *
 	 * ## なぜ値を `null` にせずフラグで申告するのか
 	 *
