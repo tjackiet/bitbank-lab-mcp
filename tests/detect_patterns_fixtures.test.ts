@@ -1489,9 +1489,24 @@ describe('detect_patterns fixtures', () => {
 			// range の端は pivot が指す足の日時と整合する（ISO 側との突き合わせ）
 			expect(pattern.range.start).toBe(window[pivots[0].idx].isoTime);
 
+			// breakoutBarIndex も同じ基準。bounds だけでなく、指す足が confirmation.date と
+			// 一致することまで見る——bounds だけだと窓内に収まる誤りを見逃す。
+			const breakoutBarIndex = pattern.breakoutBarIndex;
+			expect(breakoutBarIndex).toBeDefined();
+			expect(breakoutBarIndex).toBeGreaterThanOrEqual(0);
+			expect(breakoutBarIndex).toBeLessThan(window.length);
+
+			// confirmation.idx も出力に現れるインデックス。breakoutBarIndex と同じ足を指す。
+			const confirmation = pattern.confirmation;
+			expect(confirmation?.type).toBe('neckline_breakout');
+			if (confirmation?.type !== 'neckline_breakout') throw new Error('unreachable');
+			expect(confirmation.idx).toBe(breakoutBarIndex);
+			expect(window[confirmation.idx].isoTime).toBe(confirmation.date);
+
 			// warmup を含む配列の添字ではない: そちらに解決すると平坦足（100）に当たってしまう
 			const all = [...warmup, ...window];
 			expect(all[pivots[0].idx].isoTime).not.toBe(pattern.range.start);
+			expect(all[confirmation.idx].isoTime).not.toBe(confirmation.date);
 		});
 
 		it('pastBuffer を無視した場合と結果が変わる（回帰の検出力を担保する）', async () => {
