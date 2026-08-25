@@ -698,12 +698,16 @@ const PeriodPerformanceSchema = z
 			.number()
 			.describe('期初の口座評価額（JPY）。現在の保有状態から約定・入出金を逆算して復元し、期初時点の始値で評価'),
 		current_value_jpy: z.number().describe('現在の口座評価額（JPY）'),
-		change_jpy: z.number().describe('単純増減額 = current_value_jpy - start_value_jpy'),
+		change_jpy: z
+			.number()
+			.describe(
+				'単純増減額 = current_value_jpy - start_value_jpy。**change_jpy_overstated=true のときは過大**（期初の始値を解決できず start_value_jpy から脱落した評価額が、そのままこの値の過大分になる）。unpriced_start_assets があってフラグが無い場合は、現在評価額でも価格を解決できない保有があってずれの向きが確定しない状態。いずれも運用成績として読まないこと',
+			),
 		change_pct: z
 			.number()
 			.optional()
 			.describe(
-				'単純増減率（%）= change_jpy / start_value_jpy。**期初評価額が小さすぎて率が意味を持たない場合は undefined**（理由は change_pct_unavailable_reason）: (1) start_value_jpy が 0、(2) start_value_jpy が current_value_jpy の 1% 未満、(3) 期初の始値を解決できなかった暗号資産があり start_value_jpy が過小（当該期間のみ欠損・boundaryPrices 未登録・3 境界すべて欠損のいずれも含む）。(2) は年初にほぼ空だった口座に入金して運用を始めた場合に起き、率は運用成績ではなく「期初がほぼ空だった」ことを表す数になるため出さない。(3) は過小な分母では率が運用成績を表さないため出さない（資産名は unpriced_start_assets）。いずれも増減額 change_jpy は出す。undefined は「率がゼロ」ではない',
+				'単純増減率（%）= change_jpy / start_value_jpy。**期初評価額が小さすぎて率が意味を持たない場合は undefined**（理由は change_pct_unavailable_reason）: (1) start_value_jpy が 0、(2) start_value_jpy が current_value_jpy の 1% 未満、(3) 期初の始値を解決できなかった暗号資産があり start_value_jpy が過小（当該期間のみ欠損・boundaryPrices 未登録・3 境界すべて欠損のいずれも含む）。(2) は年初にほぼ空だった口座に入金して運用を始めた場合に起き、率は運用成績ではなく「期初がほぼ空だった」ことを表す数になるため出さない。(3) は過小な分母では率が運用成績を表さないため出さない（資産名は unpriced_start_assets）。いずれも増減額 change_jpy は出すが、**(3) では分子も同じ欠損の影響を受ける**ので成績として読めない（ずれの向きが確定する場合は change_jpy_overstated=true）。(1)(2) の増減額は正しい。undefined は「率がゼロ」ではない',
 			),
 		net_flow_jpy: z
 			.number()
@@ -721,7 +725,7 @@ const PeriodPerformanceSchema = z
 			.number()
 			.nullable()
 			.describe(
-				'調整後増減額 = change_jpy - net_flow_jpy（入出金元本の影響を除いた成績。出金手数料コストは含む）。null=純入出金が未計測のため算出不能',
+				'調整後増減額 = change_jpy - net_flow_jpy（入出金元本の影響を除いた成績。出金手数料コストは含む）。null=純入出金が未計測のため算出不能。**change_jpy_overstated=true のときは change_jpy と同じ額だけ過大**（純入出金は期初評価額と無関係なので過大分がそのまま残る）。unpriced_start_assets があってフラグが無い場合もずれの向きが確定しないだけで成績としては読めない',
 			),
 		adjusted_change_pct: z
 			.number()
@@ -757,8 +761,14 @@ const PeriodPerformanceSchema = z
 				'期初評価額の算出時に、当該期間の始値（1day candle open）を boundaryPrices から解決できなかった暗号資産シンボル一覧（小文字・昇順・重複なし）。boundaryPrices に未登録、または登録済みだが当該期間の始値が undefined（3 境界すべて undefined も含む）のいずれか。該当資産は start_value_jpy に含まれていない（過小）。JPY のみ保有のときは undefined。資産名のみ出し金額は出さない（unpriced_flow_assets と同じ粒度）。資産推移の equitySeriesQuality は別系統の申告であり、本フィールドが無いことは「始値が取れた」の意味ではない',
 			),
 		change_pct_unavailable_reason: PortfolioChangePctUnavailableReasonEnum.optional().describe(
-			'change_pct / adjusted_change_pct を出せなかった理由。start_value_zero=期初評価額が 0、start_value_negligible=期初評価額が現在評価額の 1% 未満（相対基準。絶対額固定は口座規模に依存するため採らない）、start_boundary_unpriced=期初の始値を解決できなかった暗号資産があり期初評価額が過小（unpriced_start_assets を参照。start_value_negligible とは原因が異なる）。設定されている場合 change_pct は undefined で、adjusted_change_pct は undefined（純入出金が未計測なら null が優先）。増減額 change_jpy / adjusted_change_jpy は通常どおり出るので、成績はそちらで読むこと。率を出せている場合は undefined',
+			'change_pct / adjusted_change_pct を出せなかった理由。start_value_zero=期初評価額が 0、start_value_negligible=期初評価額が現在評価額の 1% 未満（相対基準。絶対額固定は口座規模に依存するため採らない）、start_boundary_unpriced=期初の始値を解決できなかった暗号資産があり期初評価額が過小（unpriced_start_assets を参照。start_value_negligible とは原因が異なる）。設定されている場合 change_pct は undefined で、adjusted_change_pct は undefined（純入出金が未計測なら null が優先）。増減額 change_jpy / adjusted_change_jpy はどの理由でも出るが、**成績として読めるのは start_value_zero / start_value_negligible のときだけ**（期初評価額が本当に小さいだけで分子は正しい）。start_boundary_unpriced では分子も同じ欠損の影響を受けるため読めない（ずれの向きが確定する期間には change_jpy_overstated=true が付く。付かない期間は「正しい」ではなく「向きが確定しない」）。率を出せている場合は undefined',
 		),
+		change_jpy_overstated: z
+			.boolean()
+			.optional()
+			.describe(
+				'change_jpy / adjusted_change_jpy が過大であることの申告。true になるのは change_pct_unavailable_reason=start_boundary_unpriced のうち、期初の始値を解決できず start_value_jpy から脱落した資産（資産名は unpriced_start_assets）が**現在評価額には正しく載っている**場合だけで、脱落した期初評価額がそのまま増減額の過大分になる。現在 ticker 価格も解決できず現在評価額からも落ちる保有があると、その資産の値動きが両端に入らずずれの向きが確定しないため本フラグは付かない。**フラグが無いことは「増減額が正しい」の意味ではない**——unpriced_start_assets がある期間の増減額は、向きが確定するかによらず運用成績として読めない（率を抑止した欠損がそのまま分子の欠損であり、率より壊れた数字になる）。その期間の値動きはこの結果からは算出できない（*_equity_series も同じ 1day candle の始値に依存し、引けなかった日付は現在価格で代替されるため代替にならない）。値を null にせず出したうえでフラグを立てるのは、start_value_jpy を「過小でも出して申告する」とした方針と揃えるため（change_jpy = current_value_jpy - start_value_jpy で消費者が再計算できるので、null 化は契約を壊すだけで隠蔽にならない）。該当しない場合は undefined（false は返さない）',
+			),
 	})
 	.optional();
 
@@ -1016,7 +1026,7 @@ export const AnalyzeMyPortfolioMetaSchema = z.object({
 		.array(z.enum(['daily', 'monthly', 'yearly']))
 		.optional()
 		.describe(
-			'増減率（change_pct / adjusted_change_pct）を出さなかった期間の一覧。期初評価額が 0、現在評価額の 1% 未満、または期初始値の解決欠損で率が意味を持たない期間が対象で、期間ごとの理由コードは *_performance.change_pct_unavailable_reason に載る。該当なしのときは undefined（「全期間で率が出ている」の意味であり、率がゼロという意味ではない）。',
+			'増減率（change_pct / adjusted_change_pct）を出さなかった期間の一覧。期初評価額が 0、現在評価額の 1% 未満、または期初始値の解決欠損で率が意味を持たない期間が対象で、期間ごとの理由コードは *_performance.change_pct_unavailable_reason に載る。理由が start_boundary_unpriced の期間では増減額（change_jpy / adjusted_change_jpy）も同じ欠損の影響を受けるので、代わりに増減額を読むことはできない（ずれの向きは *_performance.change_jpy_overstated を参照）。該当なしのときは undefined（「全期間で率が出ている」の意味であり、率がゼロという意味ではない）。',
 		),
 	warnings: z
 		.array(z.string())
