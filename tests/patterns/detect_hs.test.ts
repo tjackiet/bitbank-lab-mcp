@@ -357,27 +357,40 @@ describe('detectHeadAndShoulders', () => {
 	// ── Relaxed fallback ─────────────────────────────────────
 
 	it('strict 不検出 → relaxed H&S (x1.6) でフォールバック検出', () => {
-		// left=100, right=106 → diff/max=6/106=0.0566 > strict(0.04) だが <= relaxed(0.064)
-		const { candles, pivots } = buildHS({ leftShoulder: 100, rightShoulder: 106, head: 130 });
+		// left=100, right=105 → diff/max=5/105=0.0476
+		//   > strict(0.04)                  → strict は shoulders_not_near で弾かれる
+		//   <= relaxed(0.04*1.6=0.064)      → relaxed の肩許容に収まる
+		//   <= HS_SHOULDER_MAX_PCT(0.05)    → relaxed でも効く hard cap を超えない
+		// relaxed の許容幅は hard cap で頭打ちになるため、cap 超えの差（旧 106）では
+		// relaxed も必ず落ちる（下の HS_SHOULDER_MAX_PCT テストがその境界を固定している）。
+		const { candles, pivots } = buildHS({ leftShoulder: 100, rightShoulder: 105, head: 130 });
 		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.04 });
 		const result = detectHeadAndShoulders(ctx);
 
 		const hs = result.patterns.filter((p) => p.type === 'head_and_shoulders');
-		if (hs.length > 0) {
-			expect(hs[0]?._fallback).toMatch(/relaxed_hs/);
-		}
+		expect(hs.length).toBeGreaterThan(0);
+		expect(hs[0]?._fallback).toMatch(/relaxed_hs/);
+		// strict パスで一度弾かれてから relaxed に落ちたことを確認する
+		const strictRejected = ctx.debugCandidates.some(
+			(d) => d.type === 'head_and_shoulders' && d.reason === 'shoulders_not_near',
+		);
+		expect(strictRejected).toBe(true);
 	});
 
 	it('strict 不検出 → relaxed Inverse H&S でフォールバック検出', () => {
-		// shoulders=100,106: diff/max=0.0566 > 0.04
-		const { candles, pivots } = buildInverseHS({ leftShoulder: 100, rightShoulder: 106, head: 70 });
+		// shoulders=100,105: diff/max=5/105=0.0476 > strict(0.04)、
+		// かつ relaxed(0.064) / HS_SHOULDER_MAX_PCT(0.05) の双方に収まる。
+		const { candles, pivots } = buildInverseHS({ leftShoulder: 100, rightShoulder: 105, head: 70 });
 		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.04 });
 		const result = detectHeadAndShoulders(ctx);
 
 		const ihs = result.patterns.filter((p) => p.type === 'inverse_head_and_shoulders');
-		if (ihs.length > 0) {
-			expect(ihs[0]?._fallback).toMatch(/relaxed_ihs/);
-		}
+		expect(ihs.length).toBeGreaterThan(0);
+		expect(ihs[0]?._fallback).toMatch(/relaxed_ihs/);
+		const strictRejected = ctx.debugCandidates.some(
+			(d) => d.type === 'inverse_head_and_shoulders' && d.reason === 'shoulders_not_near',
+		);
+		expect(strictRejected).toBe(true);
 	});
 
 	// ── HS_SHOULDER_MAX_PCT hard cap（PR: shoulder cap 配線） ──

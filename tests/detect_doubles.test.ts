@@ -286,27 +286,32 @@ describe('detectDoubles', () => {
 	// ── relaxed fallback ─────────────────────────────────
 
 	it('通常判定で不検出 → relaxed (x1.3) で検出', () => {
-		// tolerance=4%, peak差=5% → 通常は不検出、relaxed(4%*1.3=5.2%)で検出
-		const { candles, pivots } = buildDoubleTop({ peak1: 200, peak2: 210 });
-		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.04 });
+		// tolerance=2%, peak差=5/205=2.44% → 通常は peaks_not_equal、relaxed(2%*1.3=2.6%)で検出。
+		// relaxed の許容幅は DOUBLE_LEVEL_MAX_PCT(3%) の hard cap で頭打ちになるため、
+		// cap を超える peak 差（旧 200/210 = 4.76%）では relaxed も必ず落ちる
+		// （peaks_not_equal_structural）。差は cap 内に収める必要がある。
+		const { candles, pivots } = buildDoubleTop({ peak1: 200, peak2: 205 });
+		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.02 });
 		const result = detectDoubles(ctx);
 
 		const dt = result.patterns.filter((p) => p.type === 'double_top');
-		if (dt.length > 0) {
-			expect(dt[0]._fallback).toContain('relaxed');
-		}
+		expect(dt.length).toBeGreaterThan(0);
+		expect(dt[0]._fallback).toContain('relaxed');
+		// 通常判定で一度弾かれてから relaxed に落ちたことを確認する
+		expect(ctx.debugCandidates.some((d) => d.type === 'double_top' && d.reason === 'peaks_not_equal')).toBe(true);
 	});
 
 	it('relaxed fallback でダブルボトムを検出', () => {
-		// tolerance=4%, valley差=5% → 通常は不検出、relaxed(4%*1.3=5.2%)で検出
-		const { candles, pivots } = buildDoubleBottom({ valley1: 100, valley2: 105, peak: 130, breakoutClose: 140 });
-		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.04 });
+		// tolerance=2%, valley差=2.5/102.5=2.44% → 通常は valleys_not_equal、relaxed(2.6%)で検出。
+		// ダブルトップ側と同じく DOUBLE_LEVEL_MAX_PCT(3%) の hard cap 内に収める。
+		const { candles, pivots } = buildDoubleBottom({ valley1: 100, valley2: 102.5, peak: 130, breakoutClose: 140 });
+		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.02 });
 		const result = detectDoubles(ctx);
 
 		const db = result.patterns.filter((p) => p.type === 'double_bottom');
-		if (db.length > 0) {
-			expect(db[0]._fallback).toContain('relaxed');
-		}
+		expect(db.length).toBeGreaterThan(0);
+		expect(db[0]._fallback).toContain('relaxed');
+		expect(ctx.debugCandidates.some((d) => d.type === 'double_bottom' && d.reason === 'valleys_not_equal')).toBe(true);
 	});
 
 	// ── ピボット不足 ─────────────────────────────────────

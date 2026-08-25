@@ -246,22 +246,6 @@ describe('detectWedges', () => {
 		}
 	});
 
-	// ── breakout 後のターゲット（pattern_height）────────────
-
-	it('breakout が検出された場合、breakoutTarget と targetMethod が設定される', () => {
-		const candles = buildFallingWedgeCandles(80);
-		const pivots: Pivot[] = [];
-		const ctx = buildCtx({ candles, pivots, includeForming: true });
-		const result = detectWedges(ctx);
-
-		const withTarget = result.patterns.filter((p) => p.breakoutTarget !== undefined);
-		if (withTarget.length > 0) {
-			expect(withTarget[0]?.targetMethod).toBe('pattern_height');
-		}
-	});
-
-	// ── target 到達判定（high/low ベース）────────────────────
-
 	// ── target 到達判定（high/low ベース）────────────────────
 	//
 	// 標準の buildFallingWedgeCandles は breakout を起こさない near_completion で終わるため、
@@ -299,6 +283,21 @@ describe('detectWedges', () => {
 		}
 		return candles;
 	}
+
+	// ── breakout 後のターゲット（pattern_height）────────────
+
+	it('breakout が検出された場合、breakoutTarget と targetMethod が設定される', () => {
+		// buildFallingWedgeCandles は apex 手前で終わり breakout しない（status=forming）ので、
+		// breakoutTarget を持つパターンが 1 件も出ない。ここは上抜け付きフィクスチャを使う。
+		const candles = buildFallingWedgeWithUpBreakout();
+		const pivots: Pivot[] = [];
+		const ctx = buildCtx({ candles, pivots, includeForming: true });
+		const result = detectWedges(ctx);
+
+		const withTarget = result.patterns.filter((p) => p.breakoutTarget !== undefined);
+		expect(withTarget.length).toBeGreaterThan(0);
+		expect(withTarget[0]?.targetMethod).toBe('pattern_height');
+	});
 
 	it('falling_wedge ブレイク検出時に target 到達情報が一式付与される（high/low ベース）', () => {
 		const candles = buildFallingWedgeWithUpBreakout();
