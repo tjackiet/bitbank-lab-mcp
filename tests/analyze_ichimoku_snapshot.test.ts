@@ -195,18 +195,30 @@ describe('analyze_ichimoku_snapshot', () => {
 		expect(res.data.assessment.cloudSlope).toBe('rising');
 	});
 
-	it('toolDef.handler: テキスト content を返す', async () => {
+	it('toolDef.handler: content を組まず Result を素通しし、summary が LLM 可視テキストになる', async () => {
+		// このツールの handler は analyzeIchimokuSnapshot の Result をそのまま返す
+		// （analyze_bb_snapshot / analyze_sma_snapshot と同じ passthrough）。
+		// content[0].text は src/server.ts の respond() が summary から生成するので、
+		// LLM が受け取る情報量は summary そのもの。ここでは summary 側を検証する。
 		mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(buildMockIndicatorSuccess()));
-		const res = (await toolDef.handler({
+		const res = await toolDef.handler({
 			pair: 'btc_jpy',
 			type: '1day',
 			limit: 120,
 			lookback: 5,
-		})) as { content?: Array<{ text: string }> };
-		// handler may return content or direct result
-		if (res.content) {
-			expect(res.content[0].text).toBeTruthy();
-		}
+		});
+
+		expect(res).not.toHaveProperty('content');
+		assertOk(res);
+		// summary は 1 行のラベルではなく、数値データを含む本文であること
+		// （.claude/rules/tools.md: LLM は content[0].text しか読めない）。
+		expect(res.summary).toContain('一目均衡表分析');
+		// 見出しだけでなく、モックの入力値がそのまま数値として本文に出ていることまで見る
+		// （見出しだけの検証だと【数値データ】が空でも通ってしまう）。
+		expect(res.summary).toContain('【数値データ】');
+		expect(res.summary).toContain('転換線: 90 / 基準線: 95');
+		expect(res.summary).toContain('雲(今日): spanA=100 spanB=110');
+		expect(res.summary.split('\n').length).toBeGreaterThan(1);
 	});
 
 	it('雲データ不足時の cloud.direction は null（unknown を flat にしない）であるべき', async () => {
