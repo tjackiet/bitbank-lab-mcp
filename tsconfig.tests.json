@@ -1,7 +1,0 @@
-{
-  "extends": "./tsconfig.json",
-  "include": ["src/**/*", "tools/**/*", "lib/**/*", "tests/**/*"],
-  "//": "tests/ を型検査するための構成。tsconfig.json 本体は tests を除外しているため CI では検査されない。",
-  "//exclude": "既存の型エラーを抱えるファイルを 1 ファイルずつ修正して削除してきた暫定リスト。全ファイルの修正が完了し、除外は node_modules だけになった。残るは本ファイルを廃して tests を tsconfig 本体へ統合する作業（別 PR）。",
-  "exclude": ["node_modules"]
-}
