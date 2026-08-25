@@ -112,13 +112,27 @@ export const DetectedPatternSchema = z.object({
 	timeframe: CandleTypeEnum.optional(),
 	/** 人間可読な時間足ラベル（例: '日足', '4時間足', '週足'） */
 	timeframeLabel: z.string().optional(),
+	/**
+	 * **この 1 件のパターンが占める期間**。スキャン窓でも入力データ範囲でもない。
+	 * 全パターンを跨いだ分布は content の「検出パターン分布期間」行、
+	 * 実際に走査した足の範囲は `meta.scan` を見ること。
+	 */
 	range: z.object({
 		start: z
 			.string()
-			.describe('UTC ISO 文字列。表示は呼び出し側 tz（既定 Asia/Tokyo）で整形される（後方互換のため値自体は不変）。'),
+			.describe(
+				'このパターンの開始足。UTC ISO 文字列。' +
+					'表示は呼び出し側 tz（既定 Asia/Tokyo）で整形される（後方互換のため値自体は不変）。',
+			),
 		end: z
 			.string()
-			.describe('UTC ISO 文字列。表示は呼び出し側 tz（既定 Asia/Tokyo）で整形される（後方互換のため値自体は不変）。'),
+			.describe(
+				'**このパターンが終わった足**であって、データ末尾でもスキャン窓の末尾でもない。' +
+					'最新の range.end がスキャン窓の末尾より古いのは正常——「そこから先が走査されていない」ことを意味しない' +
+					'（走査範囲は meta.scan を参照）。' +
+					'ブレイク確認足まで含むことがあり、構成点だけで閉じた期間が必要なら structureRange を使う。' +
+					'UTC ISO 文字列。表示は呼び出し側 tz（既定 Asia/Tokyo）で整形される（後方互換のため値自体は不変）。',
+			),
 	}),
 	/**
 	 * パターン構成点のみで張る期間（誤読防止のための追加フィールド）。
