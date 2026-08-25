@@ -5,7 +5,7 @@
  * 統合動作を検証する。URL ベースのルーティングで複数 API 呼び出しをモック。
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import { assertFail, assertOk } from '../_assertResult.js';
 import { candlesBtcJpy1day120, candlesBtcJpy1day120Near, generateOhlcv, tickersJpy } from '../fixtures/bitbank-api.js';
 import {
@@ -21,7 +21,9 @@ import {
 	rawTradeHistoryResponse,
 	rawWithdrawalHistoryResponse,
 } from '../fixtures/private-api.js';
+import { assertDefined, requireDefined } from '../helpers/assert.js';
 import { asMcp } from '../helpers/mcp.js';
+import { holdingOf } from '../helpers/portfolio.js';
 
 /** rawAssetsResponse から指定 asset のエントリを取り出す（整合 fixture の組み立て用） */
 function assetFixture(asset: string) {
@@ -262,7 +264,7 @@ describe('analyze_my_portfolio', () => {
 		assertOk(result);
 		expect(result.data.holdings.length).toBeGreaterThan(0);
 		// PnL 関連フィールドが undefined
-		const btcHolding = result.data.holdings.find((h) => h.asset === 'btc');
+		const btcHolding = holdingOf(result.data.holdings, 'btc');
 		expect(btcHolding).toBeDefined();
 		expect(btcHolding?.cost_basis).toBeUndefined();
 	});
@@ -318,7 +320,7 @@ describe('analyze_my_portfolio', () => {
 		});
 
 		assertOk(result);
-		expect(result.data.account_pnl).toBeDefined();
+		assertDefined(result.data.account_pnl, 'result.data.account_pnl');
 		expect(result.data.account_pnl.margin_realized_pnl).toBe(0);
 		expect(result.data.account_pnl.margin_interest).toBe(0);
 		expect(result.data.account_pnl.margin_fee).toBe(0);
@@ -344,10 +346,11 @@ describe('analyze_my_portfolio', () => {
 
 		assertOk(result);
 		const pnl = result.data.account_pnl;
-		expect(pnl).toBeDefined();
+		assertDefined(pnl, 'result.data.account_pnl');
 		expect(pnl.margin_realized_pnl).toBe(5000);
 		expect(pnl.margin_interest).toBe(30);
 		expect(pnl.margin_fee).toBe(155);
+		assertDefined(pnl.spot_realized_pnl, 'result.data.account_pnl.spot_realized_pnl');
 		expect(pnl.total).toBe(pnl.spot_realized_pnl + 5000 - 30 - 155);
 	});
 
@@ -369,7 +372,7 @@ describe('analyze_my_portfolio', () => {
 		});
 
 		assertOk(result);
-		const pnl = result.data.account_pnl;
+		const pnl = requireDefined(result.data.account_pnl, 'result.data.account_pnl');
 		// 新フィールドはコスト = 正値（負値で持たない）
 		expect(pnl.margin_interest_cost).toBe(30);
 		expect(pnl.margin_fee_cost).toBe(155);
@@ -377,6 +380,7 @@ describe('analyze_my_portfolio', () => {
 		expect(pnl.margin_interest).toBe(pnl.margin_interest_cost);
 		expect(pnl.margin_fee).toBe(pnl.margin_fee_cost);
 		// total は新フィールドを **減算** して再現できる
+		assertDefined(pnl.spot_realized_pnl, 'result.data.account_pnl.spot_realized_pnl');
 		expect(pnl.total).toBe(
 			pnl.spot_realized_pnl + pnl.margin_realized_pnl - pnl.margin_interest_cost - pnl.margin_fee_cost,
 		);
@@ -452,12 +456,13 @@ describe('analyze_my_portfolio', () => {
 
 		assertOk(result);
 		const pnl = result.data.account_pnl;
-		expect(pnl).toBeDefined();
+		assertDefined(pnl, 'result.data.account_pnl');
 		// 信用約定 1 件のみが集計対象
 		expect(pnl.margin_realized_pnl).toBe(5000);
 		expect(pnl.margin_interest).toBe(30);
 		// 現物の 9999 が混入していたら 9999+155=10154 になるはずだが、フィルタで除外されて 155 のみ
 		expect(pnl.margin_fee).toBe(155);
+		assertDefined(pnl.spot_realized_pnl, 'result.data.account_pnl.spot_realized_pnl');
 		expect(pnl.total).toBe(pnl.spot_realized_pnl + 5000 - 30 - 155);
 	});
 
@@ -480,7 +485,7 @@ describe('analyze_my_portfolio', () => {
 		expect(result.summary).toContain('⚠️ 信用約定の取得に失敗');
 		expect(result.meta.marginFetchFailed).toBe(true);
 		// フォールバック: margin pnl 各種は 0
-		expect(result.data.account_pnl).toBeDefined();
+		assertDefined(result.data.account_pnl, 'result.data.account_pnl');
 		expect(result.data.account_pnl.margin_realized_pnl).toBe(0);
 		expect(result.data.account_pnl.margin_interest).toBe(0);
 		expect(result.data.account_pnl.margin_fee).toBe(0);
@@ -756,18 +761,19 @@ describe('analyze_my_portfolio', () => {
 
 			assertOk(result);
 			// yearly: 両方含む（1000 + 500, 10 + 5, 50 + 25）
-			expect(result.data.yearly_account_pnl).toBeDefined();
+			assertDefined(result.data.yearly_account_pnl, 'result.data.yearly_account_pnl');
 			expect(result.data.yearly_account_pnl.margin_realized_pnl).toBe(1500);
 			expect(result.data.yearly_account_pnl.margin_interest).toBe(15);
 			expect(result.data.yearly_account_pnl.margin_fee).toBe(75);
 			// monthly: 月初後のみ（500, 5, 25）
-			expect(result.data.monthly_account_pnl).toBeDefined();
+			assertDefined(result.data.monthly_account_pnl, 'result.data.monthly_account_pnl');
 			expect(result.data.monthly_account_pnl.margin_realized_pnl).toBe(500);
 			expect(result.data.monthly_account_pnl.margin_interest).toBe(5);
 			expect(result.data.monthly_account_pnl.margin_fee).toBe(25);
 
 			// #72: 期間版にも同じリネームが効く（新旧同値 + total を減算で検算）
 			for (const periodPnl of [result.data.yearly_account_pnl, result.data.monthly_account_pnl]) {
+				assertDefined(periodPnl.spot_realized_pnl, 'periodPnl.spot_realized_pnl');
 				expect(periodPnl.margin_interest_cost).toBe(periodPnl.margin_interest);
 				expect(periodPnl.margin_fee_cost).toBe(periodPnl.margin_fee);
 				expect(periodPnl.total).toBe(
@@ -919,13 +925,13 @@ describe('analyze_my_portfolio', () => {
 
 			assertOk(result);
 			const dw = result.data.deposit_withdrawal_summary;
-			expect(dw).toBeDefined();
+			assertDefined(dw, 'result.data.deposit_withdrawal_summary');
 			// 純投入額は年初前 1_000_000 + 年初後 500_000 = 1_500_000
 			expect(dw.total_jpy_deposited).toBe(1_500_000);
 			expect(dw.net_jpy_invested).toBe(1_500_000);
 			// account_return = 現在総資産 - 純投入額。総資産 > 純投入額なら正値
 			expect(dw.account_return_jpy).toBeDefined();
-			const totalValue = result.data.total_jpy_value;
+			const totalValue = requireDefined(result.data.total_jpy_value, 'result.data.total_jpy_value');
 			expect(dw.account_return_jpy).toBe(totalValue - 1_500_000);
 		} finally {
 			vi.useRealTimers();
@@ -1023,14 +1029,15 @@ describe('analyze_my_portfolio', () => {
 
 			assertOk(result);
 			// 年初後の sell が yearly に集計される
-			expect(result.data.yearly_realized_pnl).toBeDefined();
+			assertDefined(result.data.yearly_realized_pnl, 'result.data.yearly_realized_pnl');
 			expect(result.data.yearly_realized_pnl.realized_pnl).toBe(1_000_000);
 			expect(result.data.yearly_realized_pnl.sell_count).toBe(1);
 			// 全履歴の realized_pnl も同じ（年初前 buy のみで sell は 1 件のみ）
 			expect(result.data.total_realized_pnl).toBe(1_000_000);
+			assertDefined(result.data.account_pnl, 'result.data.account_pnl');
 			expect(result.data.account_pnl.spot_realized_pnl).toBe(1_000_000);
 			// BTC 残保有 0.5 → cost_basis = 0.5 * 10_000_000 = 5_000_000
-			const btcHolding = result.data.holdings.find((h: { asset: string }) => h.asset === 'btc');
+			const btcHolding = holdingOf(result.data.holdings, 'btc');
 			expect(btcHolding).toBeDefined();
 			expect(btcHolding.cost_basis).toBe(5_000_000);
 			expect(btcHolding.avg_buy_price).toBe(10_000_000);
@@ -1138,7 +1145,7 @@ describe('analyze_my_portfolio', () => {
 
 			assertOk(result);
 			// yearly_realized_pnl: 出庫を反映した平均原価で計算
-			expect(result.data.yearly_realized_pnl).toBeDefined();
+			assertDefined(result.data.yearly_realized_pnl, 'result.data.yearly_realized_pnl');
 			expect(result.data.yearly_realized_pnl.realized_pnl).toBe(1_000_000);
 			// total_realized_pnl も同じ（calcPnl と calcPeriodRealizedPnl の整合）
 			expect(result.data.total_realized_pnl).toBe(1_000_000);
@@ -1400,7 +1407,7 @@ describe('analyze_my_portfolio — 信頼できない損益値の null 化', () 
 		expect(result.meta.flowDataUnavailableReason).toBe('dw_fetch_failed');
 		expectCostFieldsSuppressed(result, 'dw_fetch_failed');
 		// 入出金サマリーは実データのまま残す（原価の信頼性とは別問題）
-		expect(result.data.deposit_withdrawal_summary).toBeDefined();
+		assertDefined(result.data.deposit_withdrawal_summary, 'result.data.deposit_withdrawal_summary');
 		expect(result.data.deposit_withdrawal_summary.analysis_basis).toBe('deposit_withdrawal');
 	});
 
@@ -1415,7 +1422,7 @@ describe('analyze_my_portfolio — 信頼できない損益値の null 化', () 
 		});
 
 		assertOk(result);
-		const btc = result.data.holdings.find((h: { asset: string }) => h.asset === 'btc');
+		const btc = holdingOf(result.data.holdings, 'btc');
 		expect(btc.cost_basis).toBeGreaterThan(0);
 		expect(btc.avg_buy_price).toBeGreaterThan(0);
 		expect(btc.unrealized_pnl).toBeDefined();
@@ -1442,8 +1449,9 @@ describe('analyze_my_portfolio — 信頼できない損益値の null 化', () 
 		assertOk(result);
 		expect(result.meta.depositWithdrawalStatus).toBe('no_history');
 		expect(result.meta.flowDataUnavailableReason).toBeUndefined();
-		const btc = result.data.holdings.find((h: { asset: string }) => h.asset === 'btc');
+		const btc = holdingOf(result.data.holdings, 'btc');
 		expect(btc.cost_basis).toBeGreaterThan(0);
+		assertDefined(result.data.daily_performance, 'result.data.daily_performance');
 		expect(result.data.daily_performance.flow_measured).toBe(true);
 		expect(result.data.daily_performance.net_flow_jpy).toBe(0);
 	});
@@ -1460,8 +1468,7 @@ describe('analyze_my_portfolio — 信頼できない損益値の null 化', () 
 
 		assertOk(result);
 		for (const key of ['daily_performance', 'yearly_performance', 'monthly_performance'] as const) {
-			const p = result.data[key];
-			expect(p, key).toBeDefined();
+			const p = requireDefined(result.data[key], key);
 			expect(p.net_flow_jpy, key).toBeNull();
 			expect(p.withdrawal_fee_jpy, key).toBeNull();
 			expect(p.adjusted_change_jpy, key).toBeNull();
@@ -1549,7 +1556,7 @@ describe('analyze_my_portfolio — 信頼できない損益値の null 化', () 
 		expect(result.data.total_cost_basis).toBeUndefined();
 		expect(result.data.total_cost_basis_unavailable_reason).toBeUndefined();
 		expect(result.meta.flowDataUnavailableReason).toBeUndefined();
-		const btc = result.data.holdings.find((h: { asset: string }) => h.asset === 'btc');
+		const btc = holdingOf(result.data.holdings, 'btc');
 		expect(btc.cost_basis).toBeUndefined();
 		expect(btc.realized_pnl).toBeUndefined();
 		expect(btc.cost_basis_unavailable_reason).toBeUndefined();
@@ -1616,7 +1623,7 @@ describe('analyze_my_portfolio — 入出金取得の include_pnl 紐づけ', ()
 		});
 
 		assertOk(result);
-		const btc = result.data.holdings.find((h: { asset: string }) => h.asset === 'btc');
+		const btc = holdingOf(result.data.holdings, 'btc');
 		// P1 で null になっていた値が復活し、かつ出庫を按分した正しい値であること
 		expect(btc.cost_basis).toBe(BTC_COST_BASIS_WITH_WITHDRAWAL);
 		expect(btc.cost_basis).not.toBe(BTC_COST_BASIS_WITHOUT_WITHDRAWAL);
@@ -1695,7 +1702,7 @@ describe('analyze_my_portfolio — 入出金取得の include_pnl 紐づけ', ()
 		});
 
 		assertOk(result);
-		const daily = result.data.daily_performance;
+		const daily = requireDefined(result.data.daily_performance, 'result.data.daily_performance');
 		expect(daily.flow_measured).toBe(true);
 		expect(daily.flow_unavailable_reason).toBeUndefined();
 		// 純入出金は元本移動のみ（出金手数料は別建て）
@@ -2412,7 +2419,7 @@ describe('analyze_my_portfolio — 入出庫日価格での評価', () => {
 		/** candlestick の URL は `/candlestick/{pair}/{type}/{yearOrDay}` 形式 */
 		const runWithYearChunks = async (last: number) => {
 			setupFetchMock({ ...mockOpts, tickers: tickersWithBtc(last) });
-			const routed = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+			const routed = globalThis.fetch as unknown as Mock<typeof fetch>;
 			const base = routed.getMockImplementation();
 			const candleUrls: string[] = [];
 			globalThis.fetch = vi.fn().mockImplementation(async (url: string | URL | Request) => {
@@ -3679,7 +3686,7 @@ describe('analyze_my_portfolio — API pair の取得境界正規化', () => {
 		});
 
 		assertOk(result);
-		const btc = result.data.holdings.find((h) => h.asset === 'btc');
+		const btc = holdingOf(result.data.holdings, 'btc');
 		// prices のキーが BTC_JPY だと評価額が undefined になる
 		expect(btc?.jpy_value).toBe(0.6 * 15_500_000);
 		// calcPnl の `t.pair === 'btc_jpy'` が 0 件マッチだと以下が全て消える
@@ -3775,7 +3782,7 @@ describe('analyze_my_portfolio — 復元数量 vs 実残高の不変条件', ()
 		});
 
 		assertOk(result);
-		const eth = result.data.holdings.find((h: { asset: string }) => h.asset === 'eth');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(eth.cost_basis_reliable).toBe(false);
 		expect(eth.cost_basis_unavailable_reason).toBe('untracked_trade_suspected');
 		// 原価から派生する 4 フィールドは #54 と同じ null 化経路で抑止される
@@ -3834,7 +3841,7 @@ describe('analyze_my_portfolio — 復元数量 vs 実残高の不変条件', ()
 		});
 
 		assertOk(result);
-		const eth = result.data.holdings.find((h: { asset: string }) => h.asset === 'eth');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		// (b) の眼目: 入庫ぶんの数量が復元に入るので、乖離は解消し原価が確定値として出る
 		expect(eth.cost_basis_reliable).toBe(true);
 		expect(eth.cost_basis_unavailable_reason).toBeUndefined();
@@ -3868,7 +3875,7 @@ describe('analyze_my_portfolio — 復元数量 vs 実残高の不変条件', ()
 		});
 
 		assertOk(result);
-		const eth = result.data.holdings.find((h: { asset: string }) => h.asset === 'eth');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(eth.cost_basis_reliable).toBe(false);
 		expect(eth.cost_basis_unavailable_reason).toBe('has_crypto_deposits');
 		expect(eth.cost_basis).toBeUndefined();
@@ -3902,7 +3909,7 @@ describe('analyze_my_portfolio — 復元数量 vs 実残高の不変条件', ()
 
 		assertOk(result);
 		expect(result.meta.tradesTruncated).toBe(true);
-		const eth = result.data.holdings.find((h: { asset: string }) => h.asset === 'eth');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(eth.cost_basis_reliable).toBe(false);
 		expect(eth.cost_basis_unavailable_reason).toBe('history_truncated');
 		expect(result.meta.warnings?.[0]).toContain('ETH（約定履歴の打ち切り）');
@@ -3924,18 +3931,18 @@ describe('analyze_my_portfolio — 復元数量 vs 実残高の不変条件', ()
 		});
 
 		assertOk(result);
-		const btc = result.data.holdings.find((h: { asset: string }) => h.asset === 'btc');
+		const btc = holdingOf(result.data.holdings, 'btc');
 		expect(btc.cost_basis_reliable).toBe(true);
 		expect(btc.cost_basis_unavailable_reason).toBeUndefined();
 		expect(btc.cost_basis).toBe(74_925);
 		// btc_jpy は price_digits=0 だが、avg_buy_price は板の刻みに縛られない加重平均なので
 		// +2 桁の余裕を持たせて丸める（整数丸めではない）。
 		expect(btc.avg_buy_price).toBe(15_015_015.02);
-		const eth = result.data.holdings.find((h: { asset: string }) => h.asset === 'eth');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(eth.cost_basis_reliable).toBe(true);
 		expect(eth.cost_basis).toBe(380_000);
 		// JPY は原価計算の対象外なので省略
-		const jpy = result.data.holdings.find((h: { asset: string }) => h.asset === 'jpy');
+		const jpy = holdingOf(result.data.holdings, 'jpy');
 		expect(jpy.cost_basis_reliable).toBeUndefined();
 		// 数量整合の warning・除外注記は出ない
 		expect(result.meta.warnings).toBeUndefined();
@@ -3953,7 +3960,7 @@ describe('analyze_my_portfolio — 復元数量 vs 実残高の不変条件', ()
 		});
 
 		assertOk(result);
-		const eth = result.data.holdings.find((h: { asset: string }) => h.asset === 'eth');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(eth.cost_basis_reliable).toBeUndefined();
 		expect(eth.cost_basis_unavailable_reason).toBeUndefined();
 	});
@@ -3972,7 +3979,7 @@ describe('analyze_my_portfolio — 復元数量 vs 実残高の不変条件', ()
 		});
 
 		assertOk(result);
-		const eth = result.data.holdings.find((h: { asset: string }) => h.asset === 'eth');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(eth.cost_basis_reliable).toBe(true);
 		expect(eth.cost_basis).toBe(800); // 0.002 * 400_000
 	});
@@ -3989,7 +3996,7 @@ describe('analyze_my_portfolio — 復元数量 vs 実残高の不変条件', ()
 		});
 
 		assertOk(result);
-		const eth = result.data.holdings.find((h: { asset: string }) => h.asset === 'eth');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(eth.cost_basis_reliable).toBe(false);
 		expect(eth.cost_basis).toBeUndefined();
 	});
@@ -4023,7 +4030,7 @@ describe('analyze_my_portfolio — 復元数量 vs 実残高の不変条件', ()
 		});
 
 		assertOk(result);
-		const eth = result.data.holdings.find((h: { asset: string }) => h.asset === 'eth');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(eth.cost_basis_reliable).toBe(true);
 		expect(eth.cost_basis_unavailable_reason).toBeUndefined();
 		// 売り切りなので原価は無いが、それは乖離ではない
@@ -4043,7 +4050,7 @@ describe('analyze_my_portfolio — 復元数量 vs 実残高の不変条件', ()
 		});
 
 		assertOk(result);
-		const eth = result.data.holdings.find((h: { asset: string }) => h.asset === 'eth');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(eth.cost_basis_unavailable_reason).toBe('dw_fetch_failed');
 		expect(eth.cost_basis_reliable).toBe(false);
 		expect(result.meta.warnings?.some((w) => w.includes('復元した保有数量'))).toBe(false);
@@ -4069,11 +4076,13 @@ describe('analyze_my_portfolio — 復元数量 vs 実残高の不変条件', ()
 		});
 
 		assertOk(result);
-		const btc = result.data.holdings.find((h: { asset: string }) => h.asset === 'btc');
-		const eth = result.data.holdings.find((h: { asset: string }) => h.asset === 'eth');
+		const btc = holdingOf(result.data.holdings, 'btc');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(btc.cost_basis_reliable).toBe(true);
 		expect(eth.cost_basis_reliable).toBe(false);
 		// 合計は btc のみから算出される（eth の評価額・原価は入らない）
+		assertDefined(btc.jpy_value, 'btc.jpy_value');
+		assertDefined(btc.cost_basis, 'btc.cost_basis');
 		expect(result.data.total_cost_basis).toBe(btc.cost_basis);
 		expect(result.data.total_unrealized_pnl).toBe(btc.jpy_value - btc.cost_basis);
 		expect(result.summary).toContain('合計評価損益（全履歴の約定ベース）');
@@ -4183,11 +4192,12 @@ describe('analyze_my_portfolio — 復元数量 vs 実残高の不変条件', ()
 			});
 
 			assertOk(result);
-			const btc = result.data.holdings.find((h: { asset: string }) => h.asset === 'btc');
+			const btc = holdingOf(result.data.holdings, 'btc');
 			expect(btc.reconstructed_qty).toBeCloseTo(0.1069, 9);
 			// 許容誤差 max(5e-8, 0.10731693 * 0.1%) ≈ 0.00010731693
 			expect(btc.qty_invariant_tolerance).toBeCloseTo(0.00010731693, 9);
 			// 乖離 0.00041693 > 許容誤差 → 検出される（本 issue の眼目）
+			assertDefined(btc.reconstructed_qty, 'btc.reconstructed_qty');
 			expect(Number('0.10731693') - btc.reconstructed_qty).toBeCloseTo(0.00041693, 9);
 			expect(btc.cost_basis_reliable).toBe(false);
 			expect(btc.cost_basis_unavailable_reason).toBe('untracked_trade_suspected');
@@ -4205,7 +4215,7 @@ describe('analyze_my_portfolio — 復元数量 vs 実残高の不変条件', ()
 			});
 
 			assertOk(result);
-			const btc = result.data.holdings.find((h: { asset: string }) => h.asset === 'btc');
+			const btc = holdingOf(result.data.holdings, 'btc');
 			expect(btc.qty_clamp_count).toBe(2);
 			expect(btc.qty_clamp_absorbed_qty).toBeCloseTo(0.0004, 9);
 			// 原価側の按分ロジック自体は変えていないので、realized_pnl は本 PR の前後で変わらない
@@ -4304,7 +4314,7 @@ describe('analyze_my_portfolio — 価格の price_digits 準拠の丸め', () =
 		const result = await callHandler();
 
 		assertOk(result);
-		const xrp = result.data.holdings.find((h: { asset: string }) => h.asset === 'xrp');
+		const xrp = holdingOf(result.data.holdings, 'xrp');
 		expect(xrp.cost_basis_reliable).toBe(true);
 		// 旧実装ではここが 27 / 30 になっていた（誤差 1.4%）
 		expect(xrp.avg_buy_price).toBe(26.686);
@@ -4324,7 +4334,7 @@ describe('analyze_my_portfolio — 価格の price_digits 準拠の丸め', () =
 		const result = await callHandler();
 
 		assertOk(result);
-		const btc = result.data.holdings.find((h: { asset: string }) => h.asset === 'btc');
+		const btc = holdingOf(result.data.holdings, 'btc');
 		expect(btc.current_price).toBe(15_500_000);
 	});
 
@@ -4340,7 +4350,7 @@ describe('analyze_my_portfolio — 価格の price_digits 準拠の丸め', () =
 		const result = await callHandler();
 
 		assertOk(result);
-		const xrp = result.data.holdings.find((h: { asset: string }) => h.asset === 'xrp');
+		const xrp = holdingOf(result.data.holdings, 'xrp');
 		expect(xrp.avg_buy_price).toBe(26.68612);
 		// current_price は板の刻みちょうど（price_digits=3）
 		expect(xrp.current_price).toBe(29.591);
@@ -4358,9 +4368,10 @@ describe('analyze_my_portfolio — 価格の price_digits 準拠の丸め', () =
 		const result = await callHandler();
 
 		assertOk(result);
-		const xrp = result.data.holdings.find((h: { asset: string }) => h.asset === 'xrp');
+		const xrp = holdingOf(result.data.holdings, 'xrp');
 		// 丸め桁が分からないので素通し。整数（27 / 30）に落ちないことが要点
 		expect(xrp.current_price).toBe(29.5912345);
+		assertDefined(xrp.avg_buy_price, 'xrp.avg_buy_price');
 		expect(xrp.avg_buy_price).toBeCloseTo(26.6861234567, 9);
 		expect(xrp.avg_buy_price).not.toBe(Math.round(xrp.avg_buy_price));
 	});
@@ -4378,7 +4389,7 @@ describe('analyze_my_portfolio — 価格の price_digits 準拠の丸め', () =
 		const result = await callHandler();
 
 		assertOk(result);
-		const xrp = result.data.holdings.find((h: { asset: string }) => h.asset === 'xrp');
+		const xrp = holdingOf(result.data.holdings, 'xrp');
 		expect(xrp.current_price).toBe(29.5912345);
 		expect(xrp.avg_buy_price).toBeCloseTo(26.6861234567, 9);
 	});
@@ -4410,7 +4421,7 @@ describe('analyze_my_portfolio — 価格の price_digits 準拠の丸め', () =
 		const result = await callHandler();
 
 		assertOk(result);
-		const xrp = result.data.holdings.find((h: { asset: string }) => h.asset === 'xrp');
+		const xrp = holdingOf(result.data.holdings, 'xrp');
 		expect(xrp.current_price).toBeUndefined();
 		expect(xrp.jpy_value).toBeUndefined();
 	});
@@ -4427,7 +4438,7 @@ describe('analyze_my_portfolio — 価格の price_digits 準拠の丸め', () =
 		const result = await callHandler();
 
 		assertOk(result);
-		const xrp = result.data.holdings.find((h: { asset: string }) => h.asset === 'xrp');
+		const xrp = holdingOf(result.data.holdings, 'xrp');
 		expect(xrp.cost_basis_unavailable_reason).toBe('dw_fetch_failed');
 		expect(xrp.avg_buy_price).toBeUndefined();
 		expect(xrp.current_price).toBe(29.59);
@@ -4447,7 +4458,7 @@ describe('analyze_my_portfolio — 価格の price_digits 準拠の丸め', () =
 		const result = await callHandler();
 
 		assertOk(result);
-		const xrp = result.data.holdings.find((h: { asset: string }) => h.asset === 'xrp');
+		const xrp = holdingOf(result.data.holdings, 'xrp');
 		expect(xrp.cost_basis_reliable).toBe(false);
 		expect(xrp.avg_buy_price).toBeUndefined();
 		expect(xrp.current_price).toBe(29.59);
@@ -4464,7 +4475,10 @@ describe('analyze_my_portfolio — 価格の price_digits 準拠の丸め', () =
 		const result = await callHandler();
 
 		assertOk(result);
-		const xrp = result.data.holdings.find((h: { asset: string }) => h.asset === 'xrp');
+		const xrp = holdingOf(result.data.holdings, 'xrp');
+		assertDefined(xrp.jpy_value, 'xrp.jpy_value');
+		assertDefined(xrp.cost_basis, 'xrp.cost_basis');
+		assertDefined(result.data.total_jpy_value, 'result.data.total_jpy_value');
 		expect(xrp.jpy_value).toBe(Math.round(xrp.jpy_value));
 		expect(xrp.cost_basis).toBe(Math.round(xrp.cost_basis));
 		expect(result.data.total_jpy_value).toBe(Math.round(result.data.total_jpy_value));
@@ -4549,10 +4563,13 @@ describe('analyze_my_portfolio — Realized PnL のスコープと売り切り�
 		expect(result.data.holdings.some((h: { asset: string }) => h.asset === 'doge')).toBe(false);
 
 		// 売り切り銘柄ぶん（doge）
+		assertDefined(result.data.closed_position_realized_pnl, 'result.data.closed_position_realized_pnl');
 		expect(result.data.closed_position_realized_pnl).toBeCloseTo(5000, 6);
 		expect(result.data.closed_position_asset_count).toBe(1);
 
 		// 検算式が閉じる
+		assertDefined(result.data.account_pnl, 'result.data.account_pnl');
+		assertDefined(result.data.account_pnl.spot_realized_pnl, 'result.data.account_pnl.spot_realized_pnl');
 		expect(heldSum + result.data.closed_position_realized_pnl).toBeCloseTo(
 			result.data.account_pnl.spot_realized_pnl,
 			6,
@@ -4587,6 +4604,8 @@ describe('analyze_my_portfolio — Realized PnL のスコープと売り切り�
 		expect(result.data.closed_position_realized_pnl).toBe(0);
 		expect(result.data.closed_position_asset_count).toBe(0);
 		const heldSum = sumHoldingsRealizedPnl(result.data.holdings);
+		assertDefined(result.data.account_pnl, 'result.data.account_pnl');
+		assertDefined(result.data.account_pnl.spot_realized_pnl, 'result.data.account_pnl.spot_realized_pnl');
 		expect(heldSum).toBeCloseTo(result.data.account_pnl.spot_realized_pnl, 6);
 		expect(result.summary).toContain(
 			'内訳: 現在保有銘柄（holdings[].realized_pnl の合計）+2,000円 / 売り切り銘柄なし（0円）',
@@ -4632,6 +4651,9 @@ describe('analyze_my_portfolio — Realized PnL のスコープと売り切り�
 		const result = await callHandler();
 
 		assertOk(result);
+		assertDefined(result.data.closed_position_realized_pnl, 'result.data.closed_position_realized_pnl');
+		assertDefined(result.data.account_pnl, 'result.data.account_pnl');
+		assertDefined(result.data.account_pnl.spot_realized_pnl, 'result.data.account_pnl.spot_realized_pnl');
 		expect(result.data.closed_position_realized_pnl).toBeCloseTo(4700, 6);
 		expect(result.data.closed_position_asset_count).toBe(2);
 		const heldSum = sumHoldingsRealizedPnl(result.data.holdings);
@@ -5040,6 +5062,7 @@ describe('analyze_my_portfolio — 資産推移の入出金フローマーカー
 
 		expect(JSON.stringify(result.data.monthly_equity_series)).not.toContain('flow_jpy');
 		// 「フローがゼロ」ではなく「未計測」であることは既存の申告経路が担う
+		assertDefined(result.data.monthly_performance, 'result.data.monthly_performance');
 		expect(result.data.monthly_performance.flow_measured).toBe(false);
 		expect(result.data.monthly_performance.flow_unavailable_reason).toBeDefined();
 	});
@@ -5140,7 +5163,7 @@ describe('analyze_my_portfolio — 期初評価額が極小のときの増減率
 		assertOk(result);
 
 		for (const key of ['daily_performance', 'monthly_performance', 'yearly_performance'] as const) {
-			const p = result.data[key];
+			const p = requireDefined(result.data[key], key);
 			expect(p.start_value_jpy, key).toBe(5_745);
 			expect(p.change_jpy, key).toBe(1_547_081); // 金額は残す
 			expect(p.change_pct, key).toBeUndefined();
@@ -5186,6 +5209,7 @@ describe('analyze_my_portfolio — 期初評価額が極小のときの増減率
 		const result = await analyze();
 		assertOk(result);
 
+		assertDefined(result.data.yearly_performance, 'result.data.yearly_performance');
 		expect(result.data.yearly_performance.start_value_jpy).toBe(1_000_000);
 		expect(result.data.yearly_performance.change_pct).toBe(50);
 		expect(result.data.yearly_performance.change_pct_unavailable_reason).toBeUndefined();
@@ -5208,7 +5232,8 @@ describe('analyze_my_portfolio — 期初評価額が極小のときの増減率
 		expect(warning).toContain('増減額（change_jpy / adjusted_change_jpy）は出しているので成績はそちらで読むこと');
 		expect(warning).toContain('「ゼロ %」の意味ではありません');
 		for (const key of ['daily_performance', 'monthly_performance', 'yearly_performance'] as const) {
-			expect(result.data[key].change_jpy_overstated, key).toBeUndefined();
+			const p = requireDefined(result.data[key], key);
+			expect(p.change_jpy_overstated, key).toBeUndefined();
 		}
 		expect(JSON.stringify(result.data)).not.toContain('change_jpy_overstated');
 	});
@@ -5285,7 +5310,7 @@ describe('analyze_my_portfolio — 期初の始値が解決できないときの
 		const result = await analyze();
 		assertOk(result);
 
-		const daily = result.data.daily_performance;
+		const daily = requireDefined(result.data.daily_performance, 'result.data.daily_performance');
 		expect(daily.start_value_jpy).toBe(63_314);
 		expect(daily.change_pct).toBeUndefined();
 		expect(daily.adjusted_change_pct).toBeUndefined();
@@ -5356,12 +5381,14 @@ describe('analyze_my_portfolio — 期初の始値が解決できないときの
 			const result = await analyze();
 			assertOk(result);
 
-			const daily = result.data.daily_performance;
+			const daily = requireDefined(result.data.daily_performance, 'result.data.daily_performance');
 			expect(daily.change_jpy).toBe(daily.current_value_jpy - daily.start_value_jpy);
 			expect(daily.change_jpy_overstated).toBe(true);
 			expect(daily.note).toContain('change_jpy_overstated=true');
 			expect(daily.note).toContain('増減額を運用成績として読まないこと');
 			// 抑止が起きていない期間には付かない（当日足だけが欠けている構成）
+			assertDefined(result.data.monthly_performance, 'result.data.monthly_performance');
+			assertDefined(result.data.yearly_performance, 'result.data.yearly_performance');
 			expect(result.data.monthly_performance.change_jpy_overstated).toBeUndefined();
 			expect(result.data.yearly_performance.change_jpy_overstated).toBeUndefined();
 			expect(result.data.monthly_performance.note).not.toContain('change_jpy_overstated');
@@ -5384,7 +5411,7 @@ describe('analyze_my_portfolio — 期初の始値が解決できないときの
 			const result = await analyze();
 			assertOk(result);
 
-			const daily = result.data.daily_performance;
+			const daily = requireDefined(result.data.daily_performance, 'result.data.daily_performance');
 			expect(daily.unpriced_start_assets).toEqual(['btc']);
 			expect(daily.change_pct_unavailable_reason).toBe('start_boundary_unpriced');
 			expect(daily.change_jpy_overstated).toBeUndefined();
@@ -5413,7 +5440,7 @@ describe('analyze_my_portfolio — 期初の始値が解決できないときの
 			assertOk(result);
 
 			for (const key of ['daily_performance', 'monthly_performance', 'yearly_performance'] as const) {
-				const p = result.data[key];
+				const p = requireDefined(result.data[key], key);
 				expect(p.change_pct_unavailable_reason, key).toBe('start_boundary_unpriced');
 				expect(p.change_jpy_overstated, key).toBe(true);
 				expect(p.note, key).toContain('change_jpy_overstated=true');
@@ -5523,9 +5550,10 @@ describe('analyze_my_portfolio — 現在価格が解決できないときの増
 		assertOk(result);
 
 		// 現在評価額は JPY 残高だけに縮退している
+		assertDefined(result.data.daily_performance, 'result.data.daily_performance');
 		expect(result.data.daily_performance.current_value_jpy).toBe(63_314);
 		for (const key of ['daily_performance', 'monthly_performance', 'yearly_performance'] as const) {
-			const p = result.data[key];
+			const p = requireDefined(result.data[key], key);
 			expect(p.change_pct, key).toBeUndefined();
 			expect(p.adjusted_change_pct, key).toBeUndefined();
 			expect(p.change_pct_unavailable_reason, key).toBe('current_value_unpriced');
@@ -5566,6 +5594,7 @@ describe('analyze_my_portfolio — 現在価格が解決できないときの増
 		expect(result.summary).toContain('脱落した分がそのまま上の増減額の過小分です');
 
 		// (3) note
+		assertDefined(result.data.daily_performance, 'result.data.daily_performance');
 		expect(result.data.daily_performance.note).toContain('change_jpy_understated=true');
 		expect(result.data.daily_performance.note).toContain('増減額を運用成績として読まないこと');
 	});
@@ -5580,6 +5609,7 @@ describe('analyze_my_portfolio — 現在価格が解決できないときの増
 		expect(result.data.total_unrealized_pnl).toBeUndefined();
 		expect(result.data.total_cost_basis).toBeUndefined();
 		// performance 側も同じ銘柄集合を根拠に抑止する（片方だけ守られる非対称を作らない）
+		assertDefined(result.data.daily_performance, 'result.data.daily_performance');
 		const unpriced = result.data.daily_performance.unpriced_current_assets ?? [];
 		const excludedFromPnl = (result.data.holdings ?? [])
 			.filter((h: { asset: string; jpy_value?: number }) => h.asset !== 'jpy' && h.jpy_value == null)
@@ -5598,7 +5628,7 @@ describe('analyze_my_portfolio — 現在価格が解決できないときの増
 		const result = await analyze();
 		assertOk(result);
 
-		const daily = result.data.daily_performance;
+		const daily = requireDefined(result.data.daily_performance, 'result.data.daily_performance');
 		expect(daily.change_pct_unavailable_reason).toBe('current_value_unpriced');
 		expect(daily.unpriced_current_assets).toEqual(['eth']);
 		expect(daily.change_jpy_understated).toBe(true);
@@ -5623,6 +5653,7 @@ describe('analyze_my_portfolio — 現在価格が解決できないときの増
 		const result = await analyze();
 		assertOk(result);
 
+		assertDefined(result.data.daily_performance, 'result.data.daily_performance');
 		expect(result.data.daily_performance.change_pct).toBeDefined();
 		expect(result.data.daily_performance.change_pct_unavailable_reason).toBeUndefined();
 		expect(JSON.stringify(result.data)).not.toContain('"unpriced_current_assets":');
@@ -5644,8 +5675,9 @@ describe('analyze_my_portfolio — 現在価格が解決できないときの増
 		assertOk(result);
 
 		for (const key of ['daily_performance', 'monthly_performance', 'yearly_performance'] as const) {
-			expect(result.data[key].unpriced_current_assets, key).toBeUndefined();
-			expect(result.data[key].change_jpy_understated, key).toBeUndefined();
+			const p = requireDefined(result.data[key], key);
+			expect(p.unpriced_current_assets, key).toBeUndefined();
+			expect(p.change_jpy_understated, key).toBeUndefined();
 		}
 		expect(JSON.stringify(result.data)).not.toContain('"current_value_unpriced"');
 	});
@@ -5664,7 +5696,7 @@ describe('analyze_my_portfolio — 現在価格が解決できないときの増
 		const result = await analyze();
 		assertOk(result);
 
-		const daily = result.data.daily_performance;
+		const daily = requireDefined(result.data.daily_performance, 'result.data.daily_performance');
 		expect(daily.change_pct_unavailable_reason).toBe('start_boundary_unpriced');
 		expect(daily.unpriced_start_assets).toEqual(['btc']);
 		expect(daily.unpriced_current_assets).toEqual(['btc']);
@@ -5760,7 +5792,7 @@ describe('analyze_my_portfolio — 原価に算入できなかった入庫の申
 		const result = await analyze();
 		assertOk(result);
 
-		const eth = result.data.holdings.find((h) => h.asset === 'eth');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(eth?.priced_deposit_count).toBe(1);
 		expect(eth?.unpriced_deposit_count).toBeUndefined();
 		expect(eth?.cost_basis).toBe(Math.round(800_000 + 0.5 * ETH_DEPOSIT_DAY_OPEN));
@@ -5785,7 +5817,7 @@ describe('analyze_my_portfolio — 原価に算入できなかった入庫の申
 		const result = await analyze();
 		assertOk(result);
 
-		const eth = result.data.holdings.find((h) => h.asset === 'eth');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(eth?.cost_basis_reliable).toBe(true);
 		expect(eth?.cost_basis_unavailable_reason).toBeUndefined();
 		expect(eth?.unpriced_deposit_count).toBe(1);
@@ -5839,7 +5871,7 @@ describe('analyze_my_portfolio — 原価に算入できなかった入庫の申
 		const result = await analyze();
 		assertOk(result);
 
-		const eth = result.data.holdings.find((h) => h.asset === 'eth');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(eth?.cost_basis_reliable).toBe(false);
 		expect(eth?.cost_basis_unavailable_reason).toBe('has_crypto_deposits');
 		expect(eth?.cost_basis).toBeUndefined();
@@ -6025,7 +6057,7 @@ describe('analyze_my_portfolio — 原価に算入できなかった入庫の申
 		const result = await analyze();
 		assertOk(result);
 
-		const eth = result.data.holdings.find((h) => h.asset === 'eth');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(Object.keys(eth ?? {})).toEqual([
 			'asset',
 			'pair',
@@ -6190,7 +6222,7 @@ describe('analyze_my_portfolio — 入庫日価格を取得できない銘柄の
 		const result = await analyze();
 		assertOk(result);
 
-		const eth = result.data.holdings.find((h) => h.asset === 'eth');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(eth?.cost_basis_unavailable_reason).toBe('deposit_price_fetch_failed');
 		expect(eth?.cost_basis_reliable).toBe(false);
 		// 原価由来 4 フィールド（#54 の null 化経路）に加えて realized_pnl も出さないのが本 issue の眼目
@@ -6265,7 +6297,7 @@ describe('analyze_my_portfolio — 入庫日価格を取得できない銘柄の
 		const result = await analyze();
 		assertOk(result);
 
-		const eth = result.data.holdings.find((h) => h.asset === 'eth');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(eth?.cost_basis_unavailable_reason).toBe('deposit_price_fetch_failed');
 		expect(eth?.realized_pnl).toBeUndefined();
 		// クランプの発火事実そのものは検算対象として出す（#87 と同じ「入力は握り潰さない」方針）
@@ -6315,7 +6347,7 @@ describe('analyze_my_portfolio — 入庫日価格を取得できない銘柄の
 		const result = await analyze();
 		assertOk(result);
 
-		const eth = result.data.holdings.find((h) => h.asset === 'eth');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(eth?.cost_basis_unavailable_reason).toBeUndefined();
 		expect(eth?.cost_basis_reliable).toBe(true);
 		expect(eth?.cost_basis).toBeGreaterThan(0);
@@ -6347,7 +6379,7 @@ describe('analyze_my_portfolio — 入庫日価格を取得できない銘柄の
 		const result = await analyze();
 		assertOk(result);
 
-		const eth = result.data.holdings.find((h) => h.asset === 'eth');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		// 原価は数量乖離で抑止されるが、理由は入庫日価格系ではなく従来の has_crypto_deposits
 		expect(eth?.cost_basis_unavailable_reason).toBe('has_crypto_deposits');
 		// realized_pnl は従来どおり出る（#80 の抑止対象ではない）
@@ -6412,8 +6444,8 @@ describe('analyze_my_portfolio — 入庫日価格を取得できない銘柄の
 		const result = await analyze();
 		assertOk(result);
 
-		const eth = result.data.holdings.find((h) => h.asset === 'eth');
-		const btc = result.data.holdings.find((h) => h.asset === 'btc');
+		const eth = holdingOf(result.data.holdings, 'eth');
+		const btc = holdingOf(result.data.holdings, 'btc');
 		expect(eth?.cost_basis_unavailable_reason).toBe('deposit_price_fetch_failed');
 		// 入庫を持たない btc は無傷（全銘柄を落とすのは過剰）
 		expect(btc?.cost_basis_unavailable_reason).toBeUndefined();
@@ -6482,7 +6514,7 @@ describe('analyze_my_portfolio — 入庫日価格を取得できない銘柄の
 		expect(result.data.total_realized_pnl).toBeUndefined();
 		expect(result.data.total_realized_pnl_unavailable_reason).toBe('deposit_price_fetch_failed');
 		// 保有側の eth は抑止対象ではないので確定値のまま（抑止範囲を広げない）
-		const eth = result.data.holdings.find((h) => h.asset === 'eth');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(eth?.realized_pnl).toBeDefined();
 		expect(eth?.cost_basis).toBeGreaterThan(0);
 		// 銘柄名は警告でしか出せない
@@ -6587,7 +6619,7 @@ describe('analyze_my_portfolio — 入庫日価格を取得できない銘柄の
 		expect(result.meta.flowPriceChunkTruncatedDepositCount).toBe(1);
 		expect(result.meta.flowPriceChunkFailedDepositCount).toBeUndefined();
 
-		const eth = result.data.holdings.find((h) => h.asset === 'eth');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		// 取得失敗（deposit_price_fetch_failed）と混同しない別コードが載る
 		expect(eth?.cost_basis_unavailable_reason).toBe('deposit_price_chunk_truncated');
 		expect(eth?.cost_basis).toBeUndefined();
@@ -6753,8 +6785,7 @@ describe('analyze_my_portfolio — 復元数量と許容誤差の露出（#87）
 		const result = await analyze();
 		assertOk(result);
 
-		const eth = result.data.holdings.find((h) => h.asset === 'eth');
-		if (eth == null) throw new Error('eth holding が無い');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(eth.reconstructed_qty).toBe(2);
 		// 許容誤差 = max(10^-8 × 5, 2.0 × 0.1%) = 0.002（相対項が支配的）
 		expect(eth.qty_invariant_tolerance).toBe(0.002);
@@ -6778,8 +6809,7 @@ describe('analyze_my_portfolio — 復元数量と許容誤差の露出（#87）
 		const result = await analyze();
 		assertOk(result);
 
-		const eth = result.data.holdings.find((h) => h.asset === 'eth');
-		if (eth == null) throw new Error('eth holding が無い');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		// 算入できた入庫 0.5 は数量に入り、算入できなかった 0.001 は入らない
 		expect(eth.reconstructed_qty).toBeCloseTo(2.5, 12);
 		expect(eth.unpriced_deposit_count).toBe(1);
@@ -6799,8 +6829,7 @@ describe('analyze_my_portfolio — 復元数量と許容誤差の露出（#87）
 		const result = await analyze();
 		assertOk(result);
 
-		const eth = result.data.holdings.find((h) => h.asset === 'eth');
-		if (eth == null) throw new Error('eth holding が無い');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(eth.reconstructed_qty).toBe(2);
 		expect(eth.qty_invariant_tolerance).toBeCloseTo(tolerance, 12);
 		expect(eth.cost_basis_reliable).toBe(reliable);
@@ -6819,8 +6848,7 @@ describe('analyze_my_portfolio — 復元数量と許容誤差の露出（#87）
 		const result = await analyze();
 		assertOk(result);
 
-		const eth = result.data.holdings.find((h) => h.asset === 'eth');
-		if (eth == null) throw new Error('eth holding が無い');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(eth.reconstructed_qty).toBe(0);
 		// 実残高がダストなので絶対項（10^-8 × 5）が支配的
 		expect(eth.qty_invariant_tolerance).toBe(5e-8);
@@ -6852,9 +6880,8 @@ describe('analyze_my_portfolio — 復元数量と許容誤差の露出（#87）
 		const result = await analyze();
 		assertOk(result);
 
-		const eth = result.data.holdings.find((h) => h.asset === 'eth');
-		const xrp = result.data.holdings.find((h) => h.asset === 'xrp');
-		if (eth == null || xrp == null) throw new Error('holding が無い');
+		const eth = holdingOf(result.data.holdings, 'eth');
+		const xrp = holdingOf(result.data.holdings, 'xrp');
 		expect(eth.qty_invariant_tolerance).toBe(5e-8);
 		expect(xrp.qty_invariant_tolerance).toBeCloseTo(5e-6, 12);
 		expect(eth.cost_basis_reliable).toBe(false);
@@ -6869,8 +6896,7 @@ describe('analyze_my_portfolio — 復元数量と許容誤差の露出（#87）
 		const result = await analyze();
 		assertOk(result);
 
-		const eth = result.data.holdings.find((h) => h.asset === 'eth');
-		if (eth == null) throw new Error('eth holding が無い');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(eth.cost_basis_reliable).toBe(false);
 		expect(eth.cost_basis_unavailable_reason).toBe('untracked_trade_suspected');
 		expect(eth.cost_basis).toBeUndefined();
@@ -6890,8 +6916,7 @@ describe('analyze_my_portfolio — 復元数量と許容誤差の露出（#87）
 		const result = await analyze();
 		assertOk(result);
 
-		const eth = result.data.holdings.find((h) => h.asset === 'eth');
-		if (eth == null) throw new Error('eth holding が無い');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(eth.cost_basis_unavailable_reason).toBe('dw_fetch_failed');
 		expect(eth.cost_basis_reliable).toBe(false);
 		expect(eth.reconstructed_qty).toBe(2);
@@ -6913,8 +6938,7 @@ describe('analyze_my_portfolio — 復元数量と許容誤差の露出（#87）
 		const result = await analyze();
 		assertOk(result);
 
-		const eth = result.data.holdings.find((h) => h.asset === 'eth');
-		if (eth == null) throw new Error('eth holding が無い');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(eth.cost_basis_unavailable_reason).toBe('deposit_price_fetch_failed');
 		expect(eth.realized_pnl).toBeUndefined();
 		// 取得に失敗した入庫 0.4 は数量に入らないので、復元数量は 2.0 + 0.5 = 2.5
@@ -6953,8 +6977,7 @@ describe('analyze_my_portfolio — 復元数量と許容誤差の露出（#87）
 		const result = await analyze();
 		assertOk(result);
 
-		const eth = result.data.holdings.find((h) => h.asset === 'eth');
-		if (eth == null) throw new Error('eth holding が無い');
+		const eth = holdingOf(result.data.holdings, 'eth');
 		// 追加先は structuredContent だけ。保有数量は `.claude/rules/sensitive-data.md` の
 		// HIGH 分類に近く、既に出している amount を超えて text に増やさない
 		for (const raw of [result.summary, ...(result.meta.warnings ?? [])]) {
@@ -7085,7 +7108,10 @@ describe('analyze_my_portfolio — 売り切り銘柄の内訳（#92）', () => 
 		expect(result.data.closed_position_realized_pnl).toBe(1800);
 		expect(result.data.closed_position_asset_count).toBe(2);
 		expect(result.data.closed_positions).toHaveLength(2);
-		const sum = (result.data.closed_positions ?? []).reduce((acc, p) => acc + p.realized_pnl, 0);
+		const sum = (result.data.closed_positions ?? []).reduce(
+			(acc, p) => acc + requireDefined(p.realized_pnl, `closed_positions[${p.asset}].realized_pnl`),
+			0,
+		);
 		expect(sum).toBe(result.data.closed_position_realized_pnl);
 		// holdings に載らない売り切り銘柄の実現損益は closed_positions でしか個別に読めない
 		expect(result.data.holdings.find((h) => h.asset === 'xrp' || h.asset === 'doge')).toBeUndefined();
