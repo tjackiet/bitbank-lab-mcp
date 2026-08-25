@@ -3271,6 +3271,7 @@ describe('buildPeriodPerformance', () => {
 							asset: 'btc',
 							amount: '0.1',
 							status: 'DONE',
+							found_at: depositMs,
 							confirmed_at: depositMs,
 						},
 					],
