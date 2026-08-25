@@ -385,6 +385,25 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 検出を落とさないため）。データが `limit` に満たない場合はヘッダの要求本数と `スキャン範囲` の
 実本数が食い違うが、実際に走査した本数は常に `スキャン範囲` / `meta.scan` が示す。
 
+#### インデックスの基準（スキャン窓相対）
+
+出力に現れるローソク足インデックスは **`meta.scan` が示すスキャン窓を基準とした 0 始まりの位置**。
+
+| フィールド | 基準 |
+|---|---|
+| `data.patterns[*].pivots[].idx` | スキャン窓 |
+| `data.patterns[*].breakoutBarIndex` | スキャン窓 |
+| `data.patterns[*].confirmation.idx` | スキャン窓 |
+| `meta.debug.swings[].idx` / `meta.debug.candidates[].indices` / `…points[].idx` | スキャン窓 |
+
+`analyze_indicators` の `chart.candles` は warmup 分（`chart.meta.pastBuffer` 本）を先頭に含む
+**別配列**なので、これらをそのまま添字として使ってはいけない（使うなら `pastBuffer` を足す）。
+日時で突き合わせるなら `range` / `date` 等の ISO 文字列を使うのが安全。
+
+なお slice 導入前もインデックスは `chart.candles`（= `limit + 199` 本）基準であって「直近 `limit`
+本の中での位置」ではなかった。今回スキャン窓と一致したことで、`meta.scan` が示す範囲で
+インデックスの意味が閉じるようになった。
+
 ### 内部仕様メモ
 
 - bitbank `/candlestick` の UTC グルーピング実測ログ: [docs/internal/bitbank-candle-tz.md](internal/bitbank-candle-tz.md)

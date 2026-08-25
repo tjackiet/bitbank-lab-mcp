@@ -1457,6 +1457,43 @@ describe('detect_patterns fixtures', () => {
 			expect(res.data.patterns).toEqual([]);
 		});
 
+		// インデックス契約: 出力の idx はスキャン窓基準（warmup を含む chart.candles の添字ではない）。
+		// slice で意味が変わった箇所なので、実際の足に解決できることを固定する。
+		it('pivots[].idx / breakoutBarIndex はスキャン窓基準で、該当足に解決できる', async () => {
+			const window = buildCompletedDoubleTopCandles();
+			const warmup = flatCandles(30, -30);
+			mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(indicatorsOkWithBuffer(warmup, window)));
+
+			const res = await detectPatterns('btc_jpy', '1day', window.length, {
+				patterns: ['double_top'],
+				swingDepth: 2,
+				tolerancePct: 0.02,
+			});
+
+			assertOk(res);
+			const pattern = res.data.patterns[0];
+			expect(pattern).toBeDefined();
+
+			const pivots = pattern.pivots ?? [];
+			expect(pivots.length).toBeGreaterThan(0);
+			for (const pivot of pivots) {
+				// window（= スキャン窓）の添字として有効な範囲に収まる
+				expect(pivot.idx).toBeGreaterThanOrEqual(0);
+				expect(pivot.idx).toBeLessThan(window.length);
+				// 価格がその足の高安に含まれる = 正しい足を指している
+				const bar = window[pivot.idx];
+				expect(pivot.price).toBeGreaterThanOrEqual(bar.low);
+				expect(pivot.price).toBeLessThanOrEqual(bar.high);
+			}
+
+			// range の端は pivot が指す足の日時と整合する（ISO 側との突き合わせ）
+			expect(pattern.range.start).toBe(window[pivots[0].idx].isoTime);
+
+			// warmup を含む配列の添字ではない: そちらに解決すると平坦足（100）に当たってしまう
+			const all = [...warmup, ...window];
+			expect(all[pivots[0].idx].isoTime).not.toBe(pattern.range.start);
+		});
+
 		it('pastBuffer を無視した場合と結果が変わる（回帰の検出力を担保する）', async () => {
 			const window = buildCompletedDoubleTopCandles();
 			const warmupPattern = buildCompletedDoubleTopCandles(2025);

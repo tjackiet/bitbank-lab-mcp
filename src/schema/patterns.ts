@@ -105,6 +105,20 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 		),
 });
 
+/**
+ * 出力に現れるローソク足インデックス（`pivots[].idx` / `breakoutBarIndex` /
+ * `confirmation.idx` / `meta.debug.*` の idx・indices）の基準を示す共通文言。
+ *
+ * 本ツールは `analyze_indicators` が返す配列から指標 warmup 分（`chart.meta.pastBuffer` 本）を
+ * 落とした「スキャン窓」だけを検出器に渡す。インデックスはその**スキャン窓基準**であり、
+ * warmup を含む `chart.candles` の添字ではない。両者は `pastBuffer` 本ずれる。
+ */
+const PATTERN_INDEX_NOTE =
+	'**meta.scan が示すスキャン窓（= 直近 limit 本）を基準とした 0 始まりの位置**。' +
+	'analyze_indicators の chart.candles は指標 warmup 分（chart.meta.pastBuffer 本）を先頭に含む' +
+	'別配列なので、そちらへ直接添字として使わないこと（使うなら pastBuffer を足す）。' +
+	'日時で突き合わせるなら range / date 等の ISO 文字列を使う。';
+
 export const DetectedPatternSchema = z.object({
 	type: PatternTypeEnum,
 	confidence: z.number().min(0).max(1),
@@ -163,7 +177,7 @@ export const DetectedPatternSchema = z.object({
 			z.object({
 				type: z.literal('neckline_breakout'),
 				date: z.string(),
-				idx: z.number().int(),
+				idx: z.number().int().describe(`ブレイクを確認した足の位置。${PATTERN_INDEX_NOTE}`),
 				price: z.number(),
 			}),
 			z.object({ type: z.literal('not_confirmed') }),
@@ -189,7 +203,10 @@ export const DetectedPatternSchema = z.object({
 			lookbackBars: z.number().int(),
 		})
 		.optional(),
-	pivots: z.array(z.object({ idx: z.number().int(), price: z.number() })).optional(),
+	pivots: z
+		.array(z.object({ idx: z.number().int().describe(PATTERN_INDEX_NOTE), price: z.number() }))
+		.optional()
+		.describe(`パターン構成点の位置と価格。${PATTERN_INDEX_NOTE}`),
 	neckline: z
 		.array(z.object({ x: z.number().int().optional(), y: z.number() }))
 		.length(2)
@@ -209,7 +226,7 @@ export const DetectedPatternSchema = z.object({
 	completionPct: z.number().int().optional(), // 完成度（%）
 	// 完成済みパターン用フィールド
 	breakoutDate: z.string().optional(), // ブレイクアウト日
-	breakoutBarIndex: z.number().int().optional(), // ブレイクアウトしたローソク足のインデックス
+	breakoutBarIndex: z.number().int().optional().describe(`ブレイクアウトしたローソク足の位置。${PATTERN_INDEX_NOTE}`),
 	daysSinceBreakout: z.number().int().optional(), // ブレイクアウトからの経過日数
 	// ブレイク方向と結果
 	breakoutDirection: z.enum(['up', 'down']).optional(), // ブレイク方向
@@ -340,7 +357,7 @@ export const DetectPatternsOutputSchema = z.union([
 					swings: z
 						.array(
 							z.object({
-								idx: z.number().int(),
+								idx: z.number().int().describe(PATTERN_INDEX_NOTE),
 								price: z.number(),
 								kind: z.enum(['H', 'L']),
 								isoTime: z.string().optional(),
@@ -354,12 +371,12 @@ export const DetectPatternsOutputSchema = z.union([
 								type: PatternFilterEnum,
 								accepted: z.boolean(),
 								reason: z.string().optional(),
-								indices: z.array(z.number().int()).optional(),
+								indices: z.array(z.number().int()).optional().describe(PATTERN_INDEX_NOTE),
 								points: z
 									.array(
 										z.object({
 											role: z.string(),
-											idx: z.number().int(),
+											idx: z.number().int().describe(PATTERN_INDEX_NOTE),
 											price: z.number(),
 											isoTime: z.string().optional(),
 										}),
