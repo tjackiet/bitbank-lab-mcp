@@ -7,6 +7,14 @@
 
 ## [Unreleased]
 
+### Changed（`detect_patterns` の `limit` に「上げる」方向の使い分けを明記）
+- **ツール description と `inputSchema.limit.describe()` に `limit` を上げる動機を 1 点ずつ追記した（文言のみ・挙動変更なし）。** #119 / #121 で `limit` の意味論を両方に明記したが、**いずれも下限の話しか書いていない**（`limit_too_small_for_timeframe`、構造的下限、種別が静かに 0 件になる下限の表）。「`limit` を上げると何が得られるか」「いつ上げるべきか」がツール表面のどこにも無く、LLM も利用者も既定 90 から動かす判断ができなかった。
+  - **既定 `limit`（90）は「いま形成中〜完成直後のパターンを把握する」ためのウィンドウ**であって「これ以上見ると重い」という上限ではない。**過去のパターンの統計（`data.statistics` の `successRate` / `avgReturn7d` 等）や `aftermath` を調べる用途では上げる**（上限 365）。
+  - **コストは `content` のトークンではなく API 呼び出し回数。** `view=summary` / `detailed` の `content` に出るのは分類内訳と上位 5 件までなので、`limit` を上げても LLM に渡る量はほとんど変わらない（全件を出す `view=full` だけが `limit` に比例する）。増えるのは `analyze_indicators` が `limit + warmup` 本を取りにいくぶんの取得コストで、**それを払うべきなのは過去分析をする呼び出しだけ**。既定値の引き上げで全呼び出しに負わせず、`limit` の明示指定に寄せている。
+- **`docs/tools.md` に「`limit` を上げる動機」節を追加した**（「`limit` の実効下限」の直後）。用途 → 効くフィールド → 既定 90 での問題を表で対応付け、description 側は 1 行の要点に留めている。
+- **既定 `limit` は 90 のまま**（値ではなくユースケースの選択なので動かさない）。**既定 `limit` の時間足スケーリングも入れない**（#118 の対応案 2。cap 導入で到達性は解決済みのため正しさの問題ではなくなっており、API 呼び出し増を全呼び出しに負わせる割に得るものが薄い）。
+- **`src/prompts/` は変更なし。** `detect_patterns` を呼ぶプロンプトは「中級：BTCのパターン分析をして」1 件だけで、既に `limit=180` を明示している。
+
 ### Changed（**挙動変更**: `detect_doubles` / `detect_hs` の手書き `daysPerBar` を廃止し、バー基準に統一した）
 - **形成中 double / H&S の 4 箇所の手書き `daysPerBar` を廃止した（#118 問題 3）。** `helpers.formingReversalDaysPerBar`（`1day`→1 / `1week`→7 / **それ以外→1**）を削除し、判定を `detect_triples` と同じ形（`formationBars ∈ [minBars, maxBars]`）に揃えた。換算は `getDoubleFormingBarParams` / `getHsFormingBarParams` から `patterns/bar-thresholds.ts` の `patternBarRange` を通す。**これで全検出器が同じ換算に乗った。**
 - **受理する形成バー数レンジ**（`formationBars` = `lastIdx - 左ピボット.idx`）:

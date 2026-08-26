@@ -491,6 +491,24 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 > `formationBars ∈ [2, 12]` と構造的下限（25 本）を下回っており、**形成中 double / H&S が
 > 実質検出不能**だった。詳細は CHANGELOG を参照。
 
+#### `limit` を上げる動機
+
+下限の裏返しとして、**`limit` を既定より上げる判断基準**も `limit` 側にしかない。
+
+既定の `limit`=90 は「**いま形成中〜完成直後のパターンを把握する**」ユースケースに合わせた値で、
+「これ以上見ると重い」という上限ではない。次の用途では既定のままだと母数が足りないので上げる（上限 365）:
+
+| 目的 | 効くフィールド | 既定 90 での問題 |
+|---|---|---|
+| パターン種別ごとの成功率・平均リターンを見る | `data.statistics[type]`（`successRate` / `avgReturn7d` / `avgReturn14d` / `medianReturn7d`） | 統計は**窓に入った同種パターンだけ**が母数。既定では 1〜2 件しか入らないことがあり、そのサンプル数の平均を「成功率」として読むと過剰に振れる（母数は同じオブジェクトの `detected` / `withAftermath` で確認する） |
+| ブレイク後の典型的な値動き・target 到達までの期間を見る | `data.patterns[*].aftermath`（`priceMove` / `daysToTarget`） | 事後分析は**パターン終了足より後の足**（最大 +30 本）を使う。窓の末尾付近のパターンはその足が窓に無いので、`priceMove` が空・`breakoutConfirmed=false` のままになる |
+
+**コストは `content` のトークンではなく API 呼び出し回数**である。`view=summary` / `detailed` の
+`content` に出るのは分類内訳と上位 5 件までなので、`limit` を上げても LLM に渡る量はほとんど変わらない
+（全件を出す `view=full` だけは `limit` に比例して増える）。増えるのは `analyze_indicators` が
+`limit + warmup` 本を取りにいくぶんの取得コストで、**それを払うべきなのは過去分析をする呼び出しだけ**。
+だからこのコストを既定値の引き上げで全呼び出しに負わせず、`limit` の明示指定に寄せている。
+
 ### 内部仕様メモ
 
 - bitbank `/candlestick` の UTC グルーピング実測ログ: [docs/internal/bitbank-candle-tz.md](internal/bitbank-candle-tz.md)
