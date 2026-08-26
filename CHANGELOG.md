@@ -7,6 +7,14 @@
 
 ## [Unreleased]
 
+### Changed（`detect_patterns` の description に検出の意味論を明記）
+- **ツール description に「検出の意味論」を 4 点追記した（文言のみ・挙動変更なし）。** #114 / #117 で `range.end` の意味論・スキャン窓・構造的下限を整備したが、記載先はスキーマ description と `docs/tools.md` だけで、**ツール description は #114 以前のまま**だった。スキーマや docs を読まない LLM / 利用者には一切届いていない状態だったため、要点だけを description 側にも置いた。
+  - **直近の一方向トレンドはパターンを構成しないため検出対象に入らない。** 「直近の値動きが結果に出ない」は多くの場合これであってデータ欠落ではなく、実際に走査した範囲は `meta.scan`（content の「スキャン範囲」行）が示す。
+  - **ピボットの確定には前後 `swingDepth` 本が要る**ため、スキャン窓の両端 `swingDepth` 本はピボットにならない（時間足ごとに自動スケール。`tools/patterns/config.ts` の `getDefaultParamsForTf`、`1hour` の実効値は 3）。
+  - **`limit` はスキャン窓の本数であり、同時に「何が検出可能か」も決める。** 小さすぎる場合は `data.warnings` に `limit_too_small_for_timeframe` が載る。
+  - **既知の制約として日数閾値由来の下限に 1 行触れた**（窓が狭いと特定の種別だけが静かに 0 件になる、#118）。対応方針は #118 で検討中なので、description では現状の挙動の説明に留め、下限の表は `docs/tools.md`「`limit` の実効下限」に委ねている。
+- **スキーマ側の description は書き換えていない**（#114 で完了済み。重複させると LLM の context を二重に食う）。description には要点だけを置き、詳細は `inputSchema` と `docs/tools.md` に委ねる分担。
+
 ### Added（`detect_patterns` が時間足に対して `limit` が小さすぎる窓を申告する）
 - **スキャン窓が構造上パターンを張れない狭さのとき `data.warnings` に `limit_too_small_for_timeframe` を載せ、`content` 先頭にも警告行を出す。** スキャン窓を `limit` 本に絞った（下記 #114）結果、`limit` をスキーマ下限の 20 付近まで下げると「0 件検出」しか返らない崖ができていた。崖の正体は `detectSwingPoints` が窓の前後 `swingDepth` 本をピボット候補から外すこと——日足の既定 `swingDepth=6` では `limit=20` に対してピボット候補が 8 本しか残らず、最小構成のダブルトップ（3 ピボット × 最小間隔 5 本 = 11 本）が張れない。`tools/detect_patterns.ts` の `candles.length < 20` ガードはこれを「ちょうど 20」で通してしまう。
 - **判定は `tools/patterns/scan-window.ts` に切り出した。** 必要本数は `2 × swingDepth + 2 × max(minBarsBetweenSwings, 5) + 1`。既定パラメータでの下限は 1hour 以下が 17 本、4hour / 8hour / 12hour が 21 本、日足 23 本、週足 25 本、月足 29 本。既定 `limit=90` ではどの時間足でも発火しない。
