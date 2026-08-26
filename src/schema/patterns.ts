@@ -63,7 +63,10 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 				'スイング検出で窓の前後 swingDepth 本ずつがピボット候補から外れるため、' +
 				'時間足の既定 swingDepth に対して小さすぎると構造上ほぼ何も検出できない' +
 				'（日足の既定 swingDepth=6 では 23 本未満）。その場合は data.warnings に ' +
-				'`limit_too_small_for_timeframe` を載せ、content 先頭にも警告行を出す。',
+				'`limit_too_small_for_timeframe` を載せ、content 先頭にも警告行を出す。\n' +
+				'逆に既定の 90 は「いま形成中〜完成直後のパターンを見る」ための窓なので、' +
+				'**過去のパターンの統計（data.statistics の成功率 / 平均リターン）や aftermath を調べる用途では上げる**' +
+				'（上限 365）。view=summary / detailed の content 量はほぼ変わらず、増えるのは API 呼び出し回数。',
 		),
 	patterns: z
 		.array(PatternFilterEnum)
