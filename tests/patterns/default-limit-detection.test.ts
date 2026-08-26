@@ -24,8 +24,8 @@ import { describe, expect, it } from 'vitest';
 import { dayjs } from '../../lib/datetime.js';
 import { CandleTypeEnum } from '../../src/schema/base.js';
 import { getDefaultParamsForTf, getDefaultToleranceForTf } from '../../tools/patterns/config.js';
-import { detectDoubles } from '../../tools/patterns/detect_doubles.js';
-import { detectHeadAndShoulders } from '../../tools/patterns/detect_hs.js';
+import { detectDoubles, getDoubleFormingBarParams } from '../../tools/patterns/detect_doubles.js';
+import { detectHeadAndShoulders, getHsFormingBarParams } from '../../tools/patterns/detect_hs.js';
 import { detectTriples } from '../../tools/patterns/detect_triples.js';
 import { detectWedges } from '../../tools/patterns/detect_wedges.js';
 import { linearRegressionWithR2 } from '../../tools/patterns/regression.js';
@@ -49,11 +49,17 @@ function mkCandle(index: number, o: number, h: number, l: number, c: number): Ca
 const bump = (i: number, center: number, width: number) => Math.max(0, 1 - Math.abs(i - center) / Math.max(3, width));
 
 /**
- * 形成中の反転パターンの左ピボット位置。`formationBars = 89 - 29 = 60`。
- * 全時間足の最小要求（最大でも `4hour` 系の 42 本）を上回り、最大要求（最小でも `1day` の 148 本）
- * を下回るので、1 つの形状で全時間足を賄える。
+ * 形成中の反転パターンの生成で、左ピボットより前に置く助走バー数。
+ * `validatePriorTrend` が見る先行トレンドをここで作る。
  */
-const LEFT_PIVOT_IDX = 29;
+const FORMING_LEAD_BARS = 29;
+
+/**
+ * 既定スキャン窓（90 本）に収まる形成バー数。`29 + 60 + 1 = 90`。
+ * 全時間足の最小要求（最大でも `4hour` 系の 42 本）を上回り、最大要求（最小でも `1day` H&S の
+ * 99 本）を下回るので、1 つの形状で全時間足を賄える。
+ */
+const DEFAULT_FORMATION_BARS = DEFAULT_SCAN_WINDOW - FORMING_LEAD_BARS - 1;
 
 /**
  * スキャン窓と同じ本数のローソク足から `DetectContext` を組む。
@@ -139,15 +145,19 @@ function buildFormingTripleTopCandles(nBars: number): CandleData[] {
 }
 
 /**
- * 形成中ダブルトップ形状。左山を `LEFT_PIVOT_IDX` に置き、谷を挟んで直近足を山の水準まで戻す。
- * `formationBars = 89 - 29 = 60` で、バー数統一後の全時間足のレンジに収まる
- * （最も狭い `4hour` / `8hour` / `12hour` でも [42, 180]）。
+ * 形成中ダブルトップ形状。左山を `FORMING_LEAD_BARS` に置き、谷を挟んで直近足を山の水準まで戻す。
+ *
+ * **`formationBars` を唯一の可変要素にしてある**（形状の内部配置は `formationBars` に対する比で
+ * 決まる）ので、`formationBars` だけを動かした 2 本の結果の差はバー数レンジの判定に帰属できる。
+ *
+ * @param formationBars `lastIdx - 左山.idx`。返るローソク足は `FORMING_LEAD_BARS + formationBars + 1` 本。
  */
-function buildFormingDoubleTopCandles(nBars: number): CandleData[] {
+function buildFormingDoubleTopCandles(formationBars: number): CandleData[] {
+	const nBars = FORMING_LEAD_BARS + formationBars + 1;
 	const last = nBars - 1;
-	const peak = LEFT_PIVOT_IDX;
+	const peak = FORMING_LEAD_BARS;
 	const valley = Math.round((peak + last) / 2);
-	const ramp = Math.max(2, Math.round((last - peak) / 6));
+	const ramp = Math.max(2, Math.round(formationBars / 6));
 	const out: CandleData[] = [];
 	for (let i = 0; i < nBars; i++) {
 		let close = 100 + 20 * bump(i, peak, (valley - peak) * 0.7) - 18 * bump(i, valley, (last - valley) * 0.8);
@@ -161,13 +171,16 @@ function buildFormingDoubleTopCandles(nBars: number): CandleData[] {
 }
 
 /**
- * 形成中 H&S 形状。左肩を `LEFT_PIVOT_IDX` に置き、頭 → 頭後谷 → 直近を左肩水準（暫定右肩）にする。
- * `formationBars = 89 - 29 = 60` で、バー数統一後の全時間足のレンジに収まる。
+ * 形成中 H&S 形状。左肩を `FORMING_LEAD_BARS` に置き、頭 → 頭後谷 → 直近を左肩水準（暫定右肩）にする。
+ * 暫定右肩は最終足なので `formationBars = 右肩.idx - 左肩.idx = lastIdx - 左肩.idx`。
+ *
+ * @param formationBars 返るローソク足は `FORMING_LEAD_BARS + formationBars + 1` 本。
  */
-function buildFormingHeadAndShouldersCandles(nBars: number): CandleData[] {
+function buildFormingHeadAndShouldersCandles(formationBars: number): CandleData[] {
+	const nBars = FORMING_LEAD_BARS + formationBars + 1;
 	const last = nBars - 1;
-	const left = LEFT_PIVOT_IDX;
-	const span = last - left;
+	const left = FORMING_LEAD_BARS;
+	const span = formationBars;
 	const head = left + Math.round(span * 0.45);
 	const postValley = left + Math.round(span * 0.72);
 	const ramp = Math.max(2, Math.round(span / 8));
@@ -180,6 +193,19 @@ function buildFormingHeadAndShouldersCandles(nBars: number): CandleData[] {
 		out.push(mkCandle(i, close, close + 0.4, close - 0.4, close));
 	}
 	return out;
+}
+
+/** 形成中 double_top を返した件数。 */
+function countFormingDoubleTop(tf: string, formationBars: number): number {
+	const ctx = buildCtx(tf, buildFormingDoubleTopCandles(formationBars), true);
+	return detectDoubles(ctx).patterns.filter((p) => p.type === 'double_top' && p.status === 'forming').length;
+}
+
+/** 形成中 head_and_shoulders を返した件数。 */
+function countFormingHeadAndShoulders(tf: string, formationBars: number): number {
+	const ctx = buildCtx(tf, buildFormingHeadAndShouldersCandles(formationBars), true);
+	return detectHeadAndShoulders(ctx).patterns.filter((p) => p.type === 'head_and_shoulders' && p.status === 'forming')
+		.length;
 }
 
 describe('既定 limit（90 本）での検出可能性 — issue #118 問題 1 / 2', () => {
@@ -216,23 +242,63 @@ describe('既定 limit（90 本）での検出可能性 — issue #118 問題 1 
 // ──────────────────────────────────────────────
 
 describe('既定 limit（90 本）での検出可能性 — issue #118 問題 3（形成中 double / H&S）', () => {
+	it('既定 limit の形状はちょうど 90 本になる（助走 + 形成 + 端点 1 本）', () => {
+		expect(buildFormingDoubleTopCandles(DEFAULT_FORMATION_BARS)).toHaveLength(DEFAULT_SCAN_WINDOW);
+		expect(buildFormingHeadAndShouldersCandles(DEFAULT_FORMATION_BARS)).toHaveLength(DEFAULT_SCAN_WINDOW);
+	});
+
 	for (const tf of ALL_TIMEFRAMES) {
 		it(`${tf}: 形成中 double_top が既定スキャン窓で検出できる`, () => {
-			const candles = buildFormingDoubleTopCandles(DEFAULT_SCAN_WINDOW);
-			expect(candles).toHaveLength(DEFAULT_SCAN_WINDOW);
-
-			const result = detectDoubles(buildCtx(tf, candles, true));
-			const forming = result.patterns.filter((p) => p.type === 'double_top' && p.status === 'forming');
-			expect(forming.length, `${tf}: 形成中 double_top が 0 件`).toBeGreaterThanOrEqual(1);
+			expect(
+				countFormingDoubleTop(tf, DEFAULT_FORMATION_BARS),
+				`${tf}: 形成中 double_top が 0 件`,
+			).toBeGreaterThanOrEqual(1);
 		});
 
 		it(`${tf}: 形成中 head_and_shoulders が既定スキャン窓で検出できる`, () => {
-			const candles = buildFormingHeadAndShouldersCandles(DEFAULT_SCAN_WINDOW);
-			expect(candles).toHaveLength(DEFAULT_SCAN_WINDOW);
+			expect(
+				countFormingHeadAndShoulders(tf, DEFAULT_FORMATION_BARS),
+				`${tf}: 形成中 head_and_shoulders が 0 件`,
+			).toBeGreaterThanOrEqual(1);
+		});
+	}
+});
 
-			const result = detectHeadAndShoulders(buildCtx(tf, candles, true));
-			const forming = result.patterns.filter((p) => p.type === 'head_and_shoulders' && p.status === 'forming');
-			expect(forming.length, `${tf}: 形成中 head_and_shoulders が 0 件`).toBeGreaterThanOrEqual(1);
+// ──────────────────────────────────────────────
+// 形成中 double / H&S — バー数レンジの境界
+//
+// 既定 limit のテスト（上）は `formationBars = 60` の 1 点しか見ないので、下限 / 上限を
+// 取り違えていても 60 を受理する限り通ってしまう。ここでは `patternBarRange` が返す
+// 実際の境界値を検出器に食わせて、`minBars - 1` / `minBars` / `maxBars` / `maxBars + 1` の
+// 4 点で受理・棄却が反転することを固定する。
+//
+// 形状生成は `formationBars` だけを可変にしてあるので、隣り合う 2 点の差はバー数レンジの
+// 判定に帰属できる（形が壊れて 0 件になったのではない）。
+// ──────────────────────────────────────────────
+
+describe('形成中 double / H&S — バー数レンジの境界', () => {
+	const cases = [
+		{
+			label: 'double_top',
+			params: getDoubleFormingBarParams,
+			count: countFormingDoubleTop,
+		},
+		{
+			label: 'head_and_shoulders',
+			params: getHsFormingBarParams,
+			count: countFormingHeadAndShoulders,
+		},
+	] as const;
+
+	for (const { label, params, count } of cases) {
+		it(`${label}: 全時間足で minBars / maxBars のちょうど内側だけが受理される`, () => {
+			for (const tf of ALL_TIMEFRAMES) {
+				const { minBars, maxBars } = params(tf);
+				expect(count(tf, minBars - 1), `${tf} × ${label}: minBars-1 (${minBars - 1}) が受理された`).toBe(0);
+				expect(count(tf, minBars), `${tf} × ${label}: minBars (${minBars}) が棄却された`).toBeGreaterThanOrEqual(1);
+				expect(count(tf, maxBars), `${tf} × ${label}: maxBars (${maxBars}) が棄却された`).toBeGreaterThanOrEqual(1);
+				expect(count(tf, maxBars + 1), `${tf} × ${label}: maxBars+1 (${maxBars + 1}) が受理された`).toBe(0);
+			}
 		});
 	}
 });

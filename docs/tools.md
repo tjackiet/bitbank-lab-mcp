@@ -432,6 +432,15 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 値の出どころを示す注記であって、暦日数の要件ではない）。上限を構造的下限の定数倍に置いてあるので、
 **既定 `limit`=90 ではどの時間足・どの種別も到達可能**。主な要求本数:
 
+> **表の値は閾値そのものではなく「必要なスキャン窓の本数」**（`limit` と同じ単位）。上の式が返すのは
+> パターンの大きさの閾値で、**表はそこに各検出器の走査ループが要求する端点ぶんを足した値**である。
+> 形成中の反転 3 種と完成済み wedge は **+1**（`formationBars` / 窓サイズはいずれも添字の差なので、
+> 本数としては 1 本多く要る）、flag / pennant も **+1**（旗竿と保ち合いの境界の 1 本）、三角形は **+6**。
+> 例: `1day` の forming double は式が `clamp(round(14 × 1), 23, 46) = 23`（= `formationBars` の下限）で、
+> 表は **24**。`12hour` は式が `clamp(round(14 × 2), 21, 42) = 28` で表は **29**。
+> **`limit` を式の値に合わせると 1 本足りない**ので、下限として使うのは表の値のほう。
+> 導出は `tools/patterns/min-bars.ts` の `minBarsForDetector` にあり、端点の根拠も各 case に書いてある。
+
 | 時間足 | forming double（14日由来） | forming triple（21日由来） | forming H&S（21日由来） | 完成済み wedge（25日窓由来） | flag / pennant（最小 1+2日由来） |
 |---|---|---|---|---|---|
 | `1min` | 31 | 31 | 31 | 31 | 61 |
@@ -452,7 +461,8 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 形成バー数（double / triple は `lastIdx - 左ピボット.idx`、H&S は `右肩.idx - 左肩.idx`）を
 バー数レンジと突き合わせる。
 日数由来が同じ 21 日の triple と H&S は全時間足で同値になり、14 日由来の double だけが
-`12hour` で下側に外れる（`round(14 × 2) = 28` が上限クランプ 42 の内側に収まるため）。
+`12hour` で下側に外れる（`formationBars` の下限が `round(14 × 2) = 28` で、上限クランプ 42 の
+内側に収まるため。表の値はこれに端点 1 本を足した 29）。
 
 > 上の 2 つの表は手書きではない。構造的下限は `tools/patterns/scan-window.ts`（`assessScanWindow`）、
 > パターンサイズ由来の下限は `tools/patterns/min-bars.ts`（`minBarsForDetector`）から導出した値で、
@@ -475,7 +485,8 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 
 > 形成中 double / H&S も以前は独自の換算（`1day`→1 / `1week`→7 / **それ以外→1**）を使っており、
 > この表の対象外だった（#118 問題 3）。**バー数への統一で閾値の向きが時間足ごとに変わる**:
-> 最小側は全時間足で厳しくなり（例: `1day` の double は 14 → 23 本）、最大側は緩む
+> 最小側は全時間足で厳しくなり（例: `1day` の double は `formationBars` の下限が 14 → 23 本。
+> スキャン窓の要求本数では 15 → 24 本）、最大側は緩む
 > （旧実装は全時間足で `formationBars ≤ 90` に張り付いていた）。`1week` は旧実装の受理域が
 > `formationBars ∈ [2, 12]` と構造的下限（25 本）を下回っており、**形成中 double / H&S が
 > 実質検出不能**だった。詳細は CHANGELOG を参照。
