@@ -13,11 +13,22 @@ export interface Candle {
 	isoTime?: string;
 }
 
-/** スイングポイント（ピボット） */
+/**
+ * スイングポイント（ピボット）
+ *
+ * `price` と `extremePrice` は**別の値**なので混同しないこと（issue #125）:
+ * 極値判定（この足がスイングか否か）は `high` / `low` で行い、`price` にはその足の
+ * **終値**を格納する。ヒゲ 1 本で構造比較（同水準判定・ネックライン）が動くのを避けるため。
+ * 判定に使った値そのものは `extremePrice` に載せる——載せないと、報告された `price` から
+ * 判定を検算できず「終値基準で極値を取っている」と誤読される。
+ */
 export interface Pivot {
 	idx: number;
+	/** 構造比較に使う価格 = その足の**終値**。極値判定に使った値ではない。 */
 	price: number;
 	kind: 'H' | 'L';
+	/** 極値判定に実際に使った値。`kind='H'` なら `high`、`'L'` なら `low`。`price` との差がヒゲ分。 */
+	extremePrice: number;
 }
 
 export interface DetectSwingePointsOptions {
@@ -65,11 +76,12 @@ export function detectSwingPoints(candles: Candle[], options: DetectSwingePoints
 			isLow = votesLow >= need;
 		}
 
-		// 判定は high/low、格納価格は close（ヒゲ影響を回避）
+		// 判定は high/low、格納価格は close（ヒゲ影響を回避）。
+		// 判定に使った極値は extremePrice に併記して、出力から検算できるようにする。
 		if (isHigh) {
-			pivots.push({ idx: i, price: candles[i].close, kind: 'H' });
+			pivots.push({ idx: i, price: candles[i].close, kind: 'H', extremePrice: highs[i] });
 		} else if (isLow) {
-			pivots.push({ idx: i, price: candles[i].close, kind: 'L' });
+			pivots.push({ idx: i, price: candles[i].close, kind: 'L', extremePrice: lows[i] });
 		}
 	}
 

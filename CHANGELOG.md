@@ -7,6 +7,27 @@
 
 ## [Unreleased]
 
+### Changed（`detect_patterns` の `debug` 可観測性と価格基準を透明化した。**検出結果は変わらない**）
+- **`view=debug` の candidates を入力 `patterns` で絞るようにした（#124）。** 全検出器が `want` を**分類・出力の時点**でしか参照しておらず、**走査に入る時点**では見ていないため、候補は走査中に無条件で積まれていた。結果 `patterns=["double_bottom"]` を指定しても candidates は falling_wedge / rising_wedge で埋まり、`tools/detect_patterns.ts` の cap=200 トリム（accepted 優先 → rejected）で**要求した種別の棄却理由が押し出されていた**。合成データ 120 本での実測で `patterns=["double_bottom"]` の candidates は 164 件（うち falling_wedge 118 件）→ 8 件（すべて double_bottom の棄却理由）になる。
+  - **絞り込みはトリム直前の 1 箇所**（`tools/patterns/candidate-filter.ts`）。各検出器の走査を `want` で早期スキップする案（計算量も減る）は採らなかった——6 ファイルに手を入れることになり「検出結果ゼロ変更」の保証が難しい。
+  - **候補ラベルの被覆は入力エイリアスと一致しない。** `detect_pennants` は方向・形状の分類前の棄却をすべて `type: 'flag'` で積むため、このラベルは入力エイリアスの `flag`（= bull_flag + bear_flag）より広く **pennant も覆う**。入力側の展開（`triangle` → 3 種、`flag` / `pennant` → 各 2 種）とは別の写像として持ち、`tests/patterns/candidate-filter.test.ts` が `PatternTypeEnum` / `PatternFilterEnum` とのドリフトを機械的に検出する。
+  - **`patterns` 未指定時の candidates は 1 件も変わらない**（フィルタが恒等になる）。8 fixture × 8 オプション × 2 時間足 = 128 ケースを変更前後でダンプして差分ゼロを確認済み。
+  - **既知のギャップ（本 PR では直さない）:** `detect_triangles` / `detect_wedges` は分類前の棄却を umbrella ラベルではなく具体型 `triangle_symmetrical` で積んでいる。そのため `patterns=["triangle_ascending"]` ではそれらが落ちる。ラベル側を `'triangle'` に直すのが筋だが、**`patterns` 未指定時の candidates 出力が変わる**ため別 PR に分ける。
+- **`debug` の候補詳細が「存在しないフィールド」を `n/a` として捏造していたのをやめた（#124）。** 専用フォーマッタを持たない reason（`r2_below_threshold` / `insufficient_touches` / `score_below_threshold` / `containment_violated` 等、棄却理由の大半）は default 分岐に落ちるが、そこは `spreadStart` / `spreadEnd` / `hiSlope` / `loSlope` を決め打ちで読んでいた。**この 4 つを `details` に入れる検出器は 1 つも無い**（`spreadStart` を持つ reason はすべて flag 系の専用分岐で処理される）ため、どの候補でも `spread: n/a` としか出ず、実際に入っている診断値（r2 / touches / score / ratio …）は 1 つも表示されていなかった。`details` が実際に持つフィールドを列挙する形に置き換えた（上限 16 フィールド、ネストは 160 字までの短縮 JSON）。
+- **候補 0 件の表示を「なし」から理由付きに変えた。** 絞り込みの結果 0 件になりうるので、`content` に「この窓では要求種別の候補が 1 つも組まれていない。candidates は入力 patterns で絞り込まれる」と出す。**「パターンが無い」と読まれないようにするため。**
+
+### Added（`detect_patterns` の pivot に判定価格を併記した。#125 前半）
+- **`data.patterns[*].pivots[]` に `kind` と `extremePrice` を足した。** スイング検出（`tools/patterns/swing.ts`）は**極値判定を高値 / 安値で行い、`price` には終値を格納する**（ヒゲ 1 本で同水準判定・ネックラインが動くのを避けるための意図的な設計）。しかし報告される `price` が判定に使った値ではないため、**出力から判定を検算できなかった**。実際に外部レビューがこれを終値基準と誤解し「ピボット抽出器のバグ」という誤った Critical 報告に至っている（実装は正しかった）。
+  - `price` = その足の終値 / `kind` = `H`（山）または `L`（谷）/ `extremePrice` = 極値判定に実際に使った値（`kind=H` なら `high`、`L` なら `low`）。`.claude/rules/tools.md` 規約 2 の「足す」に該当し、既存フィールドは 1 つも削っていない。
+  - `kind` は runtime には元から載っていたが**スキーマに無いため zod の strip で落ちていた**。`extremePrice` 単体では「その値が高値なのか安値なのか」が判別できないので併せて公開する。
+  - **`view=full` の content** では double_top / double_bottom の構成点 3 行に両方を出す（例: `谷1: 2026-08-03 終値 10,002,960円 / 安値 9,752,246円（判定は安値基準）`）。両者が同値のときは 1 つにまとめる。
+  - **型で固定した。** `Pivot.extremePrice` を必須にし、`PatternEntry.pivots` の緩い再宣言（`Array<{ idx?; price?; kind? }>`）を `Pivot[]` に締めたので、検出器が pivot を組み直すときに落とすと typecheck が落ちる。これで検出器 19 箇所の再構築サイトが機械的にカバーされる。
+  - **`triangle_*` は `price === extremePrice` になる。** 三角形の検出器は独自の relaxed swing（`swingDepth=1`）を使い、そこでの `price` が最初から高値 / 安値そのものだから。**同値であること自体が「この検出器は終値を経由していない」という情報**なので、別値を捏造せずそのまま入れている。形成中 H&S / 逆 H&S の暫定右肩（最新足の終値をそのまま置くもの）も、極値判定を通っていないので同値になる。
+- **`priceBasis: "close" | "extreme"` パラメータ（#125 後半）は入れていない。** 既定値の選択で検出結果が変わる大きな変更であり、#126 が終わって挙動が安定してから必要性を判断する。**#125 は透明化のみ完了で、パラメータ化は保留。**
+
+### Fixed（用語の陳腐化。#127 の一部）
+- **`tools/patterns/scan-window.ts` の `buildScanWindowWarning` の docstring が「日数ベースの閾値は別途かかる」のままだったのを修正した。** #121 で閾値のプリミティブがバー数になっている（`patterns/bar-thresholds.ts`）。#127 の残り（prompts の `limit=180`、CHANGELOG 集約）は本 PR の対象外。
+
 ### Changed（`detect_patterns` の `limit` に「上げる」方向の使い分けを明記）
 - **ツール description と `inputSchema.limit.describe()` に `limit` を上げる動機を 1 点ずつ追記した（文言のみ・挙動変更なし）。** #119 / #121 で `limit` の意味論を両方に明記したが、**いずれも下限の話しか書いていない**（`limit_too_small_for_timeframe`、構造的下限、種別が静かに 0 件になる下限の表）。「`limit` を上げると何が得られるか」「いつ上げるべきか」がツール表面のどこにも無く、LLM も利用者も既定 90 から動かす判断ができなかった。
   - **既定 `limit`（90）は「いま形成中〜完成直後のパターンを把握する」ためのウィンドウ**であって「これ以上見ると重い」という上限ではない。**過去のパターンの統計（`data.statistics` の `successRate` / `avgReturn7d` 等）や `aftermath` を調べる用途では上げる**（上限 365）。

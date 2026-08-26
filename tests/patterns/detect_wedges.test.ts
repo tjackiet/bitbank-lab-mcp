@@ -150,8 +150,8 @@ describe('detectWedges', () => {
 	it('ローソク足が少なすぎる → パターン不検出', () => {
 		const candles: CandleData[] = Array.from({ length: 10 }, (_, i) => mkCandle(10 - i, 100, 102, 98, 100));
 		const pivots: Pivot[] = [
-			{ idx: 0, price: 102, kind: 'H' },
-			{ idx: 5, price: 98, kind: 'L' },
+			{ idx: 0, price: 102, kind: 'H', extremePrice: 102 },
+			{ idx: 5, price: 98, kind: 'L', extremePrice: 98 },
 		];
 		const ctx = buildCtx({ candles, pivots });
 		const result = detectWedges(ctx);

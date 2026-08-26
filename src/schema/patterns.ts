@@ -99,7 +99,10 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 				'- summary: ヘッダ ＋ 分類内訳 ＋ 直近30日/90日件数 ＋ 上記 2 行 ＋ 検討パターン。個々のパターンの詳細は content に出ない。\n' +
 				'- detailed（既定）: 上位 5 件の詳細。6 件目以降は content に出ない。structuredContent に usage_example を**足す**。\n' +
 				'- full: 全件の詳細（double_top / double_bottom では山谷 3 点の pivot 行も出る）。本ツールの最重量。\n' +
-				'- debug（**階梯外**）: swings / candidates のみ。**検出パターンも上記 2 行も content に出ない**——出力を置換する view なので full の上位集合ではない。structuredContent に data.candidates を**足す**。',
+				'- debug（**階梯外**）: swings / candidates のみ。**検出パターンも上記 2 行も content に出ない**——出力を置換する view なので full の上位集合ではない。structuredContent に data.candidates を**足す**。\n' +
+				'  candidates は `patterns` で要求した種別（エイリアスは展開して照合）に**絞って**返す。' +
+				'`patterns` 未指定なら全種別。絞らないと cap（200件）を要求外の種別が食い潰し、' +
+				'要求した種別の棄却理由が押し出される。',
 		),
 	// New: relevance filter for "current-involved" long-term patterns
 	requireCurrentInPattern: z.boolean().optional().default(false),
@@ -220,9 +223,32 @@ export const DetectedPatternSchema = z.object({
 		})
 		.optional(),
 	pivots: z
-		.array(z.object({ idx: z.number().int().describe(PATTERN_INDEX_NOTE), price: z.number() }))
+		.array(
+			z.object({
+				idx: z.number().int().describe(PATTERN_INDEX_NOTE),
+				price: z
+					.number()
+					.describe(
+						'構成点の価格。**極値判定に使った値ではない**（issue #125）。' +
+							'ピボット由来の検出器（double / triple / H&S）はその足の**終値**を入れる' +
+							'（ヒゲ 1 本で同水準判定・ネックラインが動くのを避けるため）。' +
+							'判定に使った値そのものは `extremePrice` を見ること。',
+					),
+				kind: z.enum(['H', 'L']).describe('構成点の種別。H = 高値側（山）、L = 安値側（谷）。'),
+				extremePrice: z
+					.number()
+					.describe(
+						'極値判定に実際に使った値。kind=H なら `high`、kind=L なら `low`。' +
+							'`price` との差がヒゲ分で、これを見れば報告値から判定を検算できる。' +
+							'ただし triangle_* は独自の relaxed swing（`price` が最初から high / low）を使うため ' +
+							'`price` と同値になる——同値であること自体が「終値を経由していない」という情報。',
+					),
+			}),
+		)
 		.optional()
-		.describe(`パターン構成点の位置と価格。${PATTERN_INDEX_NOTE}`),
+		.describe(
+			`パターン構成点の位置と価格。**price（終値）と extremePrice（極値判定に使った高安）は別の値。** ${PATTERN_INDEX_NOTE}`,
+		),
 	neckline: z
 		.array(z.object({ x: z.number().int().optional(), y: z.number() }))
 		.length(2)

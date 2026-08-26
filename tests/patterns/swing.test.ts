@@ -70,9 +70,9 @@ describe('detectSwingPoints', () => {
 describe('filterPeaks', () => {
 	it('H のみをフィルタする', () => {
 		const pivots = [
-			{ idx: 0, price: 100, kind: 'H' as const },
-			{ idx: 1, price: 90, kind: 'L' as const },
-			{ idx: 2, price: 110, kind: 'H' as const },
+			{ idx: 0, price: 100, kind: 'H' as const, extremePrice: 100 },
+			{ idx: 1, price: 90, kind: 'L' as const, extremePrice: 90 },
+			{ idx: 2, price: 110, kind: 'H' as const, extremePrice: 110 },
 		];
 		const peaks = filterPeaks(pivots);
 		expect(peaks).toHaveLength(2);
@@ -87,9 +87,9 @@ describe('filterPeaks', () => {
 describe('filterValleys', () => {
 	it('L のみをフィルタする', () => {
 		const pivots = [
-			{ idx: 0, price: 100, kind: 'H' as const },
-			{ idx: 1, price: 90, kind: 'L' as const },
-			{ idx: 2, price: 85, kind: 'L' as const },
+			{ idx: 0, price: 100, kind: 'H' as const, extremePrice: 100 },
+			{ idx: 1, price: 90, kind: 'L' as const, extremePrice: 90 },
+			{ idx: 2, price: 85, kind: 'L' as const, extremePrice: 85 },
 		];
 		const valleys = filterValleys(pivots);
 		expect(valleys).toHaveLength(2);
@@ -98,5 +98,58 @@ describe('filterValleys', () => {
 
 	it('空配列は空を返す', () => {
 		expect(filterValleys([])).toEqual([]);
+	});
+});
+
+// ──────────────────────────────────────────────
+// 価格基準の透明化（#125）
+//   極値判定は high / low、格納する price は close。両者が別物であることを
+//   出力から検算できるように extremePrice を持たせている。
+// ──────────────────────────────────────────────
+describe('detectSwingPoints: price と extremePrice の関係', () => {
+	/** ヒゲの長さを指定できるローソク足（close と high/low を明確にずらす） */
+	function makeWickyCandles(prices: number[], wick: number): Candle[] {
+		return prices.map((p) => ({ open: p, close: p, high: p + wick, low: p - wick }));
+	}
+
+	it('スイングハイの price は終値、extremePrice は高値', () => {
+		const prices = [100, 110, 120, 130, 120, 110, 100];
+		const candles = makeWickyCandles(prices, 7);
+		const peaks = filterPeaks(detectSwingPoints(candles, { swingDepth: 2 }));
+		expect(peaks).toHaveLength(1);
+		expect(peaks[0].idx).toBe(3);
+		expect(peaks[0].price).toBe(candles[3].close);
+		expect(peaks[0].extremePrice).toBe(candles[3].high);
+		// ヒゲがある限り両者は一致しない。一致してしまうと「終値基準」との区別が付かない。
+		expect(peaks[0].extremePrice).not.toBe(peaks[0].price);
+	});
+
+	it('スイングローの price は終値、extremePrice は安値', () => {
+		const prices = [130, 120, 110, 100, 110, 120, 130];
+		const candles = makeWickyCandles(prices, 7);
+		const valleys = filterValleys(detectSwingPoints(candles, { swingDepth: 2 }));
+		expect(valleys).toHaveLength(1);
+		expect(valleys[0].idx).toBe(3);
+		expect(valleys[0].price).toBe(candles[3].close);
+		expect(valleys[0].extremePrice).toBe(candles[3].low);
+		expect(valleys[0].extremePrice).not.toBe(valleys[0].price);
+	});
+
+	it('緩和モードでも extremePrice は判定に使った極値のまま', () => {
+		const prices = [100, 110, 120, 130, 125, 120, 100];
+		const candles = makeWickyCandles(prices, 5);
+		const pivots = detectSwingPoints(candles, { swingDepth: 2, strictPivots: false });
+		expect(pivots.length).toBeGreaterThan(0);
+		for (const pv of pivots) {
+			const c = candles[pv.idx];
+			expect(pv.extremePrice).toBe(pv.kind === 'H' ? c.high : c.low);
+		}
+	});
+
+	it('ヒゲが 0 の足では price と extremePrice が一致する（同値は情報であって欠損ではない）', () => {
+		const prices = [100, 110, 120, 130, 120, 110, 100];
+		const candles = makeWickyCandles(prices, 0);
+		const peaks = filterPeaks(detectSwingPoints(candles, { swingDepth: 2 }));
+		expect(peaks[0].extremePrice).toBe(peaks[0].price);
 	});
 });

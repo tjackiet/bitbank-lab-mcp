@@ -302,9 +302,13 @@ function buildTriangleResult(c: TriangleCandidateCtx): { pattern: PatternEntry; 
 	const confidence = finalizeConf(baseScore, triangleType);
 
 	// Pivot points
+	// 本検出器の swing は `relaxedPeaks` / `relaxedValleys`（本ファイル内）で作っており、
+	// そこでの `price` は **既に high / low そのもの**（swing.ts の Pivot と違い終値ではない）。
+	// したがって「判定に使った極値」は price と同値になる。同値であること自体が
+	// 「この検出器は終値を経由していない」という情報なので、別値を捏造せずそのまま入れる。
 	const allPivots = [
-		...peaks.map((p) => ({ idx: p.idx, price: p.price, kind: 'H' as const })),
-		...valleys.map((p) => ({ idx: p.idx, price: p.price, kind: 'L' as const })),
+		...peaks.map((p) => ({ idx: p.idx, price: p.price, kind: 'H' as const, extremePrice: p.price })),
+		...valleys.map((p) => ({ idx: p.idx, price: p.price, kind: 'L' as const, extremePrice: p.price })),
 	].sort((a, b) => a.idx - b.idx);
 
 	// --- ターゲット価格計算 ---

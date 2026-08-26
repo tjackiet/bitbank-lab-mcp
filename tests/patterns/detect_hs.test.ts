@@ -70,11 +70,11 @@ function buildHS(opts?: {
 	candles[60] = mkCandle(10, rs - 1, rs, rs - 3, rs - 1);
 
 	const pivots: Pivot[] = [
-		{ idx: 0, price: ls, kind: 'H' },
-		{ idx: 15, price: v1, kind: 'L' },
-		{ idx: 30, price: hd, kind: 'H' },
-		{ idx: 45, price: v2, kind: 'L' },
-		{ idx: 60, price: rs, kind: 'H' },
+		{ idx: 0, price: ls, kind: 'H', extremePrice: ls },
+		{ idx: 15, price: v1, kind: 'L', extremePrice: v1 },
+		{ idx: 30, price: hd, kind: 'H', extremePrice: hd },
+		{ idx: 45, price: v2, kind: 'L', extremePrice: v2 },
+		{ idx: 60, price: rs, kind: 'H', extremePrice: rs },
 	];
 
 	return { candles, pivots };
@@ -106,11 +106,11 @@ function buildInverseHS(opts?: {
 	candles[60] = mkCandle(10, rs + 1, rs + 3, rs, rs + 1);
 
 	const pivots: Pivot[] = [
-		{ idx: 0, price: ls, kind: 'L' },
-		{ idx: 15, price: p1, kind: 'H' },
-		{ idx: 30, price: hd, kind: 'L' },
-		{ idx: 45, price: p2, kind: 'H' },
-		{ idx: 60, price: rs, kind: 'L' },
+		{ idx: 0, price: ls, kind: 'L', extremePrice: ls },
+		{ idx: 15, price: p1, kind: 'H', extremePrice: p1 },
+		{ idx: 30, price: hd, kind: 'L', extremePrice: hd },
+		{ idx: 45, price: p2, kind: 'H', extremePrice: p2 },
+		{ idx: 60, price: rs, kind: 'L', extremePrice: rs },
 	];
 
 	return { candles, pivots };
@@ -157,11 +157,11 @@ function buildHsWithBreakout(opts?: {
 	}
 
 	const pivots: Pivot[] = [
-		{ idx: 0, price: ls, kind: 'H' },
-		{ idx: 15, price: v1, kind: 'L' },
-		{ idx: 30, price: hd, kind: 'H' },
-		{ idx: 45, price: v2, kind: 'L' },
-		{ idx: 60, price: rs, kind: 'H' },
+		{ idx: 0, price: ls, kind: 'H', extremePrice: ls },
+		{ idx: 15, price: v1, kind: 'L', extremePrice: v1 },
+		{ idx: 30, price: hd, kind: 'H', extremePrice: hd },
+		{ idx: 45, price: v2, kind: 'L', extremePrice: v2 },
+		{ idx: 60, price: rs, kind: 'H', extremePrice: rs },
 	];
 
 	return { candles, pivots };
@@ -207,11 +207,11 @@ function buildInverseHsWithBreakout(opts?: {
 	}
 
 	const pivots: Pivot[] = [
-		{ idx: 0, price: ls, kind: 'L' },
-		{ idx: 15, price: p1, kind: 'H' },
-		{ idx: 30, price: hd, kind: 'L' },
-		{ idx: 45, price: p2, kind: 'H' },
-		{ idx: 60, price: rs, kind: 'L' },
+		{ idx: 0, price: ls, kind: 'L', extremePrice: ls },
+		{ idx: 15, price: p1, kind: 'H', extremePrice: p1 },
+		{ idx: 30, price: hd, kind: 'L', extremePrice: hd },
+		{ idx: 45, price: p2, kind: 'H', extremePrice: p2 },
+		{ idx: 60, price: rs, kind: 'L', extremePrice: rs },
 	];
 
 	return { candles, pivots };
@@ -282,11 +282,11 @@ describe('detectHeadAndShoulders', () => {
 		candles[12] = mkCandle(8, 99, 100, 97, 99);
 
 		const pivots: Pivot[] = [
-			{ idx: 0, price: 100, kind: 'H' },
-			{ idx: 3, price: 85, kind: 'L' },
-			{ idx: 6, price: 130, kind: 'H' },
-			{ idx: 9, price: 85, kind: 'L' },
-			{ idx: 12, price: 100, kind: 'H' },
+			{ idx: 0, price: 100, kind: 'H', extremePrice: 100 },
+			{ idx: 3, price: 85, kind: 'L', extremePrice: 85 },
+			{ idx: 6, price: 130, kind: 'H', extremePrice: 130 },
+			{ idx: 9, price: 85, kind: 'L', extremePrice: 85 },
+			{ idx: 12, price: 100, kind: 'H', extremePrice: 100 },
 		];
 		const ctx = buildCtx({ candles, pivots });
 		const result = detectHeadAndShoulders(ctx);
@@ -492,12 +492,12 @@ describe('detectHeadAndShoulders', () => {
 		}
 
 		const allPeaks: Pivot[] = [
-			{ idx: 5, price: 100, kind: 'H' },
-			{ idx: 30, price: 135, kind: 'H' },
+			{ idx: 5, price: 100, kind: 'H', extremePrice: 100 },
+			{ idx: 30, price: 135, kind: 'H', extremePrice: 135 },
 		];
 		const allValleys: Pivot[] = [
-			{ idx: 20, price: 88, kind: 'L' },
-			{ idx: 45, price: 90, kind: 'L' },
+			{ idx: 20, price: 88, kind: 'L', extremePrice: 88 },
+			{ idx: 45, price: 90, kind: 'L', extremePrice: 90 },
 		];
 
 		const ctx = buildCtx({
@@ -528,12 +528,12 @@ describe('detectHeadAndShoulders', () => {
 		}
 
 		const allPeaks: Pivot[] = [
-			{ idx: 5, price: 100, kind: 'H' },
-			{ idx: 30, price: 135, kind: 'H' },
+			{ idx: 5, price: 100, kind: 'H', extremePrice: 100 },
+			{ idx: 30, price: 135, kind: 'H', extremePrice: 135 },
 		];
 		const allValleys: Pivot[] = [
-			{ idx: 20, price: 88, kind: 'L' },
-			{ idx: 45, price: 90, kind: 'L' },
+			{ idx: 20, price: 88, kind: 'L', extremePrice: 88 },
+			{ idx: 45, price: 90, kind: 'L', extremePrice: 90 },
 		];
 
 		const ctx = buildCtx({
@@ -566,12 +566,12 @@ describe('detectHeadAndShoulders', () => {
 		}
 
 		const allPeaks: Pivot[] = [
-			{ idx: 20, price: 112, kind: 'H' },
-			{ idx: 45, price: 110, kind: 'H' },
+			{ idx: 20, price: 112, kind: 'H', extremePrice: 112 },
+			{ idx: 45, price: 110, kind: 'H', extremePrice: 110 },
 		];
 		const allValleys: Pivot[] = [
-			{ idx: 5, price: 100, kind: 'L' },
-			{ idx: 30, price: 60, kind: 'L' },
+			{ idx: 5, price: 100, kind: 'L', extremePrice: 100 },
+			{ idx: 30, price: 60, kind: 'L', extremePrice: 60 },
 		];
 
 		const ctx = buildCtx({
@@ -639,12 +639,12 @@ describe('detectHeadAndShoulders', () => {
 		}
 
 		const allPeaks: Pivot[] = [
-			{ idx: 5, price: 100, kind: 'H' },
-			{ idx: 30, price: 135, kind: 'H' },
+			{ idx: 5, price: 100, kind: 'H', extremePrice: 100 },
+			{ idx: 30, price: 135, kind: 'H', extremePrice: 135 },
 		];
 		const allValleys: Pivot[] = [
-			{ idx: 20, price: 88, kind: 'L' },
-			{ idx: 45, price: 90, kind: 'L' },
+			{ idx: 20, price: 88, kind: 'L', extremePrice: 88 },
+			{ idx: 45, price: 90, kind: 'L', extremePrice: 90 },
 		];
 
 		const ctx = buildCtx({
@@ -684,12 +684,12 @@ describe('detectHeadAndShoulders', () => {
 		}
 
 		const allPeaks: Pivot[] = [
-			{ idx: 20, price: 112, kind: 'H' },
-			{ idx: 45, price: 110, kind: 'H' },
+			{ idx: 20, price: 112, kind: 'H', extremePrice: 112 },
+			{ idx: 45, price: 110, kind: 'H', extremePrice: 110 },
 		];
 		const allValleys: Pivot[] = [
-			{ idx: 5, price: 100, kind: 'L' },
-			{ idx: 30, price: 60, kind: 'L' },
+			{ idx: 5, price: 100, kind: 'L', extremePrice: 100 },
+			{ idx: 30, price: 60, kind: 'L', extremePrice: 60 },
 		];
 
 		const ctx = buildCtx({
@@ -727,12 +727,12 @@ describe('detectHeadAndShoulders', () => {
 		}
 
 		const allPeaks: Pivot[] = [
-			{ idx: 5, price: 100, kind: 'H' },
-			{ idx: 30, price: 135, kind: 'H' },
+			{ idx: 5, price: 100, kind: 'H', extremePrice: 100 },
+			{ idx: 30, price: 135, kind: 'H', extremePrice: 135 },
 		];
 		const allValleys: Pivot[] = [
-			{ idx: 20, price: 88, kind: 'L' },
-			{ idx: 45, price: 90, kind: 'L' },
+			{ idx: 20, price: 88, kind: 'L', extremePrice: 88 },
+			{ idx: 45, price: 90, kind: 'L', extremePrice: 90 },
 		];
 
 		const ctx = buildCtx({
@@ -1100,9 +1100,9 @@ describe('detectHeadAndShoulders', () => {
 	it('ピボット < 5 個では H&S/Inverse H&S とも検出しない', () => {
 		const candles: CandleData[] = Array.from({ length: 30 }, (_, i) => mkCandle(30 - i, 90, 95, 85, 90));
 		const pivots: Pivot[] = [
-			{ idx: 0, price: 100, kind: 'H' },
-			{ idx: 10, price: 85, kind: 'L' },
-			{ idx: 20, price: 130, kind: 'H' },
+			{ idx: 0, price: 100, kind: 'H', extremePrice: 100 },
+			{ idx: 10, price: 85, kind: 'L', extremePrice: 85 },
+			{ idx: 20, price: 130, kind: 'H', extremePrice: 130 },
 		];
 		const ctx = buildCtx({ candles, pivots });
 		const result = detectHeadAndShoulders(ctx);
