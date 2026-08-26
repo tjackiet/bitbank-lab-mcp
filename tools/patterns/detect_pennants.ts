@@ -34,7 +34,11 @@ interface PoleParams {
 	consMaxBars: number;
 }
 
-function getFlagParams(tf: string): PoleParams {
+/**
+ * 時間足ごとの旗竿 / 保ち合いのバー数パラメータ。
+ * `patterns/min-bars.ts` が「時間足 → 最小要求バー数」を導出するのに参照するため export する。
+ */
+export function getFlagParams(tf: string): PoleParams {
 	const bpd = barsPerDay(tf);
 
 	// 旗竿: 1〜15日、保ち合い: 2〜30日（日数をバー数に変換）

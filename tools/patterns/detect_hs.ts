@@ -10,7 +10,7 @@
  * されるのを防ぐ。ネックラインは 2 点を結ぶ傾きつきラインとして外挿する。
  */
 import { generatePatternDiagram } from '../../lib/pattern-diagrams.js';
-import { computeTargetReach, finalizeConf, periodScoreDays } from './helpers.js';
+import { computeTargetReach, finalizeConf, formingReversalDaysPerBar, periodScoreDays } from './helpers.js';
 import { clamp01, marginFromRelDev, relDev } from './regression.js';
 import {
 	HS_NECKLINE_MAX_PCT,
@@ -57,7 +57,11 @@ const RELAXED_FACTORS = [
 
 const FORMING_RIGHT_TOLERANCE_PCT = 0.08;
 const FORMING_MAX_DAYS = 90;
-const FORMING_MIN_DAYS = 21;
+/**
+ * 形成中 H&S / 逆 H&S が要求する最小の形成日数。
+ * `patterns/min-bars.ts` が「時間足 → 最小要求バー数」を導出するのに参照するため export する。
+ */
+export const FORMING_MIN_DAYS = 21;
 const FORMING_MIN_COMPLETION = 0.4;
 // detect_triples.ts と同値。形状不十分な forming 候補を上位表示させないための最低 confidence。
 const FORMING_MIN_CONFIDENCE = 0.5;
@@ -780,7 +784,7 @@ function tryFormingHS(ctx: DetectContext): DeduplicablePattern | null {
 	const lastIdx = candles.length - 1;
 	const currentPrice = Number(candles[lastIdx]?.close ?? NaN);
 	const isoAt = (i: number) => candles[i]?.isoTime || '';
-	const daysPerBar = ctx.type === '1day' ? 1 : ctx.type === '1week' ? 7 : 1;
+	const daysPerBar = formingReversalDaysPerBar(ctx.type);
 
 	const confirmedPeaks = allPeaks.filter((p) => p.idx < lastIdx - 2);
 	if (confirmedPeaks.length < 2) return null;
@@ -919,7 +923,7 @@ function tryFormingInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 	const lastIdx = candles.length - 1;
 	const currentPrice = Number(candles[lastIdx]?.close ?? NaN);
 	const isoAt = (i: number) => candles[i]?.isoTime || '';
-	const daysPerBar = ctx.type === '1day' ? 1 : ctx.type === '1week' ? 7 : 1;
+	const daysPerBar = formingReversalDaysPerBar(ctx.type);
 
 	const confirmedValleys = allValleys.filter((v) => v.idx < lastIdx - 2);
 	if (confirmedValleys.length < 2) return null;

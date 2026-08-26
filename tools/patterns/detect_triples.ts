@@ -14,7 +14,11 @@ import { pushCand } from './types.js';
 const NECKLINE_SLOPE_LIMIT = 0.02;
 const MAX_VALLEY_SPREAD = 0.015;
 const FORMING_MAX_DAYS = 90;
-const FORMING_MIN_DAYS = 21;
+/**
+ * 形成中トリプルトップ / ボトムが要求する最小の形成日数。
+ * `patterns/min-bars.ts` が「時間足 → 最小要求バー数」を導出するのに参照するため export する。
+ */
+export const FORMING_MIN_DAYS = 21;
 const FORMING_TOLERANCE_MULTIPLIER = 1.2;
 const FORMING_MIN_COMPLETION = 0.4;
 const FORMING_MIN_CONFIDENCE = 0.5;

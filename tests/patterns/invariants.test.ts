@@ -15,6 +15,7 @@
  *   6. includeForming=false で forming / near_completion 除外
  *   7. allow_partial_patterns=false で uses_partial_candle スキップ
  *   8. statistics と data.patterns の対象集合が一致する
+ *   9. 日数閾値由来の最小要求バー数が既定スキャン窓に収まる（到達性）
  *
  * 設計方針:
  *   - 既存 fixture テスト（tests/patterns/*.test.ts, tests/analyze_candle_patterns.test.ts,
@@ -34,10 +35,15 @@ vi.mock('../../tools/analyze_indicators.js', () => ({
 	default: vi.fn(),
 }));
 
+import { CandleTypeEnum } from '../../src/schema/base.js';
+import { DetectPatternsInputSchema } from '../../src/schema/patterns.js';
 import analyzeCandlePatterns from '../../tools/analyze_candle_patterns.js';
 import analyzeIndicators from '../../tools/analyze_indicators.js';
 import detectPatterns from '../../tools/detect_patterns.js';
 import getCandles from '../../tools/get_candles.js';
+import { getDefaultParamsForTf } from '../../tools/patterns/config.js';
+import { MIN_BARS_DETECTORS, type MinBarsDetector, minBarsForDetector } from '../../tools/patterns/min-bars.js';
+import { assessScanWindow } from '../../tools/patterns/scan-window.js';
 
 // ── 型・ヘルパー ──────────────────────────────────
 
@@ -878,5 +884,190 @@ describe('patterns invariants — 横断契約', () => {
 				expect(stat.detected).toBe(patternCounts[type] ?? 0);
 			}
 		});
+	});
+});
+
+// ──────────────────────────────────────────────
+// 9. 到達性 — 日数閾値由来の最小要求バー数 <= 既定スキャン窓
+//
+//    #114 でスキャン窓が「直近 limit 本」に一致した結果、日数ベースの閾値が窓を超えると
+//    **そのパターン種別だけが静かに 0 件になる**（issue #118）。閾値は 6 ファイルに散っていて
+//    人手では追えないので、`patterns/min-bars.ts` の導出値で機械的に固定する。
+//
+//    現状では多数が未到達なので、**既知の未到達組み合わせを allowlist として明示**し、
+//    「allowlist の外に未到達が無いこと」を検証する形にしてある。閾値を下げて到達可能に
+//    したら、対応する行を allowlist から消さないとテストが落ちる（stale 検出）。
+//
+//    このテストは「日数閾値が窓に収まるか」だけを見る。窓に収まっていても検出できるとは
+//    限らないし（形状の条件は別）、閾値の単位が正しいとも限らない
+//    （`1month` の forming double / H&S は 14 バー = 14 ヶ月を要求している — #118 問題 3）。
+// ──────────────────────────────────────────────
+
+describe('検出器の到達性 — 日数閾値 vs 既定スキャン窓', () => {
+	const ALL_TIMEFRAMES = CandleTypeEnum.options;
+	/** 既定のスキャン窓。detect_patterns は直近 limit 本をそのまま検出器に渡す（#114）。 */
+	const DEFAULT_SCAN_WINDOW = DetectPatternsInputSchema.shape.limit.parse(undefined) as number;
+
+	/**
+	 * 既定 `limit` では日数閾値に届かない組み合わせ（issue #118 の表から導かれるもの）。
+	 *
+	 * `requiredBars` は `minBarsForDetector` の期待値。閾値を動かして本数が変わっても
+	 * 気づけるよう、到達不能かどうかだけでなく本数そのものも突き合わせている。
+	 */
+	const KNOWN_UNREACHABLE: ReadonlyArray<{
+		tf: string;
+		detector: MinBarsDetector;
+		requiredBars: number;
+		reason: string;
+	}> = [
+		// ── #118 問題 2: limit 上限 365 でも到達不能（#114 以前から到達不能なものを含む） ──
+		{
+			tf: '1min',
+			detector: 'forming_triple',
+			requiredBars: 29521,
+			reason: '#118 問題 2: 21日 = 29521本。limit 上限 365 でも到達不能',
+		},
+		{
+			tf: '1min',
+			detector: 'completed_wedge',
+			requiredBars: 36001,
+			reason: '#118 問題 2: 25日窓 = 36001本。limit 上限 365 でも到達不能',
+		},
+		{
+			tf: '1min',
+			detector: 'flag_pennant',
+			requiredBars: 4321,
+			reason: '#118 問題 2: 最小 1+2日 = 4321本。limit 上限 365 でも到達不能',
+		},
+		{
+			tf: '5min',
+			detector: 'forming_triple',
+			requiredBars: 5905,
+			reason: '#118 問題 2: 21日 = 5905本。limit 上限 365 でも到達不能',
+		},
+		{
+			tf: '5min',
+			detector: 'completed_wedge',
+			requiredBars: 7201,
+			reason: '#118 問題 2: 25日窓 = 7201本。limit 上限 365 でも到達不能',
+		},
+		{
+			tf: '5min',
+			detector: 'flag_pennant',
+			requiredBars: 865,
+			reason: '#118 問題 2: 最小 1+2日 = 865本。limit 上限 365 でも到達不能',
+		},
+		{
+			tf: '15min',
+			detector: 'forming_triple',
+			requiredBars: 1969,
+			reason: '#118 問題 2: 21日 = 1969本。limit 上限 365 でも到達不能',
+		},
+		{
+			tf: '15min',
+			detector: 'completed_wedge',
+			requiredBars: 2401,
+			reason: '#118 問題 2: 25日窓 = 2401本。limit 上限 365 でも到達不能',
+		},
+		{
+			tf: '15min',
+			detector: 'flag_pennant',
+			requiredBars: 289,
+			reason: '#118 問題 2: 最小 1+2日 = 289本。limit 上限 365 でも到達不能',
+		},
+		{
+			tf: '30min',
+			detector: 'forming_triple',
+			requiredBars: 985,
+			reason: '#118 問題 2: 21日 = 985本。limit 上限 365 でも到達不能',
+		},
+		{
+			tf: '30min',
+			detector: 'completed_wedge',
+			requiredBars: 1201,
+			reason: '#118 問題 2: 25日窓 = 1201本。limit 上限 365 でも到達不能',
+		},
+		{
+			tf: '30min',
+			detector: 'flag_pennant',
+			requiredBars: 145,
+			reason: '#118 問題 2: 最小 1+2日 = 145本。limit 上限 365 でも到達不能',
+		},
+		{
+			tf: '1hour',
+			detector: 'forming_triple',
+			requiredBars: 493,
+			reason: '#118 問題 2: 21日 = 493本。#114 以前は limit>=294 で到達できた、回復手段のない後退',
+		},
+		{
+			tf: '1hour',
+			detector: 'completed_wedge',
+			requiredBars: 601,
+			reason: '#118 問題 2: 25日窓 = 601本。limit 上限 365 でも到達不能',
+		},
+		// ── #118 問題 1: 既定 limit=90 では落ちるが、limit を明示すれば復帰する ──
+		{
+			tf: '4hour',
+			detector: 'forming_triple',
+			requiredBars: 124,
+			reason: '#118 問題 1: 21日 = 124本。limit>=124 を明示すれば復帰する',
+		},
+		{
+			tf: '4hour',
+			detector: 'completed_wedge',
+			requiredBars: 151,
+			reason: '#118 問題 1: 25日窓 = 151本。limit>=151 を明示すれば復帰する',
+		},
+	];
+
+	const allowKey = (tf: string, detector: MinBarsDetector) => `${tf} ${detector}`;
+	const allowlist = new Map(KNOWN_UNREACHABLE.map((e) => [allowKey(e.tf, e.detector), e]));
+
+	it('既定 limit は 90（allowlist の前提）', () => {
+		expect(DEFAULT_SCAN_WINDOW).toBe(90);
+	});
+
+	it('allowlist 外に未到達の組み合わせが無い', () => {
+		const unexpected: string[] = [];
+		for (const tf of ALL_TIMEFRAMES) {
+			for (const detector of MIN_BARS_DETECTORS) {
+				const required = minBarsForDetector(tf, detector);
+				if (required <= DEFAULT_SCAN_WINDOW) continue;
+				if (allowlist.has(allowKey(tf, detector))) continue;
+				unexpected.push(`${tf} x ${detector}: ${required}本 > 窓 ${DEFAULT_SCAN_WINDOW}本`);
+			}
+		}
+		expect(unexpected, `既定 limit で新たに到達不能になった組み合わせ:\n${unexpected.join('\n')}`).toEqual([]);
+	});
+
+	it('allowlist の各行が実際に未到達で、要求本数も一致する（stale 行の検出）', () => {
+		for (const entry of KNOWN_UNREACHABLE) {
+			const required = minBarsForDetector(entry.tf, entry.detector);
+			expect(required, `allowlist: ${entry.tf} x ${entry.detector} の要求本数`).toBe(entry.requiredBars);
+			expect(
+				required,
+				`allowlist: ${entry.tf} x ${entry.detector} は既定 limit で到達可能になっている。allowlist から行を消すこと`,
+			).toBeGreaterThan(DEFAULT_SCAN_WINDOW);
+		}
+	});
+
+	it('allowlist に重複行が無い', () => {
+		expect(allowlist.size).toBe(KNOWN_UNREACHABLE.length);
+	});
+
+	it('allowlist の時間足 / 検出器が実在する（typo 検出）', () => {
+		for (const entry of KNOWN_UNREACHABLE) {
+			expect(ALL_TIMEFRAMES, `allowlist の時間足: ${entry.tf}`).toContain(entry.tf);
+			expect(MIN_BARS_DETECTORS, `allowlist の検出器: ${entry.detector}`).toContain(entry.detector);
+		}
+	});
+
+	it('構造的下限（assessScanWindow）は全時間足で既定スキャン窓に収まる', () => {
+		// 日数閾値とは別軸の下限（#117 / docs 表 1）。こちらは既定 limit で全時間足が通る。
+		for (const tf of ALL_TIMEFRAMES) {
+			const { swingDepth, minBarsBetweenSwings } = getDefaultParamsForTf(tf);
+			const a = assessScanWindow(DEFAULT_SCAN_WINDOW, swingDepth, minBarsBetweenSwings);
+			expect(a.sufficient, `${tf}: 構造的下限 ${a.minViableLimit}本 > 窓 ${DEFAULT_SCAN_WINDOW}本`).toBe(true);
+		}
 	});
 });
