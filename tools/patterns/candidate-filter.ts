@@ -20,12 +20,16 @@
  * 入力エイリアス（schema の `PATTERN_FILTER_ALIASES`）の `'flag' → bull_flag + bear_flag`
  * とは別物なので、2 つの写像を分けて持つ。
  *
- * ## 既知のギャップ
+ * ## 既知のギャップ（#129）
  *
  * `detect_triangles` / `detect_wedges` は分類前の棄却を具体型 `triangle_symmetrical` で
- * 積んでいる（umbrella ラベルを使っていない）。そのため
- * `patterns=['triangle_ascending']` ではそれらが落ちる。ラベル側を `'triangle'` に直すのが
- * 筋だが、**`patterns` 未指定時の candidates 出力が変わる**ため本モジュールでは救わない。
+ * 積んでいる（umbrella ラベルを使っていない）。そのため `patterns=['triangle_descending']`
+ * では candidates が 0 件になる——検出器は実際に走査・棄却しているのに理由が届かない。
+ *
+ * 直すべきは**ラベル側**（push を `'triangle'` にする）であって本モジュールではない。
+ * ここで `triangle_symmetrical` を三角形 3 種に被覆させると、対称三角形を要求していない
+ * 呼び出しにまで対称三角形の候補を返してしまう（規約「want に含まれない種別の candidate が
+ * 出ない」に反する）。ラベル変更は `patterns` 未指定時の candidates 出力を変えるため #129 で扱う。
  */
 
 /**
