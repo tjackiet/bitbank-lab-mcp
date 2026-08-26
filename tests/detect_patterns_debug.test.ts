@@ -40,6 +40,42 @@ function makeCandle(dayOffset: number, close: number): Candle {
 	};
 }
 
+/**
+ * 足ごとにヒゲ幅を変えた足。**定数ヒゲにしないこと**が要点で、`close ± 一定` だと
+ * high / low / close が互いの平行移動になり、極値判定（前後 1 本との大小比較）も
+ * 回帰の傾きも基準によらず一致してしまう。それでは「高安基準で見ているのか
+ * 終値基準で見ているのか」をテストが識別できない。
+ * 乱数は使わない（決定性が要る。`Math.random` は banned-patterns）。
+ */
+function makeWickyCandle(dayOffset: number, close: number): Candle {
+	// 振幅は「極値の位置が基準で変わる最小限」に取ってある。大きくしすぎると
+	// スイングがヒゲのノイズで決まり、価格構造ではなく fixture の細工を測るテストになる。
+	return {
+		isoTime: makeIso(dayOffset),
+		open: close,
+		high: close + 1 + ((dayOffset * 3) % 9),
+		low: close - 1 - ((dayOffset * 4) % 9),
+		close,
+		volume: 100,
+	};
+}
+
+/**
+ * `detect_triangles` の relaxed swing（`swingDepth=1`: 前後 1 本より高い / 低い）を
+ * 任意の系列で再現する。既定は検出器と同じ high / low 基準。
+ */
+function relaxedSwingIndices(candles: Candle[], kind: 'H' | 'L', pick?: (c: Candle) => number): number[] {
+	const value = pick ?? ((c: Candle) => (kind === 'H' ? c.high : c.low));
+	const out: number[] = [];
+	for (let i = 1; i < candles.length - 1; i++) {
+		const v = value(candles[i]);
+		const prev = value(candles[i - 1]);
+		const next = value(candles[i + 1]);
+		if (kind === 'H' ? v > prev && v > next : v < prev && v < next) out.push(i);
+	}
+	return out;
+}
+
 function indicatorsOk(candles: Candle[]) {
 	return { ok: true, summary: 'ok', data: { chart: { candles } } };
 }
@@ -193,8 +229,23 @@ describe('detect_patterns: pivot の価格基準（#125）', () => {
 	// 不変なのは「`extremePrice` は判定に使った値」の一点だけなので、
 	// 差が silent に入れ替わらないよう**現行の契約をここで固定する**（CodeRabbit review, PR #128）。
 	it('triangle_* の pivot は price も extremePrice も回帰に使った高安（終値ではない）', async () => {
-		const candles = symTriangleCloses.map((c, i) => makeCandle(i, c));
-		// fixture は close ± 3 でヒゲを付けてあるので、終値と高安が必ず食い違う。
+		const candles = symTriangleCloses.map((c, i) => makeWickyCandle(i, c));
+
+		// この fixture が基準を識別できることを先に確かめる。
+		// 定数ヒゲ（close ± 3）だと high / low / close が互いの平行移動になり、
+		// 極値判定の結果も回帰の傾きも基準によらず一致するため、
+		// 「終値基準に差し替えても通ってしまうテスト」になる（CodeRabbit review, PR #128）。
+		const highSwings = relaxedSwingIndices(candles, 'H');
+		const closeHighSwings = relaxedSwingIndices(candles, 'H', (c) => c.close);
+		const lowSwings = relaxedSwingIndices(candles, 'L');
+		const closeLowSwings = relaxedSwingIndices(candles, 'L', (c) => c.close);
+		expect(highSwings, '高値基準と終値基準で山の位置が変わらない fixture では基準を識別できない').not.toEqual(
+			closeHighSwings,
+		);
+		expect(lowSwings, '安値基準と終値基準で谷の位置が変わらない fixture では基準を識別できない').not.toEqual(
+			closeLowSwings,
+		);
+
 		const res = await run(candles, { patterns: ['triangle_symmetrical'], includeForming: true });
 		assertOk(res);
 		const tri = res.data.patterns.find((p) => p.type === 'triangle_symmetrical');
@@ -205,6 +256,10 @@ describe('detect_patterns: pivot の価格基準（#125）', () => {
 			expect(pv.extremePrice, `idx=${pv.idx} の extremePrice`).toBe(extreme);
 			expect(pv.price, `idx=${pv.idx} の price`).toBe(extreme);
 			expect(pv.price, `idx=${pv.idx} は終値ではない`).not.toBe(c.close);
+			// 値だけでなく**構成点の位置**も高安基準であることを見る。
+			// 終値基準に変えるとここが真っ先に落ちる。
+			const basisSwings = pv.kind === 'H' ? highSwings : lowSwings;
+			expect(basisSwings, `idx=${pv.idx} は高安基準のスイング位置`).toContain(pv.idx);
 		}
 	});
 

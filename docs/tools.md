@@ -220,7 +220,7 @@ API の応答をそのまま、または軽量整形して返す。指標計算�
 
 | ツール | 値 | 何に置き換わるか |
 |---|---|---|
-| `detect_patterns` | `debug` | 検出パターンが `content` から消え、swings / candidates の一覧に入れ替わる（candidates は `patterns` で絞られる。後述） |
+| `detect_patterns` | `debug` | 検出パターンが `content` から消え、swings / candidates の一覧に入れ替わる（**`candidates` のみ** `patterns` で絞られる。`swings` は種別に依らないので全件。後述） |
 | `get_volatility_metrics` | `beginner` | 平易な日本語 4 行。専門用語・指標名・フッタは出ない（読者向けレジスタの指定） |
 
 ### 生データ系ツールの既定が全件列挙な理由
@@ -433,6 +433,9 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 
 `meta.debug.candidates` は各検出器が走査中に積んだ「候補と、その採否・理由コード」。
 **入力 `patterns` を指定した場合は、要求した種別の候補だけが返る**（`patterns` 未指定なら全種別）。
+
+**`meta.debug.swings` は絞られない。** スイング点は `detectSwingPoints` が価格列だけから出すもので
+種別に紐づかないため、`patterns` の指定に関わらず全件返る（上限 200 件のトリムのみ）。
 
 絞らないと `patterns=["double_bottom"]` を指定しても candidates が wedge / triangle で埋まる。
 検出器は `patterns` を「分類・出力の時点」でしか見ておらず、走査中の候補は無条件に積まれるため、
