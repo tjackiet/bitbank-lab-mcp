@@ -9,7 +9,6 @@ import {
 	checkContainment,
 	checkConvergenceEx,
 	computeTargetReach,
-	daysPerBar,
 	deduplicatePatterns,
 	detectWedgeBreak,
 	determineWedgeType,
@@ -442,7 +441,7 @@ describe('globalDedup', () => {
 });
 
 // ---------------------------------------------------------------------------
-// barsPerDay / daysPerBar
+// barsPerDay
 // ---------------------------------------------------------------------------
 describe('barsPerDay', () => {
 	it('1day は 1 を返す', () => {
@@ -463,24 +462,6 @@ describe('barsPerDay', () => {
 
 	it('未知の time frame は 1 にフォールバック', () => {
 		expect(barsPerDay('unknown' as string)).toBe(1);
-	});
-});
-
-describe('daysPerBar', () => {
-	it('barsPerDay の逆数を返す', () => {
-		expect(daysPerBar('1day')).toBe(1);
-		expect(daysPerBar('1hour')).toBeCloseTo(1 / 24, 10);
-		expect(daysPerBar('1week')).toBe(7);
-		expect(daysPerBar('1month')).toBe(30);
-	});
-
-	it('formationBars × daysPerBar で日数に換算できる', () => {
-		// 1hour × 48 bars = 2 days
-		expect(48 * daysPerBar('1hour')).toBeCloseTo(2, 10);
-		// 1week × 4 bars = 28 days
-		expect(4 * daysPerBar('1week')).toBe(28);
-		// 1month × 3 bars = 90 days
-		expect(3 * daysPerBar('1month')).toBe(90);
 	});
 });
 

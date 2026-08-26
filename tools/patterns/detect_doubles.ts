@@ -4,13 +4,8 @@
  */
 import { EPSILON } from '../../lib/math.js';
 import { generatePatternDiagram } from '../../lib/pattern-diagrams.js';
-import {
-	computeTargetReach,
-	deduplicatePatterns,
-	finalizeConf,
-	formingReversalDaysPerBar,
-	periodScoreDays,
-} from './helpers.js';
+import { patternBarRange } from './bar-thresholds.js';
+import { computeTargetReach, deduplicatePatterns, finalizeConf, periodScoreDays } from './helpers.js';
 import { clamp01, marginFromRelDev, relDev } from './regression.js';
 import { DOUBLE_LEVEL_MAX_PCT, isSameLevel, type PriorTrendResult, validatePriorTrend } from './structural.js';
 import type { Pivot } from './swing.js';
@@ -36,18 +31,39 @@ const BREAKOUT_BUFFER_PCT = 0.015;
 const MAX_BARS_FROM_EXTREMUM = 20;
 const RELAXED_TOLERANCE_FACTOR = 1.3;
 const RELAXED_CONFIDENCE_PENALTY = 0.85;
+/**
+ * 形成中ダブルトップ / ボトムの形成期間の上限の日数由来。**実効値はバー数**で、
+ * `getDoubleFormingBarParams` が `patterns/bar-thresholds.ts` の換算を通して決める。
+ */
 const MAX_FORMING_DAYS = 90;
 const FORMING_PEAK_TOLERANCE_PCT = 0.05;
 const FORMING_BASE_COMPLETION = 0.66;
 const FORMING_COMPLETION_RANGE = 0.34;
 const MIN_FORMING_COMPLETION = 0.4;
 /**
- * 形成中ダブルトップ / ボトムが要求する最小の形成日数。
- * `patterns/min-bars.ts` が「時間足 → 最小要求バー数」を導出するのに参照するため export する。
+ * 形成中ダブルトップ / ボトムの形成期間の下限の日数由来。**実効値はバー数**で、
+ * `getDoubleFormingBarParams` が `patterns/bar-thresholds.ts` の換算を通して決める。
+ * ここの日数は「その値がどこから来たか」を示す注記であって、暦日数の要件ではない。
  */
 export const MIN_PATTERN_DAYS = 14;
 const FORMING_TOLERANCE_MULTIPLIER = 1.5;
 const FORMING_VALLEY_INVALID_PCT = 0.02;
+
+/**
+ * 形成中ダブルトップ / ボトムが要求する形成バー数のレンジ
+ * （`formationBars = lastIdx - 左ピボット.idx`）。
+ *
+ * 旧実装は `patternDays = Math.round(formationBars × 手書き daysPerBar)` を作って 14〜90 日で
+ * 判定していた。手書きの換算（`1day`→1 / `1week`→7 / **それ以外→1**）は intraday と `1month` を
+ * 「1 日 / 本」に落とすため、`1month` は 14 バー = 14 ヶ月を要求し、intraday では日数閾値が
+ * 偶然そのままバー数閾値として効いていた（issue #118 問題 3）。
+ *
+ * `detect_triples` の形成中判定（`getTripleFormingBarParams`）と同じ換算に統一してある。
+ * `patterns/min-bars.ts` が「時間足 → 最小要求バー数」を導出するのに参照するため export する。
+ */
+export function getDoubleFormingBarParams(tf: string): { minBars: number; maxBars: number } {
+	return patternBarRange(tf, MIN_PATTERN_DAYS, MAX_FORMING_DAYS);
+}
 
 type Pcand = (arg: Parameters<typeof pushCand>[1]) => void;
 
@@ -467,9 +483,8 @@ function tryFormingDoubleTop(ctx: DetectContext): PatternEntry | null {
 	if (completion < MIN_FORMING_COMPLETION) return null;
 
 	const formationBars = Math.max(0, lastIdx - leftPeak.idx);
-	const daysPerBar = formingReversalDaysPerBar(ctx.type);
-	const patternDays = Math.round(formationBars * daysPerBar);
-	if (patternDays < MIN_PATTERN_DAYS || patternDays > MAX_FORMING_DAYS) return null;
+	const formingBars = getDoubleFormingBarParams(ctx.type);
+	if (formationBars < formingBars.minBars || formationBars > formingBars.maxBars) return null;
 
 	const trend = validatePriorTrend(candles, leftPeak.idx, lastIdx - leftPeak.idx, 'up_or_sideways');
 	if (!trend.ok) {
@@ -537,7 +552,7 @@ function tryFormingDoubleBottom(ctx: DetectContext): PatternEntry | null {
 	const lastIdx = candles.length - 1;
 	const currentPrice = Number(candles[lastIdx]?.close ?? NaN);
 	const isoAt = (i: number) => candles[i]?.isoTime || '';
-	const daysPerBar = formingReversalDaysPerBar(ctx.type);
+	const formingBars = getDoubleFormingBarParams(ctx.type);
 
 	const confirmedValleys = allValleys.filter((v) => v.idx < lastIdx - 2);
 	if (confirmedValleys.length < 2) return null;
@@ -566,8 +581,7 @@ function tryFormingDoubleBottom(ctx: DetectContext): PatternEntry | null {
 		if (completion < 0.4) continue;
 
 		const formationBars = Math.max(0, lastIdx - leftValley.idx);
-		const patternDays = Math.round(formationBars * daysPerBar);
-		if (patternDays < MIN_PATTERN_DAYS || patternDays > MAX_FORMING_DAYS) continue;
+		if (formationBars < formingBars.minBars || formationBars > formingBars.maxBars) continue;
 
 		const trend = validatePriorTrend(candles, leftValley.idx, lastIdx - leftValley.idx, 'down_or_sideways');
 		if (!trend.ok) {

@@ -17,13 +17,12 @@ import { describe, expect, it } from 'vitest';
 import { CandleTypeEnum } from '../../src/schema/base.js';
 import { structuralFloorBars } from '../../tools/patterns/bar-thresholds.js';
 import { getDefaultParamsForTf } from '../../tools/patterns/config.js';
-import { MIN_PATTERN_DAYS } from '../../tools/patterns/detect_doubles.js';
-import { FORMING_MIN_DAYS as HS_FORMING_MIN_DAYS } from '../../tools/patterns/detect_hs.js';
+import { getDoubleFormingBarParams } from '../../tools/patterns/detect_doubles.js';
+import { getHsFormingBarParams } from '../../tools/patterns/detect_hs.js';
 import { getFlagParams } from '../../tools/patterns/detect_pennants.js';
 import { getTriangleParams } from '../../tools/patterns/detect_triangles.js';
 import { getTripleFormingBarParams } from '../../tools/patterns/detect_triples.js';
 import { getWedgeBarParams } from '../../tools/patterns/detect_wedges.js';
-import { formingReversalDaysPerBar } from '../../tools/patterns/helpers.js';
 import {
 	isDetectorReachable,
 	MIN_BARS_DETECTORS,
@@ -105,40 +104,55 @@ describe('minBarsForDetector — 導出式', () => {
 		}
 	});
 
-	describe('形成中の反転パターン — Math.round の境界', () => {
-		// detect_doubles / detect_hs は手書きの daysPerBar で
-		// patternDays = Math.round(formationBars × daysPerBar) を作って日数で判定する
-		// （バー数への統一は別 PR の担当）。detect_triples はバー数判定に移行済みなので
-		// ここではなく下の専用テストで検証する。
-		const cases: Array<{ detector: MinBarsDetector; minDays: number; dpb: (tf: string) => number }> = [
-			{ detector: 'forming_double', minDays: MIN_PATTERN_DAYS, dpb: formingReversalDaysPerBar },
-			{ detector: 'forming_hs', minDays: HS_FORMING_MIN_DAYS, dpb: formingReversalDaysPerBar },
+	describe('形成中の反転パターン — 形成バー数の境界', () => {
+		// double / triple / H&S は同じ形の判定をする: formationBars ∈ [minBars, maxBars]。
+		// 窓が bars 本のとき取りうる最大の formationBars は bars - 1（添字差）なので、
+		// 導出値は minBars + 1 でなければならない。
+		const cases: Array<{ detector: MinBarsDetector; params: (tf: string) => { minBars: number; maxBars: number } }> = [
+			{ detector: 'forming_double', params: getDoubleFormingBarParams },
+			{ detector: 'forming_hs', params: getHsFormingBarParams },
+			{ detector: 'forming_triple', params: getTripleFormingBarParams },
 		];
 
-		for (const { detector, minDays, dpb } of cases) {
-			it(`${detector}: 導出値ちょうどで閾値を満たし、1 本足りないと満たさない`, () => {
+		for (const { detector, params } of cases) {
+			it(`${detector}: 形成バー数の下限ちょうどで通り、1 本足りないと通らない`, () => {
 				for (const tf of ALL_TIMEFRAMES) {
+					const { minBars, maxBars } = params(tf);
 					const bars = minBarsForDetector(tf, detector);
-					// 窓が bars 本のとき、取りうる最大の formationBars は bars - 1（添字差）。
-					const patternDaysAt = (windowBars: number) => Math.round((windowBars - 1) * dpb(tf));
-					expect(patternDaysAt(bars), `${tf} × ${detector}`).toBeGreaterThanOrEqual(minDays);
-					expect(patternDaysAt(bars - 1), `${tf} × ${detector}（1 本不足）`).toBeLessThan(minDays);
+					expect(bars - 1, `${tf} × ${detector}`).toBe(minBars);
+					expect(bars - 2, `${tf} × ${detector}（1 本不足）`).toBeLessThan(minBars);
+					// 下限が上限を超えると種別ごと 0 件になる（1week / 1month で反転しやすい）
+					expect(maxBars, `${tf} × ${detector}: minBars <= maxBars`).toBeGreaterThanOrEqual(minBars);
 				}
 			});
 		}
-	});
 
-	it('forming_triple: 形成バー数の下限ちょうどで通り、1 本足りないと通らない', () => {
-		// detect_triples はバー数で判定する: formationBars ∈ [minBars, maxBars]。
-		// 窓が bars 本のとき取りうる最大の formationBars は bars - 1（添字差）。
-		for (const tf of ALL_TIMEFRAMES) {
-			const { minBars, maxBars } = getTripleFormingBarParams(tf);
-			const bars = minBarsForDetector(tf, 'forming_triple');
-			expect(bars - 1, `${tf}`).toBe(minBars);
-			expect(bars - 2, `${tf}（1 本不足）`).toBeLessThan(minBars);
-			// 下限が上限を超えると種別ごと 0 件になる（1week / 1month で反転しやすい）
-			expect(maxBars, `${tf}: minBars <= maxBars`).toBeGreaterThanOrEqual(minBars);
-		}
+		it('日数由来が同じ forming_hs と forming_triple は全時間足で同値', () => {
+			// どちらも 21〜90 日由来なので、換算後も一致していなければ換算経路が分岐している。
+			for (const tf of ALL_TIMEFRAMES) {
+				expect(getHsFormingBarParams(tf), tf).toEqual(getTripleFormingBarParams(tf));
+			}
+		});
+
+		it('手書き daysPerBar の受理域には戻っていない（#118 問題 3 の回帰）', () => {
+			// 旧実装は patternDays = Math.round(formationBars × (1day→1 / 1week→7 / それ以外→1))
+			// を 14〜90 日 / 21〜90 日で判定していた。1week の受理域は [2, 12] / [3, 12] で、
+			// 構造的下限（25 本）を下回っており実質検出不能だった。
+			const legacyDaysPerBar = (tf: string) => (tf === '1day' ? 1 : tf === '1week' ? 7 : 1);
+			const legacyRange = (tf: string, minDays: number) => ({
+				// Math.round(x) >= minDays ⟺ x >= minDays - 0.5
+				minBars: Math.ceil((minDays - 0.5) / legacyDaysPerBar(tf)),
+				maxBars: Math.floor((90 + 0.5) / legacyDaysPerBar(tf) - Number.EPSILON),
+			});
+			expect(legacyRange('1week', 14)).toEqual({ minBars: 2, maxBars: 12 });
+			expect(legacyRange('1week', 21)).toEqual({ minBars: 3, maxBars: 12 });
+			expect(getDoubleFormingBarParams('1week').minBars).toBeGreaterThan(legacyRange('1week', 14).maxBars);
+			expect(getHsFormingBarParams('1week').minBars).toBeGreaterThan(legacyRange('1week', 21).maxBars);
+			// 1month は旧実装が 14 バー = 14 ヶ月を要求していた。バー数統一後は構造的下限に
+			// 持ち上がるので、閾値は緩むのではなく厳しくなる（PR の意図した向き）。
+			expect(getDoubleFormingBarParams('1month').minBars).toBe(structuralFloorBars('1month'));
+			expect(getDoubleFormingBarParams('1month').minBars).toBeGreaterThan(legacyRange('1month', 14).minBars);
+		});
 	});
 
 	it('completed_wedge: generateWindows が窓を 1 つ生成できる最小本数（windowSizeMin + 1）', () => {
@@ -234,7 +248,9 @@ describe('docs/tools.md 「`limit` の実効下限」表との一致', () => {
 		const headerCells = rows.get('時間足');
 		expect(headerCells, 'docs §2: ヘッダ行が「時間足」で始まっていない').toBeDefined();
 		const columnToDetector: Record<string, MinBarsDetector> = {
+			'forming double（14日由来）': 'forming_double',
 			'forming triple（21日由来）': 'forming_triple',
+			'forming H&S（21日由来）': 'forming_hs',
 			'完成済み wedge（25日窓由来）': 'completed_wedge',
 			'flag / pennant（最小 1+2日由来）': 'flag_pennant',
 		};

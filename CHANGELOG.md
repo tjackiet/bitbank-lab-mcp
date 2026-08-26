@@ -7,6 +7,34 @@
 
 ## [Unreleased]
 
+### Changed（**挙動変更**: `detect_doubles` / `detect_hs` の手書き `daysPerBar` を廃止し、バー基準に統一した）
+- **形成中 double / H&S の 4 箇所の手書き `daysPerBar` を廃止した（#118 問題 3）。** `helpers.formingReversalDaysPerBar`（`1day`→1 / `1week`→7 / **それ以外→1**）を削除し、判定を `detect_triples` と同じ形（`formationBars ∈ [minBars, maxBars]`）に揃えた。換算は `getDoubleFormingBarParams` / `getHsFormingBarParams` から `patterns/bar-thresholds.ts` の `patternBarRange` を通す。**これで全検出器が同じ換算に乗った。**
+- **受理する形成バー数レンジ**（`formationBars` = `lastIdx - 左ピボット.idx`）:
+
+  | 時間足 | double 旧 | double 新 | H&S 旧 | H&S 新 |
+  |---|---|---|---|---|
+  | `1min` / `5min` | [14, 90] | **[30, 193]** | [21, 90] | **[30, 129]** |
+  | `15min` / `30min` / `1hour` | [14, 90] | **[34, 219]** | [21, 90] | **[34, 146]** |
+  | `4hour` / `8hour` | [14, 90] | **[42, 270]** | [21, 90] | **[42, 180]** |
+  | `12hour` | [14, 90] | **[28, 180]** | [21, 90] | **[42, 180]** |
+  | `1day` | [14, 90] | **[23, 148]** | [21, 90] | **[23, 99]** |
+  | `1week` | [2, 12] | **[25, 161]** | [3, 12] | **[25, 107]** |
+  | `1month` | [14, 90] | **[29, 186]** | [21, 90] | **[29, 124]** |
+
+- **`1month` は「緩む」ではなく「厳しくなる」。** #118 は「`1month` は 14 バー = 14 ヶ月を要求しており、本来の 14 日 ≒ 0.47 ヶ月より約 30 倍厳しい」と記録していたが、PR B が入れた**構造的下限のクランプ**が 0.47 バーを 29 バーへ持ち上げるため、正味は 14 → 29 バー（約 2 倍**厳しく**）動く。「14 日ぶんの暦日数」に相当するバー数は月足では 3 ピボットすら張れない値なので、下限で潰すのが `patterns/bar-thresholds.ts` の設計判断そのものである。**既定 `limit`（90）では `1month` の形成中 double / H&S の検出件数は減る**（合成データの掃引で double 66 → 53 / H&S 54 → 53 ケース）。
+- **実際に件数が増えるのは `1week`。** 旧実装の受理域は `formationBars ∈ [2, 12]`（double）/ `[3, 12]`（H&S）で、`1week` の構造的下限 25 本を**上限が下回っていた**。90 本の窓で形成中 double / H&S の形状を 85 通り掃引して**変更前は 0 件**、変更後は 58 件が検出される。最小側だけを見る到達性テスト（不変条件 9）は要求 3〜4 本を「到達可能」と判定しており、**最大側の潰れを見逃していた**。
+- **最小側は全時間足で厳しく、最大側は全時間足で緩む。** 旧実装は `1week` 以外の全時間足で `formationBars ≤ 90` に張り付いており（`MAX_FORMING_DAYS=90` がそのままバー数として効いていた）、既定 `limit`（90）では上限が実質無効だった。既定 `limit` を超える `limit` を指定したときに差が出る（例: `limit=120` の `1day` double は旧 90 本 → 新 113 本まで受理）。
+- **`docs/tools.md` の「`limit` の実効下限」§2 の表に forming double / forming H&S の列を追加した。** 表は `minBarsForDetector` からの導出値で、`tests/patterns/min-bars.test.ts` が docs をパースして一致を検証する。最小要求バー数は `1day` で double 15 → 24 / H&S 22 → 24、`1week` で 3 → 26 / 4 → 26、`1month` で 15 → 30 / 22 → 30。**全組み合わせが既定 `limit`（90）以下**なので、PR A の到達性 allowlist は空のままである。
+- **`helpers.daysPerBar`（`barsPerDay` の逆数）も削除した。** 唯一の用途だった `patternDays` の算出が無くなり、production の呼び出し元が 0 になったため。`patterns/` に「バー数 → 日数」の関数を残すと、日数を閾値のプリミティブに戻す経路が開いたままになる。日数 → バー数の換算率（`barsPerDay`）は引き続き `bar-thresholds.ts` / `detect_triangles` / `detect_pennants` が使う。
+- **テストの期待値更新は 3 件の fixture 延長。** いずれも `1day` の形成中 double が要求する `formationBars ≥ 23` に届かなくなったもので、形は変えず末尾 / 押し目を伸ばしただけ:
+  - `tests/patterns/invariants.test.ts` の `buildFormingDoubleBottomCandles`（`formationBars` 19 → 25）。中間の山をブレイクバッファ 1.5% 込みで超えないよう末尾は 98 で頭打ちにしてある。
+  - `tests/detect_patterns_fixtures.test.ts` の同名 fixture（同上）。`limit` を直値 24 から `FORMING_DOUBLE_BOTTOM_BARS` に置き換え、`range.end` の期待値も同じ定数から導出するようにした。
+  - `tests/detect_patterns_fixtures.test.ts` の `buildUptrendThenFakeDoubleBottomCandles`（`formationBars` 14 → 25）。右谷までの押し目を 5 本から 16 本に伸ばした。旧 fixture では形成バー数の段で先に弾かれ、このテストが検証したい `prior_trend_mismatch` の段に届かない。
+- **実検出の回帰テストを全時間足に広げた**（`tests/patterns/default-limit-detection.test.ts`）。合成データを既定 `limit`（90 本）ぶん与えて、11 時間足すべてで形成中 double_top / head_and_shoulders が実際に返ることを固定する。到達性テスト（不変条件 9）は**最小側の算術しか見ない**ので、`1week` のような「最小側は到達可能・最大側が潰れている」ケースはここでしか捕まらない。
+- **`docs/tools.md` §2 の表が「閾値そのもの」ではなく「必要なスキャン窓の本数」であることを明記した。** 表の直上の式（`clamp(round(日数 × barsPerDay), 構造的下限, 構造的下限 × 2)`）が返すのはパターンの大きさの閾値で、表はそこに各検出器の端点ぶん（形成中の反転 3 種・完成済み wedge・flag / pennant は +1、三角形は +6）を足した値。式の値をそのまま `limit` に使うと 1 本足りない（例: `1day` の forming double は式 23 に対し表 24）。この単位の取り違えは本 PR 以前からあったが、forming double / H&S の列を足したことで表面化した（CodeRabbit review, PR #122）。
+- **形成中 double / H&S のバー数レンジを境界値で固定した**（`tests/patterns/default-limit-detection.test.ts`）。既定 `limit` のテストは `formationBars = 60` の 1 点しか見ないので、下限 / 上限を取り違えていても 60 を受理する限り通る。全 11 時間足 × 両検出器で `minBars - 1` / `minBars` / `maxBars` / `maxBars + 1` の受理・棄却が反転することを検証する。形状生成は `formationBars` だけを可変にしてあるので、隣り合う 2 点の差はレンジ判定に帰属できる（CodeRabbit review, PR #122）。
+- **PR B の「`detect_doubles` / `detect_hs` は対象外（別 PR）」を解消した。** `patterns/min-bars.ts` は日数からの導出（`barsForFormationDays`）を持たなくなり、全検出器がバー数レンジからの導出に一本化されている。
+
 ### Changed（**挙動変更**: パターン閾値のプリミティブを日数からバー数に統一し、上限クランプを入れた）
 - **`detect_triples` / `detect_wedges` / `detect_triangles` / `detect_pennants` の閾値を「日数 × `barsPerDay`」からバー数に移した（#118 問題 1 / 2）。** 換算は `tools/patterns/bar-thresholds.ts` に集約し、`minBars = clamp(round(days × barsPerDay(tf)), structuralFloorBars(tf), patternBarsCap(tf))` の 1 形に統一している。**検出件数が広く変わる。**
 - **原因は閾値が小さすぎることではなく大きすぎること。** 「25 日窓」は `1hour` で 600 本、`1min` で 36000 本を要求し、既定 `limit`（90）はもちろん `limit` のスキーマ上限（365）でも到達不能だった。必要なのは floor ではなく **cap** ——`detect_wedges` の `MIN_STRUCTURAL = 15` 方式（floor のみ）では解けない。`max(15, round(25 × bpd))` の floor 側が選ばれるのは `1week` / `1month` だけで、`1day` 以下では日数換算値が必ず floor を上回るため、intraday では一度も発火しない。
