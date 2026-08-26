@@ -20,11 +20,13 @@ import type {
 } from './types.js';
 
 // ---------------------------------------------------------------------------
-// 時間足スケーリング — バー数 ↔ 日数の変換
+// 時間足スケーリング — 日数 → バー数の換算
 //
 // 検出器の閾値（ウィンドウサイズ・タッチギャップ・形成中ウィンドウ等）は
 // 元々日足前提のバー数で書かれていたため、他時間軸では意味がずれていた。
-// 「日数」を基準に統一し、各検出器で bars-per-day を介して換算する。
+// 現在の**プリミティブはバー数**で、日数は「その値がどこから来たか」を示す注記に過ぎない
+// （`patterns/bar-thresholds.ts` を参照）。ここが持つのは換算率だけで、
+// 逆方向（バー数 → 日数）の関数は置かない——閾値を日数で判定する検出器はもう無い。
 // ---------------------------------------------------------------------------
 
 /**
@@ -64,42 +66,6 @@ export function barsPerDay(tf: string): number {
 		default:
 			return 1;
 	}
-}
-
-/**
- * 時間足ごとの「1バーあたりの日数」を返す（`barsPerDay` の逆数）。
- *
- * 形成中パターンの patternDays 計算（formationBars × daysPerBar）で
- * intraday / 1week / 1month を正しく日数換算するために使う。
- *
- * @param tf - 時間足文字列（`barsPerDay` 参照）
- * @returns 1 バーあたりの日数
- */
-export function daysPerBar(tf: string): number {
-	return 1 / barsPerDay(tf);
-}
-
-/**
- * 形成中の反転パターン（`detect_doubles` / `detect_hs`）が使っている
- * **手書きの**「1バーあたりの日数」。`daysPerBar` とは値が違う。
- *
- * `1day → 1` / `1week → 7` / **それ以外はすべて 1**、という元の式
- * （`ctx.type === '1day' ? 1 : ctx.type === '1week' ? 7 : 1`）をそのまま関数化したもの。
- * intraday と `1month` が「1 日/本」に落ちるため:
- *
- * - intraday: 日数閾値（14 日 / 21 日）が実質バー数閾値として効く（結果的に窓に収まっている）
- * - `1month`: 14 バー = 14 ヶ月を要求してしまい、本来の 14 日 ≒ 0.47 ヶ月より約 30 倍厳しい
- *
- * **これは既知の不整合**（issue #118 問題 3）で、`daysPerBar` へ寄せると intraday の
- * forming double / H&S が検出不能になるため、単位の設計判断とセットでしか直せない。
- * ここでは挙動を変えずに 4 箇所の重複を 1 箇所に寄せ、`patterns/min-bars.ts` が
- * 同じ式を参照できるようにするだけに留める。
- *
- * @param tf - 時間足文字列（`barsPerDay` 参照）
- * @returns 1 バーあたりの日数（`daysPerBar` とは一致しない）
- */
-export function formingReversalDaysPerBar(tf: string): number {
-	return tf === '1day' ? 1 : tf === '1week' ? 7 : 1;
 }
 
 // ---------------------------------------------------------------------------

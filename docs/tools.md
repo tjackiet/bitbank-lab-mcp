@@ -432,25 +432,27 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 値の出どころを示す注記であって、暦日数の要件ではない）。上限を構造的下限の定数倍に置いてあるので、
 **既定 `limit`=90 ではどの時間足・どの種別も到達可能**。主な要求本数:
 
-| 時間足 | forming triple（21日由来） | 完成済み wedge（25日窓由来） | flag / pennant（最小 1+2日由来） |
-|---|---|---|---|
-| `1min` | 31 | 31 | 61 |
-| `5min` | 31 | 31 | 61 |
-| `15min` | 35 | 35 | 69 |
-| `30min` | 35 | 35 | 69 |
-| `1hour` | 35 | 35 | 59 |
-| `4hour` | 43 | 43 | 19 |
-| `8hour` | 43 | 43 | 10 |
-| `12hour` | 43 | 43 | 7 |
-| `1day` | 24 | 26 | 6 |
-| `1week` | 26 | 26 | 6 |
-| `1month` | 30 | 30 | 6 |
+| 時間足 | forming double（14日由来） | forming triple（21日由来） | forming H&S（21日由来） | 完成済み wedge（25日窓由来） | flag / pennant（最小 1+2日由来） |
+|---|---|---|---|---|---|
+| `1min` | 31 | 31 | 31 | 31 | 61 |
+| `5min` | 31 | 31 | 31 | 31 | 61 |
+| `15min` | 35 | 35 | 35 | 35 | 69 |
+| `30min` | 35 | 35 | 35 | 35 | 69 |
+| `1hour` | 35 | 35 | 35 | 35 | 59 |
+| `4hour` | 43 | 43 | 43 | 43 | 19 |
+| `8hour` | 43 | 43 | 43 | 43 | 10 |
+| `12hour` | 29 | 43 | 43 | 43 | 7 |
+| `1day` | 24 | 24 | 24 | 26 | 6 |
+| `1week` | 26 | 26 | 26 | 26 | 6 |
+| `1month` | 30 | 30 | 30 | 30 | 6 |
 
 `detect_triangles` も同じ換算に乗っている（最小窓 = 構造的下限。要求本数は `1min` / `5min` が 21、
 `1hour` 以下が 23、`4hour`〜`12hour` が 27、`1day` 29、`1week` 31、`1month` 35）。
-**`detect_doubles` / `detect_hs` の形成中判定だけは日数のまま**で、独自の bars-per-day
-（`1day`→1 / `1week`→7 / それ以外→1）を使う。intraday では実質バー数閾値として効くため既定
-`limit` に収まっているが、`1month` は 14 バー = 14 ヶ月を要求しており単位が誤っている（#118 問題 3）。
+**形成中の反転パターン 3 種（double / triple / H&S）は同じ換算・同じ形の判定**で、
+形成バー数（double / triple は `lastIdx - 左ピボット.idx`、H&S は `右肩.idx - 左肩.idx`）を
+バー数レンジと突き合わせる。
+日数由来が同じ 21 日の triple と H&S は全時間足で同値になり、14 日由来の double だけが
+`12hour` で下側に外れる（`round(14 × 2) = 28` が上限クランプ 42 の内側に収まるため）。
 
 > 上の 2 つの表は手書きではない。構造的下限は `tools/patterns/scan-window.ts`（`assessScanWindow`）、
 > パターンサイズ由来の下限は `tools/patterns/min-bars.ts`（`minBarsForDetector`）から導出した値で、
@@ -471,9 +473,12 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 > `limit` の上限 365 でも到達不能だった。`4hour` も既定 `limit=90` では両方とも出ず、`limit≥151` が
 > 必要だった（#118 問題 1 / 2）。現在はいずれも既定 `limit` で到達できるので、この回避策は不要。
 
-`detect_doubles` / `detect_hs` の forming 判定だけは `helpers.daysPerBar` ではなく独自の換算
-（`1day`→1 / `1week`→7 / **それ以外→1**）を使っており、この表の対象外。intraday では
-日数閾値が実質バー数閾値（14〜90 本 / 21〜90 本）として効き、月足では約 30 倍厳しく効く。
+> 形成中 double / H&S も以前は独自の換算（`1day`→1 / `1week`→7 / **それ以外→1**）を使っており、
+> この表の対象外だった（#118 問題 3）。**バー数への統一で閾値の向きが時間足ごとに変わる**:
+> 最小側は全時間足で厳しくなり（例: `1day` の double は 14 → 23 本）、最大側は緩む
+> （旧実装は全時間足で `formationBars ≤ 90` に張り付いていた）。`1week` は旧実装の受理域が
+> `formationBars ∈ [2, 12]` と構造的下限（25 本）を下回っており、**形成中 double / H&S が
+> 実質検出不能**だった。詳細は CHANGELOG を参照。
 
 ### 内部仕様メモ
 

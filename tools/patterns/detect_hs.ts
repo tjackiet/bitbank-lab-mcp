@@ -10,7 +10,8 @@
  * されるのを防ぐ。ネックラインは 2 点を結ぶ傾きつきラインとして外挿する。
  */
 import { generatePatternDiagram } from '../../lib/pattern-diagrams.js';
-import { computeTargetReach, finalizeConf, formingReversalDaysPerBar, periodScoreDays } from './helpers.js';
+import { patternBarRange } from './bar-thresholds.js';
+import { computeTargetReach, finalizeConf, periodScoreDays } from './helpers.js';
 import { clamp01, marginFromRelDev, relDev } from './regression.js';
 import {
 	HS_NECKLINE_MAX_PCT,
@@ -56,15 +57,37 @@ const RELAXED_FACTORS = [
 ] as const;
 
 const FORMING_RIGHT_TOLERANCE_PCT = 0.08;
+/**
+ * 形成中 H&S / 逆 H&S の形成期間の上限の日数由来。**実効値はバー数**で、
+ * `getHsFormingBarParams` が `patterns/bar-thresholds.ts` の換算を通して決める。
+ */
 const FORMING_MAX_DAYS = 90;
 /**
- * 形成中 H&S / 逆 H&S が要求する最小の形成日数。
- * `patterns/min-bars.ts` が「時間足 → 最小要求バー数」を導出するのに参照するため export する。
+ * 形成中 H&S / 逆 H&S の形成期間の下限の日数由来。**実効値はバー数**で、
+ * `getHsFormingBarParams` が `patterns/bar-thresholds.ts` の換算を通して決める。
+ * ここの日数は「その値がどこから来たか」を示す注記であって、暦日数の要件ではない。
  */
 export const FORMING_MIN_DAYS = 21;
 const FORMING_MIN_COMPLETION = 0.4;
 // detect_triples.ts と同値。形状不十分な forming 候補を上位表示させないための最低 confidence。
 const FORMING_MIN_CONFIDENCE = 0.5;
+
+/**
+ * 形成中 H&S / 逆 H&S が要求する形成バー数のレンジ
+ * （`formationBars = 右肩.idx - 左肩.idx`）。
+ *
+ * 旧実装は `patternDays = Math.round(formationBars × 手書き daysPerBar)` を作って 21〜90 日で
+ * 判定していた。手書きの換算（`1day`→1 / `1week`→7 / **それ以外→1**）は intraday と `1month` を
+ * 「1 日 / 本」に落とすため、`1month` は 21 バー = 21 ヶ月を要求し、intraday では日数閾値が
+ * 偶然そのままバー数閾値として効いていた（issue #118 問題 3）。
+ *
+ * `detect_triples` の形成中判定（`getTripleFormingBarParams`）と同じ換算に統一してある
+ * （日数由来も 21〜90 日で同値なので、両者の値は時間足を問わず一致する）。
+ * `patterns/min-bars.ts` が「時間足 → 最小要求バー数」を導出するのに参照するため export する。
+ */
+export function getHsFormingBarParams(tf: string): { minBars: number; maxBars: number } {
+	return patternBarRange(tf, FORMING_MIN_DAYS, FORMING_MAX_DAYS);
+}
 
 // ── ネックラインブレイク検出（detect_doubles / detect_triples と同値の 1.5% バッファ） ──
 // H&S は傾きつきネックライン（谷1→谷2 / 山1→山2）を外挿して判定する。
@@ -784,7 +807,7 @@ function tryFormingHS(ctx: DetectContext): DeduplicablePattern | null {
 	const lastIdx = candles.length - 1;
 	const currentPrice = Number(candles[lastIdx]?.close ?? NaN);
 	const isoAt = (i: number) => candles[i]?.isoTime || '';
-	const daysPerBar = formingReversalDaysPerBar(ctx.type);
+	const formingBars = getHsFormingBarParams(ctx.type);
 
 	const confirmedPeaks = allPeaks.filter((p) => p.idx < lastIdx - 2);
 	if (confirmedPeaks.length < 2) return null;
@@ -831,8 +854,7 @@ function tryFormingHS(ctx: DetectContext): DeduplicablePattern | null {
 	if (completion < FORMING_MIN_COMPLETION) return null;
 
 	const formationBars = Math.max(0, rightShoulder.idx - left.idx);
-	const patternDays = Math.round(formationBars * daysPerBar);
-	if (patternDays < FORMING_MIN_DAYS || patternDays > FORMING_MAX_DAYS) return null;
+	if (formationBars < formingBars.minBars || formationBars > formingBars.maxBars) return null;
 
 	const trend = validatePriorTrend(candles, left.idx, rightShoulder.idx - left.idx, 'up_or_sideways');
 	if (!trend.ok) {
@@ -923,7 +945,7 @@ function tryFormingInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 	const lastIdx = candles.length - 1;
 	const currentPrice = Number(candles[lastIdx]?.close ?? NaN);
 	const isoAt = (i: number) => candles[i]?.isoTime || '';
-	const daysPerBar = formingReversalDaysPerBar(ctx.type);
+	const formingBars = getHsFormingBarParams(ctx.type);
 
 	const confirmedValleys = allValleys.filter((v) => v.idx < lastIdx - 2);
 	if (confirmedValleys.length < 2) return null;
@@ -970,8 +992,7 @@ function tryFormingInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 	if (completion < FORMING_MIN_COMPLETION) return null;
 
 	const formationBars = Math.max(0, rightShoulder.idx - left.idx);
-	const patternDays = Math.round(formationBars * daysPerBar);
-	if (patternDays < FORMING_MIN_DAYS || patternDays > FORMING_MAX_DAYS) return null;
+	if (formationBars < formingBars.minBars || formationBars > formingBars.maxBars) return null;
 
 	const trend = validatePriorTrend(candles, left.idx, rightShoulder.idx - left.idx, 'down_or_sideways');
 	if (!trend.ok) {

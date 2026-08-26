@@ -12,9 +12,9 @@
  * 個々の組み合わせが到達可能かどうかを人手で追えない。ここで機械可読にしておけば、
  * 到達性を CI で固定でき、閾値を動かしたときに何が到達不能になるかが即座に分かる。
  *
- * 閾値のプリミティブは `patterns/bar-thresholds.ts` でバー数に統一済み
- * （`detect_triples` / `detect_wedges` / `detect_triangles` / `detect_pennants`）。
- * `detect_doubles` / `detect_hs` の形成中判定だけが日数のまま残っている。
+ * 閾値のプリミティブは `patterns/bar-thresholds.ts` でバー数に統一済み。
+ * **全検出器がこの換算に乗っている**ので、ここは各検出器の「バー数レンジ」を
+ * スキャン窓の本数（添字ではなく本数）に読み替えるだけでよい。
  *
  * ## 何を返すか / 返さないか
  *
@@ -37,20 +37,19 @@
  *   窓が足りなくても候補が消えない。ハードなゲートではないのでここでは扱わない。
  */
 
-import { MIN_PATTERN_DAYS as DOUBLE_FORMING_MIN_DAYS } from './detect_doubles.js';
-import { FORMING_MIN_DAYS as HS_FORMING_MIN_DAYS } from './detect_hs.js';
+import { getDoubleFormingBarParams } from './detect_doubles.js';
+import { getHsFormingBarParams } from './detect_hs.js';
 import { getFlagParams } from './detect_pennants.js';
 import { getTriangleParams } from './detect_triangles.js';
 import { getTripleFormingBarParams } from './detect_triples.js';
 import { getWedgeBarParams } from './detect_wedges.js';
-import { formingReversalDaysPerBar } from './helpers.js';
 
 /**
  * パターンサイズの下限を持つ検出器の識別子。
  *
- * `docs/tools.md` §2 の表が持つのは `forming_triple` / `completed_wedge` / `flag_pennant` の
- * 3 列だが、同じクラスの閾値を持つ `forming_double` / `forming_hs` / `triangle` も
- * ここでは併せて導出する（到達性テストの網羅性のため）。
+ * `docs/tools.md` §2 の表が持つのは `forming_double` / `forming_triple` / `forming_hs` /
+ * `completed_wedge` / `flag_pennant` の 5 列。`triangle` は同じクラスの閾値を持つが表では
+ * 散文で触れているだけなので、ここで併せて導出する（到達性テストの網羅性のため）。
  */
 export const MIN_BARS_DETECTORS = [
 	'forming_double',
@@ -64,21 +63,6 @@ export const MIN_BARS_DETECTORS = [
 export type MinBarsDetector = (typeof MIN_BARS_DETECTORS)[number];
 
 /**
- * `Math.round(formationBars × daysPerBar) >= minDays` を満たせる最小のスキャン窓本数。
- *
- * 各検出器の形成中判定は `patternDays = Math.round(formationBars * daysPerBar)` を作り、
- * `patternDays < minDays` で弾く。`Math.round` は 0.5 を切り上げるので
- *
- *   `Math.round(x) >= minDays` ⟺ `x >= minDays - 0.5`
- *
- * であり、`formationBars >= (minDays - 0.5) × barsPerDay` が要る。`formationBars` は
- * 添字の差（`lastIdx - firstPivot.idx`）なので、窓としてはさらに 1 本必要。
- */
-function barsForFormationDays(minDays: number, barsPerDayValue: number): number {
-	return Math.ceil((minDays - 0.5) * barsPerDayValue) + 1;
-}
-
-/**
  * その時間足でその検出器が候補を作りうる最小のスキャン窓本数を返す。
  *
  * 「この本数あれば検出できる」ではなく「これ未満だとサイズ閾値で構造的に 0 件」という下限。
@@ -86,18 +70,17 @@ function barsForFormationDays(minDays: number, barsPerDayValue: number): number 
  */
 export function minBarsForDetector(tf: string, detector: MinBarsDetector): number {
 	switch (detector) {
-		// detect_doubles.ts: patternDays = Math.round(formationBars × 手書き daysPerBar)、
-		// formationBars = lastIdx - leftPivot.idx。手書き daysPerBar は intraday / 1month が
-		// 1 に落ちる（issue #118 問題 3）ので `formingReversalDaysPerBar` を使う。
+		// 形成中の反転パターン 3 種は同じ形をしている: `formationBars` をバー数レンジと
+		// 突き合わせる（`patterns/bar-thresholds.ts` の換算）。`formationBars` は添字の差
+		// （double / triple は `lastIdx - 左ピボット.idx`、H&S は `右肩.idx - 左肩.idx`）なので、
+		// 窓としては 1 本多く要る。H&S の右肩は確定ピボットのこともあり、その場合は
+		// `右肩.idx < lastIdx` ぶんさらに広い窓が要る——ここが返すのは下限なのでこれでよい。
 		case 'forming_double':
-			return barsForFormationDays(DOUBLE_FORMING_MIN_DAYS, 1 / formingReversalDaysPerBar(tf));
+			return getDoubleFormingBarParams(tf).minBars + 1;
 
-		// detect_hs.ts: 同上（閾値だけ 21 日）。
 		case 'forming_hs':
-			return barsForFormationDays(HS_FORMING_MIN_DAYS, 1 / formingReversalDaysPerBar(tf));
+			return getHsFormingBarParams(tf).minBars + 1;
 
-		// detect_triples.ts: 形成中判定はバー数で行う（`patterns/bar-thresholds.ts` の換算）。
-		// `formationBars` は添字の差（`lastIdx - firstPivot.idx`）なので、窓としては 1 本多く要る。
 		case 'forming_triple':
 			return getTripleFormingBarParams(tf).minBars + 1;
 

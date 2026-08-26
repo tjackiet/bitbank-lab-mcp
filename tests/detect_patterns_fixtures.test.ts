@@ -54,8 +54,20 @@ function buildCompletedDoubleTopCandles(year = 2026): Candle[] {
 	return closes.map((close, index) => makeCandle(index, close, year));
 }
 
+/**
+ * 形成中ダブルボトム: 谷1(idx=4) → 山(idx=10) → 谷2(idx=16) → 直近が上昇中。
+ *
+ * `1day` の形成中 double は formationBars（= lastIdx - 谷1.idx）∈ [23, 148] を要求するので
+ * 末尾を伸ばして formationBars=25 にしてある（#118 問題 3 のバー数統一。旧 fixture の 19 本では
+ * 弾かれる）。中間の山（101）をブレイクバッファ 1.5% 込みで超えないよう末尾は 98 で頭打ち。
+ */
+const FORMING_DOUBLE_BOTTOM_BARS = 30;
+
 function buildFormingDoubleBottomCandles(year = 2026): Candle[] {
-	const closes = [108, 104, 99, 92, 80, 84, 88, 92, 96, 99, 101, 98, 94, 89, 85, 82, 81, 84, 88, 91, 94, 95, 96, 95];
+	const closes = [
+		108, 104, 99, 92, 80, 84, 88, 92, 96, 99, 101, 98, 94, 89, 85, 82, 81, 84, 88, 91, 94, 95, 96, 95, 96, 96.5, 97,
+		97.5, 98, 98,
+	];
 
 	return closes.map((close, index) => makeCandle(index, close, year));
 }
@@ -259,11 +271,16 @@ function buildUnequalPeaksDoubleTopCandles(year = 2026): Candle[] {
 }
 
 // --- 上昇トレンド継続中の偽 double_bottom (PR #3 prior_trend hard reject) ---
-// idx 0-29 で 100→245 の clean な上昇トレンド（毎バー +5）、その後 idx 30-44 で
+// idx 0-29 で 100→245 の clean な上昇トレンド（毎バー +5）、その後 idx 30-55 で
 // 形成中ダブルボトムらしき形（左谷 232, ミッドピーク 246, 右谷 231, 直近 248）を作る。
-// 左谷 idx=30 における lookback window [20..30] は monotonic に近い上昇のため
-// priorReturn ≈ +0.16, efficiency ≈ 0.71 → 'up' 分類で down_or_sideways と矛盾し
-// hard reject されるべき。
+// 左谷 idx=30 における lookback window [5..30] は monotonic に近い上昇のため
+// 'up' 分類で down_or_sideways と矛盾し hard reject されるべき。
+//
+// 右谷までの押し目を 16 本に伸ばして formationBars（= lastIdx - 左谷.idx）を 25 にしてある。
+// `1day` の形成中 double はバー数レンジ [23, 148] を要求するので（#118 問題 3 のバー数統一）、
+// 旧 fixture（formationBars=14）では形成バー数の段で先に弾かれ、prior_trend の段に届かない。
+const UPTREND_FAKE_DOUBLE_BOTTOM_BARS = 56;
+
 function buildUptrendThenFakeDoubleBottomCandles(year = 2026): Candle[] {
 	const closes = [
 		// idx 0-9: 上昇トレンド 100 → 145 (毎バー +5)
@@ -278,9 +295,9 @@ function buildUptrendThenFakeDoubleBottomCandles(year = 2026): Candle[] {
 		236, 239, 241, 243, 245,
 		// idx 36: ミッドピーク
 		246,
-		// idx 37-41: 右谷 231 まで押し目
-		243, 240, 237, 234, 231,
-		// idx 42-44: 直近の戻り
+		// idx 37-52: 右谷 231 までゆるやかに押し目（単調なので途中にピボットは立たない）
+		245, 244, 243, 242, 241, 240, 239, 238, 237, 236, 235, 234, 233, 232, 231.5, 231,
+		// idx 53-55: 直近の戻り
 		237, 243, 248,
 	];
 	return closes.map((close, index) => makeCandle(index, close, year));
@@ -379,7 +396,7 @@ describe('detect_patterns fixtures', () => {
 	it('synthetic fixture から forming の double_bottom を completed なしで返せる', async () => {
 		mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(indicatorsOk(buildFormingDoubleBottomCandles())));
 
-		const res = await detectPatterns('btc_jpy', '1day', 24, {
+		const res = await detectPatterns('btc_jpy', '1day', FORMING_DOUBLE_BOTTOM_BARS, {
 			patterns: ['double_bottom'],
 			swingDepth: 2,
 			tolerancePct: 0.03,
@@ -398,7 +415,7 @@ describe('detect_patterns fixtures', () => {
 			completionPct: expect.any(Number),
 			targetMethod: 'neckline_projection',
 		});
-		expect(res.data.patterns[0].range.end).toBe(makeIso(23));
+		expect(res.data.patterns[0].range.end).toBe(makeIso(FORMING_DOUBLE_BOTTOM_BARS - 1));
 		expect(res.meta.count).toBe(1);
 	});
 
@@ -940,7 +957,7 @@ describe('detect_patterns fixtures', () => {
 
 		it('既存 forming double_bottom fixture は引き続き検出され、confidence は維持される', async () => {
 			mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(indicatorsOk(buildFormingDoubleBottomCandles())));
-			const res = await detectPatterns('btc_jpy', '1day', 24, {
+			const res = await detectPatterns('btc_jpy', '1day', FORMING_DOUBLE_BOTTOM_BARS, {
 				patterns: ['double_bottom'],
 				swingDepth: 2,
 				tolerancePct: 0.03,
@@ -994,7 +1011,7 @@ describe('detect_patterns fixtures', () => {
 				asMockResult(indicatorsOk(buildUptrendThenFakeDoubleBottomCandles())),
 			);
 
-			const res = await detectPatterns('btc_jpy', '1day', 45, {
+			const res = await detectPatterns('btc_jpy', '1day', UPTREND_FAKE_DOUBLE_BOTTOM_BARS, {
 				patterns: ['double_bottom'],
 				swingDepth: 2,
 				tolerancePct: 0.04,
@@ -1076,7 +1093,7 @@ describe('detect_patterns fixtures', () => {
 		it('double_bottom でも pattern 開始がデータ先頭付近の場合、insufficient_data を debug に残す', async () => {
 			mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(indicatorsOk(buildFormingDoubleBottomCandles())));
 
-			const res = await detectPatterns('btc_jpy', '1day', 24, {
+			const res = await detectPatterns('btc_jpy', '1day', FORMING_DOUBLE_BOTTOM_BARS, {
 				patterns: ['double_bottom'],
 				swingDepth: 2,
 				tolerancePct: 0.03,

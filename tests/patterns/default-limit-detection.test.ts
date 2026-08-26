@@ -1,25 +1,31 @@
 /**
  * tests/patterns/default-limit-detection.test.ts
  *
- * issue #118 問題 1 / 2 の回帰テスト。
+ * issue #118 問題 1 / 2 / 3 の回帰テスト。
  *
- * `tests/patterns/invariants.test.ts` の不変条件 9（到達性）は「閾値がスキャン窓に収まるか」
- * という**算術**だけを見る。閾値が収まっていても検出器が実際に候補を返すとは限らないので、
- * ここでは合成データを既定 `limit`（90 本）ぶん与えて **detectWedges / detectTriples が
- * 実際にパターンを返すこと**を時間足ごとに固定する。
+ * `tests/patterns/invariants.test.ts` の不変条件 9（到達性）は「閾値の**最小側**がスキャン窓に
+ * 収まるか」という算術だけを見る。閾値が収まっていても検出器が実際に候補を返すとは限らず、
+ * **最大側は見ていない**ので、ここでは合成データを既定 `limit`（90 本）ぶん与えて
+ * **検出器が実際にパターンを返すこと**を時間足ごとに固定する。
  *
- * 本 PR 以前の値では次のとおり 0 件だった（`limit` を上げても `4hour` の 151 本要求までは
- * 届かず、`1hour` の 601 本要求はスキーマ上限 365 でも到達不能）:
+ * 問題 1 / 2（wedge / triple）の修正前は次のとおり 0 件だった（`limit` を上げても `4hour` の
+ * 151 本要求までは届かず、`1hour` の 601 本要求はスキーマ上限 365 でも到達不能）:
  *
  * | 時間足 | 完成済み wedge | 形成中 triple |
  * |---|---|---|
  * | `1day`  | 1 件 | 1 件 |
  * | `4hour` | **0 件** | **0 件** |
  * | `1hour` | **0 件** | **0 件** |
+ *
+ * 問題 3（形成中 double / H&S）は最大側の問題で、最小側だけを見る到達性テストをすり抜けていた。
+ * 下の専用 describe を参照。
  */
 import { describe, expect, it } from 'vitest';
 import { dayjs } from '../../lib/datetime.js';
+import { CandleTypeEnum } from '../../src/schema/base.js';
 import { getDefaultParamsForTf, getDefaultToleranceForTf } from '../../tools/patterns/config.js';
+import { detectDoubles } from '../../tools/patterns/detect_doubles.js';
+import { detectHeadAndShoulders } from '../../tools/patterns/detect_hs.js';
 import { detectTriples } from '../../tools/patterns/detect_triples.js';
 import { detectWedges } from '../../tools/patterns/detect_wedges.js';
 import { linearRegressionWithR2 } from '../../tools/patterns/regression.js';
@@ -32,9 +38,22 @@ const DEFAULT_SCAN_WINDOW = 90;
 /** 受け入れ基準が名指ししている時間足。 */
 const TIMEFRAMES = ['1day', '4hour', '1hour'] as const;
 
+/** 形成中の反転パターンは全時間足を見る（#118 問題 3 は `1week` / `1month` に出た）。 */
+const ALL_TIMEFRAMES = CandleTypeEnum.options;
+
 function mkCandle(index: number, o: number, h: number, l: number, c: number): CandleData {
 	return { open: o, high: h, low: l, close: c, isoTime: dayjs.utc('2026-01-01').add(index, 'day').toISOString() };
 }
+
+/** 三角波の山 / 谷を作るカーネル（`center` で 1、`width` 本離れると 0）。 */
+const bump = (i: number, center: number, width: number) => Math.max(0, 1 - Math.abs(i - center) / Math.max(3, width));
+
+/**
+ * 形成中の反転パターンの左ピボット位置。`formationBars = 89 - 29 = 60`。
+ * 全時間足の最小要求（最大でも `4hour` 系の 42 本）を上回り、最大要求（最小でも `1day` の 148 本）
+ * を下回るので、1 つの形状で全時間足を賄える。
+ */
+const LEFT_PIVOT_IDX = 29;
 
 /**
  * スキャン窓と同じ本数のローソク足から `DetectContext` を組む。
@@ -108,7 +127,6 @@ function buildFormingTripleTopCandles(nBars: number): CandleData[] {
 	const valley1 = 32;
 	const valley2 = 72;
 	const ramp = 6;
-	const bump = (i: number, center: number, width: number) => Math.max(0, 1 - Math.abs(i - center) / width);
 
 	const candles: CandleData[] = [];
 	for (let i = 0; i < nBars; i++) {
@@ -118,6 +136,50 @@ function buildFormingTripleTopCandles(nBars: number): CandleData[] {
 		candles.push(mkCandle(i, close, close + 0.6, close - 0.6, close));
 	}
 	return candles;
+}
+
+/**
+ * 形成中ダブルトップ形状。左山を `LEFT_PIVOT_IDX` に置き、谷を挟んで直近足を山の水準まで戻す。
+ * `formationBars = 89 - 29 = 60` で、バー数統一後の全時間足のレンジに収まる
+ * （最も狭い `4hour` / `8hour` / `12hour` でも [42, 180]）。
+ */
+function buildFormingDoubleTopCandles(nBars: number): CandleData[] {
+	const last = nBars - 1;
+	const peak = LEFT_PIVOT_IDX;
+	const valley = Math.round((peak + last) / 2);
+	const ramp = Math.max(2, Math.round((last - peak) / 6));
+	const out: CandleData[] = [];
+	for (let i = 0; i < nBars; i++) {
+		let close = 100 + 20 * bump(i, peak, (valley - peak) * 0.7) - 18 * bump(i, valley, (last - valley) * 0.8);
+		// 左山の前は上昇トレンド（validatePriorTrend の up_or_sideways を満たす）
+		if (i < peak) close = 100 - 12 * ((peak - i) / peak);
+		// 直近 ramp 本で山の水準まで戻す（2 山目 = 現在価格）
+		if (i >= last - ramp) close = 100 + 20 * ((i - (last - ramp)) / ramp);
+		out.push(mkCandle(i, close, close + 0.4, close - 0.4, close));
+	}
+	return out;
+}
+
+/**
+ * 形成中 H&S 形状。左肩を `LEFT_PIVOT_IDX` に置き、頭 → 頭後谷 → 直近を左肩水準（暫定右肩）にする。
+ * `formationBars = 89 - 29 = 60` で、バー数統一後の全時間足のレンジに収まる。
+ */
+function buildFormingHeadAndShouldersCandles(nBars: number): CandleData[] {
+	const last = nBars - 1;
+	const left = LEFT_PIVOT_IDX;
+	const span = last - left;
+	const head = left + Math.round(span * 0.45);
+	const postValley = left + Math.round(span * 0.72);
+	const ramp = Math.max(2, Math.round(span / 8));
+	const out: CandleData[] = [];
+	for (let i = 0; i < nBars; i++) {
+		let close =
+			90 + 10 * bump(i, left, span * 0.12) + 45 * bump(i, head, span * 0.2) - 2 * bump(i, postValley, span * 0.14);
+		if (i < left) close = 90 - 8 * ((left - i) / left);
+		if (i >= last - ramp) close = 100;
+		out.push(mkCandle(i, close, close + 0.4, close - 0.4, close));
+	}
+	return out;
 }
 
 describe('既定 limit（90 本）での検出可能性 — issue #118 問題 1 / 2', () => {
@@ -140,6 +202,37 @@ describe('既定 limit（90 本）での検出可能性 — issue #118 問題 1 
 			const result = detectTriples(buildCtx(tf, candles, true));
 			const forming = result.patterns.filter((p) => p.type === 'triple_top' && p.status === 'forming');
 			expect(forming.length, `${tf}: 形成中 triple_top が 0 件`).toBeGreaterThanOrEqual(1);
+		});
+	}
+});
+
+// ──────────────────────────────────────────────
+// 形成中 double / H&S — issue #118 問題 3 の回帰
+//
+// 旧実装は手書きの bars-per-day（`1day`→1 / `1week`→7 / **それ以外→1**）で
+// `patternDays = Math.round(formationBars × daysPerBar)` を作り 14〜90 日 / 21〜90 日で判定していた。
+// `1week` の受理域は `formationBars ∈ [2, 12]` / `[3, 12]` で、構造的下限（25 本）を下回るため
+// **形成中 double / H&S が実質検出不能**だった。バー数へ統一して解消したことを固定する。
+// ──────────────────────────────────────────────
+
+describe('既定 limit（90 本）での検出可能性 — issue #118 問題 3（形成中 double / H&S）', () => {
+	for (const tf of ALL_TIMEFRAMES) {
+		it(`${tf}: 形成中 double_top が既定スキャン窓で検出できる`, () => {
+			const candles = buildFormingDoubleTopCandles(DEFAULT_SCAN_WINDOW);
+			expect(candles).toHaveLength(DEFAULT_SCAN_WINDOW);
+
+			const result = detectDoubles(buildCtx(tf, candles, true));
+			const forming = result.patterns.filter((p) => p.type === 'double_top' && p.status === 'forming');
+			expect(forming.length, `${tf}: 形成中 double_top が 0 件`).toBeGreaterThanOrEqual(1);
+		});
+
+		it(`${tf}: 形成中 head_and_shoulders が既定スキャン窓で検出できる`, () => {
+			const candles = buildFormingHeadAndShouldersCandles(DEFAULT_SCAN_WINDOW);
+			expect(candles).toHaveLength(DEFAULT_SCAN_WINDOW);
+
+			const result = detectHeadAndShoulders(buildCtx(tf, candles, true));
+			const forming = result.patterns.filter((p) => p.type === 'head_and_shoulders' && p.status === 'forming');
+			expect(forming.length, `${tf}: 形成中 head_and_shoulders が 0 件`).toBeGreaterThanOrEqual(1);
 		});
 	}
 });
