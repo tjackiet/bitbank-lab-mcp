@@ -100,6 +100,14 @@ export function patternMinBars(tf: string, days: number): number {
  * `minBars > maxBars` の反転が起き、そのパターンが 0 件になる。
  * 素の `round(maxDays × bpd)` を使わないのは、intraday で上限が青天井になり
  * 走査ループの反復回数が爆発するため（形成中ウェッジの窓ループは走査窓長で頭打ちにならない）。
+ *
+ * **`patternBarsCap` は最大側には掛けない。** cap の役割は「最小要求バー数が既定 `limit`（90）に
+ * 収まること」だけで、最大側は到達性に関与しない。掛けると cap が効く時間足で
+ * `minBars === maxBars` になり、レンジ判定が等値判定に退化する（`1hour` の形成中トリプルは
+ * `formationBars` がちょうど 34 本のときだけ通り、完成済みウェッジの走査ウィンドウは
+ * 8 サイズ → 1 サイズに潰れる）。`1day` も [25, 90] → [25, 46] に狭まり、
+ * 本モジュール導入前と同一だった挙動が壊れる。この不変条件は
+ * `tests/patterns/bar-thresholds.test.ts` が固定している。
  */
 export function patternBarRange(tf: string, minDays: number, maxDays: number): { minBars: number; maxBars: number } {
 	if (!(minDays > 0) || !(maxDays >= minDays)) {

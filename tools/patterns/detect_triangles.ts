@@ -33,9 +33,12 @@ export function getTriangleParams(tf: string) {
 	// 「その時間足で形が成立する最小の窓」そのものなので、`patterns/bar-thresholds.ts` の
 	// 構造的下限をそのまま使う（= 日数 0 日を換算したときの clamp 結果と同じ）。
 	const minWindowBars = structuralFloorBars(tf);
-	// 上限も下限の定数倍で頭打ちにする。intraday では日数換算値（1hour で 2160 本）が
-	// 走査窓を大きく超えるだけで意味が無く、`1week` / `1month` では逆に下限を割って
-	// windowSizes が空になる（`1month` の旧値は 3 本）。
+	// 上限は日数換算値を使いつつ、`patternBarsCap` を**下駄**として履かせる（頭打ちではない）。
+	// `1week` / `1month` では日数換算値（13 本 / 3 本）が minWindowBars を割って windowSizes が
+	// 空になるため、下から支える値が要る。逆に intraday の大きな値（1hour で 2160 本）は
+	// 害が無い——実際に使うのは `effectiveMax = min(lastIdx - 5, maxWindowBars)` で、
+	// 走査窓の長さで必ず頭打ちになる。ここを cap で頭打ちにすると `1hour` の窓が
+	// [17, 26] だけになり、40〜84 本の三角形が既定 limit で検出できなくなる。
 	const maxWindowBars = Math.max(patternBarsCap(tf), Math.round(maxDurationDays * bpd));
 	const minR2 = 0.6; // 収束形状なので多少の揺れは許容 — 0.25 では偽陽性が多すぎた
 	const flatThreshold = 0.03; // |relSlope| < 3% over window → "flat"

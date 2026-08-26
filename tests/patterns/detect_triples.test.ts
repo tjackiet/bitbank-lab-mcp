@@ -1173,8 +1173,10 @@ describe('detectTriples', () => {
 	});
 
 	it('1hour: 119 バーの形成なら形成中 triple_top のレンジ判定を通過する', () => {
-		// formationBars = 119 ∈ [34, 146]。既定 limit（90）でも届く本数であることが要点で、
-		// 旧実装が要求していた 492 本（= 21 暦日）はスキーマ上限 365 でも到達不能だった。
+		// レンジ [34, 146] の**上側**が効いていることの確認。formationBars = 119 は
+		// 旧実装が要求していた 492 本（= 21 暦日）を大きく下回るが、新しい上限 146 には収まる。
+		// この fixture は 120 本あり既定 limit（90）を超えるので、**到達性の検証ではない**——
+		// 既定 limit で実際に検出できることは tests/patterns/default-limit-detection.test.ts が固定する。
 		const total = 120;
 		const candles: CandleData[] = Array.from({ length: total }, (_, i) => mkCandle(total - i, 85, 90, 80, 85));
 		// 2 つ確定済みピークと 2 つの確定済み谷（ネックライン構成）

@@ -460,13 +460,16 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 > 「未到達の組み合わせがゼロ」として固定してある。
 
 実効的な制約は `limit` そのものではなく **`meta.scan.bars`（実際に走査した本数）**。
-`analyze_indicators` は `chart.meta.pastBuffer` を常に返すので `meta.scan.bars ≤ limit ≤ 365` が成り立ち、
-**この表の値が 365 を超える組み合わせは実運用では検出できない**
-（`1hour` の forming triple / wedge、`30min` 以下の大半）。例外は `pastBuffer` が取れなかった場合の
-全件走査フォールバックで、このときだけ `meta.scan.bars` が `limit` を超えうる（上流の形が変わらない限り
-起きない）。**到達可否の判断は `limit` ではなく `meta.scan.bars` を見ること。**
+`analyze_indicators` は `chart.meta.pastBuffer` を常に返すので `meta.scan.bars ≤ limit ≤ 365` が成り立つ。
+**この表の値はすべて既定 `limit`（90）以下**なので、`limit` を既定のまま使う限りどの組み合わせも
+走査窓に収まる。`limit` を既定より小さくしたときだけ、表の値を下回る種別が静かに 0 件になる。
+例外は `pastBuffer` が取れなかった場合の全件走査フォールバックで、このときだけ `meta.scan.bars` が
+`limit` を超えうる（上流の形が変わらない限り起きない）。
+**到達可否の判断は `limit` ではなく `meta.scan.bars` を見ること。**
 
-`4hour` は既定 `limit=90` では forming triple も完成済み wedge も出ないので、必要なら `limit≥151` を指定する。
+> バー数に統一する前は `1hour` の forming triple が 493 本・完成済み wedge が 601 本を要求しており、
+> `limit` の上限 365 でも到達不能だった。`4hour` も既定 `limit=90` では両方とも出ず、`limit≥151` が
+> 必要だった（#118 問題 1 / 2）。現在はいずれも既定 `limit` で到達できるので、この回避策は不要。
 
 `detect_doubles` / `detect_hs` の forming 判定だけは `helpers.daysPerBar` ではなく独自の換算
 （`1day`→1 / `1week`→7 / **それ以外→1**）を使っており、この表の対象外。intraday では

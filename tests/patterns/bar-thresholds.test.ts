@@ -155,6 +155,19 @@ describe('patternBarRange', () => {
 		expect(m.maxBars).toBe(Math.round(29 * (90 / 25)));
 	});
 
+	it('最大側は上限（cap）を意図的に超える — cap は最小側だけの制約', () => {
+		// cap の役割は「最小要求バー数が既定 limit（90）に収まること」だけ。最大側にも掛けると
+		// cap が効く時間足で minBars === maxBars になり、レンジ判定が等値判定に退化する。
+		for (const tf of ['1hour', '4hour']) {
+			const { minBars, maxBars } = patternBarRange(tf, 21, 90);
+			expect(minBars, `${tf}: 最小側は cap に張り付く`).toBe(patternBarsCap(tf));
+			expect(maxBars, `${tf}: 最大側は cap を超える（意図的）`).toBeGreaterThan(patternBarsCap(tf));
+		}
+		// cap が効かない 1day では、本モジュール導入前と同じ [25, 90] のまま
+		expect(patternBarRange('1day', 25, 90)).toEqual({ minBars: 25, maxBars: 90 });
+		expect(patternBarsCap('1day')).toBe(46); // cap を最大側に掛けると 90 → 46 に狭まってしまう
+	});
+
 	it('minDays === maxDays でも最小 1 本の幅を持つ', () => {
 		const { minBars, maxBars } = patternBarRange('1day', 25, 25);
 		expect(minBars).toBe(25);
