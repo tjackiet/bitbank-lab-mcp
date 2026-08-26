@@ -414,10 +414,20 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 `view=full` の `content` では double_top / double_bottom の構成点 3 行に両方が出る
 （例: `谷1: 2026-08-03 終値 10,002,960円 / 安値 9,752,246円（判定は安値基準）`）。
 
-**例外: `triangle_*`。** 三角形の検出器は独自の relaxed swing（`swingDepth=1`）を使い、
-そこでの `price` が**最初から高値 / 安値そのもの**なので `price === extremePrice` になる。
-同値であること自体が「この検出器は終値を経由していない」という情報で、欠損ではない。
-形成中パターンの暫定構成点（最新足の終値をそのまま置くもの）も同じ理由で同値になる。
+**`price` の基準は検出器ごとに違う。全ツール共通で不変なのは `extremePrice` の方だけ。**
+
+| 構成点の出どころ | `price` | `extremePrice` |
+|---|---|---|
+| `detectSwingPoints`（double / triple / H&S） | 終値 | 判定に使った `high` / `low` |
+| `detect_triangles` の relaxed swing（`triangle_*`） | **`high` / `low`** | 同左（`price` と同値） |
+| 形成中 H&S / 逆 H&S の暫定右肩 | 最新足の終値 | 同左（極値判定を通っていない） |
+
+三角形が終値を経由しないのは、**トレンドライン（`upperLine` / `lowerLine`）をこの高安列に
+回帰させており、`neckline` もその線から取る**ため。`price` を終値に差し替えると構成点が
+自分のトレンドライン上に乗らなくなり、`aftermath.theoreticalTarget`
+（`min` / `max(pivots[].price)` 由来）も動く。同値であることは欠損ではなく
+「この検出器は終値を経由していない」という情報として読むこと。
+契約は `tests/detect_patterns_debug.test.ts` が固定している。
 
 ### `debug` の candidates は `patterns` で絞られる
 

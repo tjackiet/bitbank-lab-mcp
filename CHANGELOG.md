@@ -23,6 +23,7 @@
   - **`view=full` の content** では double_top / double_bottom の構成点 3 行に両方を出す（例: `谷1: 2026-08-03 終値 10,002,960円 / 安値 9,752,246円（判定は安値基準）`）。両者が同値のときは 1 つにまとめる。
   - **型で固定した。** `Pivot.extremePrice` を必須にし、`PatternEntry.pivots` の緩い再宣言（`Array<{ idx?; price?; kind? }>`）を `Pivot[]` に締めたので、検出器が pivot を組み直すときに落とすと typecheck が落ちる。これで検出器 19 箇所の再構築サイトが機械的にカバーされる。
   - **`triangle_*` は `price === extremePrice` になる。** 三角形の検出器は独自の relaxed swing（`swingDepth=1`）を使い、そこでの `price` が最初から高値 / 安値そのものだから。**同値であること自体が「この検出器は終値を経由していない」という情報**なので、別値を捏造せずそのまま入れている。形成中 H&S / 逆 H&S の暫定右肩（最新足の終値をそのまま置くもの）も、極値判定を通っていないので同値になる。
+  - **`price` を終値に揃える案（CodeRabbit review, PR #128）は採らなかった。** 三角形はトレンドライン（`upperLine` / `lowerLine`）をこの高安列に回帰させ `neckline` もその線から取るため、`price` を終値に差し替えると構成点が自分のトレンドライン上に乗らなくなる。実測でも `data.patterns` が 128 ケース中 30 ケースで変わり、**変わった 30 件すべてで `aftermath.theoreticalTarget` が動いた**（`min` / `max(pivots[].price)` 由来。例: 123 → 119）。これは `targetReached` → `outcome` → `data.statistics.successRate` を決める値なので表示上の差ではない。**本 PR の受け入れ条件（検出結果ゼロ変更）を外れる検出セマンティクスの変更**なので別 PR の判断とし、代わりに `Pivot` の型 doc / `docs/tools.md` / テストで「`price` の基準は検出器ごとに違い、不変なのは `extremePrice` だけ」を明示・固定した。
 - **`priceBasis: "close" | "extreme"` パラメータ（#125 後半）は入れていない。** 既定値の選択で検出結果が変わる大きな変更であり、#126 が終わって挙動が安定してから必要性を判断する。**#125 は透明化のみ完了で、パラメータ化は保留。**
 
 ### Fixed（用語の陳腐化。#127 の一部）

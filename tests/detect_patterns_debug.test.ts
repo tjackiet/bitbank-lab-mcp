@@ -155,6 +155,12 @@ describe('detect_patterns: pivot の価格基準（#125）', () => {
 		100, 99, 98,
 	];
 
+	/** 形成中 triangle_symmetrical（tests/patterns/invariants.test.ts と同じ価格列） */
+	const symTriangleCloses = [
+		120, 126, 132, 137, 130, 122, 116, 110, 104, 100, 106, 114, 120, 128, 134, 128, 120, 115, 108, 104, 110, 118, 124,
+		130, 126, 120, 116, 112, 108, 114, 120, 126, 124, 120, 117, 114,
+	];
+
 	it('全 pivot が kind と extremePrice を持つ', async () => {
 		const candles = buildNoisyCandles();
 		const res = await run(candles, { includeForming: true, includeInvalid: true, swingDepth: 2 });
@@ -177,6 +183,28 @@ describe('detect_patterns: pivot の価格基準（#125）', () => {
 			const c = candles[pv.idx];
 			expect(pv.price).toBe(c.close);
 			expect(pv.extremePrice).toBe(pv.kind === 'H' ? c.high : c.low);
+		}
+	});
+
+	// `price` の基準は検出器ごとに違う。三角形はトレンドライン（upperLine / lowerLine）を
+	// この高安列に回帰させ、`neckline` もその線から取るため、構成点も高安のまま持つ。
+	// `price` を終値に差し替えると構成点が自分のトレンドライン上に乗らなくなり、
+	// `aftermath.theoreticalTarget`（min/max(pivots[].price) 由来）も動く。
+	// 不変なのは「`extremePrice` は判定に使った値」の一点だけなので、
+	// 差が silent に入れ替わらないよう**現行の契約をここで固定する**（CodeRabbit review, PR #128）。
+	it('triangle_* の pivot は price も extremePrice も回帰に使った高安（終値ではない）', async () => {
+		const candles = symTriangleCloses.map((c, i) => makeCandle(i, c));
+		// fixture は close ± 3 でヒゲを付けてあるので、終値と高安が必ず食い違う。
+		const res = await run(candles, { patterns: ['triangle_symmetrical'], includeForming: true });
+		assertOk(res);
+		const tri = res.data.patterns.find((p) => p.type === 'triangle_symmetrical');
+		expect(tri?.pivots?.length).toBeGreaterThan(0);
+		for (const pv of tri?.pivots ?? []) {
+			const c = candles[pv.idx];
+			const extreme = pv.kind === 'H' ? c.high : c.low;
+			expect(pv.extremePrice, `idx=${pv.idx} の extremePrice`).toBe(extreme);
+			expect(pv.price, `idx=${pv.idx} の price`).toBe(extreme);
+			expect(pv.price, `idx=${pv.idx} は終値ではない`).not.toBe(c.close);
 		}
 	});
 
