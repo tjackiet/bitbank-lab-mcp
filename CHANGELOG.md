@@ -7,6 +7,15 @@
 
 ## [Unreleased]
 
+### Added（検出器ごとの最小要求バー数を単一ソース化し、到達性を機械的に固定した）
+- **「時間足 × 検出器 → 最小要求バー数」の導出を `tools/patterns/min-bars.ts` に集約した（挙動変更なし）。** #118 の 3 件は「日数閾値がスキャン窓を超え、そのパターン種別だけが静かに 0 件になる」という同一クラスの individual instance で、個別に直しても再発する。閾値は 6 ファイル（`detect_doubles` / `detect_hs` / `detect_triples` / `detect_wedges` / `detect_triangles` / `detect_pennants`）に散っていて、どの組み合わせが到達可能かを人手で追えないのが根本原因。**閾値の値は 1 つも変えず**、「その時間足でどれだけの窓が要るか」の計算だけを 1 箇所に寄せてクラスを閉じた。
+- **導出は各検出器の定数を import して行う**（写経しない）。`MIN_PATTERN_DAYS`（doubles）/ `FORMING_MIN_DAYS`（H&S / triples）/ `getWedgeBarParams` / `getTriangleParams` / `getFlagParams` を export し、`min-bars.ts` がそれを参照する。閾値を動かせば導出値も自動で追随する。
+- **`docs/tools.md` の「`limit` の実効下限」表を機械検証の対象にした。** `tests/patterns/min-bars.test.ts` が **docs を実際にパースして** 導出値と突き合わせる。表 1（構造的下限）は `assessScanWindow`（#117 で実装済み）、表 2（日数閾値由来の下限）は `minBarsForDetector` が出典。手書きの表が drift すると CI が落ちる。列見出しからも検出器を対応づけているので、列の入れ替えや時間足の取りこぼしも検出する。
+- **到達性テストを `tests/patterns/invariants.test.ts` に追加した（不変条件 9）。** 「全時間足 × 既定 `limit`（90）で、各検出器の最小要求バー数 ≤ スキャン窓」を検証する。現状は 16 組が未到達なので **allowlist として明示**し、「allowlist の外に未到達が無いこと」を固定した（CI は今日通る）。各行に要求本数・理由・#118 の対応箇所を持たせ、閾値を下げて到達可能になった行が残っていても落ちるようにしてある（stale 検出）。16 行すべてが load-bearing（1 行消すと必ず落ちる）ことを確認済み。
+- **重複していた手書きの `daysPerBar` を 1 箇所に寄せた。** `detect_doubles` / `detect_hs` の 4 箇所にあった `ctx.type === '1day' ? 1 : ctx.type === '1week' ? 7 : 1` を `helpers.formingReversalDaysPerBar` に抽出した。**式は変えていない**——これが intraday と `1month` で誤っている件（#118 問題 3）は閾値の単位の設計判断が要るため PR B の担当で、ここでは「誤っていることを 1 箇所に書いて明示する」に留める。
+- **本 PR の対象は日数閾値由来の下限のみ。** 構造的下限（`swingDepth` 由来）は `patterns/scan-window.ts` が担当し、二重には持たない。時間足でスケールしない絶対ガード（`detect_pennants` / `detect_triangles` の `lastIdx < 15`、`detect_patterns.ts` の `candles.length < 20`）はいずれも 21 本以下で既定 `limit` では効かないため導出値に含めていない（理由は `min-bars.ts` のヘッダに明記）。
+- **検出結果（`data.patterns`）は完全一致。** 9 時間足 × 7 形状 × 4 窓長 × forming 有無 = 504 ケース・1040 パターンを変更前後で突き合わせ、byte 一致を確認した。
+
 ### Changed（`detect_patterns` の description に検出の意味論を明記）
 - **ツール description に「検出の意味論」を 4 点追記した（文言のみ・挙動変更なし）。** #114 / #117 で `range.end` の意味論・スキャン窓・構造的下限を整備したが、記載先はスキーマ description と `docs/tools.md` だけで、**ツール description は #114 以前のまま**だった。スキーマや docs を読まない LLM / 利用者には一切届いていない状態だったため、要点だけを description 側にも置いた。
   - **直近の一方向トレンドはパターンを構成しないため検出対象に入らない。** 「直近の値動きが結果に出ない」は多くの場合これであってデータ欠落ではなく、実際に走査した範囲は `meta.scan`（content の「スキャン範囲」行）が示す。

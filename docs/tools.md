@@ -442,6 +442,13 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 | `1week` | 4 | 16 | 5 |
 | `1month` | 2 | 16 | 5 |
 
+> 上の 2 つの表は手書きではない。構造的下限は `tools/patterns/scan-window.ts`（`assessScanWindow`）、
+> 日数閾値由来の下限は `tools/patterns/min-bars.ts`（`minBarsForDetector`）から導出した値で、
+> `tests/patterns/min-bars.test.ts` が**本ファイルをパースして**一致を検証している。
+> 閾値を動かしたら表も同時に直すこと（直さないと CI が落ちる）。
+> 到達性（既定 `limit` で各検出器が窓に収まるか）は `tests/patterns/invariants.test.ts` の
+> allowlist で固定してある。
+
 実効的な制約は `limit` そのものではなく **`meta.scan.bars`（実際に走査した本数）**。
 `analyze_indicators` は `chart.meta.pastBuffer` を常に返すので `meta.scan.bars ≤ limit ≤ 365` が成り立ち、
 **この表の値が 365 を超える組み合わせは実運用では検出できない**

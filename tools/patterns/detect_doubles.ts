@@ -4,7 +4,13 @@
  */
 import { EPSILON } from '../../lib/math.js';
 import { generatePatternDiagram } from '../../lib/pattern-diagrams.js';
-import { computeTargetReach, deduplicatePatterns, finalizeConf, periodScoreDays } from './helpers.js';
+import {
+	computeTargetReach,
+	deduplicatePatterns,
+	finalizeConf,
+	formingReversalDaysPerBar,
+	periodScoreDays,
+} from './helpers.js';
 import { clamp01, marginFromRelDev, relDev } from './regression.js';
 import { DOUBLE_LEVEL_MAX_PCT, isSameLevel, type PriorTrendResult, validatePriorTrend } from './structural.js';
 import type { Pivot } from './swing.js';
@@ -35,7 +41,11 @@ const FORMING_PEAK_TOLERANCE_PCT = 0.05;
 const FORMING_BASE_COMPLETION = 0.66;
 const FORMING_COMPLETION_RANGE = 0.34;
 const MIN_FORMING_COMPLETION = 0.4;
-const MIN_PATTERN_DAYS = 14;
+/**
+ * 形成中ダブルトップ / ボトムが要求する最小の形成日数。
+ * `patterns/min-bars.ts` が「時間足 → 最小要求バー数」を導出するのに参照するため export する。
+ */
+export const MIN_PATTERN_DAYS = 14;
 const FORMING_TOLERANCE_MULTIPLIER = 1.5;
 const FORMING_VALLEY_INVALID_PCT = 0.02;
 
@@ -457,7 +467,7 @@ function tryFormingDoubleTop(ctx: DetectContext): PatternEntry | null {
 	if (completion < MIN_FORMING_COMPLETION) return null;
 
 	const formationBars = Math.max(0, lastIdx - leftPeak.idx);
-	const daysPerBar = ctx.type === '1day' ? 1 : ctx.type === '1week' ? 7 : 1;
+	const daysPerBar = formingReversalDaysPerBar(ctx.type);
 	const patternDays = Math.round(formationBars * daysPerBar);
 	if (patternDays < MIN_PATTERN_DAYS || patternDays > MAX_FORMING_DAYS) return null;
 
@@ -527,7 +537,7 @@ function tryFormingDoubleBottom(ctx: DetectContext): PatternEntry | null {
 	const lastIdx = candles.length - 1;
 	const currentPrice = Number(candles[lastIdx]?.close ?? NaN);
 	const isoAt = (i: number) => candles[i]?.isoTime || '';
-	const daysPerBar = ctx.type === '1day' ? 1 : ctx.type === '1week' ? 7 : 1;
+	const daysPerBar = formingReversalDaysPerBar(ctx.type);
 
 	const confirmedValleys = allValleys.filter((v) => v.idx < lastIdx - 2);
 	if (confirmedValleys.length < 2) return null;
@@ -557,7 +567,7 @@ function tryFormingDoubleBottom(ctx: DetectContext): PatternEntry | null {
 
 		const formationBars = Math.max(0, lastIdx - leftValley.idx);
 		const patternDays = Math.round(formationBars * daysPerBar);
-		if (patternDays < 14 || patternDays > MAX_FORMING_DAYS) continue;
+		if (patternDays < MIN_PATTERN_DAYS || patternDays > MAX_FORMING_DAYS) continue;
 
 		const trend = validatePriorTrend(candles, leftValley.idx, lastIdx - leftValley.idx, 'down_or_sideways');
 		if (!trend.ok) {

@@ -104,8 +104,10 @@ const FORMING_PRICE_TOLERANCE_PCT = 0.01;
  * - maxStartGap: 上下最初タッチの開始位置差
  * - formingWindowMin / formingWindowMax: 形成中ウェッジのスキャンウィンドウ
  * - formingMinBarsBeforeBreak: 形成中ブレイク判定の最小バー数
+ *
+ * `patterns/min-bars.ts` が「時間足 → 最小要求バー数」を導出するのに参照するため export する。
  */
-function getWedgeBarParams(tf: string) {
+export function getWedgeBarParams(tf: string) {
 	const bpd = barsPerDay(tf);
 	const MIN_STRUCTURAL = 15;
 	return {

@@ -22,8 +22,10 @@ import type { CandDebugEntry, DetectContext, DetectResult, PatternEntry } from '
 
 // ---------------------------------------------------------------------------
 // Time-frame dependent parameters
+//
+// `patterns/min-bars.ts` が「時間足 → 最小要求バー数」を導出するのに参照するため export する。
 // ---------------------------------------------------------------------------
-function getTriangleParams(tf: string) {
+export function getTriangleParams(tf: string) {
 	const bpd = barsPerDay(tf);
 	const maxDurationDays = 90; // triangles > 90 days → different pattern
 	const minWindowBars = 15; // absolute minimum bars
