@@ -25,9 +25,9 @@ function makePattern(overrides: Partial<PatternEntry> = {}): PatternEntry {
 		confidence: 0.75,
 		range: { start: '2026-01-01T00:00:00.000Z', end: '2026-01-20T00:00:00.000Z' },
 		pivots: [
-			{ idx: 0, price: 100000 },
-			{ idx: 5, price: 90000 },
-			{ idx: 10, price: 100000 },
+			{ idx: 0, price: 100000, kind: 'H', extremePrice: 101000 },
+			{ idx: 5, price: 90000, kind: 'L', extremePrice: 89000 },
+			{ idx: 10, price: 100000, kind: 'H', extremePrice: 101000 },
 		],
 		...overrides,
 	};
@@ -217,32 +217,60 @@ describe('formatDebugView / formatCandidateDetails', () => {
 		expect(text).toContain('post_filter: falling lows not rising');
 	});
 
-	it('default ケース: spread と slopes を表示する', () => {
+	// default ケース（専用フォーマッタを持たない reason）: details の実フィールドを列挙する。
+	// 以前は存在しないフィールド名（spreadStart / hiSlope 等）を決め打ちで読んでいたため、
+	// 実際の検出器の details（r2 / touches / score …）が 1 つも表示されず
+	// `spread: n/a` としか出なかった（#124）。
+	it('default ケース: details の実フィールドを列挙する', () => {
 		const meta = makeMeta([
 			{
-				type: 'wedge',
+				type: 'rising_wedge',
 				accepted: false,
-				reason: 'unknown_reason',
-				details: { spreadStart: 5000, spreadEnd: 3000, hiSlope: 0.001, loSlope: -0.001 },
+				reason: 'r2_below_threshold',
+				details: { r2High: 0.31, r2Low: 0.42, slopeHigh: 0.001, slopeLow: -0.001, r2MinRequired: 0.5 },
 			},
 		]);
 		const res = formatDebugView('hdr', meta, [], makeDebugViewRes());
 		const text = res.content[0].text;
-		expect(text).toContain('spread:');
-		expect(text).toContain('slopes:');
+		expect(text).toContain('r2High: 0.31');
+		expect(text).toContain('r2Low: 0.42');
+		expect(text).toContain('r2MinRequired: 0.5');
+		expect(text).toContain('slopeHigh: 0.001');
 	});
 
-	it('default ケース: spread が NaN のとき n/a を返す', () => {
+	it('default ケース: 存在しないフィールドを n/a として捏造しない', () => {
 		const meta = makeMeta([
 			{
-				type: 'wedge',
+				type: 'rising_wedge',
 				accepted: false,
-				reason: 'unknown_reason',
-				details: { spreadStart: 'bad', spreadEnd: 'bad' },
+				reason: 'insufficient_touches',
+				details: { upperTouches: 1, lowerTouches: 2, minRequired: 3 },
 			},
 		]);
-		const res = formatDebugView('hdr', meta, [], makeDebugViewRes());
-		expect(res.content[0].text).toContain('spread: n/a');
+		const text = formatDebugView('hdr', meta, [], makeDebugViewRes()).content[0].text;
+		expect(text).toContain('upperTouches: 1');
+		expect(text).not.toContain('spread');
+		expect(text).not.toContain('n/a');
+	});
+
+	it('default ケース: details が空オブジェクトなら (no fields)', () => {
+		const meta = makeMeta([{ type: 'rising_wedge', accepted: false, reason: 'unknown_reason', details: {} }]);
+		const text = formatDebugView('hdr', meta, [], makeDebugViewRes()).content[0].text;
+		expect(text).toContain('details: (no fields)');
+	});
+
+	it('default ケース: 価格スケールの値は丸めて表示し、ネストは短縮 JSON にする', () => {
+		const meta = makeMeta([
+			{
+				type: 'rising_wedge',
+				accepted: false,
+				reason: 'score_below_threshold',
+				details: { priceRange: 1234567.891, components: { fit: 0.4, touch: 0.2 } },
+			},
+		]);
+		const text = formatDebugView('hdr', meta, [], makeDebugViewRes()).content[0].text;
+		expect(text).toContain('priceRange: 1,234,568');
+		expect(text).toContain('components: {"fit":0.4,"touch":0.2}');
 	});
 
 	it('accepted=true の候補に ✅ を付与する', () => {
@@ -314,8 +342,8 @@ describe('formatPatternLine', () => {
 		const p = makePattern({
 			type: 'double_top',
 			pivots: [
-				{ idx: 0, price: 100000 },
-				{ idx: 5, price: 90000 },
+				{ idx: 0, price: 100000, kind: 'H', extremePrice: 101000 },
+				{ idx: 5, price: 90000, kind: 'L', extremePrice: 89000 },
 			],
 		});
 		const result = formatPatternLine(p, 0, 'full', emptyMeta);
@@ -772,8 +800,8 @@ describe('formatPatternLine', () => {
 			type: 'triple_top',
 			status: 'forming',
 			pivots: [
-				{ idx: 0, price: 100 },
-				{ idx: 20, price: 101 },
+				{ idx: 0, price: 100, kind: 'H', extremePrice: 100 },
+				{ idx: 20, price: 101, kind: 'H', extremePrice: 101 },
 			],
 		});
 		const result = formatPatternLine(p, 0, 'detailed', emptyMeta);
@@ -786,8 +814,8 @@ describe('formatPatternLine', () => {
 			type: 'triple_bottom',
 			status: 'forming',
 			pivots: [
-				{ idx: 0, price: 100 },
-				{ idx: 20, price: 99 },
+				{ idx: 0, price: 100, kind: 'L', extremePrice: 100 },
+				{ idx: 20, price: 99, kind: 'L', extremePrice: 99 },
 			],
 		});
 		const result = formatPatternLine(p, 0, 'detailed', emptyMeta);
@@ -799,9 +827,9 @@ describe('formatPatternLine', () => {
 			type: 'triple_top',
 			status: 'completed',
 			pivots: [
-				{ idx: 0, price: 100 },
-				{ idx: 20, price: 100 },
-				{ idx: 40, price: 100 },
+				{ idx: 0, price: 100, kind: 'H', extremePrice: 100 },
+				{ idx: 20, price: 100, kind: 'H', extremePrice: 100 },
+				{ idx: 40, price: 100, kind: 'H', extremePrice: 100 },
 			],
 		});
 		const result = formatPatternLine(p, 0, 'detailed', emptyMeta);
@@ -813,8 +841,8 @@ describe('formatPatternLine', () => {
 			type: 'double_top',
 			status: 'forming',
 			pivots: [
-				{ idx: 0, price: 100 },
-				{ idx: 10, price: 100 },
+				{ idx: 0, price: 100, kind: 'H', extremePrice: 100 },
+				{ idx: 10, price: 100, kind: 'L', extremePrice: 100 },
 			],
 		});
 		const result = formatPatternLine(p, 0, 'detailed', emptyMeta);

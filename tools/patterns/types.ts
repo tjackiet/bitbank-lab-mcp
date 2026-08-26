@@ -63,7 +63,13 @@ export interface DeduplicablePattern {
 	type?: string;
 	confidence?: number;
 	range?: { start: string; end: string; current?: string };
-	pivots?: Array<{ idx?: number; price?: number; kind?: string }>;
+	/**
+	 * パターン構成点。`Pivot` そのものを使う（緩い形の再宣言をしない）ことで、
+	 * 検出器が pivot を組み直すときに `extremePrice`（極値判定に使った値）を
+	 * 落とすと typecheck が落ちる。#125 の「報告された price から判定を検算できない」
+	 * を型で塞ぐための拘束。
+	 */
+	pivots?: Pivot[];
 	[key: string]: unknown;
 }
 

@@ -531,8 +531,8 @@ function tryFormingDoubleTop(ctx: DetectContext): PatternEntry | null {
 		...(precedingTrend ? { precedingTrend } : {}),
 		status: 'forming',
 		pivots: [
-			{ idx: leftPeak.idx, price: leftPeak.price, kind: 'H' as const },
-			{ idx: valley.idx, price: valley.price, kind: 'L' as const },
+			{ idx: leftPeak.idx, price: leftPeak.price, kind: 'H' as const, extremePrice: leftPeak.extremePrice },
+			{ idx: valley.idx, price: valley.price, kind: 'L' as const, extremePrice: valley.extremePrice },
 		],
 		neckline,
 		trendlineLabel: 'ネックライン',
@@ -637,9 +637,9 @@ function tryFormingDoubleBottom(ctx: DetectContext): PatternEntry | null {
 			...(precedingTrend ? { precedingTrend } : {}),
 			status: 'forming',
 			pivots: [
-				{ idx: leftValley.idx, price: leftValley.price, kind: 'L' as const },
-				{ idx: midPeak.idx, price: midPeak.price, kind: 'H' as const },
-				{ idx: rightValley.idx, price: rightValley.price, kind: 'L' as const },
+				{ idx: leftValley.idx, price: leftValley.price, kind: 'L' as const, extremePrice: leftValley.extremePrice },
+				{ idx: midPeak.idx, price: midPeak.price, kind: 'H' as const, extremePrice: midPeak.extremePrice },
+				{ idx: rightValley.idx, price: rightValley.price, kind: 'L' as const, extremePrice: rightValley.extremePrice },
 			],
 			neckline,
 			trendlineLabel: 'ネックライン',

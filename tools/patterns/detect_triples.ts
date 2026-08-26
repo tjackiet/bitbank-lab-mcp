@@ -755,8 +755,8 @@ function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
 			range: { start: isoAt(peak1.idx), end: isoAt(lastIdx) },
 			status: 'forming',
 			pivots: [
-				{ idx: peak1.idx, price: peak1.price, kind: 'H' as const },
-				{ idx: peak2.idx, price: peak2.price, kind: 'H' as const },
+				{ idx: peak1.idx, price: peak1.price, kind: 'H' as const, extremePrice: peak1.extremePrice },
+				{ idx: peak2.idx, price: peak2.price, kind: 'H' as const, extremePrice: peak2.extremePrice },
 			],
 			neckline,
 			trendlineLabel: 'ネックライン',
@@ -898,8 +898,8 @@ function tryFormingTripleBottom(ctx: DetectContext): DeduplicablePattern | null 
 			range: { start: isoAt(valley1.idx), end: isoAt(lastIdx) },
 			status: 'forming',
 			pivots: [
-				{ idx: valley1.idx, price: valley1.price, kind: 'L' as const },
-				{ idx: valley2.idx, price: valley2.price, kind: 'L' as const },
+				{ idx: valley1.idx, price: valley1.price, kind: 'L' as const, extremePrice: valley1.extremePrice },
+				{ idx: valley2.idx, price: valley2.price, kind: 'L' as const, extremePrice: valley2.extremePrice },
 			],
 			neckline,
 			trendlineLabel: 'ネックライン',

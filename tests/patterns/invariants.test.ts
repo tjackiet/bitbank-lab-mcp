@@ -395,6 +395,65 @@ describe('patterns invariants — 横断契約', () => {
 				}
 			}
 		});
+
+		// #125: 報告された price から判定を検算できること。
+		// price は終値、extremePrice は極値判定に使った high / low で、両者は別物。
+		// これを落とすと「終値基準で極値を取っている」と誤読される（実際に誤読された）。
+		it('detect_patterns: 全 pivot が kind と、その足の high / low に一致する extremePrice を持つ', async () => {
+			const fixtures: Array<{
+				name: string;
+				candles: Candle[];
+				opts: Parameters<typeof detectPatterns>[3];
+			}> = [
+				{
+					name: 'double_top',
+					candles: buildCompletedDoubleTopCandles(),
+					opts: { patterns: ['double_top'], swingDepth: 2, tolerancePct: 0.02 },
+				},
+				{
+					name: 'forming_double_bottom',
+					candles: buildFormingDoubleBottomCandles(),
+					opts: { patterns: ['double_bottom'], includeForming: true, swingDepth: 2, tolerancePct: 0.03 },
+				},
+				{
+					name: 'head_and_shoulders',
+					candles: buildCompletedHeadAndShouldersCandles(),
+					opts: { patterns: ['head_and_shoulders'], swingDepth: 2, tolerancePct: 0.04 },
+				},
+				{
+					name: 'triple_top',
+					candles: buildCompletedTripleTopCandles(),
+					opts: { patterns: ['triple_top'], swingDepth: 2, tolerancePct: 0.02 },
+				},
+				{
+					name: 'triangle_symmetrical',
+					candles: buildFormingSymmetricalTriangleCandles(),
+					opts: { patterns: ['triangle_symmetrical'], includeForming: true },
+				},
+			];
+
+			let seenPivots = 0;
+			for (const fx of fixtures) {
+				mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(indicatorsOk(fx.candles)));
+				const res = await detectPatterns('btc_jpy', '1day', fx.candles.length, fx.opts);
+				assertOk(res);
+				const lastIdx = fx.candles.length - 1;
+				for (const p of res.data.patterns) {
+					for (const pv of p.pivots ?? []) {
+						seenPivots++;
+						expect(['H', 'L'], `${fx.name}: pivot kind`).toContain(pv.kind);
+						expect(Number.isFinite(pv.extremePrice), `${fx.name}: extremePrice 有限`).toBe(true);
+						const c = fx.candles[pv.idx];
+						// 形成中パターンの暫定構成点は最新足の終値（極値判定を通っていない）ので除く。
+						if (pv.idx === lastIdx && pv.extremePrice === pv.price) continue;
+						// triangle_* は独自 relaxed swing（price が最初から high / low）なので price 側も極値。
+						const expected = pv.kind === 'H' ? c.high : c.low;
+						expect(pv.extremePrice, `${fx.name}: idx=${pv.idx} の extremePrice`).toBe(expected);
+					}
+				}
+			}
+			expect(seenPivots, 'fixture が 1 つも pivot を返していない（テストが空回り）').toBeGreaterThan(0);
+		});
 	});
 
 	// ──────────────────────────────────────────────

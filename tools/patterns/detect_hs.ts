@@ -21,6 +21,7 @@ import {
 	validateHorizontalNeckline,
 	validatePriorTrend,
 } from './structural.js';
+import type { Pivot } from './swing.js';
 import type {
 	CandleData,
 	DeduplicablePattern,
@@ -831,7 +832,7 @@ function tryFormingHS(ctx: DetectContext): DeduplicablePattern | null {
 			Math.abs(p.price - left.price) / Math.max(1, left.price) <= FORMING_RIGHT_TOLERANCE_PCT,
 	);
 
-	let rightShoulder: { idx: number; price: number } | null = rightPeakCandidates.length
+	let rightShoulder: Pivot | null = rightPeakCandidates.length
 		? rightPeakCandidates[rightPeakCandidates.length - 1]
 		: null;
 	let isProvisional = false;
@@ -840,7 +841,9 @@ function tryFormingHS(ctx: DetectContext): DeduplicablePattern | null {
 	if (!rightShoulder) {
 		const nearLeft = Math.abs(currentPrice - left.price) / Math.max(1, left.price) <= FORMING_RIGHT_TOLERANCE_PCT;
 		if (nearLeft && currentPrice < head.price && currentPrice > postHeadValley.price) {
-			rightShoulder = { idx: lastIdx, price: currentPrice };
+			// 暫定右肩は確定ピボットではなく最新足の終値。極値判定（前後 swingDepth 本との比較）を
+			// 通っていないので、判定に使った値＝比較に使った currentPrice そのものになる。
+			rightShoulder = { idx: lastIdx, price: currentPrice, kind: 'H', extremePrice: currentPrice };
 			isProvisional = true;
 		}
 	}
@@ -924,10 +927,20 @@ function tryFormingHS(ctx: DetectContext): DeduplicablePattern | null {
 		...(formHsPrecedingTrend ? { precedingTrend: formHsPrecedingTrend } : {}),
 		status: 'forming',
 		pivots: [
-			{ idx: left.idx, price: left.price, kind: 'H' as const },
-			{ idx: head.idx, price: head.price, kind: 'H' as const },
-			{ idx: postHeadValley.idx, price: postHeadValley.price, kind: 'L' as const },
-			{ idx: rightShoulder.idx, price: rightShoulder.price, kind: 'H' as const },
+			{ idx: left.idx, price: left.price, kind: 'H' as const, extremePrice: left.extremePrice },
+			{ idx: head.idx, price: head.price, kind: 'H' as const, extremePrice: head.extremePrice },
+			{
+				idx: postHeadValley.idx,
+				price: postHeadValley.price,
+				kind: 'L' as const,
+				extremePrice: postHeadValley.extremePrice,
+			},
+			{
+				idx: rightShoulder.idx,
+				price: rightShoulder.price,
+				kind: 'H' as const,
+				extremePrice: rightShoulder.extremePrice,
+			},
 		],
 		neckline,
 		trendlineLabel: 'ネックライン',
@@ -969,7 +982,7 @@ function tryFormingInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 			Math.abs(v.price - left.price) / Math.max(1, left.price) <= FORMING_RIGHT_TOLERANCE_PCT,
 	);
 
-	let rightShoulder: { idx: number; price: number } | null = rightValleyCandidates.length
+	let rightShoulder: Pivot | null = rightValleyCandidates.length
 		? rightValleyCandidates[rightValleyCandidates.length - 1]
 		: null;
 	let isProvisional = false;
@@ -978,7 +991,8 @@ function tryFormingInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 	if (!rightShoulder) {
 		const nearLeft = Math.abs(currentPrice - left.price) / Math.max(1, left.price) <= FORMING_RIGHT_TOLERANCE_PCT;
 		if (nearLeft && currentPrice > head.price && currentPrice < postHeadPeak.price) {
-			rightShoulder = { idx: lastIdx, price: currentPrice };
+			// 暫定右肩は確定ピボットではなく最新足の終値（forming H&S 側と同じ扱い）。
+			rightShoulder = { idx: lastIdx, price: currentPrice, kind: 'L', extremePrice: currentPrice };
 			isProvisional = true;
 		}
 	}
@@ -1060,10 +1074,15 @@ function tryFormingInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 		...(formIhsPrecedingTrend ? { precedingTrend: formIhsPrecedingTrend } : {}),
 		status: 'forming',
 		pivots: [
-			{ idx: left.idx, price: left.price, kind: 'L' as const },
-			{ idx: head.idx, price: head.price, kind: 'L' as const },
-			{ idx: postHeadPeak.idx, price: postHeadPeak.price, kind: 'H' as const },
-			{ idx: rightShoulder.idx, price: rightShoulder.price, kind: 'L' as const },
+			{ idx: left.idx, price: left.price, kind: 'L' as const, extremePrice: left.extremePrice },
+			{ idx: head.idx, price: head.price, kind: 'L' as const, extremePrice: head.extremePrice },
+			{ idx: postHeadPeak.idx, price: postHeadPeak.price, kind: 'H' as const, extremePrice: postHeadPeak.extremePrice },
+			{
+				idx: rightShoulder.idx,
+				price: rightShoulder.price,
+				kind: 'L' as const,
+				extremePrice: rightShoulder.extremePrice,
+			},
 		],
 		neckline,
 		trendlineLabel: 'ネックライン',

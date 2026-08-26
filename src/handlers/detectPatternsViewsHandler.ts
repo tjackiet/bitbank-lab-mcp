@@ -10,6 +10,7 @@
 import { formatDateInTz } from '../../lib/datetime.js';
 import { formatFixed, formatInt, formatPctFromRatio, formatRounded } from '../../lib/formatter.js';
 import { toStructured } from '../../lib/result.js';
+import type { Pivot } from '../../tools/patterns/swing.js';
 import type { PatternEntry } from '../../tools/patterns/types.js';
 import type { McpResponse } from '../tool-definition.js';
 
@@ -87,6 +88,11 @@ const toTs = (s?: string): number => {
 const fmtPointList = (arr: unknown): string =>
 	Array.isArray(arr) ? arr.map((p: IndexedPoint) => `[${p.index}:${formatRounded(p.price)}]`).join(', ') : 'n/a';
 
+/** default ケースで details から列挙するフィールド数の上限（content 肥大の抑制）。 */
+const GENERIC_DETAILS_MAX_FIELDS = 16;
+/** ネストしたオブジェクト値を JSON 化するときの最大長。 */
+const GENERIC_DETAILS_MAX_JSON = 160;
+
 // ── shared ──
 
 /**
@@ -111,7 +117,7 @@ export function buildTypeSummary(pats: PatternEntry[], _tz: string = 'Asia/Tokyo
 
 function formatCandidateDetails(c: CandidateDebug): string {
 	if (!c.details) return '\n   details: none';
-	const d = c.details;
+	const d: Record<string, unknown> = c.details;
 	const reason = String(c?.reason ?? '');
 
 	if (reason === 'type_classification_failed') {
@@ -260,16 +266,45 @@ function formatCandidateDetails(c: CandidateDebug): string {
 		return lines.length > 0 ? `\n${lines.join('\n')}` : '\n   details: (no fields)';
 	}
 
-	// default
-	const s1 = Number(d.spreadStart);
-	const s2 = Number(d.spreadEnd);
-	const hi = Number(d.hiSlope);
-	const lo = Number(d.loSlope);
-	const spreadPart =
-		Number.isFinite(s1) && Number.isFinite(s2)
-			? `${Math.round(s1).toLocaleString('ja-JP')} → ${Math.round(s2).toLocaleString('ja-JP')}`
-			: 'n/a';
-	return `\n   spread: ${spreadPart}${Number.isFinite(hi) || Number.isFinite(lo) ? `, slopes: hi=${formatFixed(hi)} lo=${formatFixed(lo)}` : ''}`;
+	// default: 専用フォーマッタを持たない reason（r2_below_threshold / insufficient_touches /
+	// score_below_threshold / containment_violated 等、棄却理由の大半がここに来る）。
+	//
+	// 以前はここで `spreadStart` / `spreadEnd` / `hiSlope` / `loSlope` を決め打ちで読んでいたが、
+	// **この 4 つを details に入れる検出器は 1 つも無い**（`spreadStart` を持つ reason は
+	// すべて上の flagReasons 側で処理される）。結果、どの候補でも `spread: n/a` としか出ず、
+	// 実際に入っている診断値（r2 / touches / score / ratio …）は 1 つも表示されていなかった。
+	// 存在しないフィールドを名指しするのをやめ、details が実際に持つフィールドを列挙する。
+	return formatGenericDetails(d);
+}
+
+/** details に載っている値を 1 行 1 フィールドで列挙する（default ケース用）。 */
+function formatGenericDetails(d: Record<string, unknown>): string {
+	const entries = Object.entries(d).filter(([, v]) => v != null);
+	if (entries.length === 0) return '\n   details: (no fields)';
+	const shown = entries.slice(0, GENERIC_DETAILS_MAX_FIELDS);
+	const lines = shown.map(([k, v]) => `   ${k}: ${formatDetailValue(v)}`);
+	if (entries.length > shown.length) {
+		lines.push(`   … 他 ${entries.length - shown.length} フィールド（structuredContent.data.candidates 参照）`);
+	}
+	return `\n${lines.join('\n')}`;
+}
+
+/** details の 1 値を表示用に整形する。数値は桁を潰さず、オブジェクトは短縮 JSON にする。 */
+function formatDetailValue(v: unknown): string {
+	if (typeof v === 'number') {
+		if (!Number.isFinite(v)) return String(v);
+		if (Number.isInteger(v)) return String(v);
+		// 価格帯の値（数百万円）を toFixed(6) で出すと読めないので、大きい値だけ丸める。
+		return Math.abs(v) >= 1000 ? formatRounded(v) : String(Number(v.toFixed(6)));
+	}
+	if (typeof v === 'string' || typeof v === 'boolean') return String(v);
+	try {
+		const json = JSON.stringify(v);
+		if (typeof json !== 'string') return String(v);
+		return json.length > GENERIC_DETAILS_MAX_JSON ? `${json.slice(0, GENERIC_DETAILS_MAX_JSON)}…` : json;
+	} catch {
+		return String(v);
+	}
 }
 
 export function formatDebugView(
@@ -306,7 +341,12 @@ export function formatDebugView(
 		swingLines.length ? swingLines.join('\n') : 'なし',
 		'',
 		'【Candidates】',
-		candLines.length ? candLines.join('\n') : 'なし',
+		candLines.length
+			? candLines.join('\n')
+			: // 候補ゼロは「この窓でどの検出器も候補を組めなかった」の意。
+				// candidates は入力 `patterns` で絞られる（#124）ので、種別を指定して呼んだ場合は
+				// 「他種別なら候補があったかもしれない」を読み手が区別できるよう明記する。
+				'なし（この窓では要求種別の候補が 1 つも組まれていない。candidates は入力 patterns で絞り込まれる）',
 	].join('\n');
 
 	try {
@@ -408,6 +448,25 @@ function buildPeriodLines(p: PatternEntry, legacyRange: string, tz: string): str
 	return lines.length > 0 ? lines : [`   - 期間: ${legacyRange}`];
 }
 
+/**
+ * pivot の価格を「報告値」と「判定に使った極値」の両方で出す（issue #125）。
+ *
+ * `price` は終値、極値判定は high / low で行われている（`tools/patterns/swing.ts`）。
+ * 片方だけ出すと出力から判定を検算できず、実際に外部レビューが
+ * 「終値基準で極値を取っている＝ピボット抽出器のバグ」と誤読した経緯がある。
+ * 両方が同値のとき（triangle_* の relaxed swing、ヒゲの無い足）は 1 つにまとめて出す。
+ */
+function formatPivotPrices(pv: Pivot): string {
+	const yen = (v: number) => `${Math.round(v).toLocaleString('ja-JP')}円`;
+	const close = Number(pv?.price);
+	const extreme = Number(pv?.extremePrice);
+	const basisLabel = pv?.kind === 'L' ? '安値' : '高値';
+	if (!Number.isFinite(close)) return 'n/a';
+	if (!Number.isFinite(extreme)) return `(${yen(close)})`;
+	if (Math.round(close) === Math.round(extreme)) return `${basisLabel} ${yen(extreme)}（判定は${basisLabel}基準）`;
+	return `終値 ${yen(close)} / ${basisLabel} ${yen(extreme)}（判定は${basisLabel}基準）`;
+}
+
 export function formatPatternLine(
 	p: PatternEntry,
 	idx: number,
@@ -459,7 +518,7 @@ export function formatPatternLine(
 	// pivot detail lines (full/debug + double_top/double_bottom)
 	const pivotLines: string[] = [];
 	if ((view === 'full' || view === 'debug') && Array.isArray(p?.pivots) && p.pivots.length >= 3) {
-		const pivs = p.pivots as Array<{ idx: number; price: number }>;
+		const pivs = p.pivots;
 		const roleLabels =
 			p.type === 'double_top' ? ['山1', '谷', '山2'] : p.type === 'double_bottom' ? ['谷1', '山', '谷2'] : null;
 		if (roleLabels) {
@@ -468,7 +527,7 @@ export function formatPatternLine(
 				if (!pv) continue;
 				const d = idxToIso[Number(pv.idx)] || '';
 				const date = toDateOnly(d || undefined, tz);
-				pivotLines.push(`   - ${roleLabels[i]}: ${date} (${Math.round(Number(pv.price)).toLocaleString('ja-JP')}円)`);
+				pivotLines.push(`   - ${roleLabels[i]}: ${date} ${formatPivotPrices(pv)}`);
 			}
 		}
 	}

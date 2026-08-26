@@ -5,6 +5,7 @@ import { extractUpstreamWarning, prependWarnings } from '../lib/warning-propagat
 import { DetectPatternsOutputSchema, type PatternFilterEnum } from '../src/schemas.js';
 import analyzeIndicators from './analyze_indicators.js';
 import { buildStatistics } from './patterns/aftermath.js';
+import { filterCandidatesByWant } from './patterns/candidate-filter.js';
 import { resolveParams } from './patterns/config.js';
 // --- 各パターン検出モジュール ---
 import { detectDoubles } from './patterns/detect_doubles.js';
@@ -306,16 +307,20 @@ export default async function detectPatterns(
 				suggestedParams: { tolerancePct: 0.03, minBarsBetweenSwings: 2 },
 			});
 		}
+		// --- debug 候補を要求種別で絞る（#124） ---
+		// 各検出器は want を「分類・出力の時点」でしか見ておらず、走査中の候補は無条件に push される。
+		// 絞らずに下の cap トリムへ渡すと、要求していない種別の候補が枠を食い潰して
+		// **要求した種別の棄却理由が押し出される**。トリムより前に 1 箇所で落とす。
+		// want は上の alias 展開（'triangle' → 3 種）済み。残りの alias は候補フィルタ側で扱う。
+		const relevantCandidates = filterCandidatesByWant(debugCandidates, want);
+
 		// --- サイズ抑制: debug 配列を上限でトリム（view未指定で返却が肥大化しやすいため） ---
 		// ただし accepted を優先的に残す（accepted → rejected の順で cap まで）
 		const cap = 200;
 		const swingsTrimmed = Array.isArray(debugSwings) ? debugSwings.slice(0, cap) : [];
-		let candidatesTrimmed: CandDebugEntry[] = [];
-		if (Array.isArray(debugCandidates)) {
-			const acc = debugCandidates.filter((c) => !!c?.accepted);
-			const rej = debugCandidates.filter((c) => !c?.accepted);
-			candidatesTrimmed = [...acc, ...rej].slice(0, cap);
-		}
+		const acc = relevantCandidates.filter((c) => !!c?.accepted);
+		const rej = relevantCandidates.filter((c) => !c?.accepted);
+		const candidatesTrimmed: CandDebugEntry[] = [...acc, ...rej].slice(0, cap);
 		const debugTrimmed = {
 			swings: swingsTrimmed,
 			candidates: candidatesTrimmed,

@@ -220,7 +220,7 @@ API の応答をそのまま、または軽量整形して返す。指標計算�
 
 | ツール | 値 | 何に置き換わるか |
 |---|---|---|
-| `detect_patterns` | `debug` | 検出パターンが `content` から消え、swings / candidates の一覧に入れ替わる |
+| `detect_patterns` | `debug` | 検出パターンが `content` から消え、swings / candidates の一覧に入れ替わる（**`candidates` のみ** `patterns` で絞られる。`swings` は種別に依らないので全件。後述） |
 | `get_volatility_metrics` | `beginner` | 平易な日本語 4 行。専門用語・指標名・フッタは出ない（読者向けレジスタの指定） |
 
 ### 生データ系ツールの既定が全件列挙な理由
@@ -398,6 +398,55 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 
 `analyze_indicators` の `chart.candles` は warmup 分（`chart.meta.pastBuffer` 本）を先頭に含む
 **別配列**なので、これらをそのまま添字として使ってはいけない（使うなら `pastBuffer` を足す）。
+
+### `pivots[].price` は終値、`extremePrice` が判定値
+
+スイング検出（`tools/patterns/swing.ts`）は**極値判定を高値 / 安値で行い、`price` には終値を入れる**。
+ヒゲ 1 本で同水準判定やネックラインが動くのを避けるための意図的な設計だが、`price` だけを見ると
+「終値基準で極値を取っている」と読めてしまう（実際にそう誤読された）。
+
+| フィールド | 中身 |
+|---|---|
+| `data.patterns[*].pivots[].price` | その足の**終値**。構造比較（同水準判定・ネックライン）に使う値 |
+| `data.patterns[*].pivots[].kind` | `H`（山 / 高値側）または `L`（谷 / 安値側） |
+| `data.patterns[*].pivots[].extremePrice` | **極値判定に実際に使った値**。`kind=H` なら `high`、`kind=L` なら `low` |
+
+`view=full` の `content` では double_top / double_bottom の構成点 3 行に両方が出る
+（例: `谷1: 2026-08-03 終値 10,002,960円 / 安値 9,752,246円（判定は安値基準）`）。
+
+**`price` の基準は検出器ごとに違う。全ツール共通で不変なのは `extremePrice` の方だけ。**
+
+| 構成点の出どころ | `price` | `extremePrice` |
+|---|---|---|
+| `detectSwingPoints`（double / triple / H&S） | 終値 | 判定に使った `high` / `low` |
+| `detect_triangles` の relaxed swing（`triangle_*`） | **`high` / `low`** | 同左（`price` と同値） |
+| 形成中 H&S / 逆 H&S の暫定右肩 | 最新足の終値 | 同左（極値判定を通っていない） |
+
+三角形が終値を経由しないのは、**トレンドライン（`upperLine` / `lowerLine`）をこの高安列に
+回帰させており、`neckline` もその線から取る**ため。`price` を終値に差し替えると構成点が
+自分のトレンドライン上に乗らなくなり、`aftermath.theoreticalTarget`
+（`min` / `max(pivots[].price)` 由来）も動く。同値であることは欠損ではなく
+「この検出器は終値を経由していない」という情報として読むこと。
+契約は `tests/detect_patterns_debug.test.ts` が固定している。
+
+### `debug` の candidates は `patterns` で絞られる
+
+`meta.debug.candidates` は各検出器が走査中に積んだ「候補と、その採否・理由コード」。
+**入力 `patterns` を指定した場合は、要求した種別の候補だけが返る**（`patterns` 未指定なら全種別）。
+
+**`meta.debug.swings` は絞られない。** スイング点は `detectSwingPoints` が価格列だけから出すもので
+種別に紐づかないため、`patterns` の指定に関わらず全件返る（上限 200 件のトリムのみ）。
+
+絞らないと `patterns=["double_bottom"]` を指定しても candidates が wedge / triangle で埋まる。
+検出器は `patterns` を「分類・出力の時点」でしか見ておらず、走査中の候補は無条件に積まれるため、
+上限 200 件のトリムで**要求した種別の棄却理由が押し出されていた**。
+
+照合は入力エイリアスを展開して行う（`triangle` → 3 種、`flag` / `pennant` → 各 2 種）。
+候補ラベル側にも方向・形状の分類前に付く umbrella ラベルがあり（`detect_pennants` は分類前の
+棄却をすべて `flag` で積む）、こちらは flag / pennant の**両方**を覆うものとして扱う。
+
+候補が 0 件のときは「この窓で要求種別の候補が 1 つも組まれなかった」の意で、
+`content` にもその旨が出る。**「パターンが無い」ではない。**
 日時で突き合わせるなら `range` / `date` 等の ISO 文字列を使うのが安全。
 
 なお slice 導入前もインデックスは `chart.candles`（= `limit + 199` 本）基準であって「直近 `limit`

@@ -83,7 +83,9 @@ export function assessScanWindow(bars: number, swingDepth: number, minBarsBetwee
  * 窓が足りていなければ `data.warnings` に載せる警告を返す。足りていれば `null`。
  *
  * `suggestedParams.limit` は**構造上の下限**であって「これだけあれば検出できる」値ではない
- * （日数ベースの閾値は別途かかる）。メッセージ側で swingDepth を下げる選択肢も示す。
+ * （各検出器が持つパターンサイズのバー数下限が別途かかる。`patterns/bar-thresholds.ts` で
+ * バー数に統一済み — #121。表は `patterns/min-bars.ts` が導出する）。
+ * メッセージ側で swingDepth を下げる選択肢も示す。
  */
 export function buildScanWindowWarning(params: {
 	type: string;

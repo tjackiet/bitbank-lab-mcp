@@ -77,10 +77,10 @@ function buildDoubleTop(opts?: { peak1?: number; valley?: number; peak2?: number
 	for (let i = 0; i < 5; i++) candles.push(mkCandle(25 - i, brk + 5 - i, brk + 8 - i, brk - 2, brk));
 
 	const pivots: Pivot[] = [
-		{ idx: 0, price: p1, kind: 'H' },
-		{ idx: 10, price: v, kind: 'L' },
-		{ idx: 20, price: p2, kind: 'H' },
-		{ idx: 28, price: brk, kind: 'L' },
+		{ idx: 0, price: p1, kind: 'H', extremePrice: p1 },
+		{ idx: 10, price: v, kind: 'L', extremePrice: v },
+		{ idx: 20, price: p2, kind: 'H', extremePrice: p2 },
+		{ idx: 28, price: brk, kind: 'L', extremePrice: brk },
 	];
 
 	return { candles, pivots };
@@ -117,10 +117,10 @@ function buildDoubleBottom(opts?: { valley1?: number; peak?: number; valley2?: n
 	for (let i = 0; i < 5; i++) candles.push(mkCandle(25 - i, brk - 3 + i, brk + 2, brk - 5, brk));
 
 	const pivots: Pivot[] = [
-		{ idx: 0, price: v1, kind: 'L' },
-		{ idx: 10, price: p, kind: 'H' },
-		{ idx: 20, price: v2, kind: 'L' },
-		{ idx: 28, price: brk, kind: 'H' },
+		{ idx: 0, price: v1, kind: 'L', extremePrice: v1 },
+		{ idx: 10, price: p, kind: 'H', extremePrice: p },
+		{ idx: 20, price: v2, kind: 'L', extremePrice: v2 },
+		{ idx: 28, price: brk, kind: 'H', extremePrice: brk },
 	];
 
 	return { candles, pivots };
@@ -319,8 +319,8 @@ describe('detectDoubles', () => {
 	it('ピボット < 4 個では空結果', () => {
 		const candles = Array.from({ length: 30 }, (_, i) => mkCandle(30 - i, 100, 102, 98, 100));
 		const pivots: Pivot[] = [
-			{ idx: 0, price: 200, kind: 'H' },
-			{ idx: 10, price: 170, kind: 'L' },
+			{ idx: 0, price: 200, kind: 'H', extremePrice: 200 },
+			{ idx: 10, price: 170, kind: 'L', extremePrice: 170 },
 		];
 		const ctx = buildCtx({ candles, pivots });
 		const result = detectDoubles(ctx);
@@ -332,10 +332,10 @@ describe('detectDoubles', () => {
 	it('ピボット間隔 < 5 本 → スキップ', () => {
 		const candles = Array.from({ length: 30 }, (_, i) => mkCandle(30 - i, 100, 102, 98, 100));
 		const pivots: Pivot[] = [
-			{ idx: 0, price: 200, kind: 'H' },
-			{ idx: 3, price: 170, kind: 'L' }, // 間隔3 < minDistDB(5)
-			{ idx: 6, price: 200, kind: 'H' },
-			{ idx: 9, price: 170, kind: 'L' },
+			{ idx: 0, price: 200, kind: 'H', extremePrice: 200 },
+			{ idx: 3, price: 170, kind: 'L', extremePrice: 170 }, // 間隔3 < minDistDB(5)
+			{ idx: 6, price: 200, kind: 'H', extremePrice: 200 },
+			{ idx: 9, price: 170, kind: 'L', extremePrice: 170 },
 		];
 		const ctx = buildCtx({ candles, pivots });
 		const result = detectDoubles(ctx);
@@ -355,8 +355,8 @@ describe('detectDoubles', () => {
 		// 現在価格がピーク付近まで回復
 		for (let i = 45; i < 50; i++) candles[i] = mkCandle(50 - i, 195, 198, 190, 196);
 
-		const allPeaks: Pivot[] = [{ idx: 15, price: 200, kind: 'H' }];
-		const allValleys: Pivot[] = [{ idx: 30, price: 160, kind: 'L' }];
+		const allPeaks: Pivot[] = [{ idx: 15, price: 200, kind: 'H', extremePrice: 200 }];
+		const allValleys: Pivot[] = [{ idx: 30, price: 160, kind: 'L', extremePrice: 160 }];
 
 		const ctx = buildCtx({
 			candles,
@@ -383,10 +383,10 @@ describe('detectDoubles', () => {
 		for (let i = 40; i < 50; i++) candles[i] = mkCandle(50 - i, 195, 198, 190, 196);
 
 		const pivots: Pivot[] = [
-			{ idx: 5, price: 150, kind: 'L' },
-			{ idx: 20, price: 200, kind: 'H' },
-			{ idx: 30, price: 160, kind: 'L' },
-			{ idx: 45, price: 198, kind: 'H' },
+			{ idx: 5, price: 150, kind: 'L', extremePrice: 150 },
+			{ idx: 20, price: 200, kind: 'H', extremePrice: 200 },
+			{ idx: 30, price: 160, kind: 'L', extremePrice: 160 },
+			{ idx: 45, price: 198, kind: 'H', extremePrice: 198 },
 		];
 
 		const ctx = buildCtx({ candles, pivots, includeForming: false });
@@ -410,11 +410,11 @@ describe('detectDoubles', () => {
 		for (let i = 40; i < 50; i++) candles[i] = mkCandle(50 - i, 125, 128, 122, 126);
 
 		const pivots: Pivot[] = [
-			{ idx: 5, price: 135, kind: 'H' },
-			{ idx: 10, price: 100, kind: 'L' },
-			{ idx: 20, price: 130, kind: 'H' },
-			{ idx: 30, price: 100, kind: 'L' },
-			{ idx: 45, price: 128, kind: 'H' },
+			{ idx: 5, price: 135, kind: 'H', extremePrice: 135 },
+			{ idx: 10, price: 100, kind: 'L', extremePrice: 100 },
+			{ idx: 20, price: 130, kind: 'H', extremePrice: 130 },
+			{ idx: 30, price: 100, kind: 'L', extremePrice: 100 },
+			{ idx: 45, price: 128, kind: 'H', extremePrice: 128 },
 		];
 		const allPeaks = pivots.filter((p) => p.kind === 'H');
 		const allValleys = pivots.filter((p) => p.kind === 'L');
@@ -493,8 +493,8 @@ describe('detectDoubles', () => {
 		candles[30] = mkCandle(20, 163, 168, 160, 165);
 		for (let i = 45; i < 50; i++) candles[i] = mkCandle(50 - i, 195, 198, 190, 196);
 
-		const allPeaks: Pivot[] = [{ idx: 15, price: 200, kind: 'H' }];
-		const allValleys: Pivot[] = [{ idx: 30, price: 160, kind: 'L' }];
+		const allPeaks: Pivot[] = [{ idx: 15, price: 200, kind: 'H', extremePrice: 200 }];
+		const allValleys: Pivot[] = [{ idx: 30, price: 160, kind: 'L', extremePrice: 160 }];
 
 		const ctx = buildCtx({
 			candles,
@@ -521,11 +521,11 @@ describe('detectDoubles', () => {
 		for (let i = 40; i < 50; i++) candles[i] = mkCandle(50 - i, 125, 128, 122, 126);
 
 		const pivots: Pivot[] = [
-			{ idx: 5, price: 135, kind: 'H' },
-			{ idx: 10, price: 100, kind: 'L' },
-			{ idx: 20, price: 130, kind: 'H' },
-			{ idx: 30, price: 100, kind: 'L' },
-			{ idx: 45, price: 128, kind: 'H' },
+			{ idx: 5, price: 135, kind: 'H', extremePrice: 135 },
+			{ idx: 10, price: 100, kind: 'L', extremePrice: 100 },
+			{ idx: 20, price: 130, kind: 'H', extremePrice: 130 },
+			{ idx: 30, price: 100, kind: 'L', extremePrice: 100 },
+			{ idx: 45, price: 128, kind: 'H', extremePrice: 128 },
 		];
 		const allPeaks = pivots.filter((p) => p.kind === 'H');
 		const allValleys = pivots.filter((p) => p.kind === 'L');
