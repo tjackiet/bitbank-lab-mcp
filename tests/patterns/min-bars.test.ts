@@ -149,10 +149,14 @@ describe('minBarsForDetector — 導出式', () => {
 		expect([...distinct]).toEqual([21]);
 	});
 
-	it('flag_pennant: 旗竿と保ち合いの最小バー数の合計', () => {
+	it('flag_pennant: スキャンループの初回反復に入れる最小本数', () => {
 		for (const tf of ALL_TIMEFRAMES) {
 			const { poleMinBars, consMinBars } = getFlagParams(tf);
-			expect(minBarsForDetector(tf, 'flag_pennant'), `${tf}`).toBe(poleMinBars + consMinBars);
+			const bars = minBarsForDetector(tf, 'flag_pennant');
+			// ループは `poleEnd = poleMinBars` から `poleEnd <= lastIdx - consMinBars` で回る
+			const lastIdxAt = (windowBars: number) => windowBars - 1;
+			expect(poleMinBars, `${tf}`).toBeLessThanOrEqual(lastIdxAt(bars) - consMinBars);
+			expect(poleMinBars, `${tf}（1 本不足）`).toBeGreaterThan(lastIdxAt(bars - 1) - consMinBars);
 		}
 	});
 

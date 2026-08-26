@@ -936,8 +936,8 @@ describe('検出器の到達性 — 日数閾値 vs 既定スキャン窓', () =
 		{
 			tf: '1min',
 			detector: 'flag_pennant',
-			requiredBars: 4320,
-			reason: '#118 問題 2: 最小 1+2日 = 4320本。limit 上限 365 でも到達不能',
+			requiredBars: 4321,
+			reason: '#118 問題 2: 最小 1+2日 = 4321本。limit 上限 365 でも到達不能',
 		},
 		{
 			tf: '5min',
@@ -954,8 +954,8 @@ describe('検出器の到達性 — 日数閾値 vs 既定スキャン窓', () =
 		{
 			tf: '5min',
 			detector: 'flag_pennant',
-			requiredBars: 864,
-			reason: '#118 問題 2: 最小 1+2日 = 864本。limit 上限 365 でも到達不能',
+			requiredBars: 865,
+			reason: '#118 問題 2: 最小 1+2日 = 865本。limit 上限 365 でも到達不能',
 		},
 		{
 			tf: '15min',
@@ -972,8 +972,8 @@ describe('検出器の到達性 — 日数閾値 vs 既定スキャン窓', () =
 		{
 			tf: '15min',
 			detector: 'flag_pennant',
-			requiredBars: 288,
-			reason: '#118 問題 2: 最小 1+2日 = 288本。limit 上限 365 でも到達不能',
+			requiredBars: 289,
+			reason: '#118 問題 2: 最小 1+2日 = 289本。limit 上限 365 でも到達不能',
 		},
 		{
 			tf: '30min',
@@ -990,8 +990,8 @@ describe('検出器の到達性 — 日数閾値 vs 既定スキャン窓', () =
 		{
 			tf: '30min',
 			detector: 'flag_pennant',
-			requiredBars: 144,
-			reason: '#118 問題 2: 最小 1+2日 = 144本。limit 上限 365 でも到達不能',
+			requiredBars: 145,
+			reason: '#118 問題 2: 最小 1+2日 = 145本。limit 上限 365 でも到達不能',
 		},
 		{
 			tf: '1hour',

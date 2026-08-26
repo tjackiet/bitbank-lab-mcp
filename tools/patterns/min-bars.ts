@@ -108,13 +108,13 @@ export function minBarsForDetector(tf: string, detector: MinBarsDetector): numbe
 		case 'triangle':
 			return getTriangleParams(tf).minWindowBars + 6;
 
-		// detect_pennants.ts: 旗竿（最小 1 日）と保ち合い（最小 2 日）の最小日数をバー換算した合計。
-		// docs §2 の「flag / pennant（最小 1+2日）」列と同じ意味論。
-		// なお実際のスキャンループ（`poleEnd <= lastIdx - consMinBars`）は `poleEnd` が添字である分
-		// もう 1 本要るが、その 1 本は日数でスケールしない構造分なのでここには含めない。
+		// detect_pennants.ts: スキャンループは `poleEnd = poleMinBars` から始まり
+		// `poleEnd <= lastIdx - consMinBars` で回る。`poleEnd` は添字なので初回の反復に入るには
+		// `bars >= poleMinBars + consMinBars + 1` が要る（旗竿と保ち合いの境界となる 1 本ぶん）。
+		// forming_triple / completed_wedge の +1 と同じ性質の端点で、揃えて含める。
 		case 'flag_pennant': {
 			const { poleMinBars, consMinBars } = getFlagParams(tf);
-			return poleMinBars + consMinBars;
+			return poleMinBars + consMinBars + 1;
 		}
 	}
 }

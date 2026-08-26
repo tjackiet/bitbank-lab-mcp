@@ -14,6 +14,7 @@
 - **到達性テストを `tests/patterns/invariants.test.ts` に追加した（不変条件 9）。** 「全時間足 × 既定 `limit`（90）で、各検出器の最小要求バー数 ≤ スキャン窓」を検証する。現状は 16 組が未到達なので **allowlist として明示**し、「allowlist の外に未到達が無いこと」を固定した（CI は今日通る）。各行に要求本数・理由・#118 の対応箇所を持たせ、閾値を下げて到達可能になった行が残っていても落ちるようにしてある（stale 検出）。16 行すべてが load-bearing（1 行消すと必ず落ちる）ことを確認済み。
 - **重複していた手書きの `daysPerBar` を 1 箇所に寄せた。** `detect_doubles` / `detect_hs` の 4 箇所にあった `ctx.type === '1day' ? 1 : ctx.type === '1week' ? 7 : 1` を `helpers.formingReversalDaysPerBar` に抽出した。**式は変えていない**——これが intraday と `1month` で誤っている件（#118 問題 3）は閾値の単位の設計判断が要るため PR B の担当で、ここでは「誤っていることを 1 箇所に書いて明示する」に留める。
 - **本 PR の対象は日数閾値由来の下限のみ。** 構造的下限（`swingDepth` 由来）は `patterns/scan-window.ts` が担当し、二重には持たない。時間足でスケールしない絶対ガード（`detect_pennants` / `detect_triangles` の `lastIdx < 15`、`detect_patterns.ts` の `candles.length < 20`）はいずれも 21 本以下で既定 `limit` では効かないため導出値に含めていない（理由は `min-bars.ts` のヘッダに明記）。
+- **flag / pennant の要求本数は端点 1 本を含む（`poleMinBars + consMinBars + 1`）。** `detect_pennants` のスキャンループは `poleEnd = poleMinBars` から `poleEnd <= lastIdx - consMinBars` で回り、`poleEnd` は添字なので初回の反復に入るには旗竿と保ち合いの境界となる 1 本が要る。forming triple（`formationBars` の添字差）と完成済み wedge（`start + size < totalBars`）の +1 と同じ性質で、揃えて含めた。`docs/tools.md` の当該列も同時に直している（例: `1day` 5→6、`4hour` 18→19）。**到達性は変わらない**——既定 `limit`（90）の判定は全時間足で同じ結果になる。
 - **検出結果（`data.patterns`）は完全一致。** 9 時間足 × 7 形状 × 4 窓長 × forming 有無 = 504 ケース・1040 パターンを変更前後で突き合わせ、byte 一致を確認した。
 
 ### Changed（`detect_patterns` の description に検出の意味論を明記）

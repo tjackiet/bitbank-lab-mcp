@@ -430,17 +430,17 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 
 | 時間足 | forming triple（21日） | 完成済み wedge（25日窓） | flag / pennant（最小 1+2日） |
 |---|---|---|---|
-| `1min` | 29521 | 36001 | 4320 |
-| `5min` | 5905 | 7201 | 864 |
-| `15min` | 1969 | 2401 | 288 |
-| `30min` | 985 | 1201 | 144 |
-| `1hour` | 493 | 601 | 72 |
-| `4hour` | 124 | 151 | 18 |
-| `8hour` | 63 | 76 | 9 |
-| `12hour` | 42 | 51 | 6 |
-| `1day` | 22 | 26 | 5 |
-| `1week` | 4 | 16 | 5 |
-| `1month` | 2 | 16 | 5 |
+| `1min` | 29521 | 36001 | 4321 |
+| `5min` | 5905 | 7201 | 865 |
+| `15min` | 1969 | 2401 | 289 |
+| `30min` | 985 | 1201 | 145 |
+| `1hour` | 493 | 601 | 73 |
+| `4hour` | 124 | 151 | 19 |
+| `8hour` | 63 | 76 | 10 |
+| `12hour` | 42 | 51 | 7 |
+| `1day` | 22 | 26 | 6 |
+| `1week` | 4 | 16 | 6 |
+| `1month` | 2 | 16 | 6 |
 
 > 上の 2 つの表は手書きではない。構造的下限は `tools/patterns/scan-window.ts`（`assessScanWindow`）、
 > 日数閾値由来の下限は `tools/patterns/min-bars.ts`（`minBarsForDetector`）から導出した値で、
