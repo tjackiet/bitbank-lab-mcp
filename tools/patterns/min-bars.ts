@@ -1,21 +1,25 @@
 /**
  * patterns/min-bars.ts - 「時間足 × 検出器 → 最小要求バー数」の単一ソース
  *
- * `docs/tools.md` の「`limit` の実効下限」§2（日数閾値由来の下限）を、手書きの表ではなく
- * 各検出器の定数から導出する。閾値そのものは各検出器に置いたまま（値は変えない）、
+ * `docs/tools.md` の「`limit` の実効下限」§2（パターンサイズ由来の下限）を、手書きの表ではなく
+ * 各検出器の定数から導出する。閾値そのものは各検出器に置いたまま、
  * **どの時間足でどれだけの窓が要るか**の計算だけをここに集約する。
  *
  * ## なぜ要るか
  *
- * #114 でスキャン窓が「直近 `limit` 本」に一致した結果、日数ベースの閾値が窓を超えると
+ * #114 でスキャン窓が「直近 `limit` 本」に一致した結果、閾値が窓を超えると
  * **そのパターン種別だけが静かに 0 件になる**（issue #118）。閾値は 6 ファイルに散っていて、
  * 個々の組み合わせが到達可能かどうかを人手で追えない。ここで機械可読にしておけば、
  * 到達性を CI で固定でき、閾値を動かしたときに何が到達不能になるかが即座に分かる。
  *
+ * 閾値のプリミティブは `patterns/bar-thresholds.ts` でバー数に統一済み
+ * （`detect_triples` / `detect_wedges` / `detect_triangles` / `detect_pennants`）。
+ * `detect_doubles` / `detect_hs` の形成中判定だけが日数のまま残っている。
+ *
  * ## 何を返すか / 返さないか
  *
- * 返すのは **日数閾値由来の下限**、つまり「その時間足で日数（または日数換算の窓サイズ）の
- * 条件が満たされうる最小のスキャン窓本数」。`docs/tools.md` §2 の表と同じ意味論で、
+ * 返すのは **パターンサイズ閾値由来の下限**、つまり「その時間足でパターンの大きさの条件が
+ * 満たされうる最小のスキャン窓本数」。`docs/tools.md` §2 の表と同じ意味論で、
  * 以下は**含めない**:
  *
  * - スイング検出の構造的下限（前後 `swingDepth` 本の除外）
@@ -27,7 +31,7 @@
  *
  * ## 対象外の検出器
  *
- * - **完成済み double / triple / H&S**: 日数閾値を持たない（ピボット構造のみ）。
+ * - **完成済み double / triple / H&S**: サイズ閾値を持たない（ピボット構造のみ）。
  * - **形成中 wedge**: `formingWindowMin` は下限に見えるが、`detect_wedges` は
  *   「最新に揃えた特別ウィンドウ」を `Math.max(0, lastIdx - size)` で clamp して必ず積むため、
  *   窓が足りなくても候補が消えない。ハードなゲートではないのでここでは扱わない。
@@ -37,12 +41,12 @@ import { MIN_PATTERN_DAYS as DOUBLE_FORMING_MIN_DAYS } from './detect_doubles.js
 import { FORMING_MIN_DAYS as HS_FORMING_MIN_DAYS } from './detect_hs.js';
 import { getFlagParams } from './detect_pennants.js';
 import { getTriangleParams } from './detect_triangles.js';
-import { FORMING_MIN_DAYS as TRIPLE_FORMING_MIN_DAYS } from './detect_triples.js';
+import { getTripleFormingBarParams } from './detect_triples.js';
 import { getWedgeBarParams } from './detect_wedges.js';
-import { barsPerDay, formingReversalDaysPerBar } from './helpers.js';
+import { formingReversalDaysPerBar } from './helpers.js';
 
 /**
- * 日数閾値を持つ検出器の識別子。
+ * パターンサイズの下限を持つ検出器の識別子。
  *
  * `docs/tools.md` §2 の表が持つのは `forming_triple` / `completed_wedge` / `flag_pennant` の
  * 3 列だが、同じクラスの閾値を持つ `forming_double` / `forming_hs` / `triangle` も
@@ -77,7 +81,7 @@ function barsForFormationDays(minDays: number, barsPerDayValue: number): number 
 /**
  * その時間足でその検出器が候補を作りうる最小のスキャン窓本数を返す。
  *
- * 「この本数あれば検出できる」ではなく「これ未満だと日数閾値で構造的に 0 件」という下限。
+ * 「この本数あれば検出できる」ではなく「これ未満だとサイズ閾値で構造的に 0 件」という下限。
  * 実効的な制約は `limit` そのものではなく `meta.scan.bars`（実際に走査した本数）。
  */
 export function minBarsForDetector(tf: string, detector: MinBarsDetector): number {
@@ -92,9 +96,10 @@ export function minBarsForDetector(tf: string, detector: MinBarsDetector): numbe
 		case 'forming_hs':
 			return barsForFormationDays(HS_FORMING_MIN_DAYS, 1 / formingReversalDaysPerBar(tf));
 
-		// detect_triples.ts: こちらは helpers の `daysPerBar` を使っているので barsPerDay で換算する。
+		// detect_triples.ts: 形成中判定はバー数で行う（`patterns/bar-thresholds.ts` の換算）。
+		// `formationBars` は添字の差（`lastIdx - firstPivot.idx`）なので、窓としては 1 本多く要る。
 		case 'forming_triple':
-			return barsForFormationDays(TRIPLE_FORMING_MIN_DAYS, barsPerDay(tf));
+			return getTripleFormingBarParams(tf).minBars + 1;
 
 		// detect_wedges.ts: `generateWindows` は `start + size < totalBars` で回すので、
 		// 最小サイズの窓が 1 つでも生成されるには `totalBars >= windowSizeMin + 1` が要る。
@@ -104,7 +109,7 @@ export function minBarsForDetector(tf: string, detector: MinBarsDetector): numbe
 		// detect_triangles.ts: `effectiveMax = Math.min(lastIdx - 5, maxWindowBars)` に対して
 		// `minWindowBars <= effectiveMax` でないと windowSizes が空になる。
 		// → `lastIdx >= minWindowBars + 5` → `bars >= minWindowBars + 6`。
-		// `minWindowBars` は時間足でスケールしない定数（15）なので、値は全時間足で 21。
+		// `minWindowBars` は構造的下限（`structuralFloorBars`）なので時間足でスケールする。
 		case 'triangle':
 			return getTriangleParams(tf).minWindowBars + 6;
 
@@ -127,7 +132,7 @@ export function minBarsTableForTf(tf: string): Record<MinBarsDetector, number> {
 }
 
 /**
- * その検出器がそのスキャン窓で到達可能か（＝日数閾値が窓を超えていないか）。
+ * その検出器がそのスキャン窓で到達可能か（＝サイズ閾値が窓を超えていないか）。
  *
  * @param bars スキャン窓の本数（実効値は `meta.scan.bars`）
  */

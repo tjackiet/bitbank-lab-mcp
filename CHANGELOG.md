@@ -7,6 +7,40 @@
 
 ## [Unreleased]
 
+### Changed（**挙動変更**: パターン閾値のプリミティブを日数からバー数に統一し、上限クランプを入れた）
+- **`detect_triples` / `detect_wedges` / `detect_triangles` / `detect_pennants` の閾値を「日数 × `barsPerDay`」からバー数に移した（#118 問題 1 / 2）。** 換算は `tools/patterns/bar-thresholds.ts` に集約し、`minBars = clamp(round(days × barsPerDay(tf)), structuralFloorBars(tf), patternBarsCap(tf))` の 1 形に統一している。**検出件数が広く変わる。**
+- **原因は閾値が小さすぎることではなく大きすぎること。** 「25 日窓」は `1hour` で 600 本、`1min` で 36000 本を要求し、既定 `limit`（90）はもちろん `limit` のスキーマ上限（365）でも到達不能だった。必要なのは floor ではなく **cap** ——`detect_wedges` の `MIN_STRUCTURAL = 15` 方式（floor のみ）では解けない。`max(15, round(25 × bpd))` の floor 側が選ばれるのは `1week` / `1month` だけで、`1day` 以下では日数換算値が必ず floor を上回るため、intraday では一度も発火しない。
+- **下限は `patterns/scan-window.ts` の `assessScanWindow`（`minViableLimit`）から導出する。** 時間足ごとの `swingDepth` / `minBarsBetweenSwings` が既に効いているので「その時間足で形が成立する最小の窓」という意味が付く。マジックナンバー 15（`detect_wedges` の `MIN_STRUCTURAL`、`detect_triangles` の `minWindowBars`）は廃止した。実効値は `1min`/`5min` 15、`15min`〜`1hour` 17、`4hour`〜`12hour` 21、`1day` 23、`1week` 25、`1month` 29。
+- **上限は下限の定数倍（`PATTERN_BARS_CAP_MULTIPLIER = 2`）。走査窓（`limit`）には依存させていない**——同じデータで `limit` 次第にパターンの定義が変わるのを避けるため。倍率 2 は「既定 `limit`=90 で全時間足・全種別が到達可能」を満たす**唯一の整数倍率**: 1 では上限 = 下限で clamp が潰れて日数換算値が 1 つも生き残らず、3 以上では flag / pennant が `15min` / `30min` で `3 × 17 × 2 + 1 = 103` 本 > 90 本となり再び到達不能になる。この 2 点は `tests/patterns/bar-thresholds.test.ts` が機械的に固定している。
+- **日数は description の注記に降格した。** 閾値の本来の意図は「形が成立するだけの構造がある」ことであって暦日数ではない。1時間足の利用者にとって「21 暦日にまたがるトリプルトップ」は要件として意味を持たない。コード上は定数名（`FORMING_MIN_DAYS` / `WINDOW_MIN_DAYS` 等）として値の出どころを残すだけにしてある。
+- **最大側は「bar 空間でも日数比を保つ」形にした**（`patternBarRange`）。最小側だけクランプすると `1week` / `1month` で `minBars > maxBars` の反転が起き、そのパターンが丸ごと 0 件になる（例: `1week` の形成中トリプルは下限 25 本・上限 13 本になっていた）。素の `round(maxDays × bpd)` を上限に使わないのは、形成中ウェッジの窓ループが走査窓長で頭打ちにならず、intraday で反復回数が爆発するため。
+- **旗竿・保ち合い（`detect_pennants`）には構造的下限を掛けていない。** 下限の前提は「前後 `swingDepth` 本の除外」と「3 ピボットの最小間隔」だが、旗竿は単一のインパルス脚でピボット構造ではない。`1day` に下限 23 本を掛けると `poleMinBars`(23) > `poleMaxBars`(15) となり検出が全滅する。下限は旧実装の絶対値（旗竿 2 本 / 保ち合い 3 本）のまま、上限クランプだけを適用した。
+- **パターン内部の比率は窓サイズに対する比で持つようにした。** `detect_wedges` の `windowStep` / `maxTouchGap` / `maxStartGap` / `formingMinBarsBeforeBreak` は日数換算をやめ、`windowSizeMin` に対する比（旧実装の 5/25、25/25、10/25、15/25 日）で決める。`1day` では旧値（5 / 25 / 10 / 15 本）と完全に一致する。`windowStep` の頭打ちは必須で、これが無いと `1hour` の step 120 に対して窓が 34 本しか無く、走査ウィンドウが 1 つ（`[0, 34]`）しか生成されない。
+- **既定 `limit`（90）での到達性:** 到達不能だった 16 組（PR A の allowlist）が**すべて解消し、allowlist は空になった**。`tests/patterns/invariants.test.ts` の不変条件 9 は「未到達の組み合わせがゼロ」を直接固定する形に変えてある。
+- **実際に検出できることも回帰テストで固定した**（`tests/patterns/default-limit-detection.test.ts`）。到達性テストは「閾値が窓に収まるか」という算術しか見ないので、合成データを 90 本与えて `1day` / `4hour` / `1hour` で完成済み wedge・形成中 triple が実際に返ることを別途検証する。変更前は `4hour` / `1hour` の両方が 0 件だった。
+- **最小要求バー数の変化**（`docs/tools.md` §2 と同じ意味論。`limit` がこれ未満だとその種別だけが 0 件になる）:
+
+  | 時間足 | 形成中 triple | 完成済み wedge | 三角形 | flag / pennant |
+  |---|---|---|---|---|
+  | `1min` | 29521 → **31** | 36001 → **31** | 21 → **21** | 4321 → **61** |
+  | `1hour` | 493 → **35** | 601 → **35** | 21 → **23** | 73 → **59** |
+  | `4hour` | 124 → **43** | 151 → **43** | 21 → **27** | 19 → **19** |
+  | `1day` | 22 → **24** | 26 → **26** | 21 → **29** | 6 → **6** |
+  | `1week` | 4 → **26** | 16 → **26** | 21 → **31** | 6 → **6** |
+  | `1month` | 2 → **30** | 16 → **30** | 21 → **35** | 6 → **6** |
+
+  `1week` / `1month` は**上がっている**。日数換算値（`1week` の形成中トリプルは 21 ÷ 7 = 3 バー）が
+  `minDist=5` の 3 ピボットすら張れない値で、下限として機能していなかったため。
+
+- **テストの期待値更新は 3 件。** いずれも意図的な契約変更:
+  - `detect_triples` の `1hour` / `1week` の形成中判定テスト（旧: 720 本 = 30 暦日 / 8 本 = 56 暦日）を、新しい形成バー数レンジ（`1hour` [34, 146] / `1week` [25, 107]）の内側に置き直した。旧値はいずれも新レンジの**外**で、`1hour` の 720 本は既定 `limit` では取得すらできない本数だった。
+  - `detect_triangles` の fixture（`buildDescendingTriangleInvalidBreakoutCandles`）を三角形本体 18 本 → 24 本に伸ばした。`1day` の最小窓が 15 → 23 本になり、旧 fixture では `windowSizes` が空になる。追加分は既存と同じ形（切り下がる高値・水平な安値）を 1 サイクル伸ばしただけ。
+  - `detect_wedges` の時間軸スケーリングテストは**期待値は変えていない**が、根拠のコメントが実装と食い違うようになったため書き直した（`1hour` の 80 本で 0 件になる理由は「窓が足りない」から「収束が浅い」に変わっている）。
+- **`detect_doubles` / `detect_hs` は対象外**（別 PR）。手書きの bars-per-day（`1day`→1 / `1week`→7 / それ以外→1）を持ち、`1month` で 14 バー = 14 ヶ月を要求している件（#118 問題 3）は単位の設計判断とセットで直す。既定 `limit` では両者とも到達可能なので、allowlist は空のままで良い。
+- **`docs/tools.md` の「`limit` の実効下限」§2 の表を新しい値に更新した。** 表は手書きではなく `minBarsForDetector` からの導出値で、`tests/patterns/min-bars.test.ts` が docs をパースして一致を検証している（見出しも「日数閾値由来の下限」→「パターンサイズ由来の下限」に改めた）。
+- **上限（`patternBarsCap`）は最小側にしか掛けない。** cap の役割は「最小要求バー数が既定 `limit`（90）に収まること」だけで、最大側は到達性に関与しない。最大側にも掛けると cap が効く時間足で `minBars === maxBars` になり、レンジ判定が等値判定に退化する（`1hour` の形成中トリプルは `formationBars` がちょうど 34 本のときだけ通り、完成済みウェッジの走査ウィンドウは 8 サイズ → 1 サイズに潰れる）。`1day` も [25, 90] → [25, 46] に狭まって本 PR 以前と同一だった挙動が壊れる。`detect_triangles` の `maxWindowBars` が cap を `Math.max` の側に置いているのも同じ理由で、実際に使うのは `effectiveMax = min(lastIdx - 5, maxWindowBars)` なので走査窓長で必ず頭打ちになる。この不変条件は `tests/patterns/bar-thresholds.test.ts` が固定している（CodeRabbit review, PR #121）。
+
+
 ### Added（検出器ごとの最小要求バー数を単一ソース化し、到達性を機械的に固定した）
 - **「時間足 × 検出器 → 最小要求バー数」の導出を `tools/patterns/min-bars.ts` に集約した（挙動変更なし）。** #118 の 3 件は「日数閾値がスキャン窓を超え、そのパターン種別だけが静かに 0 件になる」という同一クラスの individual instance で、個別に直しても再発する。閾値は 6 ファイル（`detect_doubles` / `detect_hs` / `detect_triples` / `detect_wedges` / `detect_triangles` / `detect_pennants`）に散っていて、どの組み合わせが到達可能かを人手で追えないのが根本原因。**閾値の値は 1 つも変えず**、「その時間足でどれだけの窓が要るか」の計算だけを 1 箇所に寄せてクラスを閉じた。
 - **導出は各検出器の定数を import して行う**（写経しない）。`MIN_PATTERN_DAYS`（doubles）/ `FORMING_MIN_DAYS`（H&S / triples）/ `getWedgeBarParams` / `getTriangleParams` / `getFlagParams` を export し、`min-bars.ts` がそれを参照する。閾値を動かせば導出値も自動で追随する。

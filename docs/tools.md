@@ -424,39 +424,52 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 | `1week` | 7 | 25 |
 | `1month` | 8 | 29 |
 
-**2. 日数閾値由来の下限（警告なし）** — 各検出器は日数の閾値を `barsPerDay` でバー数に換算する
-（`patterns/helpers.ts`）。窓が狭いとバー数の要求が窓を超え、**そのパターン種別だけが静かに 0 件になる**。
-主な要求本数:
+**2. パターンサイズ由来の下限（警告なし）** — 各検出器は「パターンがどれだけの大きさなら
+成立するか」の閾値を持つ。窓が狭いとその要求が窓を超え、**そのパターン種別だけが静かに 0 件になる**。
 
-| 時間足 | forming triple（21日） | 完成済み wedge（25日窓） | flag / pennant（最小 1+2日） |
+閾値のプリミティブは**バー数**で、`tools/patterns/bar-thresholds.ts` が
+`clamp(round(日数 × barsPerDay), 構造的下限, 構造的下限 × 2)` で決める（列見出しの日数は
+値の出どころを示す注記であって、暦日数の要件ではない）。上限を構造的下限の定数倍に置いてあるので、
+**既定 `limit`=90 ではどの時間足・どの種別も到達可能**。主な要求本数:
+
+| 時間足 | forming triple（21日由来） | 完成済み wedge（25日窓由来） | flag / pennant（最小 1+2日由来） |
 |---|---|---|---|
-| `1min` | 29521 | 36001 | 4321 |
-| `5min` | 5905 | 7201 | 865 |
-| `15min` | 1969 | 2401 | 289 |
-| `30min` | 985 | 1201 | 145 |
-| `1hour` | 493 | 601 | 73 |
-| `4hour` | 124 | 151 | 19 |
-| `8hour` | 63 | 76 | 10 |
-| `12hour` | 42 | 51 | 7 |
-| `1day` | 22 | 26 | 6 |
-| `1week` | 4 | 16 | 6 |
-| `1month` | 2 | 16 | 6 |
+| `1min` | 31 | 31 | 61 |
+| `5min` | 31 | 31 | 61 |
+| `15min` | 35 | 35 | 69 |
+| `30min` | 35 | 35 | 69 |
+| `1hour` | 35 | 35 | 59 |
+| `4hour` | 43 | 43 | 19 |
+| `8hour` | 43 | 43 | 10 |
+| `12hour` | 43 | 43 | 7 |
+| `1day` | 24 | 26 | 6 |
+| `1week` | 26 | 26 | 6 |
+| `1month` | 30 | 30 | 6 |
+
+`detect_triangles` も同じ換算に乗っている（最小窓 = 構造的下限。要求本数は `1min` / `5min` が 21、
+`1hour` 以下が 23、`4hour`〜`12hour` が 27、`1day` 29、`1week` 31、`1month` 35）。
+**`detect_doubles` / `detect_hs` の形成中判定だけは日数のまま**で、独自の bars-per-day
+（`1day`→1 / `1week`→7 / それ以外→1）を使う。intraday では実質バー数閾値として効くため既定
+`limit` に収まっているが、`1month` は 14 バー = 14 ヶ月を要求しており単位が誤っている（#118 問題 3）。
 
 > 上の 2 つの表は手書きではない。構造的下限は `tools/patterns/scan-window.ts`（`assessScanWindow`）、
-> 日数閾値由来の下限は `tools/patterns/min-bars.ts`（`minBarsForDetector`）から導出した値で、
+> パターンサイズ由来の下限は `tools/patterns/min-bars.ts`（`minBarsForDetector`）から導出した値で、
 > `tests/patterns/min-bars.test.ts` が**本ファイルをパースして**一致を検証している。
 > 閾値を動かしたら表も同時に直すこと（直さないと CI が落ちる）。
-> 到達性（既定 `limit` で各検出器が窓に収まるか）は `tests/patterns/invariants.test.ts` の
-> allowlist で固定してある。
+> 到達性（既定 `limit` で各検出器が窓に収まるか）は `tests/patterns/invariants.test.ts` が
+> 「未到達の組み合わせがゼロ」として固定してある。
 
 実効的な制約は `limit` そのものではなく **`meta.scan.bars`（実際に走査した本数）**。
-`analyze_indicators` は `chart.meta.pastBuffer` を常に返すので `meta.scan.bars ≤ limit ≤ 365` が成り立ち、
-**この表の値が 365 を超える組み合わせは実運用では検出できない**
-（`1hour` の forming triple / wedge、`30min` 以下の大半）。例外は `pastBuffer` が取れなかった場合の
-全件走査フォールバックで、このときだけ `meta.scan.bars` が `limit` を超えうる（上流の形が変わらない限り
-起きない）。**到達可否の判断は `limit` ではなく `meta.scan.bars` を見ること。**
+`analyze_indicators` は `chart.meta.pastBuffer` を常に返すので `meta.scan.bars ≤ limit ≤ 365` が成り立つ。
+**この表の値はすべて既定 `limit`（90）以下**なので、`limit` を既定のまま使う限りどの組み合わせも
+走査窓に収まる。`limit` を既定より小さくしたときだけ、表の値を下回る種別が静かに 0 件になる。
+例外は `pastBuffer` が取れなかった場合の全件走査フォールバックで、このときだけ `meta.scan.bars` が
+`limit` を超えうる（上流の形が変わらない限り起きない）。
+**到達可否の判断は `limit` ではなく `meta.scan.bars` を見ること。**
 
-`4hour` は既定 `limit=90` では forming triple も完成済み wedge も出ないので、必要なら `limit≥151` を指定する。
+> バー数に統一する前は `1hour` の forming triple が 493 本・完成済み wedge が 601 本を要求しており、
+> `limit` の上限 365 でも到達不能だった。`4hour` も既定 `limit=90` では両方とも出ず、`limit≥151` が
+> 必要だった（#118 問題 1 / 2）。現在はいずれも既定 `limit` で到達できるので、この回避策は不要。
 
 `detect_doubles` / `detect_hs` の forming 判定だけは `helpers.daysPerBar` ではなく独自の換算
 （`1day`→1 / `1week`→7 / **それ以外→1**）を使っており、この表の対象外。intraday では

@@ -13,8 +13,8 @@
  */
 import { EPSILON } from '../../lib/math.js';
 import { generatePatternDiagram, type PatternDiagramData } from '../../lib/pattern-diagrams.js';
+import { patternBarRange } from './bar-thresholds.js';
 import {
-	barsPerDay,
 	calcAlternationScoreEx,
 	calcApex,
 	calcATR,
@@ -93,11 +93,38 @@ const FORMING_PRICE_TOLERANCE_PCT = 0.01;
 // ── 時間軸別バーカウント ──
 
 /**
+ * 完成済みウェッジの走査窓の日数由来。**実効値はバー数**で、
+ * `patterns/bar-thresholds.ts` の `patternBarRange` が構造的下限と上限でクランプする。
+ * ここの日数は「その値がどこから来たか」を示す注記であって、暦日数の要件ではない。
+ */
+const WINDOW_MIN_DAYS = 25;
+const WINDOW_MAX_DAYS = 90;
+/** 形成中ウェッジの走査窓（同上）。 */
+const FORMING_WINDOW_MIN_DAYS = 20;
+const FORMING_WINDOW_MAX_DAYS = 120;
+
+/**
+ * 窓サイズに対する比で持つ内部パラメータ。分母は旧実装の日数（25 日窓）で、
+ * `1day` では旧値（5 / 25 / 10 / 15 本）と一致する。
+ *
+ * 構造的下限は掛けない——これらは「パターンの大きさ」ではなく**パターン内部の比率**で、
+ * 下限を掛けると許容ギャップが窓より広くなって意味を失う。
+ */
+const WINDOW_STEP_RATIO = 5 / WINDOW_MIN_DAYS;
+const MAX_TOUCH_GAP_RATIO = 25 / WINDOW_MIN_DAYS;
+const MAX_START_GAP_RATIO = 10 / WINDOW_MIN_DAYS;
+const MIN_BARS_BEFORE_BREAK_RATIO = 15 / WINDOW_MIN_DAYS;
+/** 上の比が小さくなりすぎたときの絶対下限（旧実装から据え置き）。 */
+const MIN_TOUCH_GAP_BARS = 8;
+const MIN_START_GAP_BARS = 3;
+const MIN_BARS_BEFORE_BREAK_BARS = 5;
+
+/**
  * 時間軸別ウェッジ検出のバー数パラメータ。
  *
- * 1day を基準（25 日 windowMin、90 日 windowMax）とし、他時間軸では
- * 「日数 × bars-per-day」で換算する。1week / 1month など bpd<1 で
- * バー数が小さくなりすぎる時間軸では、構造上の最低本数で下限を確保する。
+ * 窓の大きさは `patterns/bar-thresholds.ts` に集約した換算
+ * （`clamp(round(days × barsPerDay), structuralFloorBars, patternBarsCap)`）で決める。
+ * 旧実装のマジックナンバー `MIN_STRUCTURAL = 15` は `structuralFloorBars` に置き換えて廃止した。
  *
  * - windowSizeMin / windowSizeMax / windowStep: 完成済みウェッジのスキャンウィンドウ
  * - maxTouchGap: 隣接タッチ間の最大ギャップ
@@ -108,17 +135,20 @@ const FORMING_PRICE_TOLERANCE_PCT = 0.01;
  * `patterns/min-bars.ts` が「時間足 → 最小要求バー数」を導出するのに参照するため export する。
  */
 export function getWedgeBarParams(tf: string) {
-	const bpd = barsPerDay(tf);
-	const MIN_STRUCTURAL = 15;
+	const { minBars: windowSizeMin, maxBars: windowSizeMax } = patternBarRange(tf, WINDOW_MIN_DAYS, WINDOW_MAX_DAYS);
+	const forming = patternBarRange(tf, FORMING_WINDOW_MIN_DAYS, FORMING_WINDOW_MAX_DAYS);
 	return {
-		windowSizeMin: Math.max(MIN_STRUCTURAL, Math.round(25 * bpd)),
-		windowSizeMax: Math.max(MIN_STRUCTURAL + 5, Math.round(90 * bpd)),
-		windowStep: Math.max(1, Math.round(5 * bpd)),
-		maxTouchGap: Math.max(8, Math.round(25 * bpd)),
-		maxStartGap: Math.max(3, Math.round(10 * bpd)),
-		formingWindowMin: Math.max(MIN_STRUCTURAL - 5, Math.round(20 * bpd)),
-		formingWindowMax: Math.max(MIN_STRUCTURAL + 5, Math.round(120 * bpd)),
-		formingMinBarsBeforeBreak: Math.max(5, Math.round(15 * bpd)),
+		windowSizeMin,
+		windowSizeMax,
+		windowStep: Math.max(1, Math.round(windowSizeMin * WINDOW_STEP_RATIO)),
+		maxTouchGap: Math.max(MIN_TOUCH_GAP_BARS, Math.round(windowSizeMin * MAX_TOUCH_GAP_RATIO)),
+		maxStartGap: Math.max(MIN_START_GAP_BARS, Math.round(windowSizeMin * MAX_START_GAP_RATIO)),
+		formingWindowMin: forming.minBars,
+		formingWindowMax: forming.maxBars,
+		formingMinBarsBeforeBreak: Math.max(
+			MIN_BARS_BEFORE_BREAK_BARS,
+			Math.round(windowSizeMin * MIN_BARS_BEFORE_BREAK_RATIO),
+		),
 	};
 }
 

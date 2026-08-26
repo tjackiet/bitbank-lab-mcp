@@ -4,7 +4,8 @@
  */
 import { generatePatternDiagram, type PatternDiagramData } from '../../lib/pattern-diagrams.js';
 import { MIN_CONFIDENCE } from '../patterns/config.js';
-import { daysPerBar, finalizeConf, periodScoreDays } from './helpers.js';
+import { patternBarRange } from './bar-thresholds.js';
+import { finalizeConf, periodScoreDays } from './helpers.js';
 import { clamp01, relDev } from './regression.js';
 import type { CandleData, DeduplicablePattern, DetectContext, DetectResult } from './types.js';
 import { pushCand } from './types.js';
@@ -13,12 +14,14 @@ import { pushCand } from './types.js';
 
 const NECKLINE_SLOPE_LIMIT = 0.02;
 const MAX_VALLEY_SPREAD = 0.015;
-const FORMING_MAX_DAYS = 90;
 /**
- * 形成中トリプルトップ / ボトムが要求する最小の形成日数。
- * `patterns/min-bars.ts` が「時間足 → 最小要求バー数」を導出するのに参照するため export する。
+ * 形成中トリプルトップ / ボトムの形成期間の日数由来。**実効値はバー数**で、
+ * `getTripleFormingBarParams` が `patterns/bar-thresholds.ts` の換算を通して決める。
+ * ここの日数は「その値がどこから来たか」を示す注記であって、暦日数の要件ではない。
  */
 export const FORMING_MIN_DAYS = 21;
+const FORMING_MAX_DAYS = 90;
+
 const FORMING_TOLERANCE_MULTIPLIER = 1.2;
 const FORMING_MIN_COMPLETION = 0.4;
 const FORMING_MIN_CONFIDENCE = 0.5;
@@ -40,6 +43,19 @@ const FORMING_STAIR_STEP_LIMIT = 0.02;
 // ネックラインブレイク判定（detect_doubles と同じ値）
 const BREAKOUT_BUFFER_PCT = 0.015;
 const MAX_BARS_FROM_EXTREMUM = 20;
+
+/**
+ * 形成中トリプルが要求する形成バー数のレンジ（`formationBars = lastIdx - 最初のピボット`）。
+ *
+ * 旧実装は `patternDays = Math.round(formationBars × daysPerBar)` を作って 21〜90 日で
+ * 判定していたため、`1hour` では 492 本、`1min` では 29520 本の形成を要求し、
+ * `limit` のスキーマ上限（365）でも到達不能だった（issue #118 問題 2）。
+ *
+ * `patterns/min-bars.ts` が「時間足 → 最小要求バー数」を導出するのに参照するため export する。
+ */
+export function getTripleFormingBarParams(tf: string): { minBars: number; maxBars: number } {
+	return patternBarRange(tf, FORMING_MIN_DAYS, FORMING_MAX_DAYS);
+}
 
 type Pcand = (arg: Parameters<typeof pushCand>[1]) => void;
 
@@ -619,7 +635,7 @@ function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
 	const lastIdx = candles.length - 1;
 	const currentPrice = Number(candles[lastIdx]?.close ?? NaN);
 	const isoAt = (i: number) => candles[i]?.isoTime || '';
-	const dpb = daysPerBar(ctx.type);
+	const formingBars = getTripleFormingBarParams(ctx.type);
 	const tripleTolerancePct = tolerancePct * FORMING_TOLERANCE_MULTIPLIER;
 	const levelSpreadLimit = tripleTolerancePct * FORMING_LEVEL_SPREAD_FACTOR;
 	const necklineSpreadLimit = tolerancePct * FORMING_NECKLINE_SPREAD_FACTOR;
@@ -682,8 +698,7 @@ function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
 		}
 
 		const formationBars = Math.max(0, lastIdx - peak1.idx);
-		const patternDays = Math.round(formationBars * dpb);
-		if (patternDays < FORMING_MIN_DAYS || patternDays > FORMING_MAX_DAYS) continue;
+		if (formationBars < formingBars.minBars || formationBars > formingBars.maxBars) continue;
 
 		// ネックライン構成点: H-L-H-L-(現在足) という構造を強制するため、
 		// 谷を peak1-peak2 区間と peak2-現在足 区間にそれぞれ 1 つ以上要求する。
@@ -762,7 +777,7 @@ function tryFormingTripleBottom(ctx: DetectContext): DeduplicablePattern | null 
 	const lastIdx = candles.length - 1;
 	const currentPrice = Number(candles[lastIdx]?.close ?? NaN);
 	const isoAt = (i: number) => candles[i]?.isoTime || '';
-	const dpb = daysPerBar(ctx.type);
+	const formingBars = getTripleFormingBarParams(ctx.type);
 	const tripleTolerancePct = tolerancePct * FORMING_TOLERANCE_MULTIPLIER;
 	const levelSpreadLimit = tripleTolerancePct * FORMING_LEVEL_SPREAD_FACTOR;
 	const necklineSpreadLimit = tolerancePct * FORMING_NECKLINE_SPREAD_FACTOR;
@@ -861,8 +876,7 @@ function tryFormingTripleBottom(ctx: DetectContext): DeduplicablePattern | null 
 		}
 
 		const formationBars = Math.max(0, lastIdx - valley1.idx);
-		const patternDays = Math.round(formationBars * dpb);
-		if (patternDays < FORMING_MIN_DAYS || patternDays > FORMING_MAX_DAYS) continue;
+		if (formationBars < formingBars.minBars || formationBars > formingBars.maxBars) continue;
 
 		const progress = (currentPrice - avgValleyPrice) / Math.max(1e-12, avgPeakPrice - avgValleyPrice);
 		const completion = Math.min(1, 0.66 + Math.min(1, progress) * 0.34);

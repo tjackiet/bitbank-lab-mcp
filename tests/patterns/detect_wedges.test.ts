@@ -436,9 +436,10 @@ describe('detectWedges', () => {
 
 	// ── 時間軸スケーリング: 1hour ─────────────────────────────
 	//
-	// 1day の WINDOW_SIZE_MIN=25 を素のまま 1hour に使うと 25 時間 = 約 1 日でしかなく、
-	// ウェッジとしては短すぎる。barsPerDay(1hour)=24 を介して、構造的に意味のある
-	// バー数（数日相当）に拡張されることを確認する。
+	// 閾値のプリミティブはバー数（`patterns/bar-thresholds.ts`）。
+	// 1hour の実効値は windowSizeMin=34 / formingWindowMin=34 / formingWindowMax=204。
+	// 「25 日 × barsPerDay(1hour)=600 本」という日数換算は上限（構造的下限 17 × 2 = 34）で
+	// 頭打ちになる——600 本は `limit` のスキーマ上限 365 でも到達不能だった（#118 問題 2）。
 
 	function buildRisingWedge1Hour(nBars: number): CandleData[] {
 		// 1hour 時間軸での Rising Wedge: 上下とも上昇、下が急で収束
@@ -469,12 +470,11 @@ describe('detectWedges', () => {
 		return candles;
 	}
 
-	it('1hour: 1day と同じスケール感のウィンドウ（数日分のバー）でウェッジを評価する', () => {
-		// 1hour で 80 バー = 約 3.3 日。getWedgeBarParams の formingWindow は
-		// 1day で 20-120 バーだったのが、1hour では 480-2880 バー相当になる。
-		// 80 バーだけでは forming ウィンドウ最小（480 バー = 20 日）に届かないため、
-		// 検出が 0 件であることを確認する（= バー数固定だった旧挙動と比較し、
-		// 1hour で過剰に検出しないことの回帰検知）。
+	it('1hour: 窓が足りていても収束が浅い形状は検出しない', () => {
+		// この形状の勾配は upper=0.04/bar, lower=0.07/bar。80 バーでもギャップは
+		// 20 → 17.6（ratio 0.88）までしか縮まず、収束条件（ratio < 0.70）を満たさない。
+		// 窓（formingWindowMin=34）は 80 バーで足りているので、0 件になる理由は**形状**であって
+		// 窓ではない。1hour で緩い上昇を過剰にウェッジ判定しないことの回帰検知。
 		const candles = buildRisingWedge1Hour(80);
 		const pivots: Pivot[] = [];
 		const ctx = buildCtx({ candles, pivots, includeForming: true, type: '1hour' });
@@ -483,7 +483,8 @@ describe('detectWedges', () => {
 	});
 
 	it('1hour: バー数を十分に確保すれば forming wedge が検出される', () => {
-		// 形成中ウィンドウ最小 480 バー（20 日相当）を上回る 600 バー。
+		// 600 バーあれば上の収束条件も満たす（ギャップ 20 → 2）。
+		// 既定 limit（90 本）での検出可能性は tests/patterns/default-limit-detection.test.ts が固定している。
 		const candles = buildRisingWedge1Hour(600);
 		const pivots: Pivot[] = [];
 		const ctx = buildCtx({ candles, pivots, includeForming: true, type: '1hour' });
@@ -496,9 +497,9 @@ describe('detectWedges', () => {
 
 	// ── 時間軸スケーリング: 1week ─────────────────────────────
 	//
-	// 1day の WINDOW_SIZE_MIN=25 を素のまま 1week に使うと 25 週 = 約半年で、
-	// 多くの場合データ量を上回ってしまう。bpd(1week)=1/7 と構造上の下限 15 で
-	// クランプされ、現実的なバー数で評価できることを確認する。
+	// 1week は日数換算値（round(25 × 1/7) = 4 本）が小さすぎるので、構造的下限
+	// （`structuralFloorBars('1week')` = 25 本）でクランプされる側。実効値は
+	// windowSizeMin=25 / windowSizeMax=90 / formingWindowMin=25 / formingWindowMax=150。
 
 	function buildRisingWedge1Week(nBars: number): CandleData[] {
 		// 1week 時間軸の Rising Wedge: 振幅と勾配を週足相当に拡大
@@ -529,9 +530,9 @@ describe('detectWedges', () => {
 		return candles;
 	}
 
-	it('1week: バー数固定の旧閾値（25 バー）ではなく構造下限（15 バー）で評価される', () => {
-		// 1week で 25 バーは 25 週（約半年）。bpd=1/7 を介すると round(25*1/7)=4 だが
-		// 構造下限 15 でクランプされるので、windowSizeMin=15。20 バーあれば検出機会あり。
+	it('1week: 日数換算値（4 バー）ではなく構造的下限（25 バー）で評価される', () => {
+		// bpd=1/7 を介すると round(25*1/7)=4 バー——minDist=5 の 3 ピボットすら張れない。
+		// 構造的下限 25 でクランプされるので windowSizeMin=25。40 バーあれば検出機会あり。
 		const candles = buildRisingWedge1Week(40);
 		const pivots: Pivot[] = [];
 		const ctx = buildCtx({ candles, pivots, includeForming: true, type: '1week', swingDepth: 3 });
@@ -540,21 +541,21 @@ describe('detectWedges', () => {
 		expect(Array.isArray(result.patterns)).toBe(true);
 	});
 
-	it('1week: 旧バー数固定（WINDOW_SIZE_MIN=25, FORMING_WINDOW_MIN=20）でデータが足りない場合でも例外を投げない', () => {
-		// 1week で 20 バー（約 5 ヶ月）程度。1day 旧コードなら windowSizeMin=25 を割って
-		// 完成済みウェッジは検出不可だが、形成中（旧 FORMING_WINDOW_MIN=20）はギリ。
-		// 新スケーリングでは 1week の formingWindowMin=10 となり、より小さなバー数でも評価できる。
+	it('1week: windowSizeMin（25 バー）にデータが届かない場合でも例外を投げない', () => {
+		// 1week で 20 バー（約 5 ヶ月）。windowSizeMin=25 / formingWindowMin=25 を割るので
+		// 通常のウィンドウは 1 つも生成されないが、形成中の「最新に揃えた特別ウィンドウ」は
+		// start を max(0, lastIdx - size) に clamp して必ず積むため評価自体は走る。
 		const candles = buildRisingWedge1Week(20);
 		const pivots: Pivot[] = [];
 		const ctx = buildCtx({ candles, pivots, includeForming: true, type: '1week', swingDepth: 2 });
 		expect(() => detectWedges(ctx)).not.toThrow();
 	});
 
-	it('1week と 1day で同一バー数の閾値挙動が異なる（時間軸スケーリング有効）', () => {
-		// 同じ 40 バーでも 1day は 40 日（標準ウェッジ範囲）、1week は 40 週（広範）。
-		// バー数固定だった旧コードでは両者で同じ挙動になるが、新スケーリングでは
-		// 1week の windowSizeMax がクランプにより小さくなる（≈ round(90/7)=13 ＞ 構造下限 20 → 20）。
-		// 少なくとも、両時間軸で例外なく実行できることを確認する。
+	it('1week と 1day で同一バー数でも例外なく評価できる', () => {
+		// 窓の実効値は 1day が [25, 90]、1week が [25, 90]（1week は日数換算 4 本が
+		// 構造的下限 25 に持ち上がり、上限も日数比 90/25 を保って 90 になる）。
+		// 形状の振幅・勾配が違うので検出結果は一致しない。ここでは両時間軸で
+		// 例外なく実行できることだけを確認する。
 		const candles1d = buildRisingWedgeCandles(40);
 		const candles1w = buildRisingWedge1Week(40);
 		const ctx1d = buildCtx({ candles: candles1d, pivots: [], includeForming: true, type: '1day' });

@@ -16,6 +16,7 @@
  * pole-first スキャンとして検出する（このモジュールでは扱わない）。
  */
 
+import { patternBarsCap, structuralFloorBars } from './bar-thresholds.js';
 import { barsPerDay, calcATR, computeTargetReach, deduplicatePatterns, finalizeConf } from './helpers.js';
 import { clamp01 } from './regression.js';
 import type { CandDebugEntry, DetectContext, DetectResult, PatternEntry } from './types.js';
@@ -28,8 +29,17 @@ import type { CandDebugEntry, DetectContext, DetectResult, PatternEntry } from '
 export function getTriangleParams(tf: string) {
 	const bpd = barsPerDay(tf);
 	const maxDurationDays = 90; // triangles > 90 days → different pattern
-	const minWindowBars = 15; // absolute minimum bars
-	const maxWindowBars = Math.max(minWindowBars, Math.round(maxDurationDays * bpd));
+	// 旧実装は `15`（時間足でスケールしないマジックナンバー）だった。三角形の窓は
+	// 「その時間足で形が成立する最小の窓」そのものなので、`patterns/bar-thresholds.ts` の
+	// 構造的下限をそのまま使う（= 日数 0 日を換算したときの clamp 結果と同じ）。
+	const minWindowBars = structuralFloorBars(tf);
+	// 上限は日数換算値を使いつつ、`patternBarsCap` を**下駄**として履かせる（頭打ちではない）。
+	// `1week` / `1month` では日数換算値（13 本 / 3 本）が minWindowBars を割って windowSizes が
+	// 空になるため、下から支える値が要る。逆に intraday の大きな値（1hour で 2160 本）は
+	// 害が無い——実際に使うのは `effectiveMax = min(lastIdx - 5, maxWindowBars)` で、
+	// 走査窓の長さで必ず頭打ちになる。ここを cap で頭打ちにすると `1hour` の窓が
+	// [17, 26] だけになり、40〜84 本の三角形が既定 limit で検出できなくなる。
+	const maxWindowBars = Math.max(patternBarsCap(tf), Math.round(maxDurationDays * bpd));
 	const minR2 = 0.6; // 収束形状なので多少の揺れは許容 — 0.25 では偽陽性が多すぎた
 	const flatThreshold = 0.03; // |relSlope| < 3% over window → "flat"
 	const moveThreshold = 0.015; // |relSlope| > 1.5% over window → "rising/falling"

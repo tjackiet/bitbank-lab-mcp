@@ -16,6 +16,7 @@
  * 7. 同区間の重複候補を抑制（consolidation 終端の近接性で dedup）
  */
 
+import { cappedBarsForDays } from './bar-thresholds.js';
 import { barsPerDay, calcATR, computeTargetReach, deduplicatePatterns, finalizeConf } from './helpers.js';
 import { clamp01 } from './regression.js';
 import type { CandleData, DetectContext, DetectResult, PatternEntry } from './types.js';
@@ -34,18 +35,41 @@ interface PoleParams {
 	consMaxBars: number;
 }
 
+/** 旗竿 / 保ち合いの長さの日数由来。実効値はバー数（下記参照）。 */
+const POLE_MIN_DAYS = 1;
+const POLE_MAX_DAYS = 15;
+const CONS_MIN_DAYS = 2;
+const CONS_MAX_DAYS = 30;
+/** 日数換算値が 1 本を割る時間足での絶対下限（旧実装から据え置き）。 */
+const POLE_MIN_FLOOR_BARS = 2;
+const POLE_MAX_FLOOR_BARS = 5;
+const CONS_MIN_FLOOR_BARS = 3;
+const CONS_MAX_FLOOR_BARS = 10;
+
 /**
  * 時間足ごとの旗竿 / 保ち合いのバー数パラメータ。
+ *
+ * 最小側は `patterns/bar-thresholds.ts` の上限（構造的下限の定数倍）で頭打ちにする。
+ * 日数換算のままだと `1min` で旗竿 1440 本 + 保ち合い 2880 本を要求し、`limit` の
+ * スキーマ上限（365）でも到達不能だった（issue #118 問題 2）。
+ *
+ * **構造的「下限」は掛けない。** 下限の前提は「前後 `swingDepth` 本の除外」と
+ * 「3 ピボットの最小間隔」だが、旗竿は単一のインパルス脚でピボット構造ではない。
+ * `1day` に下限 23 本を掛けると `poleMinBars`(23) > `poleMaxBars`(15) となり全滅する。
+ * 下限は旧実装の絶対値（旗竿 2 本 / 保ち合い 3 本）をそのまま使う。
+ *
  * `patterns/min-bars.ts` が「時間足 → 最小要求バー数」を導出するのに参照するため export する。
  */
 export function getFlagParams(tf: string): PoleParams {
 	const bpd = barsPerDay(tf);
 
 	// 旗竿: 1〜15日、保ち合い: 2〜30日（日数をバー数に変換）
-	const poleMinBars = Math.max(2, Math.round(1 * bpd));
-	const poleMaxBars = Math.max(5, Math.round(15 * bpd));
-	const consMinBars = Math.max(3, Math.round(2 * bpd));
-	const consMaxBars = Math.max(10, Math.round(30 * bpd));
+	const poleMinBars = cappedBarsForDays(tf, POLE_MIN_DAYS, POLE_MIN_FLOOR_BARS);
+	const consMinBars = cappedBarsForDays(tf, CONS_MIN_DAYS, CONS_MIN_FLOOR_BARS);
+	// 最大側は頭打ちにしない（走査ループはいずれもデータ長で止まる）。最小側がクランプで
+	// 動いた結果として max < min にならないことだけ保証する。
+	const poleMaxBars = Math.max(poleMinBars, POLE_MAX_FLOOR_BARS, Math.round(POLE_MAX_DAYS * bpd));
+	const consMaxBars = Math.max(consMinBars, CONS_MAX_FLOOR_BARS, Math.round(CONS_MAX_DAYS * bpd));
 
 	// ATR 倍率・最小変化率は時間軸で微調整（中庸寄りの設定 — 緩やかな動きを除外）
 	const t = String(tf);

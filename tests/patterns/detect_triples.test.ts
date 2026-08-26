@@ -1123,16 +1123,25 @@ describe('detectTriples', () => {
 		expect(tt).toHaveLength(0);
 	});
 
-	// ── 形成中の patternDays 計算（時間軸スケーリング）──────────────
+	// ── 形成中の形成バー数レンジ（時間軸スケーリング）──────────────
 	//
-	// 旧実装: daysPerBar = ctx.type === '1day' ? 1 : ctx.type === '1week' ? 7 : 1
-	// → 1hour/1month/1min が全部 1 扱いになり、patternDays が完全にズレていた。
-	// 新実装: helpers.ts の daysPerBar(tf) で正しく換算する。
+	// 判定のプリミティブは**バー数**（`patterns/bar-thresholds.ts`）。
+	//   formationBars ∈ [minBars, maxBars]
+	//   minBars = clamp(round(21 × barsPerDay), 構造的下限, 構造的下限 × 2)
+	//   maxBars = minBars × (90 / 21)
+	// 日数（21日 / 90日）は値の出どころを示す注記でしかない。時間足ごとの実効レンジ:
+	//   1hour  → [34, 146]
+	//   1week  → [25, 107]
+	//   1month → [29, 124]
+	//
+	// これ以前は patternDays = Math.round(formationBars × daysPerBar) を 21〜90 日で
+	// 判定していたため、1hour は 492 本、1min は 29520 本の形成を要求し、`limit` の
+	// スキーマ上限（365）でも到達不能だった（issue #118 問題 2）。
 
-	it('1hour: 30 バーで形成中 triple_top が patternDays 期間判定を通過する', () => {
-		// 1hour で 30 バー = 約 1.25 日。FORMING_MIN_DAYS=21 / FORMING_MAX_DAYS=90 を
-		// 旧コード（daysPerBar=1 扱い）では 30 と判定して通過していたが、新実装は
-		// 30 * (1/24) ≈ 1 日と正しく評価して FORMING_MIN_DAYS=21 を下回ることで弾く。
+	it('1hour: 30 バーの形成は下限（34 本）を割るので形成中 triple_top にならない', () => {
+		// 1hour の形成バー数レンジは [34, 146]。formationBars = 30 は下限に 4 本足りない。
+		// 旧実装（日数判定）では 30 バー ≈ 1.25 日 < 21 日 で弾いていた——結論は同じだが、
+		// 「1時間足で 21 暦日ぶんの形成」を要求しなくなったぶん下限は 492 本 → 34 本に下がっている。
 		const total = 31;
 		const candles: CandleData[] = Array.from({ length: total }, (_, i) => mkCandle(total - i, 85, 90, 80, 85));
 		candles[0] = mkCandle(total, 99, 100, 97, 99);
@@ -1163,26 +1172,29 @@ describe('detectTriples', () => {
 		expect(forming).toHaveLength(0);
 	});
 
-	it('1hour: 720 バー（約 30 日）あれば形成中 triple_top の期間判定を通過する', () => {
-		// 720 バー × (1/24) = 30 日 ∈ [21, 90] → patternDays チェック OK
-		const total = 720;
+	it('1hour: 119 バーの形成なら形成中 triple_top のレンジ判定を通過する', () => {
+		// レンジ [34, 146] の**上側**が効いていることの確認。formationBars = 119 は
+		// 旧実装が要求していた 492 本（= 21 暦日）を大きく下回るが、新しい上限 146 には収まる。
+		// この fixture は 120 本あり既定 limit（90）を超えるので、**到達性の検証ではない**——
+		// 既定 limit で実際に検出できることは tests/patterns/default-limit-detection.test.ts が固定する。
+		const total = 120;
 		const candles: CandleData[] = Array.from({ length: total }, (_, i) => mkCandle(total - i, 85, 90, 80, 85));
 		// 2 つ確定済みピークと 2 つの確定済み谷（ネックライン構成）
 		candles[0] = mkCandle(total, 99, 100, 97, 99);
-		candles[300] = mkCandle(total - 300, 79, 81, 79, 80);
-		candles[600] = mkCandle(total - 600, 100, 101, 99, 100);
-		candles[660] = mkCandle(total - 660, 80, 82, 80, 81);
+		candles[50] = mkCandle(total - 50, 79, 81, 79, 80);
+		candles[100] = mkCandle(total - 100, 100, 101, 99, 100);
+		candles[110] = mkCandle(total - 110, 80, 82, 80, 81);
 		for (let i = total - 5; i < total; i++) {
 			candles[i] = mkCandle(total - i, 98, 100, 97, 99);
 		}
 
 		const allPeaks: Pivot[] = [
 			{ idx: 0, price: 100, kind: 'H' },
-			{ idx: 600, price: 101, kind: 'H' },
+			{ idx: 100, price: 101, kind: 'H' },
 		];
 		const allValleys: Pivot[] = [
-			{ idx: 300, price: 80, kind: 'L' },
-			{ idx: 660, price: 81, kind: 'L' },
+			{ idx: 50, price: 80, kind: 'L' },
+			{ idx: 110, price: 81, kind: 'L' },
 		];
 
 		const ctx = buildCtx({
@@ -1199,9 +1211,11 @@ describe('detectTriples', () => {
 		expect(forming.length).toBeGreaterThanOrEqual(1);
 	});
 
-	it('1week: 4 バーで形成中 triple_top は期間判定を通過しない（28 日 > MIN だが構造的に短い）', () => {
-		// 4 バー × 7 日/バー = 28 日 ∈ [21, 90] → patternDays は通る
-		// だが minDist=5 で 2 つのピーク間距離が足りないので構造的に成立しない。
+	it('1week: 4 バーの形成は下限（25 本）を割るので形成中 triple_top にならない', () => {
+		// 旧実装では 4 バー × 7 日/バー = 28 日 ∈ [21, 90] で日数判定は通り、
+		// minDist=5 を満たせないという構造条件だけで落ちていた。
+		// バー数判定では下限 25 本にも 21 本足りない——「週足 4 本の三尊」を
+		// 期間として認めていた旧閾値（3 本相当）が構造的下限まで引き上がったため。
 		const total = 7;
 		const candles: CandleData[] = Array.from({ length: total }, (_, i) => mkCandle(total - i, 85, 90, 80, 85));
 		candles[0] = mkCandle(total, 99, 100, 97, 99);
@@ -1232,29 +1246,28 @@ describe('detectTriples', () => {
 		expect(forming).toHaveLength(0);
 	});
 
-	it('1week: 8 バー（56 日）で形成中 triple_top が patternDays 判定を通過する', () => {
-		// 8 バー × 7 日/バー = 56 日 ∈ [21, 90] → OK
-		// 旧コード（1week → daysPerBar=7）でも同じ結論。新コードでも維持される。
-		// 構造制約: confirmedPeaks フィルタ idx < lastIdx-2 と minDist=5 を両立するため
-		// total=9, peak1=0, peak2=5 とする（peak2=5 < 6=lastIdx-2 OK, 5-0=5 >= minDist=5 OK）。
-		// ネックライン構成点 2 つを満たすため valley を 2 つ配置（idx=3 と idx=6）。
-		const total = 9;
+	it('1week: 29 バーの形成で形成中 triple_top がレンジ判定を通過する', () => {
+		// formationBars = 29 ∈ [25, 107]。下限は 1week の構造的下限（25 本）由来で、
+		// 旧実装の 3 本（21 日 ÷ 7 日/バー）は minDist=5 の 3 ピボットすら張れない値だった。
+		// 構造制約: confirmedPeaks フィルタ idx < lastIdx-2 と minDist=5 を両立させ、
+		// ネックライン構成点を peak1-peak2 間と peak2-現在足 間に 1 つずつ置く。
+		const total = 30;
 		const candles: CandleData[] = Array.from({ length: total }, (_, i) => mkCandle(total - i, 85, 90, 80, 85));
 		candles[0] = mkCandle(total, 99, 100, 97, 99);
-		candles[3] = mkCandle(total - 3, 79, 81, 79, 80);
-		candles[5] = mkCandle(total - 5, 100, 101, 99, 100);
-		candles[6] = mkCandle(total - 6, 80, 82, 80, 81);
-		for (let i = 7; i < total; i++) {
+		candles[10] = mkCandle(total - 10, 79, 81, 79, 80);
+		candles[20] = mkCandle(total - 20, 100, 101, 99, 100);
+		candles[26] = mkCandle(total - 26, 80, 82, 80, 81);
+		for (let i = 27; i < total; i++) {
 			candles[i] = mkCandle(total - i, 98, 100, 97, 99);
 		}
 
 		const allPeaks: Pivot[] = [
 			{ idx: 0, price: 100, kind: 'H' },
-			{ idx: 5, price: 101, kind: 'H' },
+			{ idx: 20, price: 101, kind: 'H' },
 		];
 		const allValleys: Pivot[] = [
-			{ idx: 3, price: 80, kind: 'L' },
-			{ idx: 6, price: 81, kind: 'L' },
+			{ idx: 10, price: 80, kind: 'L' },
+			{ idx: 26, price: 81, kind: 'L' },
 		];
 
 		const ctx = buildCtx({
@@ -1271,10 +1284,10 @@ describe('detectTriples', () => {
 		expect(forming.length).toBeGreaterThanOrEqual(1);
 	});
 
-	it('1month: 4 バー（120 日）は FORMING_MAX_DAYS(90) 超で patternDays 判定不可', () => {
-		// 旧コードでは type !== 1day && type !== 1week なので daysPerBar=1 扱い
-		// 4 * 1 = 4 日と判定して FORMING_MIN_DAYS(21) を下回り NG（理由が誤）
-		// 新コードでは 4 * 30 = 120 日 > FORMING_MAX_DAYS(90) で正しく NG。
+	it('1month: 6 バーの形成は下限（29 本）を割るので形成中 triple_top にならない', () => {
+		// 1month の形成バー数レンジは [29, 124]。formationBars = 6 は下限を割る。
+		// 旧実装では 6 バー × 30 日/バー = 180 日 > FORMING_MAX_DAYS(90) の**上限**超過で
+		// 落ちていた。バー数判定では月足でも「形が成立するだけの本数」を下限として要求する。
 		const total = 7;
 		const candles: CandleData[] = Array.from({ length: total }, (_, i) => mkCandle(total - i, 85, 90, 80, 85));
 		candles[0] = mkCandle(total, 99, 100, 97, 99);
