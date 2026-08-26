@@ -15,7 +15,7 @@
  *   6. includeForming=false で forming / near_completion 除外
  *   7. allow_partial_patterns=false で uses_partial_candle スキップ
  *   8. statistics と data.patterns の対象集合が一致する
- *   9. 日数閾値由来の最小要求バー数が既定スキャン窓に収まる（到達性）
+ *   9. 各検出器の最小要求バー数が既定スキャン窓に収まる（到達性）
  *
  * 設計方針:
  *   - 既存 fixture テスト（tests/patterns/*.test.ts, tests/analyze_candle_patterns.test.ts,
@@ -220,9 +220,13 @@ function buildFormingSymmetricalTriangleCandles(year = 2026): Candle[] {
  * tests/detect_patterns_fixtures.test.ts の同名関数と等価の価格列。
  */
 function buildDescendingTriangleInvalidBreakoutCandles(year = 2026): Candle[] {
+	// 三角形本体は 24 本（旧 fixture の 18 本に 1 サイクル 6 本を先頭で追加）。
+	// `detect_triangles` の最小窓が時間足の構造的下限（1day = 23 本）になったため、
+	// 旧 fixture（本体 18 本）では windowSizes が空になり検出されない。
+	// 追加分は既存と同じ形（切り下がる高値・水平な安値 100〜101）を 1 サイクル伸ばしただけ。
 	const closes = [
-		120, 130, 124, 116, 100, 112, 125, 118, 101, 110, 120, 114, 100, 108, 115, 110, 101, 107, 128, 132, 130, 128, 126,
-		124,
+		130, 140, 132, 122, 100, 118, 120, 130, 124, 116, 100, 112, 125, 118, 101, 110, 120, 114, 100, 108, 115, 110, 101,
+		107, 128, 132, 130, 128, 126, 124,
 	];
 	return closes.map((close, index) => makeCandle(index, close, year));
 }
@@ -888,146 +892,49 @@ describe('patterns invariants — 横断契約', () => {
 });
 
 // ──────────────────────────────────────────────
-// 9. 到達性 — 日数閾値由来の最小要求バー数 <= 既定スキャン窓
+// 9. 到達性 — 各検出器の最小要求バー数 <= 既定スキャン窓
 //
 //    #114 でスキャン窓が「直近 limit 本」に一致した結果、日数ベースの閾値が窓を超えると
 //    **そのパターン種別だけが静かに 0 件になる**（issue #118）。閾値は 6 ファイルに散っていて
 //    人手では追えないので、`patterns/min-bars.ts` の導出値で機械的に固定する。
 //
-//    現状では多数が未到達なので、**既知の未到達組み合わせを allowlist として明示**し、
-//    「allowlist の外に未到達が無いこと」を検証する形にしてある。閾値を下げて到達可能に
-//    したら、対応する行を allowlist から消さないとテストが落ちる（stale 検出）。
+//    PR A ではこの表を allowlist（既知の未到達 16 組）付きで導入した。閾値のプリミティブを
+//    バー数に統一した（`patterns/bar-thresholds.ts`）ことで**全 16 組が解消し、allowlist は
+//    空になった**。以降は「未到達の組み合わせが 1 つも無い」が不変条件そのものになる。
 //
-//    このテストは「日数閾値が窓に収まるか」だけを見る。窓に収まっていても検出できるとは
+//    このテストは「閾値が窓に収まるか」だけを見る。窓に収まっていても検出できるとは
 //    限らないし（形状の条件は別）、閾値の単位が正しいとも限らない
-//    （`1month` の forming double / H&S は 14 バー = 14 ヶ月を要求している — #118 問題 3）。
+//    （`1month` の forming double / H&S は 14 バー = 14 ヶ月を要求している — #118 問題 3。
+//    `detect_doubles` / `detect_hs` のバー数統一は別 PR の担当）。
 // ──────────────────────────────────────────────
 
-describe('検出器の到達性 — 日数閾値 vs 既定スキャン窓', () => {
+describe('検出器の到達性 — 最小要求バー数 vs 既定スキャン窓', () => {
 	const ALL_TIMEFRAMES = CandleTypeEnum.options;
 	/** 既定のスキャン窓。detect_patterns は直近 limit 本をそのまま検出器に渡す（#114）。 */
 	const DEFAULT_SCAN_WINDOW = DetectPatternsInputSchema.shape.limit.parse(undefined) as number;
 
 	/**
-	 * 既定 `limit` では日数閾値に届かない組み合わせ（issue #118 の表から導かれるもの）。
+	 * 既定 `limit` では閾値に届かない組み合わせ。**現在は空**。
 	 *
-	 * `requiredBars` は `minBarsForDetector` の期待値。閾値を動かして本数が変わっても
-	 * 気づけるよう、到達不能かどうかだけでなく本数そのものも突き合わせている。
+	 * 例外を足すときは `requiredBars`（`minBarsForDetector` の期待値）と理由を必ず書く。
+	 * 下の「allowlist は空」テストがループで各行を検証するので、閾値を下げて到達可能に
+	 * なった行を消し忘れると落ちる（stale 検出）。
 	 */
 	const KNOWN_UNREACHABLE: ReadonlyArray<{
 		tf: string;
 		detector: MinBarsDetector;
 		requiredBars: number;
 		reason: string;
-	}> = [
-		// ── #118 問題 2: limit 上限 365 でも到達不能（#114 以前から到達不能なものを含む） ──
-		{
-			tf: '1min',
-			detector: 'forming_triple',
-			requiredBars: 29521,
-			reason: '#118 問題 2: 21日 = 29521本。limit 上限 365 でも到達不能',
-		},
-		{
-			tf: '1min',
-			detector: 'completed_wedge',
-			requiredBars: 36001,
-			reason: '#118 問題 2: 25日窓 = 36001本。limit 上限 365 でも到達不能',
-		},
-		{
-			tf: '1min',
-			detector: 'flag_pennant',
-			requiredBars: 4321,
-			reason: '#118 問題 2: 最小 1+2日 = 4321本。limit 上限 365 でも到達不能',
-		},
-		{
-			tf: '5min',
-			detector: 'forming_triple',
-			requiredBars: 5905,
-			reason: '#118 問題 2: 21日 = 5905本。limit 上限 365 でも到達不能',
-		},
-		{
-			tf: '5min',
-			detector: 'completed_wedge',
-			requiredBars: 7201,
-			reason: '#118 問題 2: 25日窓 = 7201本。limit 上限 365 でも到達不能',
-		},
-		{
-			tf: '5min',
-			detector: 'flag_pennant',
-			requiredBars: 865,
-			reason: '#118 問題 2: 最小 1+2日 = 865本。limit 上限 365 でも到達不能',
-		},
-		{
-			tf: '15min',
-			detector: 'forming_triple',
-			requiredBars: 1969,
-			reason: '#118 問題 2: 21日 = 1969本。limit 上限 365 でも到達不能',
-		},
-		{
-			tf: '15min',
-			detector: 'completed_wedge',
-			requiredBars: 2401,
-			reason: '#118 問題 2: 25日窓 = 2401本。limit 上限 365 でも到達不能',
-		},
-		{
-			tf: '15min',
-			detector: 'flag_pennant',
-			requiredBars: 289,
-			reason: '#118 問題 2: 最小 1+2日 = 289本。limit 上限 365 でも到達不能',
-		},
-		{
-			tf: '30min',
-			detector: 'forming_triple',
-			requiredBars: 985,
-			reason: '#118 問題 2: 21日 = 985本。limit 上限 365 でも到達不能',
-		},
-		{
-			tf: '30min',
-			detector: 'completed_wedge',
-			requiredBars: 1201,
-			reason: '#118 問題 2: 25日窓 = 1201本。limit 上限 365 でも到達不能',
-		},
-		{
-			tf: '30min',
-			detector: 'flag_pennant',
-			requiredBars: 145,
-			reason: '#118 問題 2: 最小 1+2日 = 145本。limit 上限 365 でも到達不能',
-		},
-		{
-			tf: '1hour',
-			detector: 'forming_triple',
-			requiredBars: 493,
-			reason: '#118 問題 2: 21日 = 493本。#114 以前は limit>=294 で到達できた、回復手段のない後退',
-		},
-		{
-			tf: '1hour',
-			detector: 'completed_wedge',
-			requiredBars: 601,
-			reason: '#118 問題 2: 25日窓 = 601本。limit 上限 365 でも到達不能',
-		},
-		// ── #118 問題 1: 既定 limit=90 では落ちるが、limit を明示すれば復帰する ──
-		{
-			tf: '4hour',
-			detector: 'forming_triple',
-			requiredBars: 124,
-			reason: '#118 問題 1: 21日 = 124本。limit>=124 を明示すれば復帰する',
-		},
-		{
-			tf: '4hour',
-			detector: 'completed_wedge',
-			requiredBars: 151,
-			reason: '#118 問題 1: 25日窓 = 151本。limit>=151 を明示すれば復帰する',
-		},
-	];
+	}> = [];
 
 	const allowKey = (tf: string, detector: MinBarsDetector) => `${tf} ${detector}`;
 	const allowlist = new Map(KNOWN_UNREACHABLE.map((e) => [allowKey(e.tf, e.detector), e]));
 
-	it('既定 limit は 90（allowlist の前提）', () => {
+	it('既定 limit は 90（到達性判定の前提）', () => {
 		expect(DEFAULT_SCAN_WINDOW).toBe(90);
 	});
 
-	it('allowlist 外に未到達の組み合わせが無い', () => {
+	it('全時間足 × 全検出器が既定 limit で到達可能（allowlist 外に未到達が無い）', () => {
 		const unexpected: string[] = [];
 		for (const tf of ALL_TIMEFRAMES) {
 			for (const detector of MIN_BARS_DETECTORS) {
@@ -1037,11 +944,15 @@ describe('検出器の到達性 — 日数閾値 vs 既定スキャン窓', () =
 				unexpected.push(`${tf} x ${detector}: ${required}本 > 窓 ${DEFAULT_SCAN_WINDOW}本`);
 			}
 		}
-		expect(unexpected, `既定 limit で新たに到達不能になった組み合わせ:\n${unexpected.join('\n')}`).toEqual([]);
+		expect(unexpected, `既定 limit で到達不能な組み合わせ:\n${unexpected.join('\n')}`).toEqual([]);
 	});
 
-	it('allowlist の各行が実際に未到達で、要求本数も一致する（stale 行の検出）', () => {
+	it('allowlist は空 — 例外行が残っている場合はその内容も検証する', () => {
 		for (const entry of KNOWN_UNREACHABLE) {
+			// 時間足 / 検出器の typo 検出
+			expect(ALL_TIMEFRAMES, `allowlist の時間足: ${entry.tf}`).toContain(entry.tf);
+			expect(MIN_BARS_DETECTORS, `allowlist の検出器: ${entry.detector}`).toContain(entry.detector);
+			// 要求本数の一致と、実際に未到達であること（stale 行の検出）
 			const required = minBarsForDetector(entry.tf, entry.detector);
 			expect(required, `allowlist: ${entry.tf} x ${entry.detector} の要求本数`).toBe(entry.requiredBars);
 			expect(
@@ -1049,21 +960,13 @@ describe('検出器の到達性 — 日数閾値 vs 既定スキャン窓', () =
 				`allowlist: ${entry.tf} x ${entry.detector} は既定 limit で到達可能になっている。allowlist から行を消すこと`,
 			).toBeGreaterThan(DEFAULT_SCAN_WINDOW);
 		}
-	});
-
-	it('allowlist に重複行が無い', () => {
-		expect(allowlist.size).toBe(KNOWN_UNREACHABLE.length);
-	});
-
-	it('allowlist の時間足 / 検出器が実在する（typo 検出）', () => {
-		for (const entry of KNOWN_UNREACHABLE) {
-			expect(ALL_TIMEFRAMES, `allowlist の時間足: ${entry.tf}`).toContain(entry.tf);
-			expect(MIN_BARS_DETECTORS, `allowlist の検出器: ${entry.detector}`).toContain(entry.detector);
-		}
+		// 重複行の検出も兼ねる（Map に畳んだ数が元の行数と一致すること）
+		expect(allowlist.size, 'allowlist に重複行がある').toBe(KNOWN_UNREACHABLE.length);
+		expect(KNOWN_UNREACHABLE, '未到達の例外は解消済み。行を足すなら理由を添えること').toEqual([]);
 	});
 
 	it('構造的下限（assessScanWindow）は全時間足で既定スキャン窓に収まる', () => {
-		// 日数閾値とは別軸の下限（#117 / docs 表 1）。こちらは既定 limit で全時間足が通る。
+		// パターンサイズ閾値とは別軸の下限（#117 / docs 表 1）。こちらは既定 limit で全時間足が通る。
 		for (const tf of ALL_TIMEFRAMES) {
 			const { swingDepth, minBarsBetweenSwings } = getDefaultParamsForTf(tf);
 			const a = assessScanWindow(DEFAULT_SCAN_WINDOW, swingDepth, minBarsBetweenSwings);

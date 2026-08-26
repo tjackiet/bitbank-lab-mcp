@@ -61,9 +61,13 @@ function buildFormingDoubleBottomCandles(year = 2026): Candle[] {
 }
 
 function buildDescendingTriangleInvalidBreakoutCandles(year = 2026): Candle[] {
+	// 三角形本体は 24 本（旧 fixture の 18 本に 1 サイクル 6 本を先頭で追加）。
+	// `detect_triangles` の最小窓が時間足の構造的下限（1day = 23 本）になったため、
+	// 旧 fixture（本体 18 本）では windowSizes が空になり検出されない。
+	// 追加分は既存と同じ形（切り下がる高値・水平な安値 100〜101）を 1 サイクル伸ばしただけ。
 	const closes = [
-		120, 130, 124, 116, 100, 112, 125, 118, 101, 110, 120, 114, 100, 108, 115, 110, 101, 107, 128, 132, 130, 128, 126,
-		124,
+		130, 140, 132, 122, 100, 118, 120, 130, 124, 116, 100, 112, 125, 118, 101, 110, 120, 114, 100, 108, 115, 110, 101,
+		107, 128, 132, 130, 128, 126, 124,
 	];
 
 	return closes.map((close, index) => makeCandle(index, close, year));
