@@ -26,7 +26,109 @@
 | 11 | #135 | dedup の勝者選択を `statusScore` 最優先に揃えた | 変わる |
 | 12 | #136 | 構造的ピボット間隔の床（`= 5`）の妥当性を実測で判定し据え置きを確定 | 変わらない |
 | 13 | #137 | 三角形の分類前 candidate ラベルを umbrella 化（#129）、`limit=180` の判定と CI ジョブ名の注記（#127 の残り） | 変わらない |
-| 14 | 本 PR | triple / H&S にサイズ検査を横展開（#138 欠陥 2-2） | 減る |
+| 14 | #139 | triple / H&S にサイズ検査を横展開（#138 欠陥 2-2） | 減る |
+| 15 | 本 PR | triple / H&S に構造ゲートを横展開（#138 欠陥 2-1） | 減る |
+
+### Fixed（`detect_patterns` の triple / H&S に構造ゲートを横展開した。**構造として成立しない形が減る**。#138 欠陥 2-1）
+
+**#131 が double にだけ入れた「構造として成立していない候補は整合度の減点ではなく hard reject で落とす」という原則を、triple / H&S へ広げた。** #131 は `tools/patterns/structural.ts` に `validateReversalStructure` を切り出したものの、呼んでいるのは `detect_doubles.ts` だけで、「head_and_shoulders / triple への適用は本 PR では行っていない——検出件数への影響の確認が別途要るため」と明記して保留していた。本 PR はその回収。
+
+ゲートが見るのは 2 つ（`structural.ts` の docstring が単一ソース。**閾値・判定式には一切触れていない**）:
+
+- **戻り率**が帯 `[RETRACEMENT_MIN(0.2), RETRACEMENT_MAX(0.9)]` に入ること。1.0 超は「ネックラインが先行下落 / 上昇の起点の外」＝定義上そのパターンではないので固定 reject
+- 第1構成点より前に、ネックライン水準を**終値で**抜けたバーが実在すること。無ければ「抜け返す」という事象が定義できない
+
+#### 設計判断: 構成点 5 つに対する `first` / `mid` の取り方
+
+double（谷1-山-谷2）では自明だが、triple（谷1-山1-谷2-山2-谷3）と H&S（左肩-谷1-頭-谷2-右肩）は構成点が 5 つあり、issue #138 が「先行トレンドの起点をどこの手前に取るか」を着手前の宿題にしていた。**`validatePatternSize`（#139）に渡す構成点列の先頭 2 点**に固定した（`tools/patterns/reversal-gate.ts` の冒頭に根拠）:
+
+| 経路 | `side` | `first` | `mid` | ネックライン水準 |
+|---|---|---|---|---|
+| triple_top（strict / relaxed） | top | 山1 | 谷1 | `(v1.price + v2.price) / 2` |
+| triple_bottom（strict / relaxed） | bottom | 谷1 | 山1 | `(p1.price + p2.price) / 2` |
+| triple 形成中 | 同上 | 山1 / 谷1 | 谷1 / 山1 | `avgValley` / `avgPeakPrice` |
+| H&S / 逆 H&S（strict） | top / bottom | 左肩 | 谷1 / 山1 | `(p1.price + p3.price) / 2` |
+| H&S / 逆 H&S（relaxed） | 同上 | 左肩 | 谷1 / 山1 | `nlY`（水平線。`findHsBreakoutIdx` に渡すのと同一） |
+| H&S / 逆 H&S 形成中 | 同上 | 左肩（先行谷 / 山が無ければ頭） | 先行谷 / 山（無ければ頭の後の谷 / 山） | `neckline[0].y` |
+
+- **`first` は「先行トレンドが終わった点」**、**`mid` は「先行トレンドに対する最初の戻り」**。戻り率は `first → mid` の 1 脚で測る量なので、構成点が 5 つに増えても測る脚は変わらない。頭や第3構成点まで含めた全振幅で測ると「先行値幅に対する戻り」ではなく「パターン全体の大きさ」という別の量になる
+- サイズ検査と**同じ配列の先頭 2 点**にしたので、形成中 H&S のように先行谷が取れず 3 点（頭-戻り-右肩）に縮む経路でも、縮んだ配列の先頭 2 点が自動的に正しい `first` / `mid` になる（実際にこの縮退経路で 1 件落ちている。下表 B）
+- **ネックライン水準は検出器がブレイク判定に使うのと同じ値**を呼び出し側が渡す（#131 の `ReversalStructureInput.necklinePrice` の設計）。strict H&S だけはブレイク判定が p1 / p3 を結ぶ**傾きつき**の線なので、ゲートには 2 点の平均を渡している——ゲートは第1構成点より 60 本手前まで遡るので**スカラーの水準**が要り、傾きを外挿すると外挿誤差が水準そのものより大きくなり得るため。`validateHorizontalNeckline` が既に `|p1 - p3| <= HS_NECKLINE_MAX_PCT`(5%) を課しているので、平均が線の代表値になる
+
+#### 設計判断: 谷ゾーン再進入（`detectTroughZoneReentry`）は**適用しない**
+
+issue #138 が「triple は 3 つ目の谷が定義上存在するので、double の `reclassified_as_triple_bottom` と同じ判定が意味を成すか要検討」としていた件。**実測したうえで本 PR では適用しない判断にした。**
+
+triple の第3構成点の後・ネックライン突破前について、double と同じ形（`first` = 谷1 / `mid` = 山1 / `second` = 谷3）で再進入を計測したところ、**704 ケースで accepted な triple の約半分（strict 経路で triple_top 32 / 64・triple_bottom 32 / 64）が「再進入あり」になった**。適用すれば構造ゲート本体（24 ケース）より大きな挙動変化になる。適用を見送った理由:
+
+- **再分類先が無い。** double の再進入は `reclassify`（`detect_triples` に委ねて何も出さない）か `invalid` かに分岐するが、`reclassify` が成立するのは受け皿の `detect_triples` があるから。triple には `detect_quadruples` に相当する受け皿が無く、`invalid` として終端 status を新設するか黙って落とすかの二択になる——**status enum・ranking・aftermath に波及する別種の変更**
+- **`mid` の取り方でゾーンの高さが変わる。** 再進入水準は `mid.extremePrice` から高さを出すが、triple のネックラインは 2 山（2 谷）の平均で、どちらの山を `mid` にするかで水準が動く。戻り率と違い、この選択を決める根拠がまだ無い
+- **走査窓が double と非対称。** double は突破バーまでを見るが、`near_completion` の triple は最終足まで見ることになり、窓の長さだけで再進入率が上がる
+
+計測値は上記のとおり残したので、着手する際は 0 から測り直す必要はない。
+
+#### 実測（704 ケース比較）
+
+`tests/detect_patterns_fixtures.test.ts` の **fixture 22 件 × オプション 8 通り（`includeForming` / `includeCompleted` / `includeInvalid`）× 時間足 2 種（`1day` / `1hour`）× `swingDepth` 2 種（2 / 3）= 704 ケース**を、`main`（049607f）と本ブランチの双方で走らせて突き合わせた（#131 / #132 / #135 / #136 / #139 と同じ手順・同じ 704 ケース）。
+
+| | 結果 |
+|---|---|
+| 変化したケース | **24 / 704**（3.4%）。残り 680 は完全一致 |
+| パターン総数 | **320 → 296**（-24） |
+| 種別内訳 | `triple_bottom` 48 → **32** / `triple_top` 48 → **40** / 他 11 種はすべて不変（`head_and_shoulders` 16 / `inverse_head_and_shoulders` 16 / `double_top` 16 / `double_bottom` 16 / `triangle_symmetrical` 48 / `falling_wedge` 32 / `rising_wedge` 24 / `triangle_ascending` 16 / `triangle_descending` 16 / `bull_pennant` 16 / `bull_flag` 8） |
+| 増えたパターン | **0 件** |
+| status / 整合度 / `range` が動いた生存パターン | **0 件**（差分は削除のみ） |
+
+**消えた 24 件は 3 つのパターンが 8 通りのオプションに現れたもの。** 実体は 3 つで、いずれも**三角形の fixture が triple として二重に読まれていたもの**:
+
+| # | 種別 | 整合度 | 構成点 idx | fixture | 戻り率 | 誤検出である理由 |
+|---|---|---|---|---|---|---|
+| A | `triple_top` | 0.73 | 7 / 12 / 16 | `descendingTriangleInvalidBreakout`（1hour, ×8） | **1.000** | 下降三角形（水平な安値 100 前後・切り下がる高値 130 → 125 → 120）。ネックライン（谷の平均）が**先行上昇の起点そのもの**（idx 4 の安値 97）と一致する＝山1 に向かう上昇が丸ごと吐き出されており、先行上昇が存在しない。同じ窓の `triangle_descending` は**残る**（16 → 16） |
+| B | `triple_bottom` | 0.73 | 7 / 14 / 21 | `formingAscendingTriangle`（1day, ×8） | **1.000** | 上昇三角形（水平な抵抗 127・**切り上がる安値** 112 → 114 → 117）。「3 つの谷が同水準」という triple の前提を満たしていないのに `near()` の許容で通っていた。ネックライン 127 は先行下落の起点（idx 4 の高値 130）と同水準。同じ窓の `triangle_ascending` は**残る**（16 → 16） |
+| C | `triple_bottom` | 0.76 | 7 / 14 / 21 | `formingAscendingTriangle`（1hour, ×8） | **1.000** | B と同一実体の 1hour 側 |
+
+3 件とも `retracement_out_of_band`（戻り率 1.0 > `RETRACEMENT_MAX` 0.9）で落ちる。**「三角形として正しく検出されている窓が、同時に反転パターンとしても報告される」という重複が消えて、三角形側だけが残った。**
+
+#### 配線の網羅性（ablation）
+
+704 ケースの生存パターンは**ほぼ全件が `skipped: 'no_prior_extreme'` で素通しされている**（合成 fixture はパターンの第1構成点がスキャン窓のほぼ先頭にあり、その手前に反対種別のピボットが無い）。閾値をいじる ablation では配線を確認できないため、`validateReversalStructure` を**常に不合格にする** ablation で全経路を確認した:
+
+| ablation | 変化したケース | パターン総数 | 種別内訳 |
+|---|---|---|---|
+| `validateReversalStructure` が常に `ok: false` | 266 / 704 | 320 → **160** | `triple_top` 48 → **0** / `triple_bottom` 48 → **0** / `head_and_shoulders` 16 → **0** / `inverse_head_and_shoulders` 16 → **0**（+ double 16 / 16 → 0。#131 で配線済み）。三角形 / ウェッジ / 旗は 1 件も動かない |
+
+**新設した 12 経路すべてを通っている**（通らない経路が残っていれば、その経路の検出が残存する）。棄却理由の内訳は `triple_top` 240 / `triple_bottom` 304 / `head_and_shoulders` 96 / `inverse_head_and_shoulders` 96 件。
+
+#### 実測（実データ fixture）
+
+`tests/fixtures/btc_jpy_1day_2026.ts`（BTC/JPY 日足 90 本、上記 704 ケースの外）を **`swingDepth` 4 種（既定 6 / 明示 2 / 3 / 6）× オプション 8 通り = 32 ケース**で突き合わせた。合成 fixture と違い、パターンの手前に実際のスイングがあるのでゲートが実際に判定に効く。
+
+| | 結果 |
+|---|---|
+| 変化したケース | **18 / 32** |
+| パターン総数 | **84 → 76**（-8） |
+| 種別内訳 | `head_and_shoulders` 12 → **8** / `triple_top` 4 → **0** / 他は不変（`double_bottom` 24 / `inverse_head_and_shoulders` 8 / `falling_wedge` 16 / `triangle_symmetrical` 16 / `triple_bottom` 4） |
+| 増えたパターン | **0 件** |
+| status / 整合度が動いた生存パターン | **0 件** |
+| `structureGate` が新たに付いた生存パターン | **20 件**（`head_and_shoulders` 8 / `inverse_head_and_shoulders` 8 / `triple_bottom` 4）＝ゲートが**適用されたうえで通っている** |
+
+消えた 2 件と、それが誤検出だった理由:
+
+| # | 種別 | status | 整合度 | 構成点 idx | 条件 | 棄却理由 | 誤検出である理由 |
+|---|---|---|---|---|---|---|---|
+| A | `triple_top` | completed | 0.75 | 9 / 17 / 24 | `swingDepth: 2`（×4） | `no_neckline_cross_before_peak1` | ネックライン 10,166,847 円（2 谷の終値平均）が**山1 の終値 10,159,661 円より上**にある。山1 より前の 60 本でこの水準を終値で上抜けたバーが 1 本も無く、「下抜け」という事象が定義できない。山1 は高値 10,290,000 円でネックラインを超えるが**終値は超えない**——ヒゲだけで立った山。戻り率 0.747 は帯の中なので、落ちたのは交差の不在 |
+| B | `head_and_shoulders` | forming | 0.63 | 47 / 53 / 66 / 73 | `swingDepth: 3`（×4） | `neckline_below_pre_decline_low` | 左肩 47 と頭 53 の間に谷ピボットが無く、サイズ検査ともども**頭-戻り-右肩の 3 点に縮退**する（`first` = 頭）。頭への上昇は 851,964 円（起点 idx 45 の安値 10,051,036 円）なのに、頭から谷までの下落は 1,150,754 円で**戻り率 1.351**。ネックライン 10,002,960 円は上昇の起点より**下**にあり、割ったところで「上昇を支えていた水準を割った」ことにならない |
+
+**#139 が「実在する H&S を落としていないことの確認」として固定した形成中 `head_and_shoulders`（左肩 idx 38 / 頭 53 / 谷 66 / 右肩 73、整合度 0.78）は既定 `swingDepth` で残る。** しかも**素通しではなくゲートを通って残る**（戻り率 0.766 / 先行極値 idx 33 @ 9,401,000 / ネックライン交差 idx 9）。B で落ちるのは**同じ頭・谷・右肩を左肩 idx 47 で読んだ縮退版**で、5 点そろう読みは残り、3 点に縮んだ読みだけが落ちる関係になっている。
+
+`double_bottom` は **32 ケースすべてで main と完全一致**（谷 8/3 → 山 8/10 → 谷 8/14、整合度 0.96、戻り率 0.528）。#131 で配線済みの double には触れていない。
+
+- **`view=debug` の棄却理由**は double と同じコード（`retracement_out_of_band` / `neckline_above_pre_decline_high` / `neckline_below_pre_decline_low` / `no_neckline_cross_before_trough1` / `no_neckline_cross_before_peak1`）で `candidates[].reason` に出る。`details` に `retracementRatio` / `priorExtremeIdx` / `priorExtremePrice` / `firstIdx` / `midIdx` / `necklinePrice` を載せたので、**どの脚をどう測って落としたか**が呼び出し側で検算できる。通った候補は `PatternEntry.structureGate` に同じ値が出る（schema は #131 の時点で全種別共通）。
+- **配線層は `tools/patterns/reversal-gate.ts` に新設した。** `structural.ts`（純粋関数）は `debugCandidates` も `PatternEntry` も知らないままにしてある。判定ロジックは持たず、戻り値を棄却理由と `structureGate` に変換するだけ。
+- **どの経路でも「既存の棄却検査をすべて通過した後」（`validatePatternSize` の直後）に置いた。** 理由は #139 と同じで、前に置くと既に固有の理由コードを持つ候補の `reason` を横取りする。ネックライン水準の算出だけは副作用が無いのでゲートの手前へ引き上げてある。
+- **`tests/patterns/size-gates-triple-hs.test.ts` の過剰棄却の回帰テストを書き換えた。** 旧版は「振幅 15.4% の**純粋なレンジ往復**なら triple_top / triple_bottom が返る」ことを見ていたが、先行トレンドの無いレンジは本 PR の構造ゲートで落ちる（戻り率がちょうど 1.0 になる）。**落ちる理由がサイズ検査から構造ゲートに移っただけ**なので、サイズ検査の過剰棄却は「サイズ系の理由コード（`pattern_too_small` / `valley_too_shallow` / `peak_too_shallow`）が 1 件も出ないこと」で直接見るように変えた。期待値を緩めたのではなく、測る対象を理由コードに寄せてある。
+- ガードは `tests/patterns/structural-gates-triple-hs.test.ts`（8 本）。合成側は**先行下落 → 3 点の底 → ネックライン上抜け**という反転の形を作り、(1) その `triple_bottom` が残って `structureGate.retracementRatio` が帯の中に出ること、(2) **同じ窓の逆向きの読み（`triple_top`）が戻り率 1.0 で落ちること**を固定する（top / bottom 対称に 2 組）。issue #138 欠陥 2 の「同一の窓で triple_top と triple_bottom が両方検出される」がこの形で解消される。閾値そのものの妥当性は合成では担保できないので、上表 A / B と #139 の H&S を実データ側で固定した。
+- **本 PR は #138 欠陥 2-1 のみを扱う。** 欠陥 1 / 項目 2（triangle の per-line タッチゲート）は**実測で片側偏重が観測できなかったため着手しない判断**、項目 3（タッチ / 同水準の判定基準がパターン高さに対して転倒している）は影響範囲が大きいため対象外。#138 は項目 3 が残るので閉じない。
 
 ### Fixed（`detect_patterns` の triple / H&S にサイズ検査を追加した。**小さすぎる形が減る**。#138 欠陥 2-2）
 

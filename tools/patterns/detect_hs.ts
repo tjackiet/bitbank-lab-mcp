@@ -13,6 +13,7 @@ import { generatePatternDiagram } from '../../lib/pattern-diagrams.js';
 import { patternBarRange } from './bar-thresholds.js';
 import { computeTargetReach, finalizeConf, periodScoreDays } from './helpers.js';
 import { clamp01, marginFromRelDev, relDev } from './regression.js';
+import { applyReversalGate, buildStructureGate } from './reversal-gate.js';
 import {
 	HS_NECKLINE_MAX_PCT,
 	HS_SHOULDER_MAX_PCT,
@@ -245,12 +246,34 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 					{ x: p1.idx, y: p1.price },
 					{ x: p3.idx, y: p3.price },
 				];
+				const nlAvg = (Number(p1.price) + Number(p3.price)) / 2;
+
+				// ネックライン水準は**ブレイク判定（findHsBreakoutIdx）に渡す線と同じ**ものを構造ゲートへ渡す
+				// （`ReversalStructureInput.necklinePrice` の docstring）。線は p1 / p3 の 2 点で張るが、
+				// ゲートは第1構成点より手前を遡るので**スカラーの水準**が要る。`validateHorizontalNeckline` が
+				// 既に |p1 - p3| <= HS_NECKLINE_MAX_PCT を課しているため、2 点の平均が線の代表値になる。
+				// 傾きを外挿して遡ると、探索窓 60 本ぶんの外挿誤差が水準そのものより大きくなり得る。
+				// 構造ゲート（#138 欠陥 2-1）。#131 が double にだけ入れたものの横展開。
+				// サイズ検査と同じく「既存の棄却検査をすべて通過した後」に置く。
+				const gate = applyReversalGate({
+					candles,
+					pivots,
+					side: 'bottom',
+					first: p0,
+					mid: p1,
+					necklinePrice: nlAvg,
+					type: 'inverse_head_and_shoulders',
+					indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+					debugCandidates,
+				});
+				if (!gate) continue;
+				const structureGate = buildStructureGate(gate);
+
 				const tolMargin = marginFromRelDev(relDev(p0.price, p4.price), tolerancePct);
 				const symmetry = clamp01(1 - relDev(p0.price, p4.price));
 				const per = periodScoreDays(start, end);
 				const base = (tolMargin + symmetry + per) / 3;
 				const confidence = finalizeConf(base, 'inverse_head_and_shoulders');
-				const nlAvg = (Number(p1.price) + Number(p3.price)) / 2;
 				// 右肩後のネックライン上抜けを確認する。
 				const breakoutIdx = findHsBreakoutIdx(candles, neckline, p4.idx, 'above');
 				const completion = buildHsCompletionFields(candles, breakoutIdx, 'up', end);
@@ -295,6 +318,7 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 					...(ihsPrecedingTrend ? { precedingTrend: ihsPrecedingTrend } : {}),
 					pivots: [p0, p1, p2, p3, p4],
 					neckline,
+					...(structureGate ? { structureGate } : {}),
 					trendlineLabel: 'ネックライン',
 					breakoutTarget: ihsTarget,
 					targetMethod: 'neckline_projection' as const,
@@ -416,12 +440,34 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 					{ x: p1.idx, y: p1.price },
 					{ x: p3.idx, y: p3.price },
 				];
+				const nlAvg = (Number(p1.price) + Number(p3.price)) / 2;
+
+				// ネックライン水準は**ブレイク判定（findHsBreakoutIdx）に渡す線と同じ**ものを構造ゲートへ渡す
+				// （`ReversalStructureInput.necklinePrice` の docstring）。線は p1 / p3 の 2 点で張るが、
+				// ゲートは第1構成点より手前を遡るので**スカラーの水準**が要る。`validateHorizontalNeckline` が
+				// 既に |p1 - p3| <= HS_NECKLINE_MAX_PCT を課しているため、2 点の平均が線の代表値になる。
+				// 傾きを外挿して遡ると、探索窓 60 本ぶんの外挿誤差が水準そのものより大きくなり得る。
+				// 構造ゲート（#138 欠陥 2-1）。#131 が double にだけ入れたものの横展開。
+				// サイズ検査と同じく「既存の棄却検査をすべて通過した後」に置く。
+				const gate = applyReversalGate({
+					candles,
+					pivots,
+					side: 'top',
+					first: p0,
+					mid: p1,
+					necklinePrice: nlAvg,
+					type: 'head_and_shoulders',
+					indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+					debugCandidates,
+				});
+				if (!gate) continue;
+				const structureGate = buildStructureGate(gate);
+
 				const tolMargin = marginFromRelDev(relDev(p0.price, p4.price), tolerancePct);
 				const symmetry = clamp01(1 - relDev(p0.price, p4.price));
 				const per = periodScoreDays(start, end);
 				const base = (tolMargin + symmetry + per) / 3;
 				const confidence = finalizeConf(base, 'head_and_shoulders');
-				const nlAvg = (Number(p1.price) + Number(p3.price)) / 2;
 				// 右肩後のネックライン下抜けを確認する。
 				const breakoutIdx = findHsBreakoutIdx(candles, neckline, p4.idx, 'below');
 				const completion = buildHsCompletionFields(candles, breakoutIdx, 'down', end);
@@ -466,6 +512,7 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 					...(hsPrecedingTrend ? { precedingTrend: hsPrecedingTrend } : {}),
 					pivots: [p0, p1, p2, p3, p4],
 					neckline,
+					...(structureGate ? { structureGate } : {}),
 					trendlineLabel: 'ネックライン',
 					breakoutTarget: hsTarget,
 					targetMethod: 'neckline_projection' as const,
@@ -615,6 +662,25 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 				{ x: p1.idx, y: nlY },
 				{ x: p3.idx, y: nlY },
 			];
+
+			// relaxed 経路のネックラインは `nlY` の水平線（`findHsBreakoutIdx` に渡すのと同一）。
+			// ブレイク判定と同じ値をそのまま構造ゲートへ渡す。
+			// 構造ゲート（#138 欠陥 2-1）。#131 が double にだけ入れたものの横展開。
+			// サイズ検査と同じく「既存の棄却検査をすべて通過した後」に置く。
+			const gate = applyReversalGate({
+				candles,
+				pivots,
+				side: 'top',
+				first: p0,
+				mid: p1,
+				necklinePrice: nlY,
+				type: 'head_and_shoulders',
+				indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+				debugCandidates,
+			});
+			if (!gate) continue;
+			const structureGate = buildStructureGate(gate);
+
 			const tolMargin = marginFromRelDev(relDev(p0.price, p4.price), tolerancePct * factors.shoulder);
 			const symmetry = clamp01(1 - relDev(p0.price, p4.price));
 			const per = periodScoreDays(start, end);
@@ -667,6 +733,7 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 				...(hsRelPrecedingTrend ? { precedingTrend: hsRelPrecedingTrend } : {}),
 				pivots: [p0, p1, p2, p3, p4],
 				neckline,
+				...(structureGate ? { structureGate } : {}),
 				trendlineLabel: 'ネックライン',
 				breakoutTarget: hsRelTarget,
 				targetMethod: 'neckline_projection' as const,
@@ -775,6 +842,25 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 				{ x: p1.idx, y: nlY },
 				{ x: p3.idx, y: nlY },
 			];
+
+			// relaxed 経路のネックラインは `nlY` の水平線（`findHsBreakoutIdx` に渡すのと同一）。
+			// ブレイク判定と同じ値をそのまま構造ゲートへ渡す。
+			// 構造ゲート（#138 欠陥 2-1）。#131 が double にだけ入れたものの横展開。
+			// サイズ検査と同じく「既存の棄却検査をすべて通過した後」に置く。
+			const gate = applyReversalGate({
+				candles,
+				pivots,
+				side: 'bottom',
+				first: p0,
+				mid: p1,
+				necklinePrice: nlY,
+				type: 'inverse_head_and_shoulders',
+				indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+				debugCandidates,
+			});
+			if (!gate) continue;
+			const structureGate = buildStructureGate(gate);
+
 			const tolMargin = marginFromRelDev(relDev(p0.price, p4.price), tolerancePct * factors.shoulder);
 			const symmetry = clamp01(1 - relDev(p0.price, p4.price));
 			const per = periodScoreDays(start, end);
@@ -827,6 +913,7 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 				...(ihsRelPrecedingTrend ? { precedingTrend: ihsRelPrecedingTrend } : {}),
 				pivots: [p0, p1, p2, p3, p4],
 				neckline,
+				...(structureGate ? { structureGate } : {}),
 				trendlineLabel: 'ネックライン',
 				breakoutTarget: ihsRelTarget,
 				targetMethod: 'neckline_projection' as const,
@@ -849,7 +936,7 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 // ── Helper: 形成中 H&S ──
 
 function tryFormingHS(ctx: DetectContext): DeduplicablePattern | null {
-	const { candles, allPeaks, allValleys } = ctx;
+	const { candles, pivots, allPeaks, allValleys } = ctx;
 	const lastIdx = candles.length - 1;
 	const currentPrice = Number(candles[lastIdx]?.close ?? NaN);
 	const isoAt = (i: number) => candles[i]?.isoTime || '';
@@ -971,10 +1058,29 @@ function tryFormingHS(ctx: DetectContext): DeduplicablePattern | null {
 		return null;
 	}
 
+	const formHsNl = neckline[0].y;
+
+	// 構造ゲート（#138 欠陥 2-1）。#131 が double にだけ入れたものの横展開。
+	// `first` / `mid` は**サイズ検査に渡した構成点列の先頭 2 点**（`reversal-gate.ts` の冒頭）。
+	// 先行谷が取れず 3 点（頭-戻り-右肩）に縮む経路では、縮んだ配列の先頭 2 点がそのまま
+	// `first` / `mid` になる。ネックライン水準は検出器自身が使う `neckline[0].y`。
+	const gate = applyReversalGate({
+		candles,
+		pivots,
+		side: 'top',
+		first: preHeadValley ? left : head,
+		mid: preHeadValley ?? postHeadValley,
+		necklinePrice: formHsNl,
+		type: 'head_and_shoulders',
+		indices: [left.idx, head.idx, postHeadValley.idx, rightShoulder.idx],
+		debugCandidates: ctx.debugCandidates,
+	});
+	if (!gate) return null;
+	const structureGate = buildStructureGate(gate);
+
 	const start = isoAt(left.idx);
 	const end = isoAt(rightShoulder.idx);
 
-	const formHsNl = neckline[0].y;
 	const formHsTarget = Math.round(formHsNl - (head.price - formHsNl));
 	const formHsStructureRange = start && end ? { start, end } : undefined;
 	const formHsPrecedingTrend = buildPrecedingTrend(candles, trend, left.idx);
@@ -1004,6 +1110,7 @@ function tryFormingHS(ctx: DetectContext): DeduplicablePattern | null {
 			},
 		],
 		neckline,
+		...(structureGate ? { structureGate } : {}),
 		trendlineLabel: 'ネックライン',
 		breakoutTarget: formHsTarget,
 		targetMethod: 'neckline_projection' as const,
@@ -1015,7 +1122,7 @@ function tryFormingHS(ctx: DetectContext): DeduplicablePattern | null {
 // ── Helper: 形成中 Inverse H&S ──
 
 function tryFormingInverseHS(ctx: DetectContext): DeduplicablePattern | null {
-	const { candles, allPeaks, allValleys } = ctx;
+	const { candles, pivots, allPeaks, allValleys } = ctx;
 	const lastIdx = candles.length - 1;
 	const currentPrice = Number(candles[lastIdx]?.close ?? NaN);
 	const isoAt = (i: number) => candles[i]?.isoTime || '';
@@ -1134,10 +1241,29 @@ function tryFormingInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 		return null;
 	}
 
+	const formIhsNl = neckline[0].y;
+
+	// 構造ゲート（#138 欠陥 2-1）。#131 が double にだけ入れたものの横展開。
+	// `first` / `mid` は**サイズ検査に渡した構成点列の先頭 2 点**（`reversal-gate.ts` の冒頭）。
+	// 先行山が取れず 3 点（頭-戻り-右肩）に縮む経路では、縮んだ配列の先頭 2 点がそのまま
+	// `first` / `mid` になる。ネックライン水準は検出器自身が使う `neckline[0].y`。
+	const gate = applyReversalGate({
+		candles,
+		pivots,
+		side: 'bottom',
+		first: preHeadPeak ? left : head,
+		mid: preHeadPeak ?? postHeadPeak,
+		necklinePrice: formIhsNl,
+		type: 'inverse_head_and_shoulders',
+		indices: [left.idx, head.idx, postHeadPeak.idx, rightShoulder.idx],
+		debugCandidates: ctx.debugCandidates,
+	});
+	if (!gate) return null;
+	const structureGate = buildStructureGate(gate);
+
 	const start = isoAt(left.idx);
 	const end = isoAt(rightShoulder.idx);
 
-	const formIhsNl = neckline[0].y;
 	const formIhsTarget = Math.round(formIhsNl + (formIhsNl - head.price));
 	const formIhsStructureRange = start && end ? { start, end } : undefined;
 	const formIhsPrecedingTrend = buildPrecedingTrend(candles, trend, left.idx);
@@ -1162,6 +1288,7 @@ function tryFormingInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 			},
 		],
 		neckline,
+		...(structureGate ? { structureGate } : {}),
 		trendlineLabel: 'ネックライン',
 		breakoutTarget: formIhsTarget,
 		targetMethod: 'neckline_projection' as const,
