@@ -76,6 +76,7 @@ interface SummaryPattern extends DeduplicablePattern {
  * オプション:
  * - includeCompleted: true (デフォルト) → 完成済みパターンを検出
  * - includeForming: true → 形成中パターンも検出（早期警告向け）
+ * - includeInvalid: true → 無効化済み（invalid）と期限切れ（expired）も検出
  */
 
 export default async function detectPatterns(
@@ -238,21 +239,22 @@ export default async function detectPatterns(
 			}
 		}
 
-		// includeForming / includeCompleted に基づくフィルタリング
-		let filteredPatterns = patterns;
-		if (!includeForming || !includeCompleted) {
-			filteredPatterns = patterns.filter((p) => {
-				const isForming = p.status === 'forming' || p.status === 'near_completion';
-				const isCompleted = p.status === 'completed' || p.status === 'invalid' || !p.status;
-				if (includeForming && isForming) return true;
-				if (includeCompleted && isCompleted) return true;
-				return false;
-			});
-		}
-		// includeInvalid に基づくフィルタリング
-		if (!includeInvalid) {
-			filteredPatterns = filteredPatterns.filter((p) => p.status !== 'invalid');
-		}
+		// status を 3 つの排他バケットに分け、対応する include* が立っているものだけ残す。
+		//
+		// **3 つは独立した包含スイッチで、入れ子ではない。** 旧実装は
+		// 「completed バケットに invalid を入れてから includeInvalid で引き算する」形だったため、
+		// `includeCompleted: false` + `includeInvalid: true` が**どちらも返さない**という
+		// 到達不能な組み合わせを作っていた（`includeInvalid` の説明文は「含める」と読める）。
+		//
+		// `expired`（issue #126）は「形成中だったが突破確認窓を使い切った」終端状態なので、
+		// forming 側ではなく invalid と同じバケットに入れる。
+		const filteredPatterns = patterns.filter((p) => {
+			const isForming = p.status === 'forming' || p.status === 'near_completion';
+			const isInvalid = p.status === 'invalid' || p.status === 'expired';
+			// status 未設定は完成済み扱い（既存契約）
+			const isCompleted = p.status === 'completed' || !p.status;
+			return (includeForming && isForming) || (includeCompleted && isCompleted) || (includeInvalid && isInvalid);
+		});
 		patterns = filteredPatterns;
 
 		// statistics と data.patterns の対象集合を一致させるため、フィルタ後の patterns に対して実行する。
@@ -498,7 +500,7 @@ export default async function detectPatterns(
 			.join(', ');
 
 		const baseSummary =
-			`${pair.toUpperCase()} ${tfLabel}（${type}） ${limit}本から${patterns.length}件を検出（${typeCountStr}）${periodText}\n\n【検出パターン（全件）】\n${patternSummaries || 'なし'}${statsText}\n\nチャート連携: data.overlays を render_chart_svg.overlays に渡すと注釈/範囲を描画できます。\n\nパターン整合度について（形状一致度・対称性・期間から算出）:\n  0.8以上 = 理想的な形状（教科書的パターン）\n  0.7-0.8 = 標準的な形状（他指標と併用推奨）\n  0.6-0.7 = やや不明瞭（慎重に判断）\n  0.6未満 = 形状不十分` +
+			`${pair.toUpperCase()} ${tfLabel}（${type}） ${limit}本から${patterns.length}件を検出（${typeCountStr}）${periodText}\n\n【検出パターン（全件）】\n${patternSummaries || 'なし'}${statsText}\n\nチャート連携: data.overlays を render_chart_svg.overlays に渡すと注釈/範囲を描画できます。\n\nパターン整合度について（対称性・戻り率・ブレイク品質・期間から算出）:\n  ※整合度は**構造ゲートを通過した候補どうしの形の良さ**の比較値であって、構造的妥当性の指標ではない。\n    ネックラインが先行値幅の起点を越えている等の構造的に無効な形は、整合度が下がるのではなく検出結果に出ない。\n    内訳は data.patterns[].scoreComponents、ゲートの計測値は data.patterns[].structureGate を参照。\n  0.8以上 = 理想的な形状（教科書的パターン）\n  0.7-0.8 = 標準的な形状（他指標と併用推奨）\n  0.6-0.7 = やや不明瞭（慎重に判断）\n  0.6未満 = 形状不十分` +
 			`\n\n---\n📌 含まれるもの: チャートパターン検出（種類・整合度・期間）、ブレイク情報、統計` +
 			`\n📌 含まれないもの: 出来高によるパターン確認、テクニカル指標値、板情報` +
 			`\n📌 補完ツール: analyze_indicators（指標でパターンを裏付け）, get_flow_metrics（出来高確認）, get_orderbook（板情報）`;

@@ -24,7 +24,10 @@ interface PatternWithStatus extends DeduplicablePattern {
  * - completed: 3（ブレイクアウト確認済み）
  * - status 未設定（完成済み扱い）: 2
  * - forming / near_completion: 1
- * - invalid: 0
+ * - invalid / expired: 0
+ *
+ * `expired`（issue #126）は「形成中だったが突破確認窓を使い切った」状態で、
+ * 以後 `completed` にはならない。`invalid` と同じ最下位に置く。
  */
 function statusScore(status: string | undefined): number {
 	if (status === 'completed') return 3;

@@ -429,6 +429,56 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 「この検出器は終値を経由していない」という情報として読むこと。
 契約は `tests/detect_patterns_debug.test.ts` が固定している。
 
+### double_top / double_bottom の構造ゲート（hard reject）
+
+`double_top` / `double_bottom` は、形の良し悪しを整合度で減点する前に、
+**構造として成立していない候補を検出結果から落とす層**を通る。落ちた候補は整合度が
+低く出るのではなく **1 件も出力されない**（理由は `view=debug` の `candidates` に理由コード付きで残る）。
+
+| 理由コード | 意味 |
+|---|---|
+| `neckline_above_pre_decline_high` | (bottom) ネックラインが先行下落の起点より上。戻り率 > 1.0 で、下抜けという事象が存在しない |
+| `neckline_below_pre_decline_low` | (top) 同上の符号反転 |
+| `no_neckline_cross_before_trough1` | (bottom) 谷1 より前に、ネックライン水準を**終値で**下抜けたバーが無い |
+| `no_neckline_cross_before_peak1` | (top) 同上の符号反転 |
+| `retracement_out_of_band` | 戻り率が許容帯（0.20〜0.90）の外 |
+| `re_entered_trough_zone` | 谷2 確定後、ネックライン突破前に終値が谷ゾーンへ戻った。`status=invalid` として出る |
+| `reclassified_as_triple_bottom` / `_top` | 上記に加えて同水準の第3構成点があるため、triple 側に委ねた |
+
+**戻り率は `extremePrice`（高安）基準で測る。** `price`（終値）基準は検出器ごとに意味が違う
+（上表）だけでなく、実データで帯の余裕が消える——BTC/JPY 日足 2026-08-03 → 08-10 の実在パターンで
+高安基準 0.528 に対し終値基準 0.222 と、下限 0.20 まで 2 ポイントしか残らない。
+
+**ネックラインの「線」だけは終値基準**（`neckline` 配列・ブレイク判定と同じ値）。値幅の評価と
+線の位置は別問題で、後でブレイクを判定するのと同じ線を検査しないと意味が無いため。
+
+契約は `tests/patterns/structural-gates-btcjpy.test.ts`（実データ fixture）が固定している。
+
+**既知の偽陰性（#130）。** 安値切り上げ型のダブルボトムが、構造ゲートを通過しても
+`MIN_PIVOT_DISTANCE_BARS`（山→谷2 が 5 本未満）とサイズ検査の終値基準で落ちる場合がある。
+構造ゲートの問題ではないので、本セクションの理由コードには現れない（候補そのものが積まれない）。
+
+### `status` に `expired` がある
+
+| `status` | 意味 | 既定で出るか |
+|---|---|---|
+| `forming` | 形成途上。まだネックライン突破の余地がある | `includeForming: true` で |
+| `near_completion` | 突破目前 | `includeForming: true` で |
+| `completed` | 検出器がネックライン突破を確認済み | ○ |
+| `invalid` | 構成点確定後に形が崩れて無効化された（理由は `invalidReason`） | `includeInvalid: true` で |
+| `expired` | **突破確認窓を使い切った。**以後 `completed` になることはない | `includeInvalid: true` で |
+
+`expired` は `invalid` と同義ではない——形が崩れたのではなく、成立する時間を使い切った状態。
+突破探索は第2構成点から 20 本しか行われないので、それを過ぎた候補が `forming` を名乗ると
+「まだ完成しうる」という誤った含意になる。既定で隠すのは、既に決着した候補がノイズになるため。
+
+### 整合度は「ゲート通過後の形の良さ」
+
+`confidence` は**構造ゲートを通過した候補どうしの比較値**であって、構造的妥当性の指標ではない。
+構造的に無効な形は整合度が下がるのではなく、そもそも出力されない。
+内訳は `data.patterns[*].scoreComponents`（`symmetry` / `retracement` / `breakoutQuality` / `duration`）、
+ゲートが実際に計測した値は `data.patterns[*].structureGate` にある。
+
 ### `debug` の candidates は `patterns` で絞られる
 
 `meta.debug.candidates` は各検出器が走査中に積んだ「候補と、その採否・理由コード」。

@@ -154,6 +154,25 @@ export interface AftermathResult {
 	daysToTarget?: number | null;
 }
 
+/**
+ * 整合度（confidence）のサブスコア。issue #126 で露出。
+ * **構造ゲートを通過した候補どうしの形の良さ**の内訳であって、構造的妥当性の指標ではない。
+ */
+export interface PatternScoreBreakdown {
+	symmetry?: number;
+	retracement?: number;
+	breakoutQuality?: number;
+	duration?: number;
+}
+
+/** 構造ゲート（issue #126）が実際に計測した値。schema 参照。 */
+export interface PatternStructureGate {
+	retracementRatio?: number;
+	priorExtremeIdx?: number;
+	priorExtremePrice?: number;
+	necklineCrossIdx?: number;
+}
+
 /** パターン構成点のみで張る期間（誤読防止のための追加フィールド）。詳細は schema 参照。 */
 export interface PatternStructureRange {
 	start: string;
@@ -182,6 +201,12 @@ export interface PatternEntry extends DeduplicablePattern {
 	neckline?: Array<{ x?: number; y: number }>;
 	structureDiagram?: { svg: string; artifact?: { identifier: string; title: string } };
 	status?: string;
+	/** `status='invalid' | 'expired'` の理由コード（issue #126）。schema 参照。 */
+	invalidReason?: string;
+	/** 整合度のサブスコア（issue #126）。ゲート通過後の形の良さの内訳。schema 参照。 */
+	scoreComponents?: PatternScoreBreakdown;
+	/** 構造ゲート（issue #126）の計測値。schema 参照。 */
+	structureGate?: PatternStructureGate;
 	breakout?: { idx: number; price: number; direction?: string } | null;
 	structureRange?: PatternStructureRange;
 	confirmation?: PatternConfirmation;

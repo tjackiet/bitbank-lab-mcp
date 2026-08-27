@@ -6,8 +6,19 @@ import { EPSILON } from '../../lib/math.js';
 import { generatePatternDiagram } from '../../lib/pattern-diagrams.js';
 import { patternBarRange } from './bar-thresholds.js';
 import { computeTargetReach, deduplicatePatterns, finalizeConf, periodScoreDays } from './helpers.js';
-import { clamp01, marginFromRelDev, relDev } from './regression.js';
-import { DOUBLE_LEVEL_MAX_PCT, isSameLevel, type PriorTrendResult, validatePriorTrend } from './structural.js';
+import { clamp01, relDev } from './regression.js';
+import {
+	DOUBLE_LEVEL_MAX_PCT,
+	detectTroughZoneReentry,
+	isSameLevel,
+	type PriorTrendResult,
+	RETRACEMENT_MAX,
+	RETRACEMENT_MIN,
+	type ReversalSide,
+	type ReversalStructureResult,
+	validatePriorTrend,
+	validateReversalStructure,
+} from './structural.js';
 import type { Pivot } from './swing.js';
 import {
 	type CandleData,
@@ -16,6 +27,8 @@ import {
 	type PatternConfirmation,
 	type PatternEntry,
 	type PatternPrecedingTrend,
+	type PatternScoreBreakdown,
+	type PatternStructureGate,
 	pushCand,
 } from './types.js';
 
@@ -48,6 +61,18 @@ const MIN_FORMING_COMPLETION = 0.4;
 export const MIN_PATTERN_DAYS = 14;
 const FORMING_TOLERANCE_MULTIPLIER = 1.5;
 const FORMING_VALLEY_INVALID_PCT = 0.02;
+/**
+ * 形成中パターンが `forming` を名乗れる、第2構成点確定からの経過バー数の上限（issue #126 G4）。
+ *
+ * **{@link MAX_BARS_FROM_EXTREMUM} と同じ値であることに意味がある。** 完成済み判定の
+ * `findBreakoutIdx` は第2構成点から `MAX_BARS_FROM_EXTREMUM` 本しかネックライン突破を探さない。
+ * つまりそれを過ぎた候補は、以後どれだけ待っても `completed` にはならない。
+ * 「形成中＝まだ完成しうる」を成立させるには、形成中側の期限を突破探索窓と一致させるしかない。
+ *
+ * これが無かったため、現値がネックラインを大きく上回っている状態でも「形成中」と
+ * 報告され続けていた（8/25 時点で +17.8%）。
+ */
+const FORMING_EXPIRY_BARS = MAX_BARS_FROM_EXTREMUM;
 
 /**
  * 形成中ダブルトップ / ボトムが要求する形成バー数のレンジ
@@ -137,6 +162,164 @@ function validateBottomSize(a: Pivot, b: Pivot, c: Pivot): string | null {
 	const peakHeightPct = (b.price - valleyAvg) / Math.max(1, valleyAvg);
 	if (peakHeightPct < MIN_DEPTH_PCT) return 'peak_too_shallow';
 	return null;
+}
+
+// ── Helper: 構造ゲート（issue #126）──
+
+/**
+ * 構造ゲート（{@link validateReversalStructure}）を適用し、不合格なら debug candidate を
+ * 積んで `null` を返す。
+ *
+ * **スコアの減点ではなく hard reject。** ここを通らない形は整合度がいくら高くても
+ * 検出結果に出さない。issue #126 の 7/1〜8/3 の偽陽性（ネックラインが先行下落の起点より
+ * 4.88% 上にあり「下抜け」という事象が存在しないまま整合度 1.00 が付いていた）はここで落ちる。
+ *
+ * 価格基準は `Pivot.extremePrice`（高安）。既存の同水準判定（`isSameLevel(a.price, c.price)`）が
+ * 終値基準のままなのは意図的で、本ゲートだけが `extremePrice` を見る——
+ * 理由は `structural.ts` の {@link ReversalSide} の docstring を参照。
+ */
+function applyStructuralGate(
+	candles: CandleData[],
+	pivots: ReadonlyArray<Pivot>,
+	side: ReversalSide,
+	a: Pivot,
+	b: Pivot,
+	c: Pivot,
+	necklinePrice: number,
+	type: 'double_top' | 'double_bottom',
+	pcand: Pcand,
+): ReversalStructureResult | null {
+	const gate = validateReversalStructure({ candles, pivots, first: a, mid: b, necklinePrice, side });
+	if (gate.ok) return gate;
+	const outerRole = side === 'bottom' ? 'valley' : 'peak';
+	pcand({
+		type,
+		accepted: false,
+		reason: gate.reason,
+		idxs: [a.idx, b.idx, c.idx],
+		pts: [
+			...(gate.priorExtreme
+				? [{ role: 'prior_extreme', idx: gate.priorExtreme.idx, price: gate.priorExtreme.extremePrice }]
+				: []),
+			{ role: `${outerRole}1`, idx: a.idx, price: a.price },
+			{ role: side === 'bottom' ? 'peak' : 'valley', idx: b.idx, price: b.price },
+			{ role: `${outerRole}2`, idx: c.idx, price: c.price },
+		],
+	});
+	return null;
+}
+
+/** {@link ReversalStructureResult} → `PatternEntry.structureGate` */
+function buildStructureGate(gate: ReversalStructureResult): PatternStructureGate | undefined {
+	const out: PatternStructureGate = {};
+	if (gate.retracementRatio !== undefined) out.retracementRatio = Number(gate.retracementRatio.toFixed(4));
+	if (gate.priorExtreme) {
+		out.priorExtremeIdx = gate.priorExtreme.idx;
+		out.priorExtremePrice = gate.priorExtreme.extremePrice;
+	}
+	if (gate.necklineCrossIdx !== undefined) out.necklineCrossIdx = gate.necklineCrossIdx;
+	return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * 戻り率スコア。許容帯 [{@link RETRACEMENT_MIN}, {@link RETRACEMENT_MAX}] の**中央で 1、端で 0**。
+ *
+ * 帯の外は構造ゲートが既に弾いているので、ここに来る値は必ず帯の中にある。
+ * 「帯の中央 = 教科書的な戻り」という評価であって、合否の判定ではない。
+ */
+function retracementScore(ratio: number | undefined): number | undefined {
+	if (ratio === undefined || !Number.isFinite(ratio)) return undefined;
+	const center = (RETRACEMENT_MIN + RETRACEMENT_MAX) / 2;
+	const halfWidth = (RETRACEMENT_MAX - RETRACEMENT_MIN) / 2;
+	if (halfWidth <= 0) return undefined;
+	return clamp01(1 - Math.abs(ratio - center) / halfWidth);
+}
+
+/**
+ * ブレイク品質スコア。突破足の終値がネックラインをパターン高さの何割ぶん超えたか。
+ *
+ * ネックラインぎりぎりの突破（`BREAKOUT_BUFFER_PCT` すれすれ）と、
+ * 高さの半分ぶん一気に抜けた突破を同じ整合度にしないための軸。
+ */
+function breakoutQualityScore(
+	necklinePrice: number,
+	breakoutClose: number,
+	patternHeight: number,
+	side: ReversalSide,
+): number | undefined {
+	if (!Number.isFinite(breakoutClose) || !(patternHeight > EPSILON)) return undefined;
+	const excess = side === 'bottom' ? breakoutClose - necklinePrice : necklinePrice - breakoutClose;
+	return clamp01(excess / patternHeight);
+}
+
+/**
+ * 完成済みダブルの整合度サブスコア。
+ *
+ * 旧実装は `(tolMargin + symmetry + per) / 3` で、`tolMargin` と `symmetry` は
+ * どちらも「2 点が同水準か」を測る同じ軸だった（実質 2 軸）。**戻り率**と**ブレイク品質**を
+ * 独立軸として足し、4 軸の平均にする。構造的に無効な形に 1.00 が付いていた問題
+ * （issue #126 G3）は構造ゲート側で塞ぐが、通過後の形の良さもこれで解像度が上がる。
+ */
+function buildDoubleScore(opts: {
+	outer1: number;
+	outer2: number;
+	necklinePrice: number;
+	breakoutClose: number;
+	patternHeight: number;
+	side: ReversalSide;
+	retracementRatio?: number;
+	durationScore: number;
+}): { components: PatternScoreBreakdown; base: number } {
+	const symmetry = clamp01(1 - relDev(opts.outer1, opts.outer2));
+	const retracement = retracementScore(opts.retracementRatio);
+	const breakoutQuality = breakoutQualityScore(opts.necklinePrice, opts.breakoutClose, opts.patternHeight, opts.side);
+	const components: PatternScoreBreakdown = {
+		symmetry: Number(symmetry.toFixed(4)),
+		...(retracement !== undefined ? { retracement: Number(retracement.toFixed(4)) } : {}),
+		...(breakoutQuality !== undefined ? { breakoutQuality: Number(breakoutQuality.toFixed(4)) } : {}),
+		duration: Number(opts.durationScore.toFixed(4)),
+	};
+	// 算出できなかった軸は平均から外す（0 として混ぜると欠測が減点になる）
+	const values = [symmetry, retracement, breakoutQuality, opts.durationScore].filter(
+		(v): v is number => v !== undefined,
+	);
+	const base = values.reduce((sum, v) => sum + v, 0) / values.length;
+	return { components, base };
+}
+
+/**
+ * 第2構成点の確定後にパターンが崩れていないかを見て、崩れていれば終端 status を返す
+ * （issue #126 G5）。
+ *
+ * 谷ゾーンへ戻ってしまった候補は、同水準の第3構成点があれば triple への再分類対象なので
+ * **何も出さない**（`detect_triples` に委ねる）。無ければ `invalid` として理由コード付きで出す。
+ */
+function checkPostPivotInvalidation(opts: {
+	candles: CandleData[];
+	pivots: ReadonlyArray<Pivot>;
+	a: Pivot;
+	b: Pivot;
+	c: Pivot;
+	untilIdx: number;
+	side: ReversalSide;
+}): { verdict: 'ok' } | { verdict: 'reclassify' } | { verdict: 'invalid'; reason: string; idx?: number } {
+	const reentry = detectTroughZoneReentry({
+		candles: opts.candles,
+		first: opts.a,
+		mid: opts.b,
+		second: opts.c,
+		untilIdx: opts.untilIdx,
+		side: opts.side,
+	});
+	if (!reentry.reentered) return { verdict: 'ok' };
+
+	const level = (opts.a.price + opts.c.price) / 2;
+	const kind = opts.side === 'bottom' ? 'L' : 'H';
+	const hasThird = opts.pivots.some(
+		(p) => p.idx > opts.c.idx && p.kind === kind && isSameLevel(p.price, level, DOUBLE_LEVEL_MAX_PCT),
+	);
+	if (hasThird) return { verdict: 'reclassify' };
+	return { verdict: 'invalid', reason: 're_entered_trough_zone', idx: reentry.idx };
 }
 
 // ── Helper: relaxed fallback ダブルトップ検索 ──
@@ -232,6 +415,28 @@ function findRelaxedDoubleTop(
 			});
 		}
 
+		const gate = applyStructuralGate(candles, pivots, 'top', a, b, c, necklinePrice, 'double_top', pcand);
+		if (!gate) continue;
+
+		const post = checkPostPivotInvalidation({
+			candles,
+			pivots,
+			a,
+			b,
+			c,
+			untilIdx: breakoutIdx - 1,
+			side: 'top',
+		});
+		if (post.verdict === 'reclassify') {
+			pcand({
+				type: 'double_top',
+				accepted: false,
+				reason: 'reclassified_as_triple_top',
+				idxs: [a.idx, b.idx, c.idx],
+			});
+			continue;
+		}
+
 		const start = candles[a.idx].isoTime,
 			end = candles[breakoutIdx].isoTime;
 		if (!start || !end) continue;
@@ -240,10 +445,19 @@ function findRelaxedDoubleTop(
 			{ x: a.idx, y: necklinePrice },
 			{ x: breakoutIdx, y: necklinePrice },
 		];
-		const tolMargin = marginFromRelDev(relDev(a.price, c.price), tolRelax);
-		const symmetry = clamp01(1 - relDev(a.price, c.price));
 		const per = periodScoreDays(start, end);
-		const base = (tolMargin + symmetry + per) / 3;
+		const dtRelAvgPeak = (a.price + c.price) / 2;
+		const dtRelBp = Number(candles[breakoutIdx]?.close ?? NaN);
+		const { components: scoreComponents, base } = buildDoubleScore({
+			outer1: a.price,
+			outer2: c.price,
+			necklinePrice,
+			breakoutClose: dtRelBp,
+			patternHeight: dtRelAvgPeak - necklinePrice,
+			side: 'top',
+			retracementRatio: gate.retracementRatio,
+			durationScore: per,
+		});
 		const confidence = finalizeConf(base * RELAXED_CONFIDENCE_PENALTY, 'double_top');
 		const diagram = generatePatternDiagram(
 			'double_top',
@@ -255,9 +469,7 @@ function findRelaxedDoubleTop(
 			{ price: necklinePrice },
 			{ start, end },
 		);
-		const dtRelAvgPeak = (a.price + c.price) / 2;
 		const dtRelTarget = Math.round(necklinePrice - (dtRelAvgPeak - necklinePrice));
-		const dtRelBp = Number(candles[breakoutIdx]?.close ?? NaN);
 		const dtRelReach = Number.isFinite(dtRelBp)
 			? computeTargetReach(candles, breakoutIdx, dtRelBp, dtRelTarget, 'down')
 			: undefined;
@@ -268,13 +480,18 @@ function findRelaxedDoubleTop(
 		const confirmation = buildNecklineConfirmation(candles, breakoutIdx);
 		const precedingTrend = buildPrecedingTrend(candles, trend, a.idx);
 
+		const structureGate = buildStructureGate(gate);
+
 		return {
 			type: 'double_top',
 			confidence,
+			scoreComponents,
+			...(structureGate ? { structureGate } : {}),
 			range: { start, end },
 			...(structureRange ? { structureRange } : {}),
 			...(confirmation ? { confirmation } : {}),
 			...(precedingTrend ? { precedingTrend } : {}),
+			...(post.verdict === 'invalid' ? { status: 'invalid', invalidReason: post.reason } : {}),
 			pivots: [a, b, c],
 			neckline,
 			trendlineLabel: 'ネックライン',
@@ -390,6 +607,28 @@ function findRelaxedDoubleBottom(
 			});
 		}
 
+		const gate = applyStructuralGate(candles, pivots, 'bottom', a, b, c, necklinePrice, 'double_bottom', pcand);
+		if (!gate) continue;
+
+		const post = checkPostPivotInvalidation({
+			candles,
+			pivots,
+			a,
+			b,
+			c,
+			untilIdx: breakoutIdx - 1,
+			side: 'bottom',
+		});
+		if (post.verdict === 'reclassify') {
+			pcand({
+				type: 'double_bottom',
+				accepted: false,
+				reason: 'reclassified_as_triple_bottom',
+				idxs: [a.idx, b.idx, c.idx],
+			});
+			continue;
+		}
+
 		const start = candles[a.idx].isoTime,
 			end = candles[breakoutIdx].isoTime;
 		if (!start || !end) continue;
@@ -398,11 +637,20 @@ function findRelaxedDoubleBottom(
 			{ x: a.idx, y: necklinePrice },
 			{ x: breakoutIdx, y: necklinePrice },
 		];
-		const tolMargin = marginFromRelDev(relDev(a.price, c.price), tolRelax);
-		const symmetry = clamp01(1 - relDev(a.price, c.price));
 		const per = periodScoreDays(start, end);
-		const base = (tolMargin + symmetry + per) / 3;
-		const confidence = finalizeConf(base * 0.85, 'double_bottom');
+		const dbRelAvgValley = (a.price + c.price) / 2;
+		const dbRelBp = Number(candles[breakoutIdx]?.close ?? NaN);
+		const { components: scoreComponents, base } = buildDoubleScore({
+			outer1: a.price,
+			outer2: c.price,
+			necklinePrice,
+			breakoutClose: dbRelBp,
+			patternHeight: necklinePrice - dbRelAvgValley,
+			side: 'bottom',
+			retracementRatio: gate.retracementRatio,
+			durationScore: per,
+		});
+		const confidence = finalizeConf(base * RELAXED_CONFIDENCE_PENALTY, 'double_bottom');
 		const diagram = generatePatternDiagram(
 			'double_bottom',
 			[
@@ -413,9 +661,7 @@ function findRelaxedDoubleBottom(
 			{ price: necklinePrice },
 			{ start, end },
 		);
-		const dbRelAvgValley = (a.price + c.price) / 2;
 		const dbRelTarget = Math.round(necklinePrice + (necklinePrice - dbRelAvgValley));
-		const dbRelBp = Number(candles[breakoutIdx]?.close ?? NaN);
 		const dbRelReach = Number.isFinite(dbRelBp)
 			? computeTargetReach(candles, breakoutIdx, dbRelBp, dbRelTarget, 'up')
 			: undefined;
@@ -426,13 +672,18 @@ function findRelaxedDoubleBottom(
 		const confirmation = buildNecklineConfirmation(candles, breakoutIdx);
 		const precedingTrend = buildPrecedingTrend(candles, trend, a.idx);
 
+		const structureGate = buildStructureGate(gate);
+
 		return {
 			type: 'double_bottom',
 			confidence,
+			scoreComponents,
+			...(structureGate ? { structureGate } : {}),
 			range: { start, end },
 			...(structureRange ? { structureRange } : {}),
 			...(confirmation ? { confirmation } : {}),
 			...(precedingTrend ? { precedingTrend } : {}),
+			...(post.verdict === 'invalid' ? { status: 'invalid', invalidReason: post.reason } : {}),
 			pivots: [a, b, c],
 			neckline,
 			trendlineLabel: 'ネックライン',
@@ -510,6 +761,33 @@ function tryFormingDoubleTop(ctx: DetectContext): PatternEntry | null {
 		});
 	}
 
+	// 形成中でも構造ゲートは完成済みと同じものを掛ける。ゲートを通らない形は、
+	// 形成が進んでも有効なパターンにはならない（issue #126 G1 / G2）。
+	// 暫定右肩（最新足）は確定ピボットではないので、第2構成点には left/valley だけで
+	// 判定できる部分——先行値幅と戻り率——のみを適用する。
+	const gate = validateReversalStructure({
+		candles,
+		pivots: ctx.pivots,
+		first: leftPeak,
+		mid: valley,
+		// 形成中ダブルトップのネックラインは valley.price（下の neckline 配列と同じ値）
+		necklinePrice: valley.price,
+		side: 'top',
+	});
+	if (!gate.ok) {
+		ctx.debugCandidates.push({
+			type: 'double_top',
+			accepted: false,
+			reason: gate.reason,
+			indices: [leftPeak.idx, valley.idx, lastIdx],
+			points: [
+				{ role: 'peak1', idx: leftPeak.idx, price: leftPeak.price, isoTime: candles[leftPeak.idx]?.isoTime },
+				{ role: 'valley', idx: valley.idx, price: valley.price, isoTime: candles[valley.idx]?.isoTime },
+			],
+		});
+		return null;
+	}
+
 	const neckline = [
 		{ x: leftPeak.idx, y: valley.price },
 		{ x: lastIdx, y: valley.price },
@@ -522,9 +800,18 @@ function tryFormingDoubleTop(ctx: DetectContext): PatternEntry | null {
 	const structureRange = start && end ? { start, end } : undefined;
 	const precedingTrend = buildPrecedingTrend(candles, trend, leftPeak.idx);
 
+	const structureGate = buildStructureGate(gate);
+
 	return {
 		type: 'double_top',
 		confidence,
+		scoreComponents: {
+			symmetry: Number(clamp01(1 - relDev(leftPeak.price, currentPrice)).toFixed(4)),
+			...(retracementScore(gate.retracementRatio) !== undefined
+				? { retracement: Number((retracementScore(gate.retracementRatio) as number).toFixed(4)) }
+				: {}),
+		},
+		...(structureGate ? { structureGate } : {}),
 		range: { start, end },
 		...(structureRange ? { structureRange } : {}),
 		confirmation: { type: 'not_confirmed' },
@@ -612,6 +899,76 @@ function tryFormingDoubleBottom(ctx: DetectContext): PatternEntry | null {
 			});
 		}
 
+		const gate = validateReversalStructure({
+			candles,
+			pivots: ctx.pivots,
+			first: leftValley,
+			mid: midPeak,
+			// 形成中ダブルボトムのネックラインは midPeak.price（下の neckline 配列と同じ値）
+			necklinePrice: midPeak.price,
+			side: 'bottom',
+		});
+		if (!gate.ok) {
+			ctx.debugCandidates.push({
+				type: 'double_bottom',
+				accepted: false,
+				reason: gate.reason,
+				indices: [leftValley.idx, midPeak.idx, rightValley.idx, lastIdx],
+				points: [
+					...(gate.priorExtreme
+						? [
+								{
+									role: 'prior_extreme',
+									idx: gate.priorExtreme.idx,
+									price: gate.priorExtreme.extremePrice,
+									isoTime: candles[gate.priorExtreme.idx]?.isoTime,
+								},
+							]
+						: []),
+					{ role: 'valley1', idx: leftValley.idx, price: leftValley.price, isoTime: candles[leftValley.idx]?.isoTime },
+					{ role: 'peak', idx: midPeak.idx, price: midPeak.price, isoTime: candles[midPeak.idx]?.isoTime },
+					{
+						role: 'valley2',
+						idx: rightValley.idx,
+						price: rightValley.price,
+						isoTime: candles[rightValley.idx]?.isoTime,
+					},
+				],
+			});
+			continue;
+		}
+
+		// 谷2 確定後の再下落（issue #126 G5）。ネックライン突破前に谷ゾーンへ戻っていたら
+		// ダブルとしては無効。同水準の第3の谷があれば triple 側に委ねる。
+		const post = checkPostPivotInvalidation({
+			candles,
+			pivots: ctx.pivots,
+			a: leftValley,
+			b: midPeak,
+			c: rightValley,
+			untilIdx: lastIdx,
+			side: 'bottom',
+		});
+		if (post.verdict === 'reclassify') {
+			ctx.debugCandidates.push({
+				type: 'double_bottom',
+				accepted: false,
+				reason: 'reclassified_as_triple_bottom',
+				indices: [leftValley.idx, midPeak.idx, rightValley.idx, lastIdx],
+			});
+			continue;
+		}
+
+		// 期限切れ（issue #126 G4）。谷2 確定から突破探索窓を過ぎた候補は、以後
+		// `completed` になりようがない——`forming` を名乗らせない。
+		const barsSinceRightValley = lastIdx - rightValley.idx;
+		const terminal: { status: string; invalidReason: string } | null =
+			post.verdict === 'invalid'
+				? { status: 'invalid', invalidReason: post.reason }
+				: barsSinceRightValley > FORMING_EXPIRY_BARS
+					? { status: 'expired', invalidReason: 'forming_expired' }
+					: null;
+
 		const neckline = [
 			{ x: midPeak.idx, y: midPeak.price },
 			{ x: lastIdx, y: midPeak.price },
@@ -628,14 +985,24 @@ function tryFormingDoubleBottom(ctx: DetectContext): PatternEntry | null {
 		const structureRange = structStart && structEnd ? { start: structStart, end: structEnd } : undefined;
 		const precedingTrend = buildPrecedingTrend(candles, trend, leftValley.idx);
 
+		const structureGate = buildStructureGate(gate);
+
 		return {
 			type: 'double_bottom',
 			confidence,
+			scoreComponents: {
+				symmetry: Number(clamp01(1 - relDev(leftValley.price, rightValley.price)).toFixed(4)),
+				...(retracementScore(gate.retracementRatio) !== undefined
+					? { retracement: Number((retracementScore(gate.retracementRatio) as number).toFixed(4)) }
+					: {}),
+			},
+			...(structureGate ? { structureGate } : {}),
 			range: { start, end },
 			...(structureRange ? { structureRange } : {}),
 			confirmation: { type: 'not_confirmed' },
 			...(precedingTrend ? { precedingTrend } : {}),
-			status: 'forming',
+			status: terminal ? terminal.status : 'forming',
+			...(terminal ? { invalidReason: terminal.invalidReason } : {}),
 			pivots: [
 				{ idx: leftValley.idx, price: leftValley.price, kind: 'L' as const, extremePrice: leftValley.extremePrice },
 				{ idx: midPeak.idx, price: midPeak.price, kind: 'H' as const, extremePrice: midPeak.extremePrice },
@@ -748,6 +1115,26 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 						idxs: [a.idx, b.idx, c.idx],
 					});
 				}
+				const gate = applyStructuralGate(candles, pivots, 'top', a, b, c, necklinePrice, 'double_top', pcand);
+				if (!gate) continue;
+				const post = checkPostPivotInvalidation({
+					candles,
+					pivots,
+					a,
+					b,
+					c,
+					untilIdx: breakoutIdx - 1,
+					side: 'top',
+				});
+				if (post.verdict === 'reclassify') {
+					pcand({
+						type: 'double_top',
+						accepted: false,
+						reason: 'reclassified_as_triple_top',
+						idxs: [a.idx, b.idx, c.idx],
+					});
+					continue;
+				}
 				const start = candles[a.idx].isoTime;
 				const end = candles[breakoutIdx].isoTime;
 				if (!start || !end) continue;
@@ -755,10 +1142,19 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					{ x: a.idx, y: necklinePrice },
 					{ x: breakoutIdx, y: necklinePrice },
 				];
-				const tolMargin = marginFromRelDev(relDev(a.price, c.price), tolerancePct);
-				const symmetry = clamp01(1 - relDev(a.price, c.price));
 				const per = periodScoreDays(start, end);
-				const base = (tolMargin + symmetry + per) / 3;
+				const dtAvgPeak = (a.price + c.price) / 2;
+				const dtBp = Number(candles[breakoutIdx]?.close ?? NaN);
+				const { components: dtScoreComponents, base } = buildDoubleScore({
+					outer1: a.price,
+					outer2: c.price,
+					necklinePrice,
+					breakoutClose: dtBp,
+					patternHeight: dtAvgPeak - necklinePrice,
+					side: 'top',
+					retracementRatio: gate.retracementRatio,
+					durationScore: per,
+				});
 				const confidence = finalizeConf(base, 'double_top');
 				const diagram = generatePatternDiagram(
 					'double_top',
@@ -770,9 +1166,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					{ price: necklinePrice },
 					{ start, end },
 				);
-				const dtAvgPeak = (a.price + c.price) / 2;
 				const dtTarget = Math.round(necklinePrice - (dtAvgPeak - necklinePrice));
-				const dtBp = Number(candles[breakoutIdx]?.close ?? NaN);
 				const dtReach = Number.isFinite(dtBp)
 					? computeTargetReach(candles, breakoutIdx, dtBp, dtTarget, 'down')
 					: undefined;
@@ -782,13 +1176,17 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 						: undefined;
 				const dtConfirmation = buildNecklineConfirmation(candles, breakoutIdx);
 				const dtPrecedingTrend = buildPrecedingTrend(candles, trend, a.idx);
+				const dtStructureGate = buildStructureGate(gate);
 				push(patterns, {
 					type: 'double_top',
 					confidence,
+					scoreComponents: dtScoreComponents,
+					...(dtStructureGate ? { structureGate: dtStructureGate } : {}),
 					range: { start, end },
 					...(dtStructureRange ? { structureRange: dtStructureRange } : {}),
 					...(dtConfirmation ? { confirmation: dtConfirmation } : {}),
 					...(dtPrecedingTrend ? { precedingTrend: dtPrecedingTrend } : {}),
+					...(post.verdict === 'invalid' ? { status: 'invalid', invalidReason: post.reason } : {}),
 					pivots: [a, b, c],
 					neckline,
 					trendlineLabel: 'ネックライン',
@@ -897,6 +1295,26 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 						idxs: [a.idx, b.idx, c.idx],
 					});
 				}
+				const gate = applyStructuralGate(candles, pivots, 'bottom', a, b, c, necklinePrice, 'double_bottom', pcand);
+				if (!gate) continue;
+				const post = checkPostPivotInvalidation({
+					candles,
+					pivots,
+					a,
+					b,
+					c,
+					untilIdx: breakoutIdx - 1,
+					side: 'bottom',
+				});
+				if (post.verdict === 'reclassify') {
+					pcand({
+						type: 'double_bottom',
+						accepted: false,
+						reason: 'reclassified_as_triple_bottom',
+						idxs: [a.idx, b.idx, c.idx],
+					});
+					continue;
+				}
 				const start = candles[a.idx].isoTime;
 				const end = candles[breakoutIdx].isoTime;
 				if (!start || !end) continue;
@@ -904,10 +1322,19 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					{ x: a.idx, y: necklinePrice },
 					{ x: breakoutIdx, y: necklinePrice },
 				];
-				const tolMargin = marginFromRelDev(relDev(a.price, c.price), tolerancePct);
-				const symmetry = clamp01(1 - relDev(a.price, c.price));
 				const per = periodScoreDays(start, end);
-				const base = (tolMargin + symmetry + per) / 3;
+				const dbAvgValley = (a.price + c.price) / 2;
+				const dbBp = Number(candles[breakoutIdx]?.close ?? NaN);
+				const { components: dbScoreComponents, base } = buildDoubleScore({
+					outer1: a.price,
+					outer2: c.price,
+					necklinePrice,
+					breakoutClose: dbBp,
+					patternHeight: necklinePrice - dbAvgValley,
+					side: 'bottom',
+					retracementRatio: gate.retracementRatio,
+					durationScore: per,
+				});
 				const confidence = finalizeConf(base, 'double_bottom');
 				const diagram = generatePatternDiagram(
 					'double_bottom',
@@ -919,9 +1346,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					{ price: necklinePrice },
 					{ start, end },
 				);
-				const dbAvgValley = (a.price + c.price) / 2;
 				const dbTarget = Math.round(necklinePrice + (necklinePrice - dbAvgValley));
-				const dbBp = Number(candles[breakoutIdx]?.close ?? NaN);
 				const dbReach = Number.isFinite(dbBp)
 					? computeTargetReach(candles, breakoutIdx, dbBp, dbTarget, 'up')
 					: undefined;
@@ -931,13 +1356,17 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 						: undefined;
 				const dbConfirmation = buildNecklineConfirmation(candles, breakoutIdx);
 				const dbPrecedingTrend = buildPrecedingTrend(candles, trend, a.idx);
+				const dbStructureGate = buildStructureGate(gate);
 				push(patterns, {
 					type: 'double_bottom',
 					confidence,
+					scoreComponents: dbScoreComponents,
+					...(dbStructureGate ? { structureGate: dbStructureGate } : {}),
 					range: { start, end },
 					...(dbStructureRange ? { structureRange: dbStructureRange } : {}),
 					...(dbConfirmation ? { confirmation: dbConfirmation } : {}),
 					...(dbPrecedingTrend ? { precedingTrend: dbPrecedingTrend } : {}),
+					...(post.verdict === 'invalid' ? { status: 'invalid', invalidReason: post.reason } : {}),
 					pivots: [a, b, c],
 					neckline,
 					trendlineLabel: 'ネックライン',
