@@ -151,8 +151,10 @@ describe('detect_patterns: triple / H&S のサイズ検査（issue #138 欠陥 2
 		const sizeReasons = ['pattern_too_small', 'valley_too_shallow', 'peak_too_shallow'];
 		for (const type of ['triple_top', 'triple_bottom']) {
 			expect(candidates.filter((c) => c.type === type && sizeReasons.includes(String(c.reason)))).toHaveLength(0);
+			// **両種別について**構成点まで到達していること（別経路の silent reject で消えている
+			// わけではないこと）の裏取り。片方だけ見ると、もう片方がサイズ検査より手前で
+			// 落ちていても上の「サイズ系の理由が 0 件」が空振りで通ってしまう。
+			expect(candidates.some((c) => c.type === type && c.reason === 'retracement_out_of_band')).toBe(true);
 		}
-		// 構成点まで到達している（別経路の silent reject で消えているわけではない）ことの裏取り。
-		expect(candidates.some((c) => c.type === 'triple_top' && c.reason === 'retracement_out_of_band')).toBe(true);
 	});
 });
