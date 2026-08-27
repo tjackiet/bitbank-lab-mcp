@@ -108,14 +108,19 @@ const TRIANGLE_CANDIDATE_LABELS = [
 ] as const;
 
 /**
- * 具体型が決まらないまま積まれる棄却理由。どちらも umbrella ラベルで積む契約。
+ * 具体型が決まらないまま積まれる棄却理由。いずれも umbrella ラベルで積む契約。
  * - `poor_trendline_fit`: 回帰の当てはまり不足。分類に入る前の棄却
+ * - `excessive_outlier_removal`: 外れ値除去が上限を超えた。分類に入る前の棄却（#141）
  * - `classification_failed`: 3 種のどの形にも当てはまらない（`want` と無関係に成立しない）
  *
  * **`type_not_requested` はここに含めない。** あれは「形は成立するが要求外」で型が決まって
  * いるため、具体型ラベルで積む（`detect_wedges` の同名 reason と同じ idiom）。
  */
-const PRE_CLASSIFICATION_REASONS = ['poor_trendline_fit', 'classification_failed'] as const;
+const PRE_CLASSIFICATION_REASONS = [
+	'poor_trendline_fit',
+	'excessive_outlier_removal',
+	'classification_failed',
+] as const;
 
 /** 候補を「ラベルを無視した中身」に落とす（ラベル変更が件数・理由を動かしていないことの検証用）。 */
 function candidateShape(c: { accepted?: boolean; reason?: string; indices?: number[] }) {
