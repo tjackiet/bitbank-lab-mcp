@@ -454,9 +454,25 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 
 契約は `tests/patterns/structural-gates-btcjpy.test.ts`（実データ fixture）が固定している。
 
-**既知の偽陰性（#130）。** 安値切り上げ型のダブルボトムが、構造ゲートを通過しても
-`MIN_PIVOT_DISTANCE_BARS`（山→谷2 が 5 本未満）とサイズ検査の終値基準で落ちる場合がある。
-構造ゲートの問題ではないので、本セクションの理由コードには現れない（候補そのものが積まれない）。
+### double_top / double_bottom のサイズ検査は高安基準（#130）
+
+構造ゲートとは別に、`double_top` / `double_bottom` は**パターンの値幅が十分か**を見る検査を通る。
+
+| 検査 | 閾値 | 測る対象 |
+|---|---|---|
+| `pattern_too_small` | パターン高さ ≥ 3% | 第1構成点と中間構成点の値幅 |
+| `valley_too_shallow` / `peak_too_shallow` | 中間の谷 / 山の深さ ≥ 5% | 2 つの外側構成点の平均に対する中間構成点の値幅 |
+
+**どちらも `extremePrice`（高安）基準で測る。** 値幅の評価は構造ゲートの戻り率と同じ基準に
+揃えてある（上節）。終値基準ではヒゲの大きい区間で値幅が実際の 1/3 に見え、正しいパターンが
+落ちる——BTC/JPY 日足 2026-08-03 → 08-10 → 08-14 の実在するダブルボトムは、高安基準の
+5.87% / 5.13% に対し終値基準では 1.85% / 1.67% となり両方の閾値を割っていた（issue #130 の偽陰性）。
+**同水準判定（2 つの外側構成点が同じ水準か）とネックラインの線は終値基準のまま。**
+
+**ピボット間の最小間隔は `minBarsBetweenSwings` に従う。** 以前は double 検出だけが
+ローカル定数 5 本でこのパラメータを上書きしていた（`detect_triples` / `detect_hs` は当時から
+パラメータどおり）。日足の既定は 4 本・1時間足は 2 本なので、**既定パラメータでも上書きが
+起きていた**。上書きを外したので、日足で 4 本間隔の構成も検出される。
 
 ### `status` に `expired` がある
 
@@ -509,7 +525,7 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 下限は 2 段ある。
 
 **1. 構造的下限（警告あり）** — `detectSwingPoints` は窓の前後 `swingDepth` 本をピボット候補から外す。
-最小構成の反転パターン（3 ピボット × 最小間隔 5 本）を張るには
+最小構成の反転パターン（3 ピボット）を張るには
 `2 × swingDepth + 2 × max(minBarsBetweenSwings, 5) + 1` 本が要る。これを下回ると
 `data.warnings` に `limit_too_small_for_timeframe` が載り、**`content` の先頭にも警告行が出る**
 （`data.warnings` は LLM から見えないため）。時間足既定パラメータでの下限:
@@ -522,6 +538,15 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 | `1day` | 6 | 23 |
 | `1week` | 7 | 25 |
 | `1month` | 8 | 29 |
+
+> 式の `max(minBarsBetweenSwings, 5)` の **5**（`patterns/scan-window.ts` の
+> `STRUCTURAL_PIVOT_GAP_FLOOR_BARS`）は**検出器の挙動の写しではない**。ピボット間隔そのものは
+> 全検出器が `minBarsBetweenSwings` をそのまま使う（#130）。この床が残っているのは、同じ値が
+> 下の §2「パターンサイズ由来の下限」の基準点（`bar-thresholds.ts` の `structuralFloorBars`）
+> でもあるため——床を外すと `minBarsBetweenSwings < 5` の 9 時間足で §2 の表が一斉に縮み、
+> double とは無関係の triangle / wedge / triple が緩む。**その判断は #130 のスコープ外**として
+> 据え置いてある。結果として §1 の下限は `minBarsBetweenSwings < 5` の時間足で
+> 実際の検出器より 1〜4 本ぶん保守的（＝ `limit` を少し多めに勧める向き）になる。
 
 **2. パターンサイズ由来の下限（警告なし）** — 各検出器は「パターンがどれだけの大きさなら
 成立するか」の閾値を持つ。窓が狭いとその要求が窓を超え、**そのパターン種別だけが静かに 0 件になる**。

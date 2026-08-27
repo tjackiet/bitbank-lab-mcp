@@ -17,7 +17,28 @@
  */
 
 import { timeframeLabel } from '../../lib/formatter.js';
-import { MIN_PIVOT_DISTANCE_BARS } from './detect_doubles.js';
+
+/**
+ * 構造的下限を導くときに `minBarsBetweenSwings` に被せる床（本）。
+ *
+ * **これは検出器のピボット間隔ではない。** ピボット間隔は全検出器が `ctx.minDist`
+ * （= `resolveParams` の `minBarsBetweenSwings`）をそのまま使う。issue #130 以前は
+ * `detect_doubles` がローカル定数 5 で `ctx.minDist` を上書きしており、この床はその
+ * 上書きの写しだった（当時の docstring は「double 検出は下限 5 を持つため大きい方を採る」と
+ * 書いていた）。上書きは #130 で外したので、**この床はもう検出器の挙動を写していない。**
+ *
+ * それでも残してあるのは、この値が警告だけの値ではなく
+ * **`patterns/bar-thresholds.ts` の `structuralFloorBars` の唯一の入力**だからである。
+ * そこから `patternMinBars` / `patternBarsCap` を経由して**全検出器のパターンサイズ閾値**
+ * （`docs/tools.md`「パターンサイズ由来の下限」表）が決まる。床を外すと
+ * `minBarsBetweenSwings < 5` の 9 時間足で構造的下限が縮み、**double とは無関係の
+ * triangle / wedge / triple が一斉に緩む**（実測: fixture 704 ケース中 104 ケースが変化、
+ * パターン総数 312 → 384）。#130 が扱う偽陰性とは別の判断なので、ここでは据え置く。
+ *
+ * この床を動かす場合は `docs/tools.md` の 2 つの表・`patterns/min-bars.ts` の導出値・
+ * `tests/patterns/invariants.test.ts` の到達性が同時に動く。
+ */
+export const STRUCTURAL_PIVOT_GAP_FLOOR_BARS = 5;
 
 /** `data.warnings[].type`。`low_detection_count` と同じ枠で返す。 */
 export const SCAN_WINDOW_WARNING_TYPE = 'limit_too_small_for_timeframe';
@@ -52,17 +73,22 @@ export interface ScanWindowAssessment {
  * ここが通らない窓ではそれらも当然出ない。逆にここが通っても検出を保証するものではない
  * ——あくまで「構造上ゼロ」の崖を検出するための下限。
  *
+ * 間隔には {@link STRUCTURAL_PIVOT_GAP_FLOOR_BARS} の床が掛かるので、`minBarsBetweenSwings`
+ * が 5 未満の時間足では**実際の検出器より 1〜4 本ぶん保守的**な下限が出る（警告としては
+ * 安全側 = 少し多めの `limit` を勧める向き）。
+ *
  * @param bars 検出器に渡した足の本数
  * @param swingDepth スイング検出の深さ（前後この本数ぶんが候補から落ちる）
- * @param minBarsBetweenSwings 実効の最小ピボット間隔。double 検出は
- *        `MIN_PIVOT_DISTANCE_BARS` を下限に持つため、大きい方を採る
+ * @param minBarsBetweenSwings 実効の最小ピボット間隔。{@link STRUCTURAL_PIVOT_GAP_FLOOR_BARS}
+ *        を床に被せて大きい方を採る——**検出器の挙動の写しではなく**、パターンサイズ閾値の
+ *        基準点を安定させるための保守側の床。理由は同定数の docstring を参照。
  */
 export function assessScanWindow(bars: number, swingDepth: number, minBarsBetweenSwings: number): ScanWindowAssessment {
 	const safeBars = Number.isFinite(bars) ? Math.max(0, Math.trunc(bars)) : 0;
 	const safeDepth = Number.isFinite(swingDepth) ? Math.max(0, Math.trunc(swingDepth)) : 0;
 	const safeMinDist = Number.isFinite(minBarsBetweenSwings) ? Math.max(1, Math.trunc(minBarsBetweenSwings)) : 1;
 
-	const pivotGapBars = Math.max(safeMinDist, MIN_PIVOT_DISTANCE_BARS);
+	const pivotGapBars = Math.max(safeMinDist, STRUCTURAL_PIVOT_GAP_FLOOR_BARS);
 	// 3 ピボット（山・谷・山）を最小間隔で並べるのに要る幅 + 両端の 1 本。
 	const requiredPivotCandidateBars = 2 * pivotGapBars + 1;
 	// detectSwingPoints は idx ∈ [swingDepth, bars - swingDepth) だけを候補にする。

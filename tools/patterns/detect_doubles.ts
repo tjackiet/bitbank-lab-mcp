@@ -33,11 +33,13 @@ import {
 } from './types.js';
 
 // ── Configuration ──
-/**
- * ダブルトップ / ボトムのピボット間の最小距離（本）。
- * `patterns/scan-window.ts` がスキャン窓の構造的下限を出すのに参照するため export する。
- */
-export const MIN_PIVOT_DISTANCE_BARS = 5;
+//
+// ピボット間の最小距離の定数はここには無い。`ctx.minDist`（`resolveParams` が解決した
+// `minBarsBetweenSwings`）を使う。以前は検出器ローカルの `MIN_PIVOT_DISTANCE_BARS = 5` が
+// `ctx.minDist` を**無視して**いた（issue #130）。`detect_triples` / `detect_hs` は同じ反転系の
+// ピボット列構造でありながら `ctx.minDist` をそのまま使っており、double だけが公開パラメータ
+// `minBarsBetweenSwings` を黙って上書きしていた。時間足既定は日足 4 本 / 1時間足 2 本なので、
+// **日足では 4 本間隔の構成が常に落ちていた**（BTC/JPY 2026-08-10 → 08-14 の 4 本がこれ）。
 const MIN_PATTERN_HEIGHT_PCT = 0.03;
 const MIN_DEPTH_PCT = 0.05;
 const BREAKOUT_BUFFER_PCT = 0.015;
@@ -142,24 +144,37 @@ function buildNecklineConfirmation(candles: CandleData[], breakoutIdx: number): 
 	};
 }
 
-// ── Helper: ダブルトップのサイズ検証（不合格理由 or null） ──
+// ── Helper: ダブルトップ / ボトムのサイズ検証（不合格理由 or null） ──
 
+/**
+ * サイズ検査は**値幅の評価**なので、価格基準は `Pivot.extremePrice`（高安）で測る。
+ *
+ * #126 / #131 で構造ゲートの戻り率を `extremePrice` に寄せた判断の横展開（issue #130）。
+ * 終値基準では**ヒゲの大きい区間で値幅が実際の 1/3 に見える**——BTC/JPY 日足の実在する
+ * ダブルボトム（2026-08-03 → 08-10 → 08-14）は高安基準で 5.87% / 5.13% あるのに、
+ * 終値基準では 1.85% / 1.67% となり {@link MIN_PATTERN_HEIGHT_PCT} と {@link MIN_DEPTH_PCT} を
+ * 両方割って偽陰性になっていた。
+ *
+ * **同水準判定（`near` / `isSameLevel(a.price, c.price)`）が終値基準のままなのは意図的。**
+ * 「2 点が同じ水準か」は値幅ではなく水準の一致の問題で、ヒゲ 1 本で同水準判定が動くのを
+ * 避けるために終値を見ている。ネックラインの「線」も同じ理由で終値基準
+ * （`structural.ts` の {@link ReversalSide} の docstring を参照）。
+ */
 function validateTopSize(a: Pivot, b: Pivot, c: Pivot): string | null {
-	const heightPct = Math.abs(a.price - b.price) / Math.max(1, Math.max(a.price, b.price));
+	const heightPct = Math.abs(a.extremePrice - b.extremePrice) / Math.max(1, Math.max(a.extremePrice, b.extremePrice));
 	if (heightPct < MIN_PATTERN_HEIGHT_PCT) return 'pattern_too_small';
-	const peakAvg = (a.price + c.price) / 2;
-	const valleyDepthPct = (peakAvg - b.price) / Math.max(1, peakAvg);
+	const peakAvg = (a.extremePrice + c.extremePrice) / 2;
+	const valleyDepthPct = (peakAvg - b.extremePrice) / Math.max(1, peakAvg);
 	if (valleyDepthPct < MIN_DEPTH_PCT) return 'valley_too_shallow';
 	return null;
 }
 
-// ── Helper: ダブルボトムのサイズ検証（不合格理由 or null） ──
-
+/** {@link validateTopSize} の符号反転版。価格基準の根拠は同関数の docstring を参照。 */
 function validateBottomSize(a: Pivot, b: Pivot, c: Pivot): string | null {
-	const heightPct = Math.abs(a.price - b.price) / Math.max(1, Math.max(a.price, b.price));
+	const heightPct = Math.abs(a.extremePrice - b.extremePrice) / Math.max(1, Math.max(a.extremePrice, b.extremePrice));
 	if (heightPct < MIN_PATTERN_HEIGHT_PCT) return 'pattern_too_small';
-	const valleyAvg = (a.price + c.price) / 2;
-	const peakHeightPct = (b.price - valleyAvg) / Math.max(1, valleyAvg);
+	const valleyAvg = (a.extremePrice + c.extremePrice) / 2;
+	const peakHeightPct = (b.extremePrice - valleyAvg) / Math.max(1, valleyAvg);
 	if (peakHeightPct < MIN_DEPTH_PCT) return 'peak_too_shallow';
 	return null;
 }
@@ -329,18 +344,18 @@ function findRelaxedDoubleTop(
 	candles: CandleData[],
 	tolerancePct: number,
 	factor: number,
-	minDistDB: number,
+	minDist: number,
 	pcand: Pcand,
 ): PatternEntry | null {
 	const tolRelax = tolerancePct * factor;
 	const nearRelaxed = (x: number, y: number) => Math.abs(x - y) <= Math.max(x, y) * tolRelax;
 
-	for (let i = 0; i < pivots.length - 3; i++) {
+	for (let i = 0; i + 2 < pivots.length; i++) {
 		const a = pivots[i],
 			b = pivots[i + 1],
 			c = pivots[i + 2];
 		if (!(a.kind === 'H' && b.kind === 'L' && c.kind === 'H')) continue;
-		if (b.idx - a.idx < minDistDB || c.idx - b.idx < minDistDB) continue;
+		if (b.idx - a.idx < minDist || c.idx - b.idx < minDist) continue;
 
 		const sizeReason = validateTopSize(a, b, c);
 		if (sizeReason) {
@@ -521,18 +536,18 @@ function findRelaxedDoubleBottom(
 	candles: CandleData[],
 	tolerancePct: number,
 	factor: number,
-	minDistDB: number,
+	minDist: number,
 	pcand: Pcand,
 ): PatternEntry | null {
 	const tolRelax = tolerancePct * factor;
 	const nearRelaxed = (x: number, y: number) => Math.abs(x - y) <= Math.max(x, y) * tolRelax;
 
-	for (let i = 0; i < pivots.length - 3; i++) {
+	for (let i = 0; i + 2 < pivots.length; i++) {
 		const a = pivots[i],
 			b = pivots[i + 1],
 			c = pivots[i + 2];
 		if (!(a.kind === 'L' && b.kind === 'H' && c.kind === 'L')) continue;
-		if (b.idx - a.idx < minDistDB || c.idx - b.idx < minDistDB) continue;
+		if (b.idx - a.idx < minDist || c.idx - b.idx < minDist) continue;
 
 		const sizeReason = validateBottomSize(a, b, c);
 		if (sizeReason) {
@@ -833,7 +848,7 @@ function tryFormingDoubleTop(ctx: DetectContext): PatternEntry | null {
 // ── Helper: 形成中ダブルボトム検索 ──
 
 function tryFormingDoubleBottom(ctx: DetectContext): PatternEntry | null {
-	const { candles, allPeaks, allValleys, tolerancePct, want } = ctx;
+	const { candles, allPeaks, allValleys, tolerancePct, want, minDist } = ctx;
 	if (!(want.size === 0 || want.has('double_bottom')) || allValleys.length < 2) return null;
 
 	const lastIdx = candles.length - 1;
@@ -847,14 +862,17 @@ function tryFormingDoubleBottom(ctx: DetectContext): PatternEntry | null {
 	for (let j = confirmedValleys.length - 1; j >= 1; j--) {
 		const rightValley = confirmedValleys[j];
 		const leftValley = confirmedValleys[j - 1];
-		if (rightValley.idx - leftValley.idx < MIN_PIVOT_DISTANCE_BARS) continue;
+		if (rightValley.idx - leftValley.idx < minDist) continue;
 
 		const peaksBetween = allPeaks.filter((p) => p.idx > leftValley.idx && p.idx < rightValley.idx);
 		if (!peaksBetween.length) continue;
 		const midPeak = peaksBetween.reduce((best, p) => (p.price > best.price ? p : best), peaksBetween[0]);
 
-		const leftDepth = (midPeak.price - leftValley.price) / Math.max(EPSILON, midPeak.price);
-		const rightDepth = (midPeak.price - rightValley.price) / Math.max(EPSILON, midPeak.price);
+		// 値幅の評価なので基準は `extremePrice`（{@link validateBottomSize} と同じ理由）。
+		// 完成済みパスと同じ MIN_PATTERN_HEIGHT_PCT を使う以上ここだけ終値基準にすると、
+		// 「形成中は通るのに完成した瞬間にサイズ検査で落ちる」候補ができる。
+		const leftDepth = (midPeak.extremePrice - leftValley.extremePrice) / Math.max(EPSILON, midPeak.extremePrice);
+		const rightDepth = (midPeak.extremePrice - rightValley.extremePrice) / Math.max(EPSILON, midPeak.extremePrice);
 		if (!(leftDepth >= MIN_PATTERN_HEIGHT_PCT && rightDepth >= MIN_PATTERN_HEIGHT_PCT)) continue;
 
 		const valleyDiff =
@@ -1022,7 +1040,7 @@ function tryFormingDoubleBottom(ctx: DetectContext): PatternEntry | null {
 // ── Main ──
 
 export function detectDoubles(ctx: DetectContext): DetectResult {
-	const { candles, pivots, tolerancePct, want, includeForming, near } = ctx;
+	const { candles, pivots, tolerancePct, want, includeForming, near, minDist } = ctx;
 	const pcand: Pcand = (arg) => pushCand(ctx, arg);
 	const push = (arr: PatternEntry[], item: PatternEntry) => {
 		arr.push(item);
@@ -1032,12 +1050,11 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 	let foundDoubleTop = false,
 		foundDoubleBottom = false;
 	if (want.size === 0 || want.has('double_top') || want.has('double_bottom')) {
-		const minDistDB = MIN_PIVOT_DISTANCE_BARS;
-		for (let i = 0; i < pivots.length - 3; i++) {
+		for (let i = 0; i + 2 < pivots.length; i++) {
 			const a = pivots[i];
 			const b = pivots[i + 1];
 			const c = pivots[i + 2];
-			if (b.idx - a.idx < minDistDB || c.idx - b.idx < minDistDB) continue;
+			if (b.idx - a.idx < minDist || c.idx - b.idx < minDist) continue;
 
 			// ── double top: H-L-H ──
 			if (a.kind === 'H' && b.kind === 'L' && c.kind === 'H') {
@@ -1400,14 +1417,14 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 		// relaxed fallback for double top/bottom: single-stage factor 1.3
 		for (const f of [RELAXED_TOLERANCE_FACTOR]) {
 			if (!foundDoubleTop && (want.size === 0 || want.has('double_top'))) {
-				const result = findRelaxedDoubleTop(pivots, candles, tolerancePct, f, minDistDB, pcand);
+				const result = findRelaxedDoubleTop(pivots, candles, tolerancePct, f, minDist, pcand);
 				if (result) {
 					push(patterns, result);
 					foundDoubleTop = true;
 				}
 			}
 			if (!foundDoubleBottom && (want.size === 0 || want.has('double_bottom'))) {
-				const result = findRelaxedDoubleBottom(pivots, candles, tolerancePct, f, minDistDB, pcand);
+				const result = findRelaxedDoubleBottom(pivots, candles, tolerancePct, f, minDist, pcand);
 				if (result) {
 					push(patterns, result);
 					foundDoubleBottom = true;
