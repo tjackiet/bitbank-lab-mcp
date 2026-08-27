@@ -7,6 +7,7 @@ import { MIN_CONFIDENCE } from '../patterns/config.js';
 import { patternBarRange } from './bar-thresholds.js';
 import { finalizeConf, periodScoreDays } from './helpers.js';
 import { clamp01, relDev } from './regression.js';
+import { validatePatternSize } from './structural.js';
 import type { CandleData, DeduplicablePattern, DetectContext, DetectResult } from './types.js';
 import { pushCand } from './types.js';
 
@@ -134,6 +135,13 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 				reason: 'confidence_below_min',
 				idxs: [a.idx, b.idx, c.idx],
 			});
+			continue;
+		}
+
+		// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
+		const sizeReason = validatePatternSize('top', [a, v1, b, v2, c]);
+		if (sizeReason) {
+			pcand({ type: 'triple_top', accepted: false, reason: sizeReason, idxs: [a.idx, b.idx, c.idx] });
 			continue;
 		}
 
@@ -279,6 +287,13 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 				reason: 'confidence_below_min',
 				idxs: [a.idx, b.idx, c.idx],
 			});
+			continue;
+		}
+
+		// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
+		const sizeReason = validatePatternSize('bottom', [a, p1, b, p2, c]);
+		if (sizeReason) {
+			pcand({ type: 'triple_bottom', accepted: false, reason: sizeReason, idxs: [a.idx, b.idx, c.idx] });
 			continue;
 		}
 
@@ -429,6 +444,13 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 			continue; // 後続候補で confidence が足りるものを探す
 		}
 
+		// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
+		const sizeReason = validatePatternSize('top', [a, v1, b, v2, c]);
+		if (sizeReason) {
+			pcand({ type: 'triple_top', accepted: false, reason: sizeReason, idxs: [a.idx, b.idx, c.idx] });
+			continue;
+		}
+
 		// ネックライン下抜け検出
 		const nlAvg = (Number(v1.price) + Number(v2.price)) / 2;
 		const breakoutIdx = findBreakoutIdx(candles, c.idx, nlAvg, 'below');
@@ -562,6 +584,13 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 				idxs: [a.idx, b.idx, c.idx],
 			});
 			continue; // 後続候補で confidence が足りるものを探す
+		}
+
+		// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
+		const sizeReason = validatePatternSize('bottom', [a, p1, b, p2, c]);
+		if (sizeReason) {
+			pcand({ type: 'triple_bottom', accepted: false, reason: sizeReason, idxs: [a.idx, b.idx, c.idx] });
+			continue;
 		}
 
 		// ネックライン上抜け検出
@@ -741,6 +770,13 @@ function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
 
 		if (completion < FORMING_MIN_COMPLETION || confidence < FORMING_MIN_CONFIDENCE) continue;
 
+		// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
+		const sizeReason = validatePatternSize('top', [peak1, v1, peak2, v2, { extremePrice: currentPrice }]);
+		if (sizeReason) {
+			pcand({ type: 'triple_top', accepted: false, reason: sizeReason, idxs: [peak1.idx, peak2.idx, lastIdx] });
+			continue;
+		}
+
 		// ネックラインは v1, v2 の平均で引く（strict triple_top と同じ方針）。
 		const avgValley = (v1.price + v2.price) / 2;
 		const neckline = [
@@ -885,6 +921,13 @@ function tryFormingTripleBottom(ctx: DetectContext): DeduplicablePattern | null 
 		const confidence = Math.min(rawConfidence, FORMING_MAX_CONFIDENCE);
 
 		if (completion < FORMING_MIN_COMPLETION || confidence < FORMING_MIN_CONFIDENCE) continue;
+
+		// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
+		const sizeReason = validatePatternSize('bottom', [valley1, pTop1, valley2, pTop2, { extremePrice: currentPrice }]);
+		if (sizeReason) {
+			pcand({ type: 'triple_bottom', accepted: false, reason: sizeReason, idxs: [valley1.idx, valley2.idx, lastIdx] });
+			continue;
+		}
 
 		const neckline = [
 			{ x: valley1.idx, y: avgPeakPrice },
