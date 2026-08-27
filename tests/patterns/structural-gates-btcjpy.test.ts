@@ -15,6 +15,7 @@ vi.mock('../../tools/analyze_indicators.js', () => ({ default: vi.fn() }));
 
 import analyzeIndicators from '../../tools/analyze_indicators.js';
 import detectPatterns from '../../tools/detect_patterns.js';
+import { getDefaultParamsForTf } from '../../tools/patterns/config.js';
 import {
 	detectTroughZoneReentry,
 	findPriorExtreme,
@@ -131,15 +132,29 @@ describe('issue #126 構造ゲート — BTC/JPY 日足 実データ回帰', () 
 			});
 			expect(offending).toHaveLength(0);
 
-			// 条件 2: 棄却理由が理由コード付きで残る
+			// 条件 2: この形は候補としても組まれない。
+			//
+			// **#130 以前は `neckline_above_pre_decline_high` の棄却候補として残っていた。**
+			// 当時この候補を組んでいたのは形成中パスだけで（7/13 と 8/3 は隣接ピボットではないため
+			// 完成済みパスの走査には乗らない）、`tryFormingDoubleBottom` は谷ペアを新しい順に見て
+			// **最初に成立したところで return する**。#130 以前は正しい 8/3 → 8/10 → 8/14 が
+			// サイズ検査で落ちていたため走査が 7/13 まで遡り、そこで構造ゲートが働いていた。
+			// 偽陰性を潰した今は手前で正しい形が成立するので、偽陽性はそもそも検査されない。
+			//
+			// 構造ゲート自体が今もこの形を弾くことは、上の
+			// 「ネックライン(7/21)が先行下落の起点(7/10)より上で、戻り率が 1.0 を超える」が
+			// `validateReversalStructure` を直接呼んで固定している。
 			const cands =
 				(res.meta?.debug as { candidates?: Array<{ accepted?: boolean; reason?: string; indices?: number[] }> })
 					?.candidates ?? [];
-			const rejected = cands.find(
-				(c) =>
-					!c.accepted && (c.indices ?? []).includes(IDX.falseTrough1) && (c.indices ?? []).includes(IDX.falseNeckline),
+			const offendingCands = cands.filter(
+				(c) => (c.indices ?? []).includes(IDX.falseTrough1) && (c.indices ?? []).includes(IDX.falseNeckline),
 			);
-			expect(rejected?.reason).toBe('neckline_above_pre_decline_high');
+			expect(offendingCands).toHaveLength(0);
+
+			// 代わりに、正しい形が accepted の候補として残る
+			const accepted = cands.find((c) => c.accepted && (c.indices ?? []).includes(IDX.trueTrough2));
+			expect(accepted?.indices).toEqual([IDX.sharedTrough, IDX.trueNeckline, IDX.trueTrough2]);
 		});
 
 		// 条件 4
@@ -263,24 +278,29 @@ describe('issue #126 構造ゲート — BTC/JPY 日足 実データ回帰', () 
 		 * ノイズで正しいパターンが落ちる。高安基準なら帯の中央付近に収まる。
 		 */
 		/**
-		 * **偽陰性はまだ残っている（#130）。** その原因が構造ゲート（#126 のスコープ）ではなく、
-		 * 既存の 2 つの検査であることをここで固定する。どちらも double_top / triple / H&S にも
-		 * 効く共通の慣習なので、変更は検出件数への影響を見てから #130 で行う。
+		 * **偽陰性を成立させていた 3 つの前提を、修正後の値として固定する（issue #130）。**
 		 *
-		 * 1. `MIN_PIVOT_DISTANCE_BARS = 5` — 8/10 → 8/14 は 4 本しかない
-		 * 2. サイズ検査が**終値基準** — 高安基準なら通る大きさが、終値基準だと小さすぎると判定される
+		 * #131 の時点ではこの `it` は「未検出の原因は構造ゲートではなく〜」という名前で、
+		 * 3 つの前提が**未検出を生んでいる**ことを固定していた。#130 でその原因を潰したので、
+		 * ここは同じ数値を「なぜその修正が要ったか」の側から固定し直してある。
+		 * **数値の期待は 1 つも緩めていない**——不等号の向きも閾値もそのまま。
 		 *
-		 * このテストが失敗するようになったら、それは偽陰性が解消されたか、
-		 * 上記いずれかの前提が変わったかのどちらか。**期待値を緩めずに原因を確認すること。**
+		 * 1. **ピボット間隔**: 山 → 谷2 は 4 本。日足の既定 `minBarsBetweenSwings` は 4 なので通る。
+		 *    以前は検出器ローカルの `MIN_PIVOT_DISTANCE_BARS = 5` が `ctx.minDist` を上書きしていた。
+		 * 2. **サイズ検査の価格基準**: 終値基準では閾値割れ、`extremePrice`（高安）基準なら通る。
+		 * 3. **走査ループの端**: 谷2 は窓の最後のピボットなので、`i < pivots.length - 3` では
+		 *    完成済みパスの走査に乗らなかった（3 ピボットなら `i + 2 < pivots.length`）。
 		 */
-		it('未検出の原因は構造ゲートではなく、最小ピボット間隔とサイズ検査の価格基準にある', () => {
+		it('3 つの前提（間隔 4 本 / 高安基準 / 最終ピボット）が揃って検出される', () => {
 			const [first, mid, second] = [pivotAt(IDX.sharedTrough), pivotAt(IDX.trueNeckline), pivotAt(IDX.trueTrough2)];
 
-			// 1. 山 → 谷2 が 4 本しかなく MIN_PIVOT_DISTANCE_BARS(5) を満たさない
+			// 1. 山 → 谷2 は 4 本。日足の既定 minBarsBetweenSwings（4）とちょうど同値で、
+			//    「5 本」を要求していた検出器ローカル定数を外したことで通るようになった。
 			expect(second.idx - mid.idx).toBe(4);
 			expect(mid.idx - first.idx).toBe(7);
+			expect(getDefaultParamsForTf('1day').minBarsBetweenSwings).toBe(4);
 
-			// 2. サイズ検査（validateTopSize / validateBottomSize）は price=終値 を見る。
+			// 2. サイズ検査（validateTopSize / validateBottomSize）の価格基準。
 			//    終値基準だと閾値割れ、高安基準なら通る。
 			const heightPctClose = Math.abs(first.price - mid.price) / Math.max(first.price, mid.price);
 			const peakHeightPctClose = (mid.price - (first.price + second.price) / 2) / ((first.price + second.price) / 2);
@@ -293,6 +313,91 @@ describe('issue #126 構造ゲート — BTC/JPY 日足 実データ回帰', () 
 			const peakHeightPctExt = (mid.extremePrice - avgExt) / avgExt;
 			expect(heightPctExt).toBeGreaterThan(0.03);
 			expect(peakHeightPctExt).toBeGreaterThan(0.05);
+
+			// 3. 谷2 は窓の最後のピボット。旧 `i < pivots.length - 3` では走査に乗らない。
+			expect(pivots[pivots.length - 1].idx).toBe(IDX.trueTrough2);
+		});
+
+		/**
+		 * **受け入れ条件そのもの（issue #130）。** 8/3 → 8/10 → 8/14 が完成済みの
+		 * `double_bottom` として検出され、ネックライン突破が 8/19（idx 82）で確定する。
+		 *
+		 * 突破足の終値 10,949,999 はネックライン（8/10 の終値 10,191,324）を 7.4% 上回り、
+		 * `BREAKOUT_BUFFER_PCT`（1.5%）を明確に超えている。8/17（10,278,279）と
+		 * 8/18（10,330,037）はバッファ込みの閾値 10,344,194 に届かないので、
+		 * **突破の初出は 8/19 で一意に決まる**。
+		 */
+		it('完成済み double_bottom として検出され、ブレイクが 8/19（idx 82）で確定する', async () => {
+			mockedAnalyzeIndicators.mockResolvedValue(indicatorsOk() as never);
+			const res = await detectPatterns('btc_jpy', '1day', 90, {
+				patterns: ['double_bottom'],
+				includeCompleted: true,
+				view: 'debug',
+				swingDepth: 3,
+			});
+			expect(res.ok).toBe(true);
+			if (!res.ok) return;
+
+			const found = res.data.patterns.filter((p) => {
+				const idxs = (p.pivots ?? []).map((v) => v.idx);
+				return idxs.includes(IDX.sharedTrough) && idxs.includes(IDX.trueTrough2);
+			});
+			expect(found).toHaveLength(1);
+			expect((found[0].pivots ?? []).map((v) => v.idx)).toEqual([IDX.sharedTrough, IDX.trueNeckline, IDX.trueTrough2]);
+			expect(found[0].breakoutBarIndex).toBe(82);
+			expect(found[0].confirmation).toMatchObject({ type: 'neckline_breakout', idx: 82 });
+			expect(candles[82].isoTime.slice(0, 10)).toBe('2026-08-19');
+			// 突破の初出が 8/19 で一意であること（8/17 / 8/18 はバッファ込み閾値に届かない）
+			const necklineThreshold = pivotAt(IDX.trueNeckline).price * 1.015;
+			expect(candles[80].close).toBeLessThan(necklineThreshold);
+			expect(candles[81].close).toBeLessThan(necklineThreshold);
+			expect(candles[82].close).toBeGreaterThan(necklineThreshold);
+		});
+
+		/**
+		 * **⚠️ このテストは「あるべき仕様」ではなく「既知の不整合」を固定している（issue #133）。**
+		 *
+		 * 下の `expect(found[0].status).toBe('forming')` は**望ましい挙動ではない**。
+		 * ネックライン突破が 8/19 に確定しているのに、`includeCompleted: true` で明示的に
+		 * 完成済みを要求した呼び出し側が `forming` を受け取ってしまう、という不具合そのものを
+		 * 現状のまま凍結している。#133 を修正するときは**このアサーションを
+		 * `toBe('completed')` に反転させる**こと——期待値を緩めて通すのではなく、
+		 * 原因を潰してこのテストを落とす（#130 → #132 と同じ扱い）。
+		 *
+		 * 原因は同じツール内で 2 つの優先順位規則が食い違っていること:
+		 *
+		 * | 関数 | 優先順位 |
+		 * |---|---|
+		 * | `patterns/helpers.ts` の `globalDedup` | **confidence のみ** → 同値なら `range.end` |
+		 * | `patterns/ranking.ts` の `rankPatterns` | **`statusScore` 最優先** → 次に confidence |
+		 *
+		 * `globalDedup` が先に走って completed（整合度 0.96）を捨てるため、`rankPatterns` の
+		 * status 優先は手遅れになる（形成中は完成中の進捗から整合度 1.00 が付きやすい）。
+		 *
+		 * **本 PR（#132）では直さない。** `globalDedup` は全パターン種別を通る共通経路なので、
+		 * 直すと triangle / wedge / triple / H&S / flag にも波及し、704 ケースの再計測と
+		 * 増減 1 件ごとの正当性説明がいる。#132 の検証済みの状態（8/704・差分は追加のみ）を
+		 * 壊さないため #133 に分離した。既定（`includeForming: false`）では突破確定済みの
+		 * 完成済みが返ることは、1 つ上の `it` が固定している。
+		 */
+		it('【既知の不整合 #133】includeForming: true では形成中が完成済みを押し出す（修正時に completed へ反転する）', async () => {
+			mockedAnalyzeIndicators.mockResolvedValue(indicatorsOk() as never);
+			const res = await detectPatterns('btc_jpy', '1day', 90, {
+				patterns: ['double_bottom'],
+				includeForming: true,
+				includeCompleted: true,
+				view: 'debug',
+				swingDepth: 3,
+			});
+			expect(res.ok).toBe(true);
+			if (!res.ok) return;
+			const found = res.data.patterns.filter((p) => {
+				const idxs = (p.pivots ?? []).map((v) => v.idx);
+				return idxs.includes(IDX.sharedTrough) && idxs.includes(IDX.trueTrough2);
+			});
+			expect(found).toHaveLength(1);
+			// ⚠️ 望ましい値ではない。#133 の修正で 'completed' に反転させること（上の docstring 参照）。
+			expect(found[0].status).toBe('forming');
 		});
 
 		it('高安基準は帯の中央付近、終値基準は下限すれすれ（基準選択の根拠）', () => {

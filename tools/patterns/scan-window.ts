@@ -17,7 +17,44 @@
  */
 
 import { timeframeLabel } from '../../lib/formatter.js';
-import { MIN_PIVOT_DISTANCE_BARS } from './detect_doubles.js';
+
+/**
+ * 構造的下限を導くときに `minBarsBetweenSwings` に被せる床（本）。
+ *
+ * **⚠️ この 5 は、現在どの検出器の要件にも対応していない。妥当性の検証は issue #134。**
+ * 名前が「構造的（structural）」と読めるが、**構造から導かれた不変量ではない。**
+ * 根拠を探しても見つからないので探さないこと——下記が根拠のすべてである。
+ *
+ * ## 元の根拠と、それが消えた経緯
+ *
+ * この 5 はもともと `detect_doubles.ts` の `MIN_PIVOT_DISTANCE_BARS`、すなわち
+ * **double 検出器が実際に要求する最小ピボット間隔**だった（当時の docstring は
+ * 「double 検出は下限 5 を持つため大きい方を採る」と書いていた）。
+ * issue #130 / PR #132 で検出器側の 5 を削除し、ピボット間隔は全検出器が `ctx.minDist`
+ * （= 公開パラメータ `minBarsBetweenSwings`）をそのまま使う形に統一した
+ * （`detect_triples` / `detect_hs` は元からそうで、double だけが黙って上書きしていた）。
+ * **その時点で、この床が写していた検出器の挙動は存在しなくなった。**
+ *
+ * ## それでも据え置いている理由（経験的なもので、構造的必然ではない）
+ *
+ * この値は警告だけの値ではなく **`patterns/bar-thresholds.ts` の `structuralFloorBars` の
+ * 唯一の入力**である。そこから `patternMinBars` / `patternBarsCap` を経由して
+ * **全検出器のパターンサイズ閾値**（`docs/tools.md`「パターンサイズ由来の下限」表）が決まり、
+ * **#121 の閾値調整はこの床（と `× 2` の上限）を前提に行われている。**
+ * 床は下限であると同時に上限の基数でもあるので、下げると帯が両側から縮む。
+ *
+ * 床を外すと `minBarsBetweenSwings < 5` の 9 時間足で構造的下限が縮み、**double とは無関係の
+ * triangle / wedge / triple が一斉に緩む**（実測: fixture 704 ケース中 104 ケースが変化、
+ * パターン総数 312 → 384）。**この +72 件が真の検出漏れなのかノイズなのかは未検証**で、
+ * それを判定するのが #134。据え置きの根拠は「外すと大きく動く」という経験的事実だけである。
+ *
+ * ## 動かす場合に同時に動くもの
+ *
+ * `docs/tools.md` の 2 つの表（「構造的下限」/「パターンサイズ由来の下限」）・
+ * `patterns/min-bars.ts` の導出値・`tests/patterns/invariants.test.ts` の到達性・
+ * `#117` の警告 `limit_too_small_for_timeframe` の `suggestedParams.limit`。
+ */
+export const STRUCTURAL_PIVOT_GAP_FLOOR_BARS = 5;
 
 /** `data.warnings[].type`。`low_detection_count` と同じ枠で返す。 */
 export const SCAN_WINDOW_WARNING_TYPE = 'limit_too_small_for_timeframe';
@@ -52,17 +89,22 @@ export interface ScanWindowAssessment {
  * ここが通らない窓ではそれらも当然出ない。逆にここが通っても検出を保証するものではない
  * ——あくまで「構造上ゼロ」の崖を検出するための下限。
  *
+ * 間隔には {@link STRUCTURAL_PIVOT_GAP_FLOOR_BARS} の床が掛かるので、`minBarsBetweenSwings`
+ * が 5 未満の時間足では**実際の検出器より 1〜4 本ぶん保守的**な下限が出る（警告としては
+ * 安全側 = 少し多めの `limit` を勧める向き）。**この床の妥当性は未検証** — issue #134。
+ *
  * @param bars 検出器に渡した足の本数
  * @param swingDepth スイング検出の深さ（前後この本数ぶんが候補から落ちる）
- * @param minBarsBetweenSwings 実効の最小ピボット間隔。double 検出は
- *        `MIN_PIVOT_DISTANCE_BARS` を下限に持つため、大きい方を採る
+ * @param minBarsBetweenSwings 実効の最小ピボット間隔。{@link STRUCTURAL_PIVOT_GAP_FLOOR_BARS}
+ *        を床に被せて大きい方を採る——**検出器の挙動の写しではなく**、パターンサイズ閾値の
+ *        基準点を安定させるための保守側の床。理由は同定数の docstring を参照。
  */
 export function assessScanWindow(bars: number, swingDepth: number, minBarsBetweenSwings: number): ScanWindowAssessment {
 	const safeBars = Number.isFinite(bars) ? Math.max(0, Math.trunc(bars)) : 0;
 	const safeDepth = Number.isFinite(swingDepth) ? Math.max(0, Math.trunc(swingDepth)) : 0;
 	const safeMinDist = Number.isFinite(minBarsBetweenSwings) ? Math.max(1, Math.trunc(minBarsBetweenSwings)) : 1;
 
-	const pivotGapBars = Math.max(safeMinDist, MIN_PIVOT_DISTANCE_BARS);
+	const pivotGapBars = Math.max(safeMinDist, STRUCTURAL_PIVOT_GAP_FLOOR_BARS);
 	// 3 ピボット（山・谷・山）を最小間隔で並べるのに要る幅 + 両端の 1 本。
 	const requiredPivotCandidateBars = 2 * pivotGapBars + 1;
 	// detectSwingPoints は idx ∈ [swingDepth, bars - swingDepth) だけを候補にする。

@@ -26,6 +26,8 @@ function buildCtx(opts: {
 	want?: Set<string>;
 	includeForming?: boolean;
 	type?: string;
+	/** 最小ピボット間隔。既定 5 は旧 `MIN_PIVOT_DISTANCE_BARS` と同値（既存ケースの挙動を保つ）。 */
+	minDist?: number;
 }): DetectContext {
 	const tol = opts.tolerancePct ?? 0.04;
 	return {
@@ -34,7 +36,7 @@ function buildCtx(opts: {
 		allPeaks: opts.allPeaks ?? opts.pivots.filter((p) => p.kind === 'H'),
 		allValleys: opts.allValleys ?? opts.pivots.filter((p) => p.kind === 'L'),
 		tolerancePct: tol,
-		minDist: 5,
+		minDist: opts.minDist ?? 5,
 		want: opts.want ?? new Set(),
 		includeForming: opts.includeForming ?? false,
 		debugCandidates: [],
@@ -316,7 +318,7 @@ describe('detectDoubles', () => {
 
 	// ── ピボット不足 ─────────────────────────────────────
 
-	it('ピボット < 4 個では空結果', () => {
+	it('ピボット < 3 個では空結果', () => {
 		const candles = Array.from({ length: 30 }, (_, i) => mkCandle(30 - i, 100, 102, 98, 100));
 		const pivots: Pivot[] = [
 			{ idx: 0, price: 200, kind: 'H', extremePrice: 200 },
@@ -329,17 +331,118 @@ describe('detectDoubles', () => {
 
 	// ── 間隔不足 ─────────────────────────────────────────
 
-	it('ピボット間隔 < 5 本 → スキップ', () => {
+	it('ピボット間隔 < ctx.minDist → スキップ', () => {
 		const candles = Array.from({ length: 30 }, (_, i) => mkCandle(30 - i, 100, 102, 98, 100));
 		const pivots: Pivot[] = [
 			{ idx: 0, price: 200, kind: 'H', extremePrice: 200 },
-			{ idx: 3, price: 170, kind: 'L', extremePrice: 170 }, // 間隔3 < minDistDB(5)
+			{ idx: 3, price: 170, kind: 'L', extremePrice: 170 }, // 間隔3 < ctx.minDist(5)
 			{ idx: 6, price: 200, kind: 'H', extremePrice: 200 },
 			{ idx: 9, price: 170, kind: 'L', extremePrice: 170 },
 		];
 		const ctx = buildCtx({ candles, pivots });
 		const result = detectDoubles(ctx);
 		expect(result.patterns).toHaveLength(0);
+	});
+
+	// ── issue #130: 偽陰性を生んでいた 3 点の回帰 ─────────
+
+	describe('issue #130 の回帰', () => {
+		/**
+		 * **最小ピボット間隔は `ctx.minDist` を使う。**
+		 *
+		 * 以前は検出器ローカルの `MIN_PIVOT_DISTANCE_BARS = 5` が `ctx.minDist` を上書きしており、
+		 * 公開パラメータ `minBarsBetweenSwings` が double にだけ効かなかった
+		 * （`detect_triples` / `detect_hs` は当時から `ctx.minDist` を使っている）。
+		 * 日足の既定は 4、1時間足は 2 なので、既定パラメータでも常に上書きが起きていた。
+		 */
+		it('間隔 3 本は minDist=5 では落ち、minDist=2 では検出される', () => {
+			// valley1(idx=0, 100) → peak(idx=3, 130) → valley2(idx=6, 100) → breakout(idx=8〜, 140)
+			const candles: CandleData[] = [
+				mkCandle(30, 100, 105, 100, 100),
+				mkCandle(29, 110, 115, 105, 110),
+				mkCandle(28, 122, 127, 118, 122),
+				mkCandle(27, 130, 135, 126, 130),
+				mkCandle(26, 120, 125, 115, 120),
+				mkCandle(25, 108, 113, 103, 108),
+				mkCandle(24, 100, 105, 100, 100),
+				mkCandle(23, 115, 120, 110, 115),
+				mkCandle(22, 140, 145, 135, 140),
+				...Array.from({ length: 8 }, (_, i) => mkCandle(21 - i, 142, 147, 137, 142)),
+			];
+			const pivots: Pivot[] = [
+				{ idx: 0, price: 100, kind: 'L', extremePrice: 100 },
+				{ idx: 3, price: 130, kind: 'H', extremePrice: 135 },
+				{ idx: 6, price: 100, kind: 'L', extremePrice: 100 },
+			];
+
+			const strict = detectDoubles(buildCtx({ candles, pivots, minDist: 5 }));
+			expect(strict.patterns.filter((p) => p.type === 'double_bottom')).toHaveLength(0);
+
+			const loose = detectDoubles(buildCtx({ candles, pivots, minDist: 2 }));
+			const db = loose.patterns.filter((p) => p.type === 'double_bottom');
+			expect(db).toHaveLength(1);
+			expect((db[0].pivots ?? []).map((v) => v.idx)).toEqual([0, 3, 6]);
+		});
+
+		/**
+		 * **サイズ検査は `extremePrice`（高安）基準。**
+		 *
+		 * 終値が圧縮されヒゲが大きい区間では、終値基準の値幅が実際の 1/6 になる。
+		 * この fixture は終値基準で `MIN_PATTERN_HEIGHT_PCT`(3%) / `MIN_DEPTH_PCT`(5%) を
+		 * 両方割るが、高安基準なら両方通る——BTC/JPY 日足 2026-08-03〜08-14 と同じ形。
+		 */
+		it('終値基準では閾値割れでも高安基準なら検出される', () => {
+			// valley1(close 100 / low 95) → peak(close 102 / high 108) → valley2(close 100.5 / low 95.5)
+			const candles: CandleData[] = [
+				...Array.from({ length: 5 }, (_, i) => mkCandle(40 - i, 100, 101, 95, 100)),
+				...Array.from({ length: 5 }, (_, i) => mkCandle(35 - i, 101, 108, 99, 102)),
+				...Array.from({ length: 5 }, (_, i) => mkCandle(30 - i, 100.5, 101, 95.5, 100.5)),
+				...Array.from({ length: 10 }, (_, i) => mkCandle(25 - i, 110, 112, 108, 110)),
+			];
+			const pivots: Pivot[] = [
+				{ idx: 0, price: 100, kind: 'L', extremePrice: 95 },
+				{ idx: 7, price: 102, kind: 'H', extremePrice: 108 },
+				{ idx: 14, price: 100.5, kind: 'L', extremePrice: 95.5 },
+			];
+
+			// 前提: 終値基準なら両閾値割れ / 高安基準なら両方通る
+			const heightClose = Math.abs(100 - 102) / 102;
+			const peakHeightClose = (102 - (100 + 100.5) / 2) / ((100 + 100.5) / 2);
+			expect(heightClose).toBeLessThan(0.03);
+			expect(peakHeightClose).toBeLessThan(0.05);
+			const heightExt = Math.abs(95 - 108) / 108;
+			const peakHeightExt = (108 - (95 + 95.5) / 2) / ((95 + 95.5) / 2);
+			expect(heightExt).toBeGreaterThan(0.03);
+			expect(peakHeightExt).toBeGreaterThan(0.05);
+
+			const ctx = buildCtx({ candles, pivots, minDist: 5 });
+			const result = detectDoubles(ctx);
+			const db = result.patterns.filter((p) => p.type === 'double_bottom');
+			expect(db).toHaveLength(1);
+			// サイズ検査で落ちた痕跡が残っていないこと（旧実装はここで pattern_too_small を積んだ）
+			expect(ctx.debugCandidates.map((c) => c.reason)).not.toContain('pattern_too_small');
+		});
+
+		/**
+		 * **窓の最後の 3 ピボットも走査対象。**
+		 *
+		 * 旧 `for (let i = 0; i < pivots.length - 3; i++)` は 4 ピボットぶんの端点を要求しており、
+		 * 3 ピボットのパターンでは**最後の 1 組が必ず走査から漏れていた**
+		 * （`detect_triples` は `i <= n - 3`、`detect_hs` は 5 ピボットに対し `i < n - 4` で正しい）。
+		 * 第2構成点が窓の最後のピボットになる形——つまり**最も直近のダブルトップ / ボトム**が
+		 * 構造的に検出できなかった。
+		 */
+		it('第2構成点が最後のピボットでも検出される（後続ピボット不要）', () => {
+			const { candles, pivots } = buildDoubleBottom();
+			// 4 本目（breakout 後のピボット）を落として 3 ピボットだけにする
+			const threePivots = pivots.slice(0, 3);
+			expect(threePivots).toHaveLength(3);
+
+			const result = detectDoubles(buildCtx({ candles, pivots: threePivots }));
+			const db = result.patterns.filter((p) => p.type === 'double_bottom');
+			expect(db).toHaveLength(1);
+			expect((db[0].pivots ?? []).map((v) => v.idx)).toEqual([0, 10, 20]);
+		});
 	});
 
 	// ── 形成中ダブルトップ ───────────────────────────────
