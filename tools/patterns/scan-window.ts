@@ -21,7 +21,7 @@ import { timeframeLabel } from '../../lib/formatter.js';
 /**
  * 構造的下限を導くときに `minBarsBetweenSwings` に被せる床（本）。
  *
- * **⚠️ この 5 は、現在どの検出器の要件にも対応していない。妥当性の検証は issue #134。**
+ * **⚠️ この 5 は、現在どの検出器の要件にも対応していない。それでも #134 の実測判定で据え置きを確定した。**
  * 名前が「構造的（structural）」と読めるが、**構造から導かれた不変量ではない。**
  * 根拠を探しても見つからないので探さないこと——下記が根拠のすべてである。
  *
@@ -35,7 +35,7 @@ import { timeframeLabel } from '../../lib/formatter.js';
  * （`detect_triples` / `detect_hs` は元からそうで、double だけが黙って上書きしていた）。
  * **その時点で、この床が写していた検出器の挙動は存在しなくなった。**
  *
- * ## それでも据え置いている理由（経験的なもので、構造的必然ではない）
+ * ## 据え置いている理由（経験的なもので、構造的必然ではない）
  *
  * この値は警告だけの値ではなく **`patterns/bar-thresholds.ts` の `structuralFloorBars` の
  * 唯一の入力**である。そこから `patternMinBars` / `patternBarsCap` を経由して
@@ -44,9 +44,15 @@ import { timeframeLabel } from '../../lib/formatter.js';
  * 床は下限であると同時に上限の基数でもあるので、下げると帯が両側から縮む。
  *
  * 床を外すと `minBarsBetweenSwings < 5` の 9 時間足で構造的下限が縮み、**double とは無関係の
- * triangle / wedge / triple が一斉に緩む**（実測: fixture 704 ケース中 104 ケースが変化、
- * パターン総数 312 → 384）。**この +72 件が真の検出漏れなのかノイズなのかは未検証**で、
- * それを判定するのが #134。据え置きの根拠は「外すと大きく動く」という経験的事実だけである。
+ * triangle / wedge / triple が一斉に緩む**。#134 でこの増分を 1 件ずつ判定した——
+ * main（24db879）で PR #131 / #132 / #135 と同じ 704 ケース比較を床なしビルドと突き合わせると
+ * パターン総数 320 → 392 で、純増 +72 の実体は 9 パターン × オプション 8 ケース。内訳は
+ * **正しい検出 1**（FormingDoubleBottom の 1hour 形成中 double。1day で検出済みの同一構成点）/
+ * **誤検出・冗長 6**（矩形レンジへの triangle_ascending、H&S 本体の triangle_symmetrical への
+ * 読み替え 2、検出済み triple_top と同一レジスタンスの重複 forming ほか）/
+ * **幾何は正しいがラベルが劣化する灰色 2**。誤検出側が多数のため据え置きを確定した。
+ * ほかに既存検出の range 付け替え 80 ケース・整合度変化 8 ケースの揺れを伴う。
+ * 個々の判定根拠は CHANGELOG の #134 エントリと、#134 を閉じた PR を参照。
  *
  * ## 動かす場合に同時に動くもの
  *
@@ -91,7 +97,8 @@ export interface ScanWindowAssessment {
  *
  * 間隔には {@link STRUCTURAL_PIVOT_GAP_FLOOR_BARS} の床が掛かるので、`minBarsBetweenSwings`
  * が 5 未満の時間足では**実際の検出器より 1〜4 本ぶん保守的**な下限が出る（警告としては
- * 安全側 = 少し多めの `limit` を勧める向き）。**この床の妥当性は未検証** — issue #134。
+ * 安全側 = 少し多めの `limit` を勧める向き）。床の妥当性は #134 で実測判定済み（据え置き）——
+ * 同定数の docstring を参照。
  *
  * @param bars 検出器に渡した足の本数
  * @param swingDepth スイング検出の深さ（前後この本数ぶんが候補から落ちる）
