@@ -443,7 +443,9 @@ export function detectTriangles(ctx: DetectContext): DetectResult {
 
 			if (upperLine.r2 < params.minR2 || lowerLine.r2 < params.minR2) {
 				debugCandidates.push({
-					type: 'triangle_symmetrical',
+					// 分類前の棄却。3 種のどれになりえたかはまだ決まっていないので umbrella ラベルで積む
+					// （`candidate-filter.ts` の `CANDIDATE_LABEL_COVERAGE.triangle` が 3 種を覆う）。
+					type: 'triangle',
 					accepted: false,
 					reason: 'poor_trendline_fit',
 					indices: [winStart, winEnd],
@@ -497,7 +499,8 @@ export function detectTriangles(ctx: DetectContext): DetectResult {
 
 			if (!triangleType) {
 				debugCandidates.push({
-					type: 'triangle_symmetrical',
+					// 分類そのものが失敗した棄却。具体型は確定していないので umbrella ラベルで積む。
+					type: 'triangle',
 					accepted: false,
 					reason: 'classification_failed',
 					indices: [winStart, winEnd],

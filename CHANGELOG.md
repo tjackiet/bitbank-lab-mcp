@@ -7,6 +7,25 @@
 
 ## [Unreleased]
 
+### Changed（`detect_patterns` の三角形の分類前 candidate ラベルを umbrella 化した。**`data.patterns` は変わらない**。#129）
+
+- **`view=debug` の `candidates[].type` が変わる。** `detect_triangles` は 3 種（ascending / descending / symmetrical）の分類が確定する**前**にも候補を棄却するが、その 2 箇所（`poor_trendline_fit` / `classification_failed`）が `type: 'triangle_symmetrical'` をハードコードしていた。対称三角形とは限らない候補に対称三角形のラベルが付くため、`tools/patterns/candidate-filter.ts` の絞り込みで落ち、**`patterns=["triangle_ascending"]` / `["triangle_descending"]` には分類前の棄却理由が 1 件も届かなかった**（検出器は実際に走査・棄却している）。umbrella ラベル `'triangle'` に変えた。`CANDIDATE_LABEL_COVERAGE.triangle` が三角形 3 種を覆うので、3 種のどれを要求しても届く。
+  - **実測**（fixture 22 件 × オプション 8 通り × 時間足 2 種 × `swingDepth` 2 種 × `patterns` 7 通り = **4,928 ケース**を変更前後でダンプ）:
+
+    | | 変更前 → 変更後 |
+    |---|---|
+    | `data.patterns` の差分 | **0 ケース**（全ケースで deep equal） |
+    | `patterns` 未指定の candidates | 件数・`accepted` / `reason` / `indices` の列とも **完全一致**。`type` 文字列のみ `triangle_symmetrical` 756 → `triangle` 480 + `triangle_symmetrical` 276 |
+    | `patterns=["triangle_ascending"]` | 108 件 → **1,020 件**（`poor_trendline_fit` 480 / `classification_failed` 432 が新たに届く） |
+    | `patterns=["triangle_descending"]` | 80 件 → **1,088 件**（同 480 / 528） |
+    | `patterns=["triangle_symmetrical"]` / `["triangle"]` | 件数不変（1,012 / 944。umbrella ラベルが同じ集合を覆うため） |
+
+  - **`candidate-filter.ts` 側で `triangle_symmetrical` を 3 種に被覆させる案は採らなかった。** それをすると対称三角形を要求していない呼び出しに、分類**後**の棄却・採用まで含む対称三角形の候補が返ってしまい、規約「`want` に含まれない種別の candidate が出ない」に反する。直すのはラベル側。
+  - **#128 で分けた理由と、今回実施できる理由。** #128 の受け入れ条件は「`patterns` **未指定**時の candidates が変更前と同一」で、`type` 文字列が変わるラベル変更はこれに抵触した。本エントリはその制約を持たないので実施できる（**件数と理由コードは不変**、変わるのは `type` 文字列のみ）。
+  - **`detect_wedges` は対象外。** #129 と `candidate-filter.ts` の docstring は「`detect_triangles` / `detect_wedges` が具体型で積んでいる」と書いていたが、`detect_wedges` の該当 push は `validateRegressionCandidate` の引数 `wedgeType`（`'rising_wedge' | 'falling_wedge'`）で、呼び出し元で**分類済み**。ラベルは実際の型と一致している。docstring を実態に合わせて訂正した。
+  - **別のラベルずれを 1 件見つけたが、本 PR では直していない。** `detectRegressionWedges`（`tools/patterns/detect_wedges.ts`）の `r2_below_threshold` は上下の傾きからラベルを推定していて、傾きの向きが揃わない窓を `triangle_symmetrical` として積む。**ウェッジ走査の棄却なのに三角形のラベルが付く**ため、`patterns=["triangle_symmetrical"]` にウェッジ窓の棄却が混ざり、`patterns=["rising_wedge"]` / `["falling_wedge"]` からは同じ棄却が抜ける。#129 は「分類前の棄却に umbrella ラベルを使う」話でこちらは「別種別のラベルを流用している」話なので原因が違い、直すには umbrella の `'wedge'` を `PatternFilterEnum` に足すか（公開契約の追加）を先に決める必要がある。`docs/tools.md` と `candidate-filter.ts` の docstring に既知として明記するに留めた。
+  - ガードは `tests/patterns/candidate-filter.test.ts`（umbrella ラベルが同ファミリの出力 type を接頭辞で過不足なく覆うドリフト検出）と `tests/detect_patterns_debug.test.ts`（分類前の棄却が具体型で積まれていないこと / 具体型ラベルに分類前の理由が付かないこと / `patterns` 未指定と `patterns=["triangle"]` で三角形系候補の件数・理由コードが一致すること）。
+
 ### Changed（構造的ピボット間隔の床（`STRUCTURAL_PIVOT_GAP_FLOOR_BARS = 5`）の妥当性を実測で判定し、据え置きを確定した。**検出結果は変わらない**。#134）
 
 **床を外した場合の増分 +72 件を 1 件ずつ判定した結果、誤検出側が多数（ケース数で 誤検出・冗長 48 / 灰色 16 / 正しい検出 8）だったため、値は据え置いた。** コード変更は docstring のみ（#132 が「未検証」と明記していた箇所を判定結果で置き換えた）。`docs/tools.md` の 2 表・`patterns/min-bars.ts` の導出値・到達性テストは値が変わらないため更新なし。
