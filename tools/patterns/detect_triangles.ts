@@ -41,11 +41,23 @@ export function getTriangleParams(tf: string) {
 	// [17, 26] だけになり、40〜84 本の三角形が既定 limit で検出できなくなる。
 	const maxWindowBars = Math.max(patternBarsCap(tf), Math.round(maxDurationDays * bpd));
 	const minR2 = 0.6; // 収束形状なので多少の揺れは許容 — 0.25 では偽陽性が多すぎた
+	// `robustFit` が 1 本のラインから捨ててよい極値の割合の上限（#141）。
+	// 0.5 = 「各ラインは自分のアンカー点の半分以上を残すこと」。
+	// 実測の根拠と、上下ラインを独立に見る理由は `robustFit` の docstring を参照。
+	const maxOutlierRemovalRate = 0.5;
 	const flatThreshold = 0.03; // |relSlope| < 3% over window → "flat"
 	const moveThreshold = 0.015; // |relSlope| > 1.5% over window → "rising/falling"
 	const minConvergence = 0.9; // gap must narrow by ≥ 10%
 
-	return { minWindowBars, maxWindowBars, minR2, flatThreshold, moveThreshold, minConvergence };
+	return {
+		minWindowBars,
+		maxWindowBars,
+		minR2,
+		maxOutlierRemovalRate,
+		flatThreshold,
+		moveThreshold,
+		minConvergence,
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -77,6 +89,27 @@ function findWorstResidualIdx(current: readonly SwingPoint[], line: Pick<RegLine
  * R²-based regression with robust outlier removal fallback.
  * When initial R² is below threshold, iteratively remove the point
  * with the largest residual and re-fit, keeping at least minPoints.
+ *
+ * ## 除去率には呼び出し側で上限を課すこと（#141）
+ *
+ * このループは `line.r2 >= minR2` になった時点で止まる。つまり**閾値をぎりぎり
+ * 超えるまで点を捨てた線**が返りうる。ここでの `minPoints`（= 3）だけでは歯止めに
+ * ならない——3 点はほぼ常に直線に乗るので、`minPoints` まで捨てれば R² は自動的に
+ * 高くなり、閾値そのものが指標として機能しなくなる。実測でも BTC/JPY 日足 90 本の
+ * 上ライン 8 点中 5 点を捨てた候補が `r2Upper = 0.961` を得ている。
+ *
+ * したがって「何点残ったか」ではなく**「何割捨てたか」**を呼び出し側が
+ * `params.maxOutlierRemovalRate` で hard reject する（スコア減点ではない。#131 の
+ * 「構造として成立していないものは hard reject」の原則）。
+ *
+ * ## 上下ラインは独立に判定する
+ *
+ * 本関数は上ライン（peaks）と下ライン（valleys）で**別々に**呼ばれるので、除去率も
+ * ライン単位の量になる。合算した除去率で見ると、当てはまりの良いラインが破綻した
+ * ラインを覆い隠す: 実測の走査窓 `1day [15,50]` は peaks 5/8（63%）を捨てているのに
+ * valleys が 1/8 なので合算 38% に薄まり、上限 50% を素通りする。この候補の
+ * 「水平なレジスタンス」は 8 点中 3 点だけを根拠にしている。
+ * よって**どちらか一方でも上限を超えたら候補ごと棄却**する。
  */
 function robustFit(
 	pts: SwingPoint[],
@@ -94,6 +127,19 @@ function robustFit(
 		line = lrWithR2(current.map((p) => ({ x: p.idx, y: p.price })));
 	}
 	return { line, filtered: current };
+}
+
+/**
+ * 1 本のラインが外れ値除去に頼りすぎているか。
+ *
+ * `removed / total > maxRate` で true（= 棄却）。境界は**通す**側に倒してある
+ * （`total` が 6 で 3 点除去 = ちょうど 50% は通る）。実測で除去数 1〜4 点の
+ * 良質な候補が最大 50%（peaks 3/6）に達しており、strict majority を要求すると
+ * それらを巻き添えにするため。
+ */
+function exceedsRemovalCap(total: number, kept: number, maxRate: number): boolean {
+	if (total <= 0) return false;
+	return (total - kept) / total > maxRate;
 }
 
 /**
@@ -306,6 +352,15 @@ function buildTriangleResult(c: TriangleCandidateCtx): { pattern: PatternEntry; 
 	// そこでの `price` は **既に high / low そのもの**（swing.ts の Pivot と違い終値ではない）。
 	// したがって「判定に使った極値」は price と同値になる。同値であること自体が
 	// 「この検出器は終値を経由していない」という情報なので、別値を捏造せずそのまま入れる。
+	//
+	// **同じ `idx` が 2 回現れることがある。これは重複ではない**（#141 で「重複」として
+	// 報告された件）。配列のキーは `idx` ではなく `(idx, kind)`。本検出器の swing は
+	// `swingDepth=1` の relaxed 判定なので、**外側バー**（前後 2 本を包む足）は
+	// `high > 前後の high` と `low < 前後の low` を同時に満たし、高値としても安値としても
+	// 極値になる。BTC/JPY 日足 90 本の idx=38 が実例で、H 側 10,470,583 / L 側 9,952,759 と
+	// **価格が違う 2 件**が入る。dedup すると片方の極値が消えるので**しない**。
+	// `touchCount` が 2 と数えるのも同じ理由——その足は上ラインを高値で、下ラインを安値で
+	// 実際に触っている。
 	const allPivots = [
 		...peaks.map((p) => ({ idx: p.idx, price: p.price, kind: 'H' as const, extremePrice: p.price })),
 		...valleys.map((p) => ({ idx: p.idx, price: p.price, kind: 'L' as const, extremePrice: p.price })),
@@ -369,6 +424,11 @@ function buildTriangleResult(c: TriangleCandidateCtx): { pattern: PatternEntry; 
 			touchCount: filteredPeaks.length + filteredValleys.length,
 			outlierPeaksRemoved: peaks.length - filteredPeaks.length,
 			outlierValleysRemoved: valleys.length - filteredValleys.length,
+			// 除去**率**を出すには分母が要る（#141）。これが無かったため issue の実測は
+			// `touchCount` から母数を逆算する必要があった。上限はライン単位なので
+			// 上下それぞれの母数を出す。
+			peaksTotal: peaks.length,
+			valleysTotal: valleys.length,
 			breakout: hasBreakout ? { idx: breakoutIdx, direction: breakoutDirection } : null,
 			status,
 			confidence,
@@ -437,6 +497,35 @@ export function detectTriangles(ctx: DetectContext): DetectResult {
 			const minPtsForFit = 3;
 			let { line: upperLine, filtered: filteredPeaks } = robustFit(peaks, minPtsForFit, lrWithR2, params.minR2);
 			let { line: lowerLine, filtered: filteredValleys } = robustFit(valleys, minPtsForFit, lrWithR2, params.minR2);
+
+			// --- 外れ値除去の上限（#141）---
+			// `robustFit` は R² が閾値を超えるまで点を捨て続けるので、**捨てた割合**に
+			// hard reject を課す。`tryFlatFallback` より前に置くのは、fallback が見るのが
+			// 除去後の生き残りだけで、同じ「大半を捨てた」問題をそのまま引き継ぐため。
+			const upperExceeds = exceedsRemovalCap(peaks.length, filteredPeaks.length, params.maxOutlierRemovalRate);
+			const lowerExceeds = exceedsRemovalCap(valleys.length, filteredValleys.length, params.maxOutlierRemovalRate);
+			if (upperExceeds || lowerExceeds) {
+				debugCandidates.push({
+					// 分類前の棄却なので umbrella ラベル（`poor_trendline_fit` と同じ契約）。
+					type: 'triangle',
+					accepted: false,
+					reason: 'excessive_outlier_removal',
+					indices: [winStart, winEnd],
+					details: {
+						peaksRemoved: peaks.length - filteredPeaks.length,
+						peaksTotal: peaks.length,
+						valleysRemoved: valleys.length - filteredValleys.length,
+						valleysTotal: valleys.length,
+						upperRemovalRate: Number(((peaks.length - filteredPeaks.length) / peaks.length).toFixed(3)),
+						lowerRemovalRate: Number(((valleys.length - filteredValleys.length) / valleys.length).toFixed(3)),
+						maxOutlierRemovalRate: params.maxOutlierRemovalRate,
+						exceededSide: upperExceeds && lowerExceeds ? 'both' : upperExceeds ? 'upper' : 'lower',
+						r2Upper: Number(upperLine.r2.toFixed(3)),
+						r2Lower: Number(lowerLine.r2.toFixed(3)),
+					},
+				});
+				continue;
+			}
 
 			upperLine = tryFlatFallback(upperLine, filteredPeaks, params.minR2, params.flatThreshold);
 			lowerLine = tryFlatFallback(lowerLine, filteredValleys, params.minR2, params.flatThreshold);
