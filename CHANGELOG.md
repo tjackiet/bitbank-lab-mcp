@@ -299,7 +299,7 @@ status が変わったのは **forming → 完成済み（status 未設定）が
 - **`priceBasis: "close" | "extreme"` パラメータ（#125 後半）は入れていない。** 既定値の選択で検出結果が変わる大きな変更であり、#126 が終わって挙動が安定してから必要性を判断する。**#125 は透明化のみ完了で、パラメータ化は保留。**
 
 ### Fixed（用語の陳腐化。#127 の一部）
-- **`tools/patterns/scan-window.ts` の `buildScanWindowWarning` の docstring が「日数ベースの閾値は別途かかる」のままだったのを修正した。** #121 で閾値のプリミティブがバー数になっている（`patterns/bar-thresholds.ts`）。#127 の残り（prompts の `limit=180`、CHANGELOG 集約、CI ジョブ名）は本 PR の対象外——**本セクション冒頭の索引の 13 行目（#129 と同じ PR）で完了**。
+- **`tools/patterns/scan-window.ts` の `buildScanWindowWarning` の docstring が「日数ベースの閾値は別途かかる」のままだったのを修正した。** #121 で閾値のプリミティブがバー数になっている（`patterns/bar-thresholds.ts`）。このエントリを書いた PR（索引 8 行目 / #128）は #127 の残りには手を付けていない。**残り（prompts の `limit=180`、CHANGELOG 集約、CI ジョブ名）は索引 13 行目の PR で完了済み**——下の「#127 の残り」エントリを参照。
 
 ### Changed（`detect_patterns` の `limit` に「上げる」方向の使い分けを明記）
 - **ツール description と `inputSchema.limit.describe()` に `limit` を上げる動機を 1 点ずつ追記した（文言のみ・挙動変更なし）。** #119 / #121 で `limit` の意味論を両方に明記したが、**いずれも下限の話しか書いていない**（`limit_too_small_for_timeframe`、構造的下限、種別が静かに 0 件になる下限の表）。「`limit` を上げると何が得られるか」「いつ上げるべきか」がツール表面のどこにも無く、LLM も利用者も既定 90 から動かす判断ができなかった。
