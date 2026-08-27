@@ -108,8 +108,12 @@ const TRIANGLE_CANDIDATE_LABELS = [
 ] as const;
 
 /**
- * 3 種の分類が確定する**前**に積まれる棄却理由。
- * `detect_triangles` の該当 push はこの 2 つだけで、どちらも umbrella ラベルで積む契約。
+ * 具体型が決まらないまま積まれる棄却理由。どちらも umbrella ラベルで積む契約。
+ * - `poor_trendline_fit`: 回帰の当てはまり不足。分類に入る前の棄却
+ * - `classification_failed`: 3 種のどの形にも当てはまらない（`want` と無関係に成立しない）
+ *
+ * **`type_not_requested` はここに含めない。** あれは「形は成立するが要求外」で型が決まって
+ * いるため、具体型ラベルで積む（`detect_wedges` の同名 reason と同じ idiom）。
  */
 const PRE_CLASSIFICATION_REASONS = ['poor_trendline_fit', 'classification_failed'] as const;
 
@@ -230,14 +234,66 @@ describe('detect_patterns: triangle の分類前ラベル（#129）', () => {
 		const cands = res.meta.debug?.candidates ?? [];
 		const preClassification = cands.filter((c) => PRE_CLASSIFICATION_REASONS.includes(c.reason as never));
 		expect(preClassification.length, '分類前の棄却理由が 1 件も届いていない').toBeGreaterThan(0);
-		// 2 つの理由コードは別経路（回帰の当てはまり / 分類そのもの）。片方だけでは回帰を検出できない。
+		// 回帰の当てはまり不足は `want` に依らず起きる棄却なので、具体型を要求しても必ず届く。
+		// （`classification_failed` は「どの形にも当てはまらない」窓が要る。この fixture では
+		//  出ないので必須にしない——要求外を分類失敗と偽っていた頃はここが常に真だった。）
 		const reasons = new Set(preClassification.map((c) => c.reason));
-		for (const r of PRE_CLASSIFICATION_REASONS) {
-			expect(reasons.has(r), `${r} が届いていない`).toBe(true);
-		}
+		expect(reasons.has('poor_trendline_fit'), 'poor_trendline_fit が届いていない').toBe(true);
 		// 理由コードは content にも出る（LLM は structuredContent を読めない）
 		const text = formatDebugView('hdr', res.meta, [], res).content[0].text;
 		for (const r of reasons) expect(text).toContain(String(r));
+	});
+
+	// 分類判定は `want` をゲートに含む（`flatThreshold` > `moveThreshold` で分岐条件が重なるため、
+	// 外すと選ばれる型が変わる = 検出結果が変わる）。その結果 `triangleType === null` には
+	// 「形が成立しない」と「形は成立するが要求外」が混ざる。**後者を classification_failed と
+	// 報告すると、正常に分類できる窓を「分類失敗」と偽って伝えることになる。**
+	// umbrella ラベル化でそれがフィルタを通過して届くようになったため、理由コードを分けた。
+	it('要求外の型を classification_failed と偽らない', async () => {
+		const candles = symTriangleCloses.map((c, i) => makeCandle(i, c));
+		const sym = await run(candles, { patterns: ['triangle_symmetrical'], includeForming: true });
+		const asc = await run(candles, { patterns: ['triangle_ascending'], includeForming: true });
+		assertOk(sym);
+		assertOk(asc);
+		// 前提: この窓は対称三角形としては成立する（成立しない fixture では検証にならない）
+		expect(
+			sym.data.patterns.filter((p) => p.type === 'triangle_symmetrical').length,
+			'対称三角形が成立しない fixture では「要求外」と「分類失敗」を区別できない',
+		).toBeGreaterThan(0);
+		// その窓を ascending 要求時に「分類失敗」として報告しない
+		const failed = (asc.meta.debug?.candidates ?? []).filter((c) => c.reason === 'classification_failed');
+		expect(failed, `要求外の窓が classification_failed で届いている: ${JSON.stringify(failed)}`).toEqual([]);
+	});
+
+	// ラベルの契約: 具体型が決まらない棄却 ⇔ umbrella ラベル、型が決まっている棄却・採用 ⇔ 具体型。
+	// どの `want` で呼んでも成り立つ（`want` は届く範囲を変えるだけでラベルの規則を変えない）。
+	//
+	// `type_not_requested` が出力に現れないのは**設計どおり**。要求外の型のラベルで積むので
+	// 候補フィルタが落とす（規約「`want` に含まれない種別の candidate が出ない」）。
+	// `detect_wedges` の同名 reason と同じ挙動で、要求した型のノイズにしないためのもの。
+	it.each([
+		undefined,
+		['triangle'],
+		['triangle_ascending'],
+		['triangle_symmetrical'],
+	] as const)('patterns=%j でもラベルと理由コードの対応が崩れない', async (want) => {
+		// 全 want で三角形系候補が立つ価格列を使う。対称三角形だけの fixture だと
+		// `patterns=['triangle_ascending']` で候補が 0 件になり（要求外が届かないのは正しい挙動）、
+		// ラベル規則を 1 件も検証しないまま通ってしまう。
+		const candles = buildNoisyCandles();
+		const res = await run(candles, { includeForming: true, ...(want ? { patterns: [...want] } : {}) });
+		assertOk(res);
+		const cands = (res.meta.debug?.candidates ?? []).filter((c) => TRIANGLE_CANDIDATE_LABELS.includes(c.type as never));
+		expect(cands.length, '三角形系の候補が 0 件では検証にならない').toBeGreaterThan(0);
+		for (const c of cands) {
+			if (PRE_CLASSIFICATION_REASONS.includes(c.reason as never)) {
+				expect(c.type, `具体型が決まらない棄却なのに具体型ラベル: ${JSON.stringify(c)}`).toBe('triangle');
+			} else {
+				expect(c.type, `型が決まっているのに umbrella ラベル: ${JSON.stringify(c)}`).not.toBe('triangle');
+			}
+			// 要求外の棄却は候補フィルタで落ちるので、呼び出し側には届かない
+			expect(c.reason, `要求外の候補が届いている: ${JSON.stringify(c)}`).not.toBe('type_not_requested');
+		}
 	});
 
 	it('分類前の棄却は具体型ではなく umbrella ラベル triangle で積まれる', async () => {

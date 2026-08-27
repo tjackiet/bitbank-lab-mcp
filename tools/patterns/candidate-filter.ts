@@ -31,10 +31,12 @@
  * `validateRegressionCandidate` の引数 `wedgeType`（`'rising_wedge' | 'falling_wedge'`）で
  * 積んでおり、呼び出し元で**分類済み**。ラベルは実際の型と一致している。
  *
- * ただし `detectRegressionWedges` の `r2_below_threshold` だけは上下の傾きからラベルを推定し、
- * 傾きの向きが揃わない窓を `triangle_symmetrical` として積む。**ウェッジ走査の棄却なのに
- * 三角形のラベルが付く**（#129 の対象外。umbrella の `'wedge'` が `PatternFilterEnum` に
- * 無いため、直すにはまず入力語彙を足すかを決める必要がある）。
+ * ただし `detectRegressionWedges` には**同じ傾き推定でラベルを決めている push が 2 箇所**あり
+ * （`r2_below_threshold` と `type_classification_failed`）、どちらも傾きの向きが揃わない窓を
+ * `triangle_symmetrical` として積む。**ウェッジ走査の棄却なのに三角形のラベルが付く**
+ * （#129 の対象外。umbrella の `'wedge'` が `PatternFilterEnum` に無いため、直すにはまず
+ * 入力語彙を足すかを決める必要がある）。**直すときは 2 箇所とも直すこと**——片方だけ直すと
+ * 同じ推論が残って症状が半分だけ残る。
  *
  * ## 直すのはラベル側であってこのモジュールではない（#129）
  *

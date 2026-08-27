@@ -487,6 +487,12 @@ export function detectTriangles(ctx: DetectContext): DetectResult {
 			const lowerRising = lowerRelSlope > params.moveThreshold;
 
 			// Classify
+			//
+			// **判定は `want` をゲートに含む（意図的）。** `flatThreshold`(0.03) > `moveThreshold`(0.015)
+			// なので `upperFlat` と `upperFalling` は (-0.03, -0.015) で同時に真になりうる。つまり
+			// 1 つの窓が複数の分岐条件を満たしうるため、`want` を外すと**選ばれる型が変わる**
+			// （= `patterns` 指定の有無で検出結果が変わる）。ここを触ると検出セマンティクスの変更に
+			// なるので、`want` ゲートはそのまま維持する。
 			let triangleType: 'triangle_ascending' | 'triangle_descending' | 'triangle_symmetrical' | null = null;
 
 			if (wantAsc && upperFlat && lowerRising) {
@@ -498,11 +504,34 @@ export function detectTriangles(ctx: DetectContext): DetectResult {
 			}
 
 			if (!triangleType) {
+				// **棄却理由は「分類できなかった」と「要求されていない」を区別する。**
+				// 上の判定は `want` ゲート込みなので、`triangleType === null` には
+				// 「形として成立しない」と「形は成立するが要求外」の 2 種類が混ざる。
+				// 後者を `classification_failed` として報告すると、実際には正常に分類できる窓を
+				// 「分類失敗」と偽って伝えることになる（`patterns=['triangle_ascending']` に
+				// 対称三角形の窓が classification_failed で届く）。
+				//
+				// そこで `want` を外した分類（= `patterns` 未指定なら何になるか）を別に取り、
+				//   - 形が成立する → `type_not_requested` を**具体型ラベル**で積む
+				//     （`detect_wedges` の `type_not_requested` と同じ idiom。要求外の型なので
+				//      候補フィルタで落ち、要求した型のノイズにならない）
+				//   - 形も成立しない → `classification_failed` を umbrella ラベルで積む
+				// と振り分ける。**検出結果には触らない**——上の `triangleType` は使い回さない。
+				const unrestrictedType =
+					upperFlat && lowerRising
+						? 'triangle_ascending'
+						: upperFalling && lowerFlat
+							? 'triangle_descending'
+							: upperFalling && lowerRising
+								? 'triangle_symmetrical'
+								: null;
+
 				debugCandidates.push({
-					// 分類そのものが失敗した棄却。具体型は確定していないので umbrella ラベルで積む。
-					type: 'triangle',
+					// 分類前 / 分類不能の棄却は具体型が決まらないので umbrella ラベルで積む。
+					// 要求外の棄却だけは型が決まっているので具体型で積む。
+					type: unrestrictedType ?? 'triangle',
 					accepted: false,
-					reason: 'classification_failed',
+					reason: unrestrictedType ? 'type_not_requested' : 'classification_failed',
 					indices: [winStart, winEnd],
 					details: {
 						upperRelSlope: Number(upperRelSlope.toFixed(4)),

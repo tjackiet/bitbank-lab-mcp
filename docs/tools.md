@@ -517,11 +517,12 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 | `triangle` | `detect_triangles`（`poor_trendline_fit` / `classification_failed` はどの三角形になりえたかが決まる前の棄却） | `triangle_ascending` / `triangle_descending` / `triangle_symmetrical` |
 
 `detect_wedges` は umbrella ラベルを持たない。棄却の大半は `rising_wedge` / `falling_wedge` に
-分類済みのラベルで積まれる。ただし `r2_below_threshold`（回帰の当てはまり不足）だけは
-**上下の傾きから種別を推定して**ラベルを付けており、傾きの向きが揃わない窓は
-`triangle_symmetrical` として積まれる。これはウェッジ走査の棄却であって三角形の候補ではない
-——ラベルと実体がずれている既知のケース（#129 の対象外。umbrella の `wedge` が
-`PatternFilterEnum` に無いため別途の検討が要る）。
+分類済みのラベルで積まれる。ただし `r2_below_threshold`（回帰の当てはまり不足）と
+`type_classification_failed`（傾き比の条件を満たさない）の **2 箇所**は、**上下の傾きから
+種別を推定して**ラベルを付けており、傾きの向きが揃わない窓は `triangle_symmetrical` として
+積まれる。これはウェッジ走査の棄却であって三角形の候補ではない——ラベルと実体がずれている
+既知のケース（#129 の対象外。umbrella の `wedge` が `PatternFilterEnum` に無いため別途の
+検討が要る）。**2 箇所が同じ推論を持っているので、直すときは両方**。
 
 **`candidates[].type` は「その候補がどの種別になりえたか」であって、必ずしも確定した種別ではない。**
 
