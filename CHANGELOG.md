@@ -33,6 +33,39 @@
 
 **ゲートの位置は `validatePriorTrend` の後ろ。** 前に置くと既存の棄却理由（`no_breakout` / `prior_trend_mismatch:*`）が構造ゲートの理由に置き換わり、debug の理由コード契約が黙って変わる。「スコアの前段」という要件は満たしつつ、既存の理由コードは温存している。
 
+#### 検出結果の変化量（全 fixture 前後比較）
+
+`tests/detect_patterns_fixtures.test.ts` の **fixture 22 件 × オプション 8 通り（`includeForming` / `includeCompleted` / `includeInvalid`）× 時間足 2 種 × `swingDepth` 2 種 = 704 ケース**を、`main`（0b4b23c）と本ブランチの双方で走らせて突き合わせた結果。
+
+| | 値 |
+|---|---|
+| 変化したケース | **32 / 704**（4.5%）。残り 672 は完全一致 |
+| パターン総数 | 312 → **296**（のべ **-16**、すべて `double_bottom`） |
+| 増えたパターン | **0 件** |
+| `status` の変化 | **なし** |
+| 整合度が動いたパターン | のべ **16 件**（すべて `double_top`）。**全件が下振れ**、変化幅は **-0.17 〜 -0.18** |
+
+**消えた 16 件はすべて三角形 fixture で double_bottom が誤ラベルされていたもの**で、過剰棄却ではない。内訳は 2 fixture × 8 オプション:
+
+| fixture | 棄却理由 | 妥当性 |
+|---|---|---|
+| `DescendingTriangleInvalidBreakout` | `reclassified_as_triple_bottom` | 下降三角形は定義上**安値が水平**なので同水準の谷が 3 つ以上ある。triple 側に委ねるのが正しい |
+| `FormingAscendingTriangle` | `retracement_out_of_band` | 上昇三角形は**高値が水平**なので中間の山が先行高値に肉薄し、戻り率が帯を外れる。同 fixture は `triple_bottom` / `triangle_ascending` として引き続き検出されるので、形自体が消えたわけではない |
+
+**整合度の下振れ（0.91 / 0.90 → 0.73）は新しい `breakoutQuality` 軸によるもの。** `CompletedDoubleTop` fixture の実測サブスコアは `symmetry` 0.992 / `breakoutQuality` **0.308** / `duration` 0.900 で、**突破足の終値がネックラインをパターン高さの 3 割しか超えていない**ことを新軸が拾っている。旧スコアは `tolMargin` と `symmetry` が同じ軸だったためこれを見ていなかった。なお同 fixture は先行極値が窓外（ピボットが idx 5 から始まる）のため `retracement` は算出されず、**算出できなかった軸は平均から外している**（0 として混ぜると欠測が減点になるため）。
+
+**実データ（`tests/fixtures/btc_jpy_1day_2026.ts`）は上記 704 ケースの外。** こちらは `double_bottom` forming 1 件（整合度 1.00）→ **0 件**。これが #126 が報告した偽陽性そのもの。
+
+#### 既存 fixture を変更した 2 件は、閾値の変更とは独立に必要だった
+
+`tests/detect_doubles.test.ts` の形成中ダブルボトム fixture 2 件で、谷1 より前の終値をネックライン(130)より上に変えた。**新しいゲートを通すためにテストデータを変えるのは過剰棄却を隠しうる操作**なので、旧 fixture が本当に退化していたかを確認した:
+
+- 宣言されたネックライン（`price: 130`）が**その足の終値（128）と一致していない**。fixture のピボット配列は高値を `price` に入れており、`detectSwingPoints` の意味論（`price` = 終値）と矛盾していた。
+- ベースライン 50 本の終値が**すべてちょうど 130** で、ネックライン水準を上回って終えた足が 1 本も無い。「下抜けたものを抜け返す」という事象が定義できない。
+- さらに、宣言された「2 つの谷の間の山」（終値 128 / 高値 130）は**ベースライン足（終値 130 / 高値 135）より低い**。価格列上はそもそも極大点ですらない。
+
+**閾値の変更とは独立であることも確認した。** `RETRACEMENT_MAX` を 0.85 のままにして新 fixture で走らせると `tests/detect_doubles.test.ts` は 32/32 通る（fixture 変更だけで足りる）。逆に 0.90 が要るのは `tests/patterns/invariants.test.ts` の対称三角形 whipsaw（戻り率 0.897）だけで、こちらの fixture は変更していない。**2 つの変更は別々の失敗に対応していて、二重に効かせてはいない。**
+
 ### Added（`detect_patterns` の `status` に `expired`、整合度にサブスコア。#126）
 
 - **`status='expired'` を追加した（G4）。** 第2構成点の確定から突破確認窓（`MAX_BARS_FROM_EXTREMUM` = 20 本）を過ぎた形成中候補は、以後どれだけ待っても `completed` にならない。それを `forming` と報告するのは「まだ完成しうる」という誤った含意になる。**`invalid` と同義ではない**（形が崩れたのではなく成立する時間を使い切った）ため、#126 の提案にあった `invalidated` は新語を作らず既存の `invalid` を使い、追加したのは期限切れの 1 値のみ。既定では出力されず `includeInvalid: true` で `invalid` と一緒に現れる。期限を突破探索窓と同じ値にしてあるのは、「形成中＝まだ完成しうる」を両パスで一致させるにはそれしかないため。
