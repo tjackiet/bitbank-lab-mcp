@@ -19,6 +19,7 @@ import {
 	isSameLevel,
 	type PriorTrendResult,
 	validateHorizontalNeckline,
+	validatePatternSize,
 	validatePriorTrend,
 } from './structural.js';
 import type { Pivot } from './swing.js';
@@ -229,6 +230,17 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 						indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
 					});
 				}
+				// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
+				const sizeReason = validatePatternSize('bottom', [p0, p1, p2, p3, p4]);
+				if (sizeReason) {
+					debugCandidates.push({
+						type: 'inverse_head_and_shoulders',
+						accepted: false,
+						reason: sizeReason,
+						indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+					});
+					continue;
+				}
 				const neckline = [
 					{ x: p1.idx, y: p1.price },
 					{ x: p3.idx, y: p3.price },
@@ -388,6 +400,17 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 						reason: 'prior_trend_insufficient_data',
 						indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
 					});
+				}
+				// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
+				const sizeReason = validatePatternSize('top', [p0, p1, p2, p3, p4]);
+				if (sizeReason) {
+					debugCandidates.push({
+						type: 'head_and_shoulders',
+						accepted: false,
+						reason: sizeReason,
+						indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+					});
+					continue;
 				}
 				const neckline = [
 					{ x: p1.idx, y: p1.price },
@@ -569,6 +592,17 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 					indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
 				});
 			}
+			// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
+			const sizeReason = validatePatternSize('top', [p0, p1, p2, p3, p4]);
+			if (sizeReason) {
+				debugCandidates.push({
+					type: 'head_and_shoulders',
+					accepted: false,
+					reason: sizeReason,
+					indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+				});
+				continue;
+			}
 			const valleyBetween = allValleys.filter((v: { idx: number }) => v.idx > p0.idx && v.idx < p4.idx);
 			const postValleys = allValleys.filter((v: { idx: number }) => v.idx > p2.idx);
 			const minValley = valleyBetween.length
@@ -717,6 +751,17 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 					reason: 'prior_trend_insufficient_data',
 					indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
 				});
+			}
+			// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
+			const sizeReason = validatePatternSize('bottom', [p0, p1, p2, p3, p4]);
+			if (sizeReason) {
+				debugCandidates.push({
+					type: 'inverse_head_and_shoulders',
+					accepted: false,
+					reason: sizeReason,
+					indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+				});
+				continue;
 			}
 			const peaksBetween = allPeaks.filter((v: { idx: number }) => v.idx > p0.idx && v.idx < p4.idx);
 			const postPeaks = allPeaks.filter((v: { idx: number }) => v.idx > p2.idx);
@@ -910,6 +955,22 @@ function tryFormingHS(ctx: DetectContext): DeduplicablePattern | null {
 		return null;
 	}
 
+	// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
+	// 先行谷 / 先行山が取れないときは頭-戻り-右肩の 3 点で測る（交互列の形は保たれる）。
+	const hsSizeReason = validatePatternSize(
+		'top',
+		preHeadValley ? [left, preHeadValley, head, postHeadValley, rightShoulder] : [head, postHeadValley, rightShoulder],
+	);
+	if (hsSizeReason) {
+		ctx.debugCandidates.push({
+			type: 'head_and_shoulders',
+			accepted: false,
+			reason: hsSizeReason,
+			indices: [left.idx, head.idx, postHeadValley.idx, rightShoulder.idx],
+		});
+		return null;
+	}
+
 	const start = isoAt(left.idx);
 	const end = isoAt(rightShoulder.idx);
 
@@ -1053,6 +1114,22 @@ function tryFormingInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 			reason: 'confidence_below_min_forming',
 			indices: [left.idx, head.idx, postHeadPeak.idx, rightShoulder.idx],
 			details: { confidence, threshold: FORMING_MIN_CONFIDENCE },
+		});
+		return null;
+	}
+
+	// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
+	// 先行谷 / 先行山が取れないときは頭-戻り-右肩の 3 点で測る（交互列の形は保たれる）。
+	const ihsSizeReason = validatePatternSize(
+		'bottom',
+		preHeadPeak ? [left, preHeadPeak, head, postHeadPeak, rightShoulder] : [head, postHeadPeak, rightShoulder],
+	);
+	if (ihsSizeReason) {
+		ctx.debugCandidates.push({
+			type: 'inverse_head_and_shoulders',
+			accepted: false,
+			reason: ihsSizeReason,
+			indices: [left.idx, head.idx, postHeadPeak.idx, rightShoulder.idx],
 		});
 		return null;
 	}

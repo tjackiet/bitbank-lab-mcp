@@ -454,20 +454,30 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 
 契約は `tests/patterns/structural-gates-btcjpy.test.ts`（実データ fixture）が固定している。
 
-### double_top / double_bottom のサイズ検査は高安基準（#130）
+### 反転パターンのサイズ検査は高安基準（#130 / #138）
 
-構造ゲートとは別に、`double_top` / `double_bottom` は**パターンの値幅が十分か**を見る検査を通る。
+構造ゲートとは別に、`double_top` / `double_bottom` / `triple_top` / `triple_bottom` /
+`head_and_shoulders` / `inverse_head_and_shoulders` は**パターンの値幅が十分か**を見る検査を通る。
+**閾値は 6 種別で同一**（`tools/patterns/structural.ts` の `MIN_PATTERN_HEIGHT_PCT` /
+`MIN_DEPTH_PCT` が単一ソース）。
 
 | 検査 | 閾値 | 測る対象 |
 |---|---|---|
-| `pattern_too_small` | パターン高さ ≥ 3% | 第1構成点と中間構成点の値幅 |
-| `valley_too_shallow` / `peak_too_shallow` | 中間の谷 / 山の深さ ≥ 5% | 2 つの外側構成点の平均に対する中間構成点の値幅 |
+| `pattern_too_small` | パターン高さ ≥ 3% | double: 第1構成点と中間構成点の値幅 / triple・H&S: 全構成点の最大 − 最小 |
+| `valley_too_shallow` / `peak_too_shallow` | 中間の谷 / 山の深さ ≥ 5% | 中間構成点と**その両隣の平均**との値幅。中間点が複数ある triple・H&S は全点が閾値を満たすこと |
+
+**triple / H&S には #138 まで検査そのものが無かった。** double なら弾かれる小ささでも通るため、
+高さ 1.6% のレンジ往復がその上端と下端を別々に拾われて `triple_top` と `triple_bottom` として
+**同時に**報告されていた（BTC/JPY 1時間足の実例）。深さを「両隣の平均」で測るのは、H&S で
+頭を含む全体平均を使うと頭が平均を押し上げ、肩とネックラインの間が浅くても通ってしまうため。
 
 **どちらも `extremePrice`（高安）基準で測る。** 値幅の評価は構造ゲートの戻り率と同じ基準に
 揃えてある（上節）。終値基準ではヒゲの大きい区間で値幅が実際の 1/3 に見え、正しいパターンが
 落ちる——BTC/JPY 日足 2026-08-03 → 08-10 → 08-14 の実在するダブルボトムは、高安基準の
 5.87% / 5.13% に対し終値基準では 1.85% / 1.67% となり両方の閾値を割っていた（issue #130 の偽陰性）。
 **同水準判定（2 つの外側構成点が同じ水準か）とネックラインの線は終値基準のまま。**
+形成中パターンの暫定構成点（3 点目 / 暫定右肩）は極値判定を通っていないので、
+`extremePrice` にはその足の終値がそのまま入る。
 
 **ピボット間の最小間隔は `minBarsBetweenSwings` に従う。** 以前は double 検出だけが
 ローカル定数 5 本でこのパラメータを上書きしていた（`detect_triples` / `detect_hs` は当時から

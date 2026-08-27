@@ -26,6 +26,21 @@ export const HS_SHOULDER_MAX_PCT = 0.05;
 /** H&S / IHS のネックライン構成点（p1, p3）同水準の構造上限 */
 export const HS_NECKLINE_MAX_PCT = 0.05;
 
+/**
+ * 反転パターンのサイズ検査の下限。**パターン高さ**（構成点の高安の全振幅）と、
+ * **戻りの深さ**（山と山に挟まれた谷 / 谷と谷に挟まれた山の押し）にそれぞれ掛かる。
+ *
+ * 元は `detect_doubles.ts` のローカル定数だった。double だけがサイズ検査を持ち、
+ * `detect_triples.ts` / `detect_hs.ts` には相当する検査が 1 つも無かったため、
+ * **double なら弾かれる小ささの形が triple / H&S では通っていた**（issue #138 欠陥 2-2）。
+ * BTC/JPY 1時間足で高さ 1.66% のレンジ往復が `triple_top` と `triple_bottom` に
+ * 同時に化けたのがこれ。値を揃えるために、定数と検査本体をここへ引き上げた。
+ */
+export const MIN_PATTERN_HEIGHT_PCT = 0.03;
+
+/** {@link MIN_PATTERN_HEIGHT_PCT} と対。谷 / 山 1 つあたりの戻りの深さの下限。 */
+export const MIN_DEPTH_PCT = 0.05;
+
 /** 前提トレンド判定で「横ばい」とみなす priorReturn の範囲 */
 export const PRIOR_TREND_SIDEWAYS_PCT = 0.05;
 
@@ -347,6 +362,69 @@ export type StructuralSkipReason =
 	| 'no_prior_extreme'
 	/** ネックライン交差の探索窓が短すぎて「交差が無い」ことを立証できない */
 	| 'insufficient_history';
+
+/**
+ * サイズ検査の不合格理由コード。`detect_doubles.ts` が既に debug candidates へ
+ * 載せている 3 コードと同じ命名で、種別をまたいで同じ意味を持つ。
+ */
+export type PatternSizeRejectReason =
+	/** パターン高さ（構成点の全振幅）が {@link MIN_PATTERN_HEIGHT_PCT} 未満 */
+	| 'pattern_too_small'
+	/** top: 山に挟まれた谷の押しが {@link MIN_DEPTH_PCT} 未満 */
+	| 'valley_too_shallow'
+	/** bottom: 谷に挟まれた山の戻りが {@link MIN_DEPTH_PCT} 未満 */
+	| 'peak_too_shallow';
+
+/**
+ * 反転パターンのサイズ検査（issue #138 欠陥 2-2）。不合格理由 or `null` を返す。
+ *
+ * `points` は**構成点を時系列順に並べた交互列**で、両端が主構成点（`side='top'`
+ * なら山、`'bottom'` なら谷）であること。triple なら 5 点（山-谷-山-谷-山）、
+ * H&S なら 5 点（左肩-谷-頭-谷-右肩）を渡す。
+ *
+ * 2 つの検査は `detect_doubles.ts` の `validateTopSize` / `validateBottomSize` と同型:
+ *
+ * - **パターン高さ**: 全構成点の最大 - 最小。issue #138 が実例の高さを
+ *   「12,734,408 - 12,526,411 ≈ 1.66%」と全振幅で測ったのに合わせている
+ * - **戻りの深さ**: 内側の点それぞれを、**その両隣の平均**と比べる。double の
+ *   `peakAvg = (a + c) / 2`（谷を挟む 2 山の平均）を構成点が増えた場合へ素直に
+ *   延長したもので、3 点の場合は double の式そのものに一致する。頭を含めた全体
+ *   平均にしないのは、H&S で頭が平均を押し上げて肩-ネックライン間の押しが
+ *   浅くても通ってしまうのを避けるため
+ *
+ * 価格基準は `Pivot.extremePrice`（高安）。**値幅の評価だから**で、
+ * #131 / #132 の結論（値幅系は `extremePrice`、水準同一性とライン系は終値）の
+ * 横展開。`detect_doubles.ts` の `validateTopSize` の docstring も参照。
+ *
+ * **呼び出しは各検出経路の「既存の棄却検査をすべて通過した後」に置くこと。** 前に置くと、
+ * 既に固有の理由コードを持つ候補の `reason` を横取りして `view=debug` の診断が変わる
+ * （実際、先に置いた版では `forming_neckline_not_horizontal` を検査していた既存テストが
+ * `valley_too_shallow` に化けて落ちた）。最後に置けば **「これまで accepted だった候補だけを
+ * 落とす」ことが位置から保証される**。
+ *
+ * 形成中パターンの暫定構成点（3 点目 / 暫定右肩）は極値判定を通っていないので、
+ * `{ extremePrice: 現在足の終値 }` を渡す（既存の形成中 H&S の暫定右肩と同じ扱い）。
+ */
+export function validatePatternSize(
+	side: ReversalSide,
+	points: ReadonlyArray<Pick<Pivot, 'extremePrice'>>,
+): PatternSizeRejectReason | null {
+	const prices = points.map((p) => p.extremePrice);
+	if (prices.length < 3 || prices.some((v) => !Number.isFinite(v))) return null;
+
+	const hi = Math.max(...prices);
+	const lo = Math.min(...prices);
+	if ((hi - lo) / Math.max(1, hi) < MIN_PATTERN_HEIGHT_PCT) return 'pattern_too_small';
+
+	const shallow: PatternSizeRejectReason = side === 'top' ? 'valley_too_shallow' : 'peak_too_shallow';
+	for (let i = 1; i < prices.length - 1; i += 2) {
+		const flankAvg = (prices[i - 1] + prices[i + 1]) / 2;
+		const depthPct =
+			side === 'top' ? (flankAvg - prices[i]) / Math.max(1, flankAvg) : (prices[i] - flankAvg) / Math.max(1, flankAvg);
+		if (depthPct < MIN_DEPTH_PCT) return shallow;
+	}
+	return null;
+}
 
 export interface ReversalStructureResult {
 	ok: boolean;

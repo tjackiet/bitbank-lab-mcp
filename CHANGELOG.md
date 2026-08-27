@@ -25,7 +25,69 @@
 | 10 | #132 | ダブルボトムの偽陰性を 3 つの原因ごとに解消 | 増える |
 | 11 | #135 | dedup の勝者選択を `statusScore` 最優先に揃えた | 変わる |
 | 12 | #136 | 構造的ピボット間隔の床（`= 5`）の妥当性を実測で判定し据え置きを確定 | 変わらない |
-| 13 | 本 PR | 三角形の分類前 candidate ラベルを umbrella 化（#129）、`limit=180` の判定と CI ジョブ名の注記（#127 の残り） | 変わらない |
+| 13 | #137 | 三角形の分類前 candidate ラベルを umbrella 化（#129）、`limit=180` の判定と CI ジョブ名の注記（#127 の残り） | 変わらない |
+| 14 | 本 PR | triple / H&S にサイズ検査を横展開（#138 欠陥 2-2） | 減る |
+
+### Fixed（`detect_patterns` の triple / H&S にサイズ検査を追加した。**小さすぎる形が減る**。#138 欠陥 2-2）
+
+**高さ 1.6% のレンジ往復が `triple_top` と `triple_bottom` として同時に検出されていた。** `detect_doubles.ts` だけが `MIN_PATTERN_HEIGHT_PCT`（3%）/ `MIN_DEPTH_PCT`（5%）のサイズ検査を持ち、`detect_triples.ts` / `detect_hs.ts` には相当する検査が 1 つも無かった（#130 の調査で確認済み）。**double なら弾かれる小ささでも triple / H&S は通る**状態で、レンジ相場の上端と下端が別々に拾われて反転パターン 2 つとして報告される。
+
+issue #138 が観測した実例（BTC/JPY 1時間足, 2026-08-27）は `triple_top`（idx 40/49/59）と `triple_bottom`（idx 26/46/54）が idx 40〜54 で重なっており、実体は 12,521,114〜12,726,672 の約 1.6% レンジの往復。`triple_bottom` のパターン高さは 1.66% で、**double の閾値なら弾かれている**。
+
+- **定数と検査本体を `tools/patterns/structural.ts` に引き上げた。** `MIN_PATTERN_HEIGHT_PCT` / `MIN_DEPTH_PCT` は `detect_doubles.ts` のローカル定数だったものをそのまま移設（**値は変えていない**）。double は自分の `validateTopSize` / `validateBottomSize` を持ったまま定数だけを import する——検出結果を 1 件も動かさないため、式には触れていない。新しい `validatePatternSize(side, points)` を triple / H&S が使う。
+  - **パターン高さ**は全構成点の最大 − 最小。issue #138 が実例の高さを「12,734,408 − 12,526,411 ≈ 1.66%」と全振幅で測ったのに合わせた
+  - **戻りの深さ**は内側の点それぞれを**その両隣の平均**と比べる。double の `peakAvg = (a + c) / 2`（谷を挟む 2 山の平均）を構成点が増えた場合へ延長したもので、3 点なら double の式に一致する。山の全体平均にしないのは、**H&S で頭が平均を押し上げて肩-ネックライン間の浅さを隠す**ため
+  - 価格基準は `Pivot.extremePrice`（高安）。値幅の評価だからで、#131 / #132 の結論（値幅系は `extremePrice`、水準同一性とライン系は終値）の横展開。形成中の 3 点目 / 暫定右肩は極値判定を通っていないので `extremePrice = 現在足の終値` で渡す（既存の形成中 H&S の暫定右肩と同じ扱い）
+- **配線は 12 箇所**（triple: strict / relaxed / forming の top・bottom 各 3 = 6、H&S: 同じく IHS 含めて 6）。
+- **どの経路でも「既存の棄却検査をすべて通過した後」に置いた。** 前に置くと、既に固有の理由コードを持つ候補の `reason` を横取りして `view=debug` の診断が変わる（実際、最初に前へ置いた版では `forming_neckline_not_horizontal` を検査していた既存テストが `valley_too_shallow` に化けて落ちた）。この位置なら **「これまで accepted だった候補だけを落とす」ことが位置から保証される**。
+- 棄却理由コードは double と同じ命名（`pattern_too_small` / `valley_too_shallow` / `peak_too_shallow`）で `view=debug` の `candidates[].reason` に出る。
+
+#### 実測（704 ケース比較）
+
+`tests/detect_patterns_fixtures.test.ts` の **fixture 22 件 × オプション 8 通り（`includeForming` / `includeCompleted` / `includeInvalid`）× 時間足 2 種（`1day` / `1hour`）× `swingDepth` 2 種（2 / 3）= 704 ケース**を、`main`（cfe24ef）と本ブランチの双方で走らせて突き合わせた（#131 / #132 / #135 / #136 と同じ手順・同じ 704 ケース）。
+
+| | 結果 |
+|---|---|
+| 変化したケース | **0 / 704**。全ケース完全一致 |
+| パターン総数 | **320 → 320**（増減なし） |
+| 種別内訳 | `triple_top` 48 → 48 / `triple_bottom` 48 → 48 / `head_and_shoulders` 16 → 16 / `inverse_head_and_shoulders` 16 → 16 / `double_top` 16 → 16 / `double_bottom` 16 → 16 / `triangle_symmetrical` 48 / `falling_wedge` 32 / `rising_wedge` 24 / `triangle_ascending` 16 / `triangle_descending` 16 / `bull_pennant` 16 / `bull_flag` 8（いずれも不変） |
+| 消えたパターン | **0 件**（したがって「誤検出だった理由」を要する 1 件も無い） |
+
+**0 / 704 は「ゲートが死んでいる」ことを意味しない。** 合成 fixture は `100 → 130` のように**振幅が 20〜30% ある系列**ばかりで、3% / 5% の下限を全ケースで大きく上回る。ゲートが全経路に配線されていることは **ablation で確認した**——定数だけを差し替えて同じ 704 ケースを走らせた結果:
+
+| ablation | 変化したケース | パターン総数 | 出た棄却理由 |
+|---|---|---|---|
+| `MIN_PATTERN_HEIGHT_PCT` を 0.99 に | 140 / 704 | 320 → **160** | `pattern_too_small`: triple_top 240 / triple_bottom 304 / H&S 96 / IHS 96（+ double 3,168） |
+| `MIN_DEPTH_PCT` を 0.99 に | 132 / 704 | 320 → **168** | `valley_too_shallow` / `peak_too_shallow`: triple_top 240 / triple_bottom 304 / H&S 96 / IHS 96（+ double 1,584） |
+
+どちらの ablation でも `triple_top` / `triple_bottom` / `head_and_shoulders` / `inverse_head_and_shoulders` が **48 / 48 / 16 / 16 → すべて 0** になる。704 ケースで検出されるこれら 4 種は**全件が新しいゲートを通っている**（通らない経路が残っていれば残存する）。
+
+#### 実測（issue の実例に相当する系列）
+
+実 API を叩けないため、issue #138 の実例と**同じ構造**の系列を合成して測った（谷 12,525,000 / 山 12,720,000 を 10 本ずつで往復する 91 本、`1hour`、`includeForming` + `includeCompleted`）。全振幅 1.55% で、実例の 1.6% と同水準。
+
+| | main（cfe24ef） | 本ブランチ |
+|---|---|---|
+| 返るパターン | **5 件** | **0 件** |
+
+消えた 5 件と、それが誤検出だった理由:
+
+| # | 種別 | status | 整合度 | 構成点 idx | 誤検出である理由 |
+|---|---|---|---|---|---|
+| 1 | `triple_top` | near_completion | 0.91 | 10 / 30 / 50 @ 12,720,000 | 実体は 1.55% レンジの上端。**同じ系列の下端が #3 / #4 として `triple_bottom` にもなっており、1 本の系列が上下両方向の反転パターンを名乗る**。パターン高さ 1.55% < 3% |
+| 2 | `triple_top` | near_completion | 0.91 | 30 / 50 / 70 @ 12,720,000 | 同上。#1 と 1 山ずらしただけの同一レンジ |
+| 3 | `triple_bottom` | near_completion | 0.91 | 20 / 40 / 60 @ 12,525,000 | 同じレンジの下端。#1 / #2 と期間が重なる |
+| 4 | `triple_bottom` | near_completion | 0.91 | 40 / 60 / 80 @ 12,525,000 | 同上。#3 と 1 谷ずらしただけ |
+| 5 | `triple_top` | forming | 0.59 | 50 / 70 + 現在足 | 上と同じ上端を形成中として重複報告したもの |
+
+**5 件とも `pattern_too_small`（高さ 1.55% < 3%）で落ちる。** 同じ系列で `double_top` / `double_bottom` も **main の時点から同じ `pattern_too_small` で落ちている**——「double なら弾かれる小ささが triple では通る」という issue の指摘そのものが、この 1 系列の中で確認できる。
+
+#### 実測（実データ fixture）
+
+`tests/fixtures/btc_jpy_1day_2026.ts`（BTC/JPY 日足 90 本、上記 704 ケースの外）は `includeForming` × `includeInvalid` の 4 通りすべてで **main と完全一致**。とくに形成中 `head_and_shoulders`（左肩 10,373,443 / 頭 10,849,999 / 谷 10,002,960 / 右肩 10,191,324、整合度 0.78）は**残る**——実在する H&S を落としていないことの確認。
+
+- ガードは `tests/patterns/size-gates-triple-hs.test.ts`（`validatePatternSize` の単体検査 7 本 + 上記 1.55% 系列で triple が出ないこと・棄却理由が `view=debug` に出ること + **同じ形状で振幅を 15.4% に広げれば triple が出続けること**（過剰棄却の回帰））。合成データなので閾値そのものの妥当性は担保できない（閾値に合わせて作れてしまう）。固定しているのは「double と同じ値で弾かれること」と「弾く方向に振りすぎていないこと」の 2 点。
+- **本 PR は #138 の欠陥 2-2 のみを扱う。** 欠陥 1（triangle の per-line タッチゲート）、記録 A（タッチ / 同水準の判定基準がパターン高さに対して転倒している）、欠陥 2-1（構造ゲートの triple / H&S 横展開）には手を付けていない。#138 の訂正コメントが定めた優先順で最優先の 1 件。
 
 ### Changed（`detect_patterns` の三角形の分類前 candidate ラベルを umbrella 化した。**`data.patterns` は変わらない**。#129）
 

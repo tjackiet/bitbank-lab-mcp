@@ -11,6 +11,8 @@ import {
 	DOUBLE_LEVEL_MAX_PCT,
 	detectTroughZoneReentry,
 	isSameLevel,
+	MIN_DEPTH_PCT,
+	MIN_PATTERN_HEIGHT_PCT,
 	type PriorTrendResult,
 	RETRACEMENT_MAX,
 	RETRACEMENT_MIN,
@@ -40,8 +42,6 @@ import {
 // ピボット列構造でありながら `ctx.minDist` をそのまま使っており、double だけが公開パラメータ
 // `minBarsBetweenSwings` を黙って上書きしていた。時間足既定は日足 4 本 / 1時間足 2 本なので、
 // **日足では 4 本間隔の構成が常に落ちていた**（BTC/JPY 2026-08-10 → 08-14 の 4 本がこれ）。
-const MIN_PATTERN_HEIGHT_PCT = 0.03;
-const MIN_DEPTH_PCT = 0.05;
 const BREAKOUT_BUFFER_PCT = 0.015;
 const MAX_BARS_FROM_EXTREMUM = 20;
 const RELAXED_TOLERANCE_FACTOR = 1.3;
