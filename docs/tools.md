@@ -454,6 +454,10 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 
 契約は `tests/patterns/structural-gates-btcjpy.test.ts`（実データ fixture）が固定している。
 
+**既知の偽陰性（#130）。** 安値切り上げ型のダブルボトムが、構造ゲートを通過しても
+`MIN_PIVOT_DISTANCE_BARS`（山→谷2 が 5 本未満）とサイズ検査の終値基準で落ちる場合がある。
+構造ゲートの問題ではないので、本セクションの理由コードには現れない（候補そのものが積まれない）。
+
 ### `status` に `expired` がある
 
 | `status` | 意味 | 既定で出るか |
