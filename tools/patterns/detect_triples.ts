@@ -7,6 +7,7 @@ import { MIN_CONFIDENCE } from '../patterns/config.js';
 import { patternBarRange } from './bar-thresholds.js';
 import { finalizeConf, periodScoreDays } from './helpers.js';
 import { clamp01, relDev } from './regression.js';
+import { applyReversalGate, buildStructureGate } from './reversal-gate.js';
 import { validatePatternSize } from './structural.js';
 import type { CandleData, DeduplicablePattern, DetectContext, DetectResult } from './types.js';
 import { pushCand } from './types.js';
@@ -145,8 +146,27 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 			continue;
 		}
 
-		// ネックライン下抜けを検出（c.idx 以降、最大 MAX_BARS_FROM_EXTREMUM バー）
+		// ネックラインは 2 つの谷の平均。**ブレイク判定に渡すのと同じ値**を構造ゲートにも渡す
+		// （`ReversalStructureInput.necklinePrice` の docstring）。
 		const nlAvg = (Number(v1.price) + Number(v2.price)) / 2;
+
+		// 構造ゲート（#138 欠陥 2-1）。#131 が double にだけ入れたものの横展開。
+		// サイズ検査と同じく「既存の棄却検査をすべて通過した後」に置く。
+		const gate = applyReversalGate({
+			candles,
+			pivots,
+			side: 'top',
+			first: a,
+			mid: v1,
+			necklinePrice: nlAvg,
+			type: 'triple_top',
+			indices: [a.idx, b.idx, c.idx],
+			debugCandidates: ctx.debugCandidates,
+		});
+		if (!gate) continue;
+		const structureGate = buildStructureGate(gate);
+
+		// ネックライン下抜けを検出（c.idx 以降、最大 MAX_BARS_FROM_EXTREMUM バー）
 		const breakoutIdx = findBreakoutIdx(candles, c.idx, nlAvg, 'below');
 		const isCompleted = breakoutIdx >= 0;
 		const rangeEnd = isCompleted ? candles[breakoutIdx]?.isoTime : structureEnd;
@@ -199,6 +219,7 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 			...completionFields,
 			pivots: [a, b, c],
 			neckline,
+			...(structureGate ? { structureGate } : {}),
 			trendlineLabel: 'ネックライン',
 			breakoutTarget: ttTarget,
 			targetMethod: 'neckline_projection' as const,
@@ -297,8 +318,27 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 			continue;
 		}
 
-		// ネックライン上抜けを検出（c.idx 以降、最大 MAX_BARS_FROM_EXTREMUM バー）
+		// ネックラインは 2 つの山の平均。**ブレイク判定に渡すのと同じ値**を構造ゲートにも渡す
+		// （`ReversalStructureInput.necklinePrice` の docstring）。
 		const nlAvg = (Number(p1.price) + Number(p2.price)) / 2;
+
+		// 構造ゲート（#138 欠陥 2-1）。#131 が double にだけ入れたものの横展開。
+		// サイズ検査と同じく「既存の棄却検査をすべて通過した後」に置く。
+		const gate = applyReversalGate({
+			candles,
+			pivots,
+			side: 'bottom',
+			first: a,
+			mid: p1,
+			necklinePrice: nlAvg,
+			type: 'triple_bottom',
+			indices: [a.idx, b.idx, c.idx],
+			debugCandidates: ctx.debugCandidates,
+		});
+		if (!gate) continue;
+		const structureGate = buildStructureGate(gate);
+
+		// ネックライン上抜けを検出（c.idx 以降、最大 MAX_BARS_FROM_EXTREMUM バー）
 		const breakoutIdx = findBreakoutIdx(candles, c.idx, nlAvg, 'above');
 		const isCompleted = breakoutIdx >= 0;
 		const rangeEnd = isCompleted ? candles[breakoutIdx]?.isoTime : structureEnd;
@@ -351,6 +391,7 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 			...completionFields,
 			pivots: [a, b, c],
 			neckline,
+			...(structureGate ? { structureGate } : {}),
 			trendlineLabel: 'ネックライン',
 			breakoutTarget: tbTarget,
 			targetMethod: 'neckline_projection' as const,
@@ -451,8 +492,27 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 			continue;
 		}
 
-		// ネックライン下抜け検出
+		// ネックラインは 2 つの谷の平均。**ブレイク判定に渡すのと同じ値**を構造ゲートにも渡す
+		// （`ReversalStructureInput.necklinePrice` の docstring）。
 		const nlAvg = (Number(v1.price) + Number(v2.price)) / 2;
+
+		// 構造ゲート（#138 欠陥 2-1）。#131 が double にだけ入れたものの横展開。
+		// サイズ検査と同じく「既存の棄却検査をすべて通過した後」に置く。
+		const gate = applyReversalGate({
+			candles,
+			pivots,
+			side: 'top',
+			first: a,
+			mid: v1,
+			necklinePrice: nlAvg,
+			type: 'triple_top',
+			indices: [a.idx, b.idx, c.idx],
+			debugCandidates: ctx.debugCandidates,
+		});
+		if (!gate) continue;
+		const structureGate = buildStructureGate(gate);
+
+		// ネックライン下抜け検出
 		const breakoutIdx = findBreakoutIdx(candles, c.idx, nlAvg, 'below');
 		const isCompleted = breakoutIdx >= 0;
 		const rangeEnd = isCompleted ? candles[breakoutIdx]?.isoTime : structureEnd;
@@ -504,6 +564,7 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 			...completionFields,
 			pivots: [a, b, c],
 			neckline,
+			...(structureGate ? { structureGate } : {}),
 			trendlineLabel: 'ネックライン',
 			breakoutTarget: ttRelTarget,
 			targetMethod: 'neckline_projection' as const,
@@ -593,8 +654,27 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 			continue;
 		}
 
-		// ネックライン上抜け検出
+		// ネックラインは 2 つの山の平均。**ブレイク判定に渡すのと同じ値**を構造ゲートにも渡す
+		// （`ReversalStructureInput.necklinePrice` の docstring）。
 		const nlAvg = (Number(p1.price) + Number(p2.price)) / 2;
+
+		// 構造ゲート（#138 欠陥 2-1）。#131 が double にだけ入れたものの横展開。
+		// サイズ検査と同じく「既存の棄却検査をすべて通過した後」に置く。
+		const gate = applyReversalGate({
+			candles,
+			pivots,
+			side: 'bottom',
+			first: a,
+			mid: p1,
+			necklinePrice: nlAvg,
+			type: 'triple_bottom',
+			indices: [a.idx, b.idx, c.idx],
+			debugCandidates: ctx.debugCandidates,
+		});
+		if (!gate) continue;
+		const structureGate = buildStructureGate(gate);
+
+		// ネックライン上抜け検出
 		const breakoutIdx = findBreakoutIdx(candles, c.idx, nlAvg, 'above');
 		const isCompleted = breakoutIdx >= 0;
 		const rangeEnd = isCompleted ? candles[breakoutIdx]?.isoTime : structureEnd;
@@ -646,6 +726,7 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 			...completionFields,
 			pivots: [a, b, c],
 			neckline,
+			...(structureGate ? { structureGate } : {}),
 			trendlineLabel: 'ネックライン',
 			breakoutTarget: tbRelTarget,
 			targetMethod: 'neckline_projection' as const,
@@ -659,7 +740,7 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 // ── Helper: 形成中 Triple Top ──
 
 function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
-	const { candles, allPeaks, allValleys, tolerancePct, minDist } = ctx;
+	const { candles, pivots, allPeaks, allValleys, tolerancePct, minDist } = ctx;
 	const pcand: Pcand = (arg) => pushCand(ctx, arg);
 	const lastIdx = candles.length - 1;
 	const currentPrice = Number(candles[lastIdx]?.close ?? NaN);
@@ -779,6 +860,23 @@ function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
 
 		// ネックラインは v1, v2 の平均で引く（strict triple_top と同じ方針）。
 		const avgValley = (v1.price + v2.price) / 2;
+
+		// 構造ゲート（#138 欠陥 2-1）。#131 が double にだけ入れたものの横展開。
+		// サイズ検査と同じく「既存の棄却検査をすべて通過した後」に置く。
+		const gate = applyReversalGate({
+			candles,
+			pivots,
+			side: 'top',
+			first: peak1,
+			mid: v1,
+			necklinePrice: avgValley,
+			type: 'triple_top',
+			indices: [peak1.idx, peak2.idx, lastIdx],
+			debugCandidates: ctx.debugCandidates,
+		});
+		if (!gate) continue;
+		const structureGate = buildStructureGate(gate);
+
 		const neckline = [
 			{ x: peak1.idx, y: avgValley },
 			{ x: lastIdx, y: avgValley },
@@ -795,6 +893,7 @@ function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
 				{ idx: peak2.idx, price: peak2.price, kind: 'H' as const, extremePrice: peak2.extremePrice },
 			],
 			neckline,
+			...(structureGate ? { structureGate } : {}),
 			trendlineLabel: 'ネックライン',
 			breakoutTarget: formTtTarget,
 			targetMethod: 'neckline_projection' as const,
@@ -808,7 +907,7 @@ function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
 // ── Helper: 形成中 Triple Bottom ──
 
 function tryFormingTripleBottom(ctx: DetectContext): DeduplicablePattern | null {
-	const { candles, allPeaks, allValleys, tolerancePct, minDist } = ctx;
+	const { candles, pivots, allPeaks, allValleys, tolerancePct, minDist } = ctx;
 	const pcand: Pcand = (arg) => pushCand(ctx, arg);
 	const lastIdx = candles.length - 1;
 	const currentPrice = Number(candles[lastIdx]?.close ?? NaN);
@@ -929,6 +1028,22 @@ function tryFormingTripleBottom(ctx: DetectContext): DeduplicablePattern | null 
 			continue;
 		}
 
+		// 構造ゲート（#138 欠陥 2-1）。#131 が double にだけ入れたものの横展開。
+		// サイズ検査と同じく「既存の棄却検査をすべて通過した後」に置く。
+		const gate = applyReversalGate({
+			candles,
+			pivots,
+			side: 'bottom',
+			first: valley1,
+			mid: pTop1,
+			necklinePrice: avgPeakPrice,
+			type: 'triple_bottom',
+			indices: [valley1.idx, valley2.idx, lastIdx],
+			debugCandidates: ctx.debugCandidates,
+		});
+		if (!gate) continue;
+		const structureGate = buildStructureGate(gate);
+
 		const neckline = [
 			{ x: valley1.idx, y: avgPeakPrice },
 			{ x: lastIdx, y: avgPeakPrice },
@@ -945,6 +1060,7 @@ function tryFormingTripleBottom(ctx: DetectContext): DeduplicablePattern | null 
 				{ idx: valley2.idx, price: valley2.price, kind: 'L' as const, extremePrice: valley2.extremePrice },
 			],
 			neckline,
+			...(structureGate ? { structureGate } : {}),
 			trendlineLabel: 'ネックライン',
 			breakoutTarget: formTbTarget,
 			targetMethod: 'neckline_projection' as const,

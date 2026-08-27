@@ -137,10 +137,24 @@ describe('detect_patterns: triple / H&S のサイズ検査（issue #138 欠陥 2
 		expect(candidates.some((c) => c.type === 'double_top' && c.reason === 'pattern_too_small')).toBe(true);
 	});
 
-	it('同じ形でも値幅が十分なら triple は検出され続ける（過剰棄却の回帰）', async () => {
-		// 上と同一の形状で振幅だけを 15.4% に広げたもの。
-		const { types } = await detectOnRange(11_000_000, 12_700_000);
-		expect(types).toContain('triple_top');
-		expect(types).toContain('triple_bottom');
+	it('同じ形でも値幅が十分ならサイズ検査では落ちない（過剰棄却の回帰）', async () => {
+		// 上と同一の形状で振幅だけを 15.4% に広げたもの。**サイズ検査の理由コードが出ないこと**で
+		// 過剰棄却を見る。
+		//
+		// 旧版はここで `types` に triple_top / triple_bottom が入ることを見ていたが、
+		// #138 欠陥 2-1（構造ゲートの横展開）以降、**先行トレンドの無い純粋なレンジの往復は
+		// 構造ゲート側で落ちる**（戻り率 = 1.0 → `retracement_out_of_band`）。落ちる理由が
+		// サイズ検査から構造ゲートに移っただけで、サイズ検査が過剰に弾いていないことは
+		// 理由コードで直接確認できる。先行トレンドを伴う形が残ることは
+		// `tests/patterns/structural-gates-triple-hs.test.ts` が固定する。
+		const { candidates } = await detectOnRange(11_000_000, 12_700_000);
+		const sizeReasons = ['pattern_too_small', 'valley_too_shallow', 'peak_too_shallow'];
+		for (const type of ['triple_top', 'triple_bottom']) {
+			expect(candidates.filter((c) => c.type === type && sizeReasons.includes(String(c.reason)))).toHaveLength(0);
+			// **両種別について**構成点まで到達していること（別経路の silent reject で消えている
+			// わけではないこと）の裏取り。片方だけ見ると、もう片方がサイズ検査より手前で
+			// 落ちていても上の「サイズ系の理由が 0 件」が空振りで通ってしまう。
+			expect(candidates.some((c) => c.type === type && c.reason === 'retracement_out_of_band')).toBe(true);
+		}
 	});
 });
