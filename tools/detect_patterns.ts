@@ -239,23 +239,22 @@ export default async function detectPatterns(
 			}
 		}
 
-		// includeForming / includeCompleted に基づくフィルタリング。
+		// status を 3 つの排他バケットに分け、対応する include* が立っているものだけ残す。
+		//
+		// **3 つは独立した包含スイッチで、入れ子ではない。** 旧実装は
+		// 「completed バケットに invalid を入れてから includeInvalid で引き算する」形だったため、
+		// `includeCompleted: false` + `includeInvalid: true` が**どちらも返さない**という
+		// 到達不能な組み合わせを作っていた（`includeInvalid` の説明文は「含める」と読める）。
+		//
 		// `expired`（issue #126）は「形成中だったが突破確認窓を使い切った」終端状態なので、
-		// forming 側ではなく invalid と同じ終端バケットに入れる。
-		let filteredPatterns = patterns;
-		if (!includeForming || !includeCompleted) {
-			filteredPatterns = patterns.filter((p) => {
-				const isForming = p.status === 'forming' || p.status === 'near_completion';
-				const isTerminal = p.status === 'completed' || p.status === 'invalid' || p.status === 'expired' || !p.status;
-				if (includeForming && isForming) return true;
-				if (includeCompleted && isTerminal) return true;
-				return false;
-			});
-		}
-		// includeInvalid に基づくフィルタリング（無効化済み + 期限切れ）
-		if (!includeInvalid) {
-			filteredPatterns = filteredPatterns.filter((p) => p.status !== 'invalid' && p.status !== 'expired');
-		}
+		// forming 側ではなく invalid と同じバケットに入れる。
+		const filteredPatterns = patterns.filter((p) => {
+			const isForming = p.status === 'forming' || p.status === 'near_completion';
+			const isInvalid = p.status === 'invalid' || p.status === 'expired';
+			// status 未設定は完成済み扱い（既存契約）
+			const isCompleted = p.status === 'completed' || !p.status;
+			return (includeForming && isForming) || (includeCompleted && isCompleted) || (includeInvalid && isInvalid);
+		});
 		patterns = filteredPatterns;
 
 		// statistics と data.patterns の対象集合を一致させるため、フィルタ後の patterns に対して実行する。

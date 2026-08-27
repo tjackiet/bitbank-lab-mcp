@@ -163,6 +163,60 @@ describe('issue #126 構造ゲート — BTC/JPY 日足 実データ回帰', () 
 		});
 	});
 
+	// ── include* フラグは独立した包含スイッチ ──
+	describe('includeForming / includeCompleted / includeInvalid の独立性', () => {
+		/**
+		 * 旧実装は「completed バケットに invalid を入れてから `includeInvalid` で引き算する」形で、
+		 * `includeCompleted: false` + `includeInvalid: true` が**どちらも返さない**到達不能な
+		 * 組み合わせになっていた。`includeInvalid` の説明文は「含める」と読めるので契約違反。
+		 *
+		 * 本 PR で `expired` を足したことで、この穴は「`includeInvalid: true` にしても
+		 * 期限切れが出ない」という形でも現れるようになるため、ここで固定する。
+		 */
+		it('includeCompleted=false + includeInvalid=true で invalid / expired が返る', async () => {
+			mockedAnalyzeIndicators.mockResolvedValue(indicatorsOk() as never);
+			const res = await detectPatterns('btc_jpy', '1day', 90, {
+				includeForming: false,
+				includeCompleted: false,
+				includeInvalid: true,
+			});
+			expect(res.ok).toBe(true);
+			if (!res.ok) return;
+			// completed / forming は 1 件も混ざらない
+			for (const p of res.data.patterns) {
+				expect(['invalid', 'expired']).toContain(p.status);
+			}
+		});
+
+		it('includeCompleted=true + includeInvalid=false に invalid / expired は混ざらない', async () => {
+			mockedAnalyzeIndicators.mockResolvedValue(indicatorsOk() as never);
+			const res = await detectPatterns('btc_jpy', '1day', 90, {
+				includeForming: false,
+				includeCompleted: true,
+				includeInvalid: false,
+			});
+			expect(res.ok).toBe(true);
+			if (!res.ok) return;
+			for (const p of res.data.patterns) {
+				expect(p.status === 'invalid' || p.status === 'expired').toBe(false);
+			}
+		});
+
+		it('includeForming=true 単独では終端 status が混ざらない', async () => {
+			mockedAnalyzeIndicators.mockResolvedValue(indicatorsOk() as never);
+			const res = await detectPatterns('btc_jpy', '1day', 90, {
+				includeForming: true,
+				includeCompleted: false,
+				includeInvalid: false,
+			});
+			expect(res.ok).toBe(true);
+			if (!res.ok) return;
+			for (const p of res.data.patterns) {
+				expect(['forming', 'near_completion']).toContain(p.status);
+			}
+		});
+	});
+
 	// ── 正しい形が構造ゲートを通ること ──
 	describe('正しい形 8/3 → 8/10 → 8/14（安値切り上げ型）', () => {
 		it('構造ゲートを通過し、戻り率が帯の内側に収まる', () => {

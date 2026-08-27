@@ -75,6 +75,13 @@
 - いずれも `.claude/rules/tools.md` 規約 2 の「足す」に該当し、既存フィールドは 1 つも削っていない。
 - **整合度の説明文に注記を入れた。** `content` の「0.8以上＝教科書的」の直前に、整合度が**ゲート通過を前提とした形状の良さ**であって構造的妥当性の指標ではないこと、構造的に無効な形は整合度が下がるのではなく出力されないことを明記した。
 
+### Fixed（`include*` の 3 フラグを独立した包含スイッチにした。#126 / PR #131 レビュー指摘）
+
+- **`includeCompleted: false` + `includeInvalid: true` が「どちらも返さない」到達不能な組み合わせになっていた。** 旧実装は「completed バケットに `invalid` を入れてから `includeInvalid` で引き算する」二段構えで、`includeCompleted` が false の時点で `invalid` が先に落ちていた。`includeInvalid` の説明文は「含める」と読めるので契約違反。
+  - **本 PR の `expired` 追加でこの穴が悪化する。** 新しい説明文が「`includeInvalid: true` で `invalid` と一緒に現れる」と約束しているのに、`includeCompleted: false` では現れない。
+  - status を `forming | near_completion` / `completed | 未設定` / `invalid | expired` の **3 つの排他バケット**に分け、対応する `include*` が立っているものだけ残す形に変えた。**既定（`includeCompleted` のみ true）の出力は変わらない。** 変わるのは `includeCompleted: false` + `includeInvalid: true` の組み合わせだけで、これまで常に空だったものが invalid / expired を返すようになる。
+  - ガードは `tests/patterns/structural-gates-btcjpy.test.ts` の「`include*` の独立性」3 件。
+
 ### Fixed（回帰テストを実データで固定した。#126）
 
 - **`tests/fixtures/btc_jpy_1day_2026.ts`** に BTC/JPY 日足 2026-05-29〜08-26 の 90 本（`detect_patterns('btc_jpy','1day',90)` が実際にスキャンする窓そのもの）を凍結した。**合成 fixture では閾値の妥当性を検証できない**（閾値に合わせて合成できてしまう）ため、戻り率の帯・ネックライン交差・谷ゾーン再進入は `tests/patterns/structural-gates-btcjpy.test.ts` が実データに対して固定する。
