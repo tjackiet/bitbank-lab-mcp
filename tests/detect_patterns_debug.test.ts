@@ -285,15 +285,17 @@ describe('detect_patterns: triangle の分類前ラベル（#129）', () => {
 		assertOk(res);
 		const cands = (res.meta.debug?.candidates ?? []).filter((c) => TRIANGLE_CANDIDATE_LABELS.includes(c.type as never));
 		expect(cands.length, '三角形系の候補が 0 件では検証にならない').toBeGreaterThan(0);
-		for (const c of cands) {
-			if (PRE_CLASSIFICATION_REASONS.includes(c.reason as never)) {
-				expect(c.type, `具体型が決まらない棄却なのに具体型ラベル: ${JSON.stringify(c)}`).toBe('triangle');
-			} else {
-				expect(c.type, `型が決まっているのに umbrella ラベル: ${JSON.stringify(c)}`).not.toBe('triangle');
-			}
-			// 要求外の棄却は候補フィルタで落ちるので、呼び出し側には届かない
-			expect(c.reason, `要求外の候補が届いている: ${JSON.stringify(c)}`).not.toBe('type_not_requested');
-		}
+		// 条件分岐の中で expect を呼ばない（vitest/no-conditional-expect）。
+		// 違反した候補を集めてから 1 度だけ突き合わせる——落ちたときにどれが違反かも出る。
+		const mislabeled = cands.filter((c) =>
+			PRE_CLASSIFICATION_REASONS.includes(c.reason as never) ? c.type !== 'triangle' : c.type === 'triangle',
+		);
+		expect(mislabeled, '具体型が決まらない棄却 ⇔ umbrella ラベルの対応が崩れている').toEqual([]);
+		// 要求外の棄却は候補フィルタで落ちるので、呼び出し側には届かない
+		expect(
+			cands.filter((c) => c.reason === 'type_not_requested'),
+			'要求外の候補が届いている',
+		).toEqual([]);
 	});
 
 	it('分類前の棄却は具体型ではなく umbrella ラベル triangle で積まれる', async () => {
