@@ -508,8 +508,23 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 上限 200 件のトリムで**要求した種別の棄却理由が押し出されていた**。
 
 照合は入力エイリアスを展開して行う（`triangle` → 3 種、`flag` / `pennant` → 各 2 種）。
-候補ラベル側にも方向・形状の分類前に付く umbrella ラベルがあり（`detect_pennants` は分類前の
-棄却をすべて `flag` で積む）、こちらは flag / pennant の**両方**を覆うものとして扱う。
+候補ラベル側にも方向・形状の分類前に付く **umbrella ラベル**があり、入力エイリアスとは
+被覆が異なる:
+
+| umbrella ラベル | 積む検出器 | 覆う具体 type |
+|---|---|---|
+| `flag` | `detect_pennants`（分類前の棄却をすべてこのラベルで積む） | `bull_flag` / `bear_flag` / `bull_pennant` / `bear_pennant`（flag / pennant の**両方**） |
+| `triangle` | `detect_triangles`（`poor_trendline_fit` / `classification_failed` はどの三角形になりえたかが決まる前の棄却） | `triangle_ascending` / `triangle_descending` / `triangle_symmetrical` |
+
+`detect_wedges` は umbrella ラベルを持たない。棄却の大半は `rising_wedge` / `falling_wedge` に
+分類済みのラベルで積まれる。ただし `r2_below_threshold`（回帰の当てはまり不足）と
+`type_classification_failed`（傾き比の条件を満たさない）の **2 箇所**は、**上下の傾きから
+種別を推定して**ラベルを付けており、傾きの向きが揃わない窓は `triangle_symmetrical` として
+積まれる。これはウェッジ走査の棄却であって三角形の候補ではない——ラベルと実体がずれている
+既知のケース（#129 の対象外。umbrella の `wedge` が `PatternFilterEnum` に無いため別途の
+検討が要る）。**2 箇所が同じ推論を持っているので、直すときは両方**。
+
+**`candidates[].type` は「その候補がどの種別になりえたか」であって、必ずしも確定した種別ではない。**
 
 候補が 0 件のときは「この窓で要求種別の候補が 1 つも組まれなかった」の意で、
 `content` にもその旨が出る。**「パターンが無い」ではない。**

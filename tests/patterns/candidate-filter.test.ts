@@ -7,7 +7,7 @@
  *   1. `want` が空（= `patterns` 未指定）なら 1 件も落とさない（順序も保つ）
  *   2. 要求した種別の候補が残る
  *   3. 要求していない種別の候補が落ちる
- *   4. 分類前ラベル（'flag'）は覆う具体 type のいずれかが要求されていれば残る
+ *   4. 分類前ラベル（'flag' / 'triangle'）は覆う具体 type のいずれかが要求されていれば残る
  *   5. 入力エイリアス（'flag' / 'pennant' / 'triangle'）が展開される
  */
 import { describe, expect, it } from 'vitest';
@@ -57,6 +57,25 @@ describe('filterCandidatesByWant', () => {
 
 	it("分類前ラベル 'flag' は無関係な種別の要求では残らない", () => {
 		expect(filterCandidatesByWant([cand('flag')], new Set(['double_top']))).toEqual([]);
+	});
+
+	// detect_triangles は 3 種の分類が確定する前の棄却をすべて 'triangle' ラベルで積む（#129）。
+	// ここが効かないと `patterns=['triangle_ascending']` で棄却理由が 1 件も届かない。
+	it("分類前ラベル 'triangle' は三角形 3 種のどの要求でも残る", () => {
+		for (const want of ['triangle_ascending', 'triangle_descending', 'triangle_symmetrical']) {
+			expect(filterCandidatesByWant([cand('triangle')], new Set([want])), want).toHaveLength(1);
+		}
+	});
+
+	it("分類前ラベル 'triangle' は無関係な種別の要求では残らない", () => {
+		for (const want of ['double_top', 'rising_wedge', 'bull_pennant']) {
+			expect(filterCandidatesByWant([cand('triangle')], new Set([want])), want).toEqual([]);
+		}
+	});
+
+	it("入力エイリアス 'triangle' は分類前ラベルの候補も残す", () => {
+		const input = [cand('triangle'), cand('triangle_ascending')];
+		expect(filterCandidatesByWant(input, new Set(['triangle']))).toEqual(input);
 	});
 
 	it("入力エイリアス 'flag' は bull_flag / bear_flag の候補を残す", () => {
@@ -137,6 +156,32 @@ describe('schema との整合', () => {
 	it('すべての出力 type は自分自身の要求で残る', () => {
 		for (const t of outputTypes) {
 			expect(filterCandidatesByWant([cand(t)], new Set([t])), t).toHaveLength(1);
+		}
+	});
+
+	// umbrella ラベルは「分類前の棄却をまとめて積む口」なので、その種別ファミリを
+	// **取りこぼしなく**覆っていないと意味が無い。enum に新しい三角形 / flag 系の type を
+	// 足したのに写像を更新し忘れると、その type を要求した呼び出しに分類前の棄却が届かなくなる
+	// （#129 で実際に起きた症状の再発経路）。接頭辞で機械的に突き合わせて固定する。
+	it.each([
+		['triangle', /^triangle_/],
+		['flag', /^(bull|bear)_(flag|pennant)$/],
+	] as const)('umbrella ラベル %s は同じファミリの出力 type を過不足なく覆う', (label, family) => {
+		const expected = [...outputTypes].filter((t) => family.test(t)).sort();
+		expect(expected.length, `${label}: ファミリの出力 type が 0 件では検出にならない`).toBeGreaterThan(0);
+		expect([...CANDIDATE_LABEL_COVERAGE[label]].sort()).toEqual(expected);
+	});
+
+	// 入力エイリアスと candidate ラベルは別写像だが、同じ語である以上
+	// **ラベル側が入力側より狭いことはありえない**（狭いと、そのエイリアスで要求したのに
+	// 分類前の棄却が落ちる）。逆に広いのは許容（'flag' が pennant まで覆う既存ケース）。
+	it('同じ語の candidate ラベルは入力エイリアスの展開を必ず含む', () => {
+		for (const [key, expansion] of Object.entries(INPUT_ALIAS_EXPANSION)) {
+			const coverage = CANDIDATE_LABEL_COVERAGE[key];
+			expect(coverage, `${key} が candidate ラベル写像に無い`).toBeDefined();
+			for (const t of expansion) {
+				expect(coverage.includes(t), `${key} → ${t} がラベル側で覆われていない`).toBe(true);
+			}
 		}
 	});
 });

@@ -15,21 +15,39 @@
  * ## ラベルの被覆は入力エイリアスと一致しない
  *
  * candidate の `type` は「その候補がどの種別になりえたか」を表すラベルで、
- * **方向・形状の分類前に積まれるものがある**。とくに `detect_pennants` は分類前の棄却を
- * すべて `type: 'flag'` で積むため、このラベルは flag だけでなく pennant も覆う。
+ * **方向・形状の分類前に積まれるものがある**。分類前の棄却は umbrella ラベル
+ * （`'flag'` / `'triangle'`）で積む約束で、このラベルが覆う具体 type を
+ * `CANDIDATE_LABEL_COVERAGE` に持つ。
+ *
+ * - `detect_pennants`: 分類前の棄却をすべて `type: 'flag'` で積む。このラベルは
+ *   flag だけでなく pennant も覆う。
+ * - `detect_triangles`: 分類前の棄却（`poor_trendline_fit` / `classification_failed`）を
+ *   `type: 'triangle'` で積む。このラベルは三角形 3 種を覆う。
+ *
  * 入力エイリアス（schema の `PATTERN_FILTER_ALIASES`）の `'flag' → bull_flag + bear_flag`
- * とは別物なので、2 つの写像を分けて持つ。
+ * とは被覆が違うので、2 つの写像を分けて持つ。
  *
- * ## 既知のギャップ（#129）
+ * `detect_wedges` は umbrella ラベルを持たない。棄却の大半は
+ * `validateRegressionCandidate` の引数 `wedgeType`（`'rising_wedge' | 'falling_wedge'`）で
+ * 積んでおり、呼び出し元で**分類済み**。ラベルは実際の型と一致している。
  *
- * `detect_triangles` / `detect_wedges` は分類前の棄却を具体型 `triangle_symmetrical` で
- * 積んでいる（umbrella ラベルを使っていない）。そのため `patterns=['triangle_descending']`
- * では candidates が 0 件になる——検出器は実際に走査・棄却しているのに理由が届かない。
+ * ただし `detectRegressionWedges` には**同じ傾き推定でラベルを決めている push が 2 箇所**あり
+ * （`r2_below_threshold` と `type_classification_failed`）、どちらも傾きの向きが揃わない窓を
+ * `triangle_symmetrical` として積む。**ウェッジ走査の棄却なのに三角形のラベルが付く**
+ * （#129 の対象外。umbrella の `'wedge'` が `PatternFilterEnum` に無いため、直すにはまず
+ * 入力語彙を足すかを決める必要がある）。**直すときは 2 箇所とも直すこと**——片方だけ直すと
+ * 同じ推論が残って症状が半分だけ残る。
  *
- * 直すべきは**ラベル側**（push を `'triangle'` にする）であって本モジュールではない。
- * ここで `triangle_symmetrical` を三角形 3 種に被覆させると、対称三角形を要求していない
- * 呼び出しにまで対称三角形の候補を返してしまう（規約「want に含まれない種別の candidate が
- * 出ない」に反する）。ラベル変更は `patterns` 未指定時の candidates 出力を変えるため #129 で扱う。
+ * ## 直すのはラベル側であってこのモジュールではない（#129）
+ *
+ * `detect_triangles` はかつて分類前の棄却を具体型 `triangle_symmetrical` で積んでいたため、
+ * `patterns=['triangle_descending']` では candidates が 0 件になっていた——検出器は実際に
+ * 走査・棄却しているのに理由が届かなかった。#129 で push 側を `'triangle'` に変えて解消した。
+ *
+ * ここで `triangle_symmetrical` を三角形 3 種に被覆させる案は採らなかった。それをすると
+ * 対称三角形を要求していない呼び出しにまで対称三角形の候補（分類**後**の棄却・採用を含む）を
+ * 返してしまい、規約「want に含まれない種別の candidate が出ない」に反する。
+ * 新しい検出器を足すときも同じ——分類前の棄却は umbrella ラベルで積むこと。
  */
 
 /**
@@ -50,6 +68,7 @@ export const CANDIDATE_LABEL_COVERAGE: Readonly<Record<string, readonly string[]
 	// detect_pennants は方向・形状の分類前の棄却をすべてこのラベルで積む（flag / pennant 両方）。
 	flag: ['bull_flag', 'bear_flag', 'bull_pennant', 'bear_pennant'],
 	pennant: ['bull_pennant', 'bear_pennant'],
+	// detect_triangles は 3 種の分類が確定する前の棄却をこのラベルで積む（#129）。
 	triangle: ['triangle_ascending', 'triangle_descending', 'triangle_symmetrical'],
 };
 

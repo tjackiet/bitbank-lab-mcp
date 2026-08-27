@@ -7,6 +7,60 @@
 
 ## [Unreleased]
 
+### 読む順（`detect_patterns` 系の一連の変更。#114 → 本 PR）
+
+**以下の `detect_patterns` 系エントリは 1 本の連続した作業で、起点は #114 の「スキャン窓を直近 `limit` 本に一致させた」変更。** 個々のエントリは新しい順に並んでいるため、逆順に全部読まないと話が再構成できない。ここに時系列の索引を置く（**各エントリの本文は削っていない**——判断根拠と却下案がリリース後に効く資産なので）。
+
+| 順 | PR | 変更 | `data.patterns` |
+|---|---|---|---|
+| 1 | #114 | **起点。** スキャン窓を `limit + 199` 本から直近 `limit` 本に一致させた。以降の「窓が狭い」系の問題はすべてここから派生する | 減る |
+| 2 | #117 | 窓が構造上狭すぎるとき `limit_too_small_for_timeframe` を申告 | 変わらない |
+| 3 | #119 | ツール description に検出の意味論を明記 | 変わらない |
+| 4 | #120 | 検出器ごとの最小要求バー数を単一ソース化し、到達性を機械的に固定 | 変わらない |
+| 5 | #121 | 閾値のプリミティブを日数からバー数に統一し、上限クランプを入れた | 変わる |
+| 6 | #122 | 形成中 double / H&S の手書き `daysPerBar` を廃止しバー基準に統一 | 変わる |
+| 7 | #123 | `limit` を**上げる**方向の使い分けをツール表面に明記 | 変わらない |
+| 8 | #128 | `view=debug` の可観測性（#124）と pivot の価格基準の透明化（#125 前半）、用語の陳腐化（#127 の一部） | 変わらない |
+| 9 | #131 | ダブルトップ / ボトムの構造ゲート、`status='expired'`、`include*` の独立化、実データ回帰 fixture | 変わる |
+| 10 | #132 | ダブルボトムの偽陰性を 3 つの原因ごとに解消 | 増える |
+| 11 | #135 | dedup の勝者選択を `statusScore` 最優先に揃えた | 変わる |
+| 12 | #136 | 構造的ピボット間隔の床（`= 5`）の妥当性を実測で判定し据え置きを確定 | 変わらない |
+| 13 | 本 PR | 三角形の分類前 candidate ラベルを umbrella 化（#129）、`limit=180` の判定と CI ジョブ名の注記（#127 の残り） | 変わらない |
+
+### Changed（`detect_patterns` の三角形の分類前 candidate ラベルを umbrella 化した。**`data.patterns` は変わらない**。#129）
+
+- **`view=debug` の `candidates[].type` が変わる。** `detect_triangles` は 3 種（ascending / descending / symmetrical）の分類が確定する**前**にも候補を棄却するが、その 2 箇所（`poor_trendline_fit` / `classification_failed`）が `type: 'triangle_symmetrical'` をハードコードしていた。対称三角形とは限らない候補に対称三角形のラベルが付くため、`tools/patterns/candidate-filter.ts` の絞り込みで落ち、**`patterns=["triangle_ascending"]` / `["triangle_descending"]` には分類前の棄却理由が 1 件も届かなかった**（検出器は実際に走査・棄却している）。umbrella ラベル `'triangle'` に変えた。`CANDIDATE_LABEL_COVERAGE.triangle` が三角形 3 種を覆うので、3 種のどれを要求しても届く。
+  - **実測**（fixture 22 件 × オプション 8 通り × 時間足 2 種 × `swingDepth` 2 種 × `patterns` 7 通り = **4,928 ケース**を変更前後でダンプ）:
+
+    | | 変更前 → 変更後 |
+    |---|---|
+    | `data.patterns` の差分 | **0 ケース**（全ケースで deep equal） |
+    | `patterns` 未指定の candidates | 件数・`accepted` / `reason` / `indices` の列とも **完全一致**。`type` 文字列のみ `triangle_symmetrical` 756 → `triangle` 480 + `triangle_symmetrical` 276 |
+    | `patterns=["triangle_ascending"]` | 108 件 → **1,020 件**（`poor_trendline_fit` 480 / `classification_failed` 432 が新たに届く） |
+    | `patterns=["triangle_descending"]` | 80 件 → **1,088 件**（同 480 / 528） |
+    | `patterns=["triangle_symmetrical"]` / `["triangle"]` | 件数不変（1,012 / 944。umbrella ラベルが同じ集合を覆うため） |
+
+- **あわせて棄却理由を `classification_failed` と `type_not_requested` に分けた（レビュー指摘）。** 分類判定（`detect_triangles.ts`）は `want` をゲートに含んでいる——`flatThreshold`(0.03) > `moveThreshold`(0.015) なので `upperFlat` と `upperFalling` は同時に真になりうる（相対傾き -0.03〜-0.015）。1 つの窓が複数の分岐条件を満たすため、`want` を外すと**選ばれる型が変わる**（= `patterns` 指定の有無で検出結果が変わる）。したがって `triangleType === null` には「形が成立しない」と「形は成立するが要求外」が混ざる。
+  - umbrella ラベル化の前は後者もフィルタで落ちていたが、**ラベルを `'triangle'` にした結果それが通過し、正常に分類できる窓が `classification_failed` として届くようになっていた**（`patterns=["triangle_ascending"]` に対称三角形の窓が「分類失敗」で届く）。可観測性を上げるはずの変更が偽の理由を足していた。
+  - `want` を外した分類を**別に**取って振り分ける形にした。形が成立する → `type_not_requested` を**具体型ラベル**で積む（`detect_wedges` の同名 reason と同じ idiom。要求外の型なので候補フィルタで落ち、要求した型のノイズにならない）。形も成立しない → `classification_failed` を umbrella ラベルで積む。**検出に使う `triangleType` は `want` ゲート込みのまま**なので `data.patterns` は 1 件も動かない。
+  - 実測（同じ 4,928 ケース）: 偽の `classification_failed` が `patterns=["triangle_ascending"]` で 432 → **0 件**、`["triangle_descending"]` で 528 → **0 件**、`["triangle_symmetrical"]` で 224 → **0 件**。本来の目的だった `poor_trendline_fit` 480 件は 3 種すべてに届いたまま。`patterns` 未指定の candidates は件数・理由コードとも main から不変（全種別が要求されているので `type_not_requested` は 1 件も出ない）。
+  - **`want` ゲートを外して分類を独立させる案は採らなかった。** 分岐条件が重なる以上、`patterns` 指定の有無で `data.patterns` が変わる検出セマンティクスの変更になる。本エントリの受け入れ条件（検出結果ゼロ変更）を外れるため、`want` ゲート自体は維持し、理由コードの振り分けだけを直した。
+  - **`candidate-filter.ts` 側で `triangle_symmetrical` を 3 種に被覆させる案は採らなかった。** それをすると対称三角形を要求していない呼び出しに、分類**後**の棄却・採用まで含む対称三角形の候補が返ってしまい、規約「`want` に含まれない種別の candidate が出ない」に反する。直すのはラベル側。
+  - **#128 で分けた理由と、今回実施できる理由。** #128 の受け入れ条件は「`patterns` **未指定**時の candidates が変更前と同一」で、`type` 文字列が変わるラベル変更はこれに抵触した。本エントリはその制約を持たないので実施できる（**件数と理由コードは不変**、変わるのは `type` 文字列のみ）。
+  - **`detect_wedges` は対象外。** #129 と `candidate-filter.ts` の docstring は「`detect_triangles` / `detect_wedges` が具体型で積んでいる」と書いていたが、`detect_wedges` の該当 push は `validateRegressionCandidate` の引数 `wedgeType`（`'rising_wedge' | 'falling_wedge'`）で、呼び出し元で**分類済み**。ラベルは実際の型と一致している。docstring を実態に合わせて訂正した。
+  - **別のラベルずれを見つけたが、本 PR では直していない。** `detectRegressionWedges`（`tools/patterns/detect_wedges.ts`）には**同じ傾き推定でラベルを決めている push が 2 箇所**あり（`r2_below_threshold` と `type_classification_failed`）、どちらも傾きの向きが揃わない窓を `triangle_symmetrical` として積む。**ウェッジ走査の棄却なのに三角形のラベルが付く**ため、`patterns=["triangle_symmetrical"]` にウェッジ窓の棄却が混ざり、`patterns=["rising_wedge"]` / `["falling_wedge"]` からは同じ棄却が抜ける。#129 は「分類前の棄却に umbrella ラベルを使う」話でこちらは「別種別のラベルを流用している」話なので原因が違い、直すには umbrella の `'wedge'` を `PatternFilterEnum` に足すか（公開契約の追加）を先に決める必要がある。`docs/tools.md` と `candidate-filter.ts` の docstring に既知として明記するに留めた（**2 箇所とも直す必要がある**ことも併記した——片方だけ直すと同じ推論が残って症状が半分だけ残る）。
+  - ガードは `tests/patterns/candidate-filter.test.ts`（umbrella ラベルが同ファミリの出力 type を接頭辞で過不足なく覆うドリフト検出）と `tests/detect_patterns_debug.test.ts`（分類前の棄却が具体型で積まれていないこと / 具体型ラベルに分類前の理由が付かないこと / `patterns` 未指定と `patterns=["triangle"]` で三角形系候補の件数・理由コードが一致すること）。
+
+### Changed（#127 の残り: プロンプトの `limit` 判定と CI ジョブ名の注記。**挙動変更なし**）
+
+- **`src/prompts/intermediate.ts` の「中級：BTCのパターン分析をして」の `limit=180` は据え置いた。** #114 以前この呼び出しは指標 warmup 込みの 379 本を走査していて、実効的な観測期間が 379 → 180 本に半減していた。`limit=180` と `limit=360` を比較して判定した結果、**このプロンプトのオプションでは出力が一致する**。
+  - 決め手は `requireCurrentInPattern=true` + `currentRelevanceDays=80`。`range.end` が 80 日以内のものしか残らず、1day で検出されうる span は有界（形成中 double 148 本 / 形成中ウェッジ 138 本 / 完成済みウェッジ・三角形の窓 90 本 / flag・pennant 46 本。`patterns/bar-thresholds.ts`）なので、**形成中は最大 149 本、完成済みは「経過 80 + 窓 90」= 170 本**あれば足りる。どちらも 180 に収まる。
+  - **span が有界な種別については 360 本にしても結果は増えない**——増える検出は `range.end` が 80 日より古く、プロンプト自身の relevance フィルタが落とす（合成系列 6 本で実測。フィルタを外すと 360 側だけ 241 本前のパターンが 1 件増える）。
+  - **ただし「360 でも必ず同じ答え」ではない（レビュー指摘）。** 完成済み double / triple / H&S は構成点間隔に上限が無く、relevance フィルタが見るのは `range.end` だけなので、**構成点が 180 本超にまたがっていて `range.end` が直近 80 日以内**というパターンは 360 でだけ出る。180 に対する 360 の増分はここに限られる。
+  - それでも据え置くのは、そのマクロなパターンがこのプロンプトの対象ではないため（「完成後80日超 → 無視」「完成後40日超 → 最大🟡中」という核心ルールは直近の形を見る設計で、数ヶ月にまたがる構成点の大型パターンを扱うなら `currentRelevanceDays` ごと設計し直す話になる）。全呼び出しの取得コストを倍にして得られるのがその一種類だけなら割に合わない。判定の根拠はプロンプト定義の直上にコメントとして残した。
+- **`.github/workflows/ci.yml` の唯一のジョブ名 `typecheck` にコメントを入れた。** このジョブは lint / format-check / banned-patterns / `npm test` / `test:coverage` をすべて実行しており、**チェック名が実態を過小に表しているせいで「CI でテストが走っていないのでは」と実際にレビューで誤解された**（PR #131）。`ci` 等への改名はブランチ保護の required check 名に影響し、リポジトリ設定の更新とセットでないと PR がマージ不能になるため、**本 PR では改名しない**。名前を据え置く理由をワークフローに明記するに留めた。
+- **CHANGELOG の `[Unreleased]` は集約ではなく索引にした**（本セクション冒頭「読む順」）。各エントリの本文には却下案と実測が入っていて、要約すると根拠が落ちるため。
+
 ### Changed（構造的ピボット間隔の床（`STRUCTURAL_PIVOT_GAP_FLOOR_BARS = 5`）の妥当性を実測で判定し、据え置きを確定した。**検出結果は変わらない**。#134）
 
 **床を外した場合の増分 +72 件を 1 件ずつ判定した結果、誤検出側が多数（ケース数で 誤検出・冗長 48 / 灰色 16 / 正しい検出 8）だったため、値は据え置いた。** コード変更は docstring のみ（#132 が「未検証」と明記していた箇所を判定結果で置き換えた）。`docs/tools.md` の 2 表・`patterns/min-bars.ts` の導出値・到達性テストは値が変わらないため更新なし。
@@ -245,7 +299,7 @@ status が変わったのは **forming → 完成済み（status 未設定）が
 - **`priceBasis: "close" | "extreme"` パラメータ（#125 後半）は入れていない。** 既定値の選択で検出結果が変わる大きな変更であり、#126 が終わって挙動が安定してから必要性を判断する。**#125 は透明化のみ完了で、パラメータ化は保留。**
 
 ### Fixed（用語の陳腐化。#127 の一部）
-- **`tools/patterns/scan-window.ts` の `buildScanWindowWarning` の docstring が「日数ベースの閾値は別途かかる」のままだったのを修正した。** #121 で閾値のプリミティブがバー数になっている（`patterns/bar-thresholds.ts`）。#127 の残り（prompts の `limit=180`、CHANGELOG 集約）は本 PR の対象外。
+- **`tools/patterns/scan-window.ts` の `buildScanWindowWarning` の docstring が「日数ベースの閾値は別途かかる」のままだったのを修正した。** #121 で閾値のプリミティブがバー数になっている（`patterns/bar-thresholds.ts`）。このエントリを書いた PR（索引 8 行目 / #128）は #127 の残りには手を付けていない。**残り（prompts の `limit=180`、CHANGELOG 集約、CI ジョブ名）は索引 13 行目の PR で完了済み**——下の「#127 の残り」エントリを参照。
 
 ### Changed（`detect_patterns` の `limit` に「上げる」方向の使い分けを明記）
 - **ツール description と `inputSchema.limit.describe()` に `limit` を上げる動機を 1 点ずつ追記した（文言のみ・挙動変更なし）。** #119 / #121 で `limit` の意味論を両方に明記したが、**いずれも下限の話しか書いていない**（`limit_too_small_for_timeframe`、構造的下限、種別が静かに 0 件になる下限の表）。「`limit` を上げると何が得られるか」「いつ上げるべきか」がツール表面のどこにも無く、LLM も利用者も既定 90 から動かす判断ができなかった。
