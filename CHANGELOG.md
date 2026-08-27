@@ -7,6 +7,41 @@
 
 ## [Unreleased]
 
+### Changed（構造的ピボット間隔の床（`STRUCTURAL_PIVOT_GAP_FLOOR_BARS = 5`）の妥当性を実測で判定し、据え置きを確定した。**検出結果は変わらない**。#134）
+
+**床を外した場合の増分 +72 件を 1 件ずつ判定した結果、誤検出側が多数（ケース数で 誤検出・冗長 48 / 灰色 16 / 正しい検出 8）だったため、値は据え置いた。** コード変更は docstring のみ（#132 が「未検証」と明記していた箇所を判定結果で置き換えた）。`docs/tools.md` の 2 表・`patterns/min-bars.ts` の導出値・到達性テストは値が変わらないため更新なし。
+
+#### 実測（704 ケース比較の再実施）
+
+`pivotGapBars = minBarsBetweenSwings`（床なし）でビルドし、PR #131 / #132 / #135 と同じ **fixture 22 件 × オプション 8 通り × 時間足 2 種 × `swingDepth` 2 種 = 704 ケース**を `main`（24db879）と突き合わせた。床が効く経路はすべて `structuralFloorBars`（= `assessScanWindow(0, …).minViableLimit`）経由で、床を外すと構造的下限が `1day` 23 → 21 / `1hour` 17 → 11、上限の基数 `patternBarsCap` が `1day` 46 → 42 / `1hour` 34 → 22 に縮む。
+
+| | 値 |
+|---|---|
+| パターン総数 | 320 → **392**（純増 **+72**。#132 時点の切り分け実測 312 → 384 と同じ増分） |
+| 純増の実体 | **9 パターン × オプション 8 ケース = 72** |
+| 既存パターンの range 付け替え | **10 実体 × 8 = 80 ケース**（wedge / triangle の窓サイズ集合が変わり開始 / 終了がずれる。種別・status・件数は不変） |
+| 整合度のみの変化 | **8 ケース**（`DescendingTriangleInvalidBreakout` 1day の invalid triangle、0.82 → 0.85） |
+
+#### 純増 9 実体の判定（種別 × 時間足 × fixture）
+
+| 種別（status, 整合度） | 時間足 | fixture | 判定 | 根拠 |
+|---|---|---|---|---|
+| double_bottom（forming, 0.93） | 1hour | FormingDoubleBottom | **正しい（唯一）** | 1day で検出済みの同一構成点（谷 77 / 78 = Δ0.99%、山 104、ネックライン 101、formationBars 25）。1hour は形成バー数下限が cap に吸収されて 34 本になっており、床なしで 22 本に下がると通る |
+| rising_wedge（forming, 0.90） | 1hour | AsymmetricNecklineIHS | 誤検出 | 素の安値列 80 → 64 → 80 は切り上がっておらず、平滑化後の回帰だけが成立させる。データは hard reject 済みの非対称ネックライン逆三尊 |
+| triangle_ascending（forming, 0.64） | 1hour | RectangleRange | 誤検出 | 「三角形と誤検出しない」ことを固定するための矩形 fixture（安値 97〜99 は水平）。三角形の最小窓 17 → 11 で 12 本窓（idx 9..20）が走査対象になり、ノイズ傾きが「上昇サポート」に化ける |
+| triangle_symmetrical（completed, 0.75） | 1day | AsymmetricNecklineHS | 誤検出寄り | H&S の谷1-頭-谷2-右肩（97 / 143 / 105 / 123）をタッチ 2+2 の最小構成で三角形と読み替えたもの。下方「ブレイク」は H&S 完成の値動きそのもの |
+| triangle_symmetrical（completed, 0.67） | 1day | CompletedHeadAndShoulders | 誤検出（冗長） | 同一区間に head_and_shoulders completed（整合度 0.99）が既に居る。頭 → 右肩（143 → 129 / 谷 107 → 109）への重複ラベル |
+| triangle_symmetrical（completed, 0.91）× 2 実体 | 1hour | BullPennantSuccess / BullPennantFailure | 灰色 | 収束・タッチ交互は本物（高値 168 → 160.8 切り下げ / 安値 151 → 154 切り上げ）だが、正しいラベルは 1day と同じ bull_pennant。1hour では旗竿 6 本 < `poleMinBars` 22 で pennant が床の有無と無関係に到達不能なため三角形として出る。Failure 側は下方ブレイクが「success」になり、pennant の「failure（ダマシ）」と意味が逆転する |
+| triple_top（forming, 0.59） | 1day | FormingAscendingTriangle | 誤検出（冗長） | 同 fixture には triple_top near_completion（0.98、127 の水平レジスタンス 3 山）が既に居る。同じレジスタンスの後ろ 2 山（idx 11 / 18）だけを取り直した低整合度の重複。範囲重複 36% で `globalDedup`（70% 閾値）を素通しする |
+| triple_top（forming, 0.59） | 1hour | UptrendThenFakeDoubleBottom | 誤検出寄り | 上昇トレンド終端の 2 山 245 / 246（山1 はレジスタンス拒否の実績が無いトレンド終端）に対し、直近終値 248 が既に両山の上。3 山目の拒否を予告する forming として弱い |
+
+#132 の切り分け（「増加は double と無関係」）への補足: #132 で検出器のピボット間隔を `ctx.minDist` に統一した後の現行 main では、増分に 1hour の forming double_bottom（上表 1 行目）が 1 実体加わる。
+
+#### 据え置きの帰結と残した観測
+
+- 唯一の正しい検出（1hour の形成中 double）を塞いでいる直接の壁は床そのものではなく、**日数 → バー換算が intraday で cap（= 床 × 2）に吸収され、形成バー数の「下限」が cap と同値になる**こと（`patternBarRange('1hour', 14, 90)` の minBars = 34 は `raw 336` のクランプ結果）。床を動かさずに intraday の形成バー数下限だけを狙って直す余地はある（#118 系の残件として観測のみ。実装しない）。
+- あわせて **#125 後半（`priceBasis: "close" | "extreme"` パラメータ）は導入しない**と判断した（根拠は #125 のコメント）。#131 / #132 で価格基準は判定カテゴリごとに固定済み——値幅系（サイズ検査・戻り率・谷ゾーン）は `extremePrice`、水準同一性（同水準判定）とライン系（ネックライン・ブレイク確認）は終値。この使い分け自体が #131 の実測から導かれたもので、パイプライン全体を単一基準に切り替えるパラメータはその実測結果と両立しない。
+
 ### Fixed（`detect_patterns` の dedup が status を見ず、形成中が完成済みを押し出していた。#133）
 
 **`includeForming: true` + `includeCompleted: true` のとき、同一構成点に完成済みと形成中の両方が成立すると、ネックライン突破が確定済みでも形成中だけが返っていた。** BTC/JPY 日足の実データ（構成点 8/3 → 8/10 → 8/14、突破 8/19 = idx 82）で、明示的に完成済みを要求した呼び出し側が `forming`（整合度 1.00）を受け取り、完成済み（同 0.96）は捨てられていた（#132 で「既知の不整合」としてテストに凍結していたもの）。
