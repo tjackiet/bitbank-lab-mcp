@@ -55,11 +55,11 @@
 - **検出器側の 5 は取り残し。** 同じ反転系の `detect_triples` / `detect_hs` は当時から `ctx.minDist` をそのまま使っており、値の根拠を書いた comment もテストも無い。公開パラメータ `minBarsBetweenSwings` が double にだけ効かない状態だったので、**`ctx.minDist` に寄せて定数を削除した**。
 - **式側の max は検出器の写しではなく、別の役割で load-bearing。** `assessScanWindow` の `minViableLimit` は `patterns/bar-thresholds.ts` の `structuralFloorBars` の**唯一の入力**で、そこから `patternMinBars` / `patternBarsCap` を経由して**全検出器のパターンサイズ閾値**（`docs/tools.md` §2 の表）が決まる。床を外すと `minBarsBetweenSwings < 5` の 9 時間足で構造的下限が縮み、**double と無関係の triangle / wedge / triple が一斉に緩む**（実測: 704 ケース中 **104 ケース**が変化、パターン総数 312 → **384**）。
 
-そこで**床は据え置き、所有権だけ移した**。`detect_doubles` からの再 export をやめ、`scan-window.ts` 自身が `STRUCTURAL_PIVOT_GAP_FLOOR_BARS` として持つ。値も `docs/tools.md` の 2 つの表も `patterns/min-bars.ts` の導出値も**変わらない**。「検出器のピボット間隔＝`minBarsBetweenSwings`」「パターンサイズ閾値の基準点＝床付きの構造的下限」と意味が 1 つずつになったので、二重管理そのものは解消している。**床を外すかどうかは #130 のスコープ外**として据え置いた（外す場合は 2 つの表・`min-bars.ts`・到達性テストが同時に動く）。副作用として §1 の構造的下限は `minBarsBetweenSwings < 5` の時間足で実際の検出器より 1〜4 本ぶん保守的になる（警告としては安全側）。
+そこで**床は据え置き、所有権だけ移した**。`detect_doubles` からの再 export をやめ、`scan-window.ts` 自身が `STRUCTURAL_PIVOT_GAP_FLOOR_BARS` として持つ。値も `docs/tools.md` の 2 つの表も `patterns/min-bars.ts` の導出値も**変わらない**。「検出器のピボット間隔＝`minBarsBetweenSwings`」「パターンサイズ閾値の基準点＝床付きの構造的下限」と意味が 1 つずつになったので、二重管理そのものは解消している。**床を外すかどうかは #130 のスコープ外**として **#134 に分離**した（外す場合は 2 つの表・`min-bars.ts`・到達性テストが同時に動き、増える 72 件の妥当性検証が別途要る）。据え置きに伴い、`STRUCTURAL_PIVOT_GAP_FLOOR_BARS` の docstring に**この 5 が現在どの検出器の要件にも対応していないこと・#121 の閾値調整がこの床を前提にしているため据え置いていること・根拠は構造的必然ではなく経験的であること**を明記した（名前が「構造的」と読めるため、不変量と誤解されるか根拠を探して時間が溶けるのを防ぐ）。副作用として §1 の構造的下限は `minBarsBetweenSwings < 5` の時間足で実際の検出器より 1〜4 本ぶん保守的になる（警告としては安全側）。
 
-#### 既知の挙動: `includeForming: true` は完成済みを隠す
+#### 既知の挙動: `includeForming: true` は完成済みを隠す（#133 に分離）
 
-同じ構成点で完成済み（整合度 0.96）と形成中（同 1.00）の両方が出る場合、`globalDedup`（`patterns/helpers.ts`）は **`status` を見ずに整合度が高い方を残す**ため、形成中が完成済みを押し出す。BTC/JPY の当該パターンも `includeForming: true` では `forming` として返る（既定の `includeForming: false` では突破確定済みの完成済みが返る）。`rankPatterns` は `status` を最優先するので**同じツール内で 2 つの規則が食い違っている**。本 PR の修正で初めて同一構成点の両方が同時に出るようになったため顕在化したもので、修正すると double 以外にも影響するので別 issue とし、現状を `tests/patterns/structural-gates-btcjpy.test.ts` に明示的に固定した。
+同じ構成点で完成済み（整合度 0.96）と形成中（同 1.00）の両方が出る場合、`globalDedup`（`patterns/helpers.ts`）は **`status` を見ずに整合度が高い方を残す**ため、形成中が完成済みを押し出す。BTC/JPY の当該パターンも `includeForming: true` では `forming` として返る（既定の `includeForming: false` では突破確定済みの完成済みが返る）。`rankPatterns` は `status` を最優先するので**同じツール内で 2 つの規則が食い違っている**。本 PR の修正で初めて同一構成点の両方が同時に出るようになったため顕在化したもので、`globalDedup` は**全パターン種別を通る共通経路**——修正すると triangle / wedge / triple / H&S / flag にも波及し、704 ケースの再計測と増減 1 件ごとの正当性説明がいる。本 PR の検証済みの状態（8/704・差分は追加のみ）を壊さないため **#133 に分離**し、現状を `tests/patterns/structural-gates-btcjpy.test.ts` に**「既知の不整合」と明記したうえで**固定した（#133 の修正時にそのアサーションを `completed` へ反転させる）。
 
 #### テスト
 

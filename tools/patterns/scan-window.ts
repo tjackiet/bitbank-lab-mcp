@@ -21,22 +21,38 @@ import { timeframeLabel } from '../../lib/formatter.js';
 /**
  * 構造的下限を導くときに `minBarsBetweenSwings` に被せる床（本）。
  *
- * **これは検出器のピボット間隔ではない。** ピボット間隔は全検出器が `ctx.minDist`
- * （= `resolveParams` の `minBarsBetweenSwings`）をそのまま使う。issue #130 以前は
- * `detect_doubles` がローカル定数 5 で `ctx.minDist` を上書きしており、この床はその
- * 上書きの写しだった（当時の docstring は「double 検出は下限 5 を持つため大きい方を採る」と
- * 書いていた）。上書きは #130 で外したので、**この床はもう検出器の挙動を写していない。**
+ * **⚠️ この 5 は、現在どの検出器の要件にも対応していない。妥当性の検証は issue #134。**
+ * 名前が「構造的（structural）」と読めるが、**構造から導かれた不変量ではない。**
+ * 根拠を探しても見つからないので探さないこと——下記が根拠のすべてである。
  *
- * それでも残してあるのは、この値が警告だけの値ではなく
- * **`patterns/bar-thresholds.ts` の `structuralFloorBars` の唯一の入力**だからである。
- * そこから `patternMinBars` / `patternBarsCap` を経由して**全検出器のパターンサイズ閾値**
- * （`docs/tools.md`「パターンサイズ由来の下限」表）が決まる。床を外すと
- * `minBarsBetweenSwings < 5` の 9 時間足で構造的下限が縮み、**double とは無関係の
+ * ## 元の根拠と、それが消えた経緯
+ *
+ * この 5 はもともと `detect_doubles.ts` の `MIN_PIVOT_DISTANCE_BARS`、すなわち
+ * **double 検出器が実際に要求する最小ピボット間隔**だった（当時の docstring は
+ * 「double 検出は下限 5 を持つため大きい方を採る」と書いていた）。
+ * issue #130 / PR #132 で検出器側の 5 を削除し、ピボット間隔は全検出器が `ctx.minDist`
+ * （= 公開パラメータ `minBarsBetweenSwings`）をそのまま使う形に統一した
+ * （`detect_triples` / `detect_hs` は元からそうで、double だけが黙って上書きしていた）。
+ * **その時点で、この床が写していた検出器の挙動は存在しなくなった。**
+ *
+ * ## それでも据え置いている理由（経験的なもので、構造的必然ではない）
+ *
+ * この値は警告だけの値ではなく **`patterns/bar-thresholds.ts` の `structuralFloorBars` の
+ * 唯一の入力**である。そこから `patternMinBars` / `patternBarsCap` を経由して
+ * **全検出器のパターンサイズ閾値**（`docs/tools.md`「パターンサイズ由来の下限」表）が決まり、
+ * **#121 の閾値調整はこの床（と `× 2` の上限）を前提に行われている。**
+ * 床は下限であると同時に上限の基数でもあるので、下げると帯が両側から縮む。
+ *
+ * 床を外すと `minBarsBetweenSwings < 5` の 9 時間足で構造的下限が縮み、**double とは無関係の
  * triangle / wedge / triple が一斉に緩む**（実測: fixture 704 ケース中 104 ケースが変化、
- * パターン総数 312 → 384）。#130 が扱う偽陰性とは別の判断なので、ここでは据え置く。
+ * パターン総数 312 → 384）。**この +72 件が真の検出漏れなのかノイズなのかは未検証**で、
+ * それを判定するのが #134。据え置きの根拠は「外すと大きく動く」という経験的事実だけである。
  *
- * この床を動かす場合は `docs/tools.md` の 2 つの表・`patterns/min-bars.ts` の導出値・
- * `tests/patterns/invariants.test.ts` の到達性が同時に動く。
+ * ## 動かす場合に同時に動くもの
+ *
+ * `docs/tools.md` の 2 つの表（「構造的下限」/「パターンサイズ由来の下限」）・
+ * `patterns/min-bars.ts` の導出値・`tests/patterns/invariants.test.ts` の到達性・
+ * `#117` の警告 `limit_too_small_for_timeframe` の `suggestedParams.limit`。
  */
 export const STRUCTURAL_PIVOT_GAP_FLOOR_BARS = 5;
 
@@ -75,7 +91,7 @@ export interface ScanWindowAssessment {
  *
  * 間隔には {@link STRUCTURAL_PIVOT_GAP_FLOOR_BARS} の床が掛かるので、`minBarsBetweenSwings`
  * が 5 未満の時間足では**実際の検出器より 1〜4 本ぶん保守的**な下限が出る（警告としては
- * 安全側 = 少し多めの `limit` を勧める向き）。
+ * 安全側 = 少し多めの `limit` を勧める向き）。**この床の妥当性は未検証** — issue #134。
  *
  * @param bars 検出器に渡した足の本数
  * @param swingDepth スイング検出の深さ（前後この本数ぶんが候補から落ちる）

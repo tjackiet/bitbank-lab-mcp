@@ -545,8 +545,10 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 > 下の §2「パターンサイズ由来の下限」の基準点（`bar-thresholds.ts` の `structuralFloorBars`）
 > でもあるため——床を外すと `minBarsBetweenSwings < 5` の 9 時間足で §2 の表が一斉に縮み、
 > double とは無関係の triangle / wedge / triple が緩む。**その判断は #130 のスコープ外**として
-> 据え置いてある。結果として §1 の下限は `minBarsBetweenSwings < 5` の時間足で
-> 実際の検出器より 1〜4 本ぶん保守的（＝ `limit` を少し多めに勧める向き）になる。
+> **#134 に分離**してある（+72 件が真の検出漏れかノイズかは未検証）。結果として §1 の下限は
+> `minBarsBetweenSwings < 5` の時間足で実際の検出器より 1〜4 本ぶん保守的
+> （＝ `limit` を少し多めに勧める向き）になる。**この床の根拠は構造的必然ではなく経験的**で、
+> 詳細は `patterns/scan-window.ts` の同定数の docstring を参照。
 
 **2. パターンサイズ由来の下限（警告なし）** — 各検出器は「パターンがどれだけの大きさなら
 成立するか」の閾値を持つ。窓が狭いとその要求が窓を超え、**そのパターン種別だけが静かに 0 件になる**。
