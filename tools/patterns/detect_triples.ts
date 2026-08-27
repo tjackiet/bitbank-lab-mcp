@@ -951,8 +951,9 @@ export function detectTriples(ctx: DetectContext): DetectResult {
 	}
 
 	// includeForming=false のとき、未ブレイクの構造（forming / near_completion）は返さない。
-	// 後段 globalDedup で completed が confidence/end-time の比較に負けて消えるのを防ぐため
-	// detect_wedges.ts と同じく検出器内で先に落とす。
+	// detect_wedges.ts と同じく検出器内で先に落とす。#133 以降 dedup は statusScore 最優先なので
+	// completed が forming に押し出されることは無くなったが、要求されていない status の候補を
+	// dedup の比較対象に混ぜない・検出器の出力契約を includeForming に一致させる意味で残している。
 	const filtered = includeForming
 		? patterns
 		: patterns.filter((p) => p.status !== 'forming' && p.status !== 'near_completion');

@@ -18,7 +18,7 @@ import {
 	globalDedup,
 	periodScoreDays,
 } from '../../tools/patterns/helpers.js';
-import type { CandleData, TrendLine } from '../../tools/patterns/types.js';
+import type { CandleData, DeduplicablePattern, TrendLine } from '../../tools/patterns/types.js';
 
 // ---------------------------------------------------------------------------
 // ヘルパー
@@ -411,6 +411,82 @@ describe('deduplicatePatterns', () => {
 	it('空配列は空を返す', () => {
 		expect(deduplicatePatterns([])).toEqual([]);
 	});
+
+	// ── statusScore 最優先（issue #133）──
+	// range.end は形成中では常に最新足なので、status より前に比較すると
+	// 形成中が完成済みを構造的に必ず押し出す。statusScore（ranking.ts が単一ソース）を
+	// 最優先し、同 status 内でのみ「新しいほうを採る」を適用する。
+
+	it('形成中が range.end も confidence も上回っていても、完成済み（status 未設定）が勝つ', () => {
+		const completed: DeduplicablePattern = {
+			type: 'double_bottom',
+			confidence: 0.96,
+			range: { start: '2024-01-01', end: '2024-01-10' },
+		};
+		const forming: DeduplicablePattern = {
+			type: 'double_bottom',
+			confidence: 1.0,
+			status: 'forming',
+			range: { start: '2024-01-01', end: '2024-01-15' },
+		};
+		const result = deduplicatePatterns([completed, forming]);
+		expect(result).toHaveLength(1);
+		expect(result[0].status).toBeUndefined();
+		expect(result[0].confidence).toBe(0.96);
+	});
+
+	it('status=completed は status 未設定（完成済み扱い）より優先される', () => {
+		const explicit: DeduplicablePattern = {
+			type: 'triangle_ascending',
+			confidence: 0.7,
+			status: 'completed',
+			range: { start: '2024-01-01', end: '2024-01-10' },
+		};
+		const unset: DeduplicablePattern = {
+			type: 'triangle_ascending',
+			confidence: 0.9,
+			range: { start: '2024-01-01', end: '2024-01-15' },
+		};
+		const result = deduplicatePatterns([explicit, unset]);
+		expect(result).toHaveLength(1);
+		expect(result[0].status).toBe('completed');
+	});
+
+	it('invalid は range.end が新しくても完成済みに負ける', () => {
+		const completed: DeduplicablePattern = {
+			type: 'double_top',
+			confidence: 0.8,
+			range: { start: '2024-01-01', end: '2024-01-10' },
+		};
+		const invalid: DeduplicablePattern = {
+			type: 'double_top',
+			confidence: 0.9,
+			status: 'invalid',
+			range: { start: '2024-01-01', end: '2024-01-15' },
+		};
+		const result = deduplicatePatterns([completed, invalid]);
+		expect(result).toHaveLength(1);
+		expect(result[0].status).toBeUndefined();
+	});
+
+	it('同 status どうしでは従来どおり range.end が新しいほうが勝つ（confidence が低くても）', () => {
+		const older: DeduplicablePattern = {
+			type: 'double_top',
+			confidence: 0.9,
+			status: 'forming',
+			range: { start: '2024-01-01', end: '2024-01-10' },
+		};
+		const newer: DeduplicablePattern = {
+			type: 'double_top',
+			confidence: 0.6,
+			status: 'forming',
+			range: { start: '2024-01-02', end: '2024-01-12' },
+		};
+		const result = deduplicatePatterns([older, newer]);
+		expect(result).toHaveLength(1);
+		expect(result[0].range?.end).toBe('2024-01-12');
+		expect(result[0].confidence).toBe(0.6);
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -437,6 +513,88 @@ describe('globalDedup', () => {
 
 	it('空配列は空を返す', () => {
 		expect(globalDedup([])).toEqual([]);
+	});
+
+	// ── statusScore 最優先（issue #133）──
+	// rankPatterns と同じ規則（statusScore → confidence → range.end）。
+	// status を見ずに confidence を先に比べると、形成中（整合度 1.00 が付きやすい）が
+	// 突破確定済みの完成済み（同 0.96）を押し出す——issue #133 の実データそのもの。
+
+	it('形成中（confidence 1.00・range.end 最新）は完成済み（status 未設定・0.96）を押し出せない', () => {
+		const completed: DeduplicablePattern = {
+			type: 'double_bottom',
+			confidence: 0.96,
+			range: { start: '2026-08-03', end: '2026-08-19' },
+		};
+		const forming: DeduplicablePattern = {
+			type: 'double_bottom',
+			confidence: 1.0,
+			status: 'forming',
+			range: { start: '2026-08-03', end: '2026-08-26' },
+		};
+		// 入力順に依存しないこと（既存が完成済みでも形成中でも同じ勝者）
+		for (const input of [
+			[completed, forming],
+			[forming, completed],
+		]) {
+			const result = globalDedup(input);
+			expect(result).toHaveLength(1);
+			expect(result[0].status).toBeUndefined();
+			expect(result[0].confidence).toBe(0.96);
+		}
+	});
+
+	it('status=completed は confidence が低くても status 未設定（完成済み扱い）に勝つ', () => {
+		const explicit: DeduplicablePattern = {
+			type: 'rising_wedge',
+			confidence: 0.6,
+			status: 'completed',
+			range: { start: '2024-01-01', end: '2024-01-10' },
+		};
+		const unset: DeduplicablePattern = {
+			type: 'rising_wedge',
+			confidence: 0.9,
+			range: { start: '2024-01-01', end: '2024-01-10' },
+		};
+		const result = globalDedup([explicit, unset]);
+		expect(result).toHaveLength(1);
+		expect(result[0].status).toBe('completed');
+	});
+
+	it('invalid は confidence が高くても完成済みに負ける', () => {
+		const completed: DeduplicablePattern = {
+			type: 'triangle_ascending',
+			confidence: 0.7,
+			status: 'completed',
+			range: { start: '2024-01-01', end: '2024-01-10' },
+		};
+		const invalid: DeduplicablePattern = {
+			type: 'triangle_descending',
+			confidence: 0.95,
+			status: 'invalid',
+			range: { start: '2024-01-01', end: '2024-01-10' },
+		};
+		const result = globalDedup([completed, invalid]);
+		expect(result).toHaveLength(1);
+		expect(result[0].status).toBe('completed');
+	});
+
+	it('同 status どうしでは従来どおり confidence → range.end の順で選ぶ', () => {
+		const lowConf: DeduplicablePattern = {
+			type: 'rising_wedge',
+			confidence: 0.6,
+			status: 'forming',
+			range: { start: '2024-01-01', end: '2024-01-15' },
+		};
+		const highConf: DeduplicablePattern = {
+			type: 'rising_wedge',
+			confidence: 0.9,
+			status: 'forming',
+			range: { start: '2024-01-01', end: '2024-01-10' },
+		};
+		const result = globalDedup([lowConf, highConf]);
+		expect(result).toHaveLength(1);
+		expect(result[0].confidence).toBe(0.9);
 	});
 });
 

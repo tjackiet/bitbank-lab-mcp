@@ -8,6 +8,7 @@
 import { dayjs } from '../../lib/datetime.js';
 import { trueRange } from '../../lib/indicators.js';
 import { EPSILON } from '../../lib/math.js';
+import { statusScore } from './ranking.js';
 import type {
 	CandleData,
 	DeduplicablePattern,
@@ -533,6 +534,18 @@ export function finalizeConf(base: number, type: string): number {
 // ---------------------------------------------------------------------------
 // 重複パターンの排除
 // ---------------------------------------------------------------------------
+
+/**
+ * 同一タイプで期間の重なり率が 50% を超えるパターンを 1 つに統合する（各検出器内で実行）。
+ *
+ * 勝者選択は statusScore（`patterns/ranking.ts` が単一ソース。issue #133）を最優先し、
+ * 同 status 内でのみ「`range.end` が新しいほう＝より新しい形を採る」→ confidence →
+ * パターン高さの順で選ぶ。`range.end` は形成中パターンでは常に最新足（lastIdx）なので、
+ * status より前に比較すると形成中が完成済み（突破確定足で終わる）を構造的に必ず押し出してしまう。
+ *
+ * @param arr - 検出順のパターン配列。`type` / `range` を欠く要素は比較せずそのまま残す
+ * @returns 重複を統合した新しい配列（入力は破壊しない）
+ */
 export function deduplicatePatterns<T extends DeduplicablePattern>(arr: T[]): T[] {
 	const result: T[] = [];
 	for (const pattern of arr) {
@@ -565,8 +578,13 @@ export function deduplicatePatterns<T extends DeduplicablePattern>(arr: T[]): T[
 			result.push(pattern);
 		} else {
 			const allCandidates = [...overlapping, pattern];
-			const maxEndTime = Math.max(...allCandidates.map((p) => Date.parse(p.range?.end ?? '')));
-			let best = allCandidates.filter((p) => Date.parse(p.range?.end ?? '') === maxEndTime);
+			const getStatusScore = (p: DeduplicablePattern) => statusScore((p as { status?: string }).status);
+			const maxStatusScore = Math.max(...allCandidates.map(getStatusScore));
+			let best = allCandidates.filter((p) => getStatusScore(p) === maxStatusScore);
+			if (best.length > 1) {
+				const maxEndTime = Math.max(...best.map((p) => Date.parse(p.range?.end ?? '')));
+				best = best.filter((p) => Date.parse(p.range?.end ?? '') === maxEndTime);
+			}
 			if (best.length > 1) {
 				const maxConfidence = Math.max(...best.map((p) => Number(p.confidence ?? 0)));
 				best = best.filter((p) => Number(p.confidence ?? 0) === maxConfidence);
@@ -603,6 +621,20 @@ export function deduplicatePatterns<T extends DeduplicablePattern>(arr: T[]): T[
 // ---------------------------------------------------------------------------
 // グローバル重複排除（全パターン種別横断）
 // ---------------------------------------------------------------------------
+
+/**
+ * 全検出器の結果を統合した後、同一タイプ（wedge / triangle は同カテゴリ）で期間の
+ * 重なり率が 70% 以上のパターンを 1 つに統合する。
+ *
+ * 勝者選択は `rankPatterns`（`patterns/ranking.ts`）と同じ規則:
+ * statusScore（単一ソース。issue #133）→ confidence → `range.end` の新しさ。
+ * status を見ずに confidence を先に比べると、形成中（完成途中の進捗から
+ * 整合度 1.00 が付きやすい）が突破確定済みの完成済みを押し出し、
+ * `includeCompleted: true` を明示した呼び出し側が完成済みを受け取れなくなる。
+ *
+ * @param patterns - 全検出器の結果を連結した配列（検出順）
+ * @returns 重複を統合した新しい配列（入力は破壊しない）
+ */
 export function globalDedup(patterns: DeduplicablePattern[]): DeduplicablePattern[] {
 	function toMs(iso?: string): number {
 		try {
@@ -658,15 +690,21 @@ export function globalDedup(patterns: DeduplicablePattern[]): DeduplicablePatter
 			out.push(p);
 		} else {
 			const existing = out[overlapIdx];
-			const eConf = Number(existing?.confidence ?? 0);
-			const pConf = Number(p?.confidence ?? 0);
-			if (pConf > eConf) {
+			const eStatus = statusScore((existing as { status?: string }).status);
+			const pStatus = statusScore((p as { status?: string }).status);
+			if (pStatus > eStatus) {
 				out[overlapIdx] = p;
-			} else if (pConf === eConf) {
-				const eEnd = toMs(existing?.range?.end ?? existing?.range?.current);
-				const pEnd = toMs(p?.range?.end ?? p?.range?.current);
-				if (Number.isFinite(pEnd) && Number.isFinite(eEnd) && pEnd > eEnd) {
+			} else if (pStatus === eStatus) {
+				const eConf = Number(existing?.confidence ?? 0);
+				const pConf = Number(p?.confidence ?? 0);
+				if (pConf > eConf) {
 					out[overlapIdx] = p;
+				} else if (pConf === eConf) {
+					const eEnd = toMs(existing?.range?.end ?? existing?.range?.current);
+					const pEnd = toMs(p?.range?.end ?? p?.range?.current);
+					if (Number.isFinite(pEnd) && Number.isFinite(eEnd) && pEnd > eEnd) {
+						out[overlapIdx] = p;
+					}
 				}
 			}
 		}

@@ -355,32 +355,26 @@ describe('issue #126 構造ゲート — BTC/JPY 日足 実データ回帰', () 
 		});
 
 		/**
-		 * **⚠️ このテストは「あるべき仕様」ではなく「既知の不整合」を固定している（issue #133）。**
+		 * **issue #133 の修正を固定する — `includeForming: true` でも完成済みが返る。**
 		 *
-		 * 下の `expect(found[0].status).toBe('forming')` は**望ましい挙動ではない**。
-		 * ネックライン突破が 8/19 に確定しているのに、`includeCompleted: true` で明示的に
-		 * 完成済みを要求した呼び出し側が `forming` を受け取ってしまう、という不具合そのものを
-		 * 現状のまま凍結している。#133 を修正するときは**このアサーションを
-		 * `toBe('completed')` に反転させる**こと——期待値を緩めて通すのではなく、
-		 * 原因を潰してこのテストを落とす（#130 → #132 と同じ扱い）。
+		 * かつて dedup は status を見ずに勝者を選んでいた（`globalDedup` は confidence →
+		 * `range.end`、`deduplicatePatterns` は `range.end` 最優先）ため、同一構成点で
+		 * 完成済み（整合度 0.96・突破確定足 8/19 で終わる）と形成中（同 1.00・最新足まで
+		 * 伸びる）の両方が成立すると形成中が完成済みを押し出し、`includeCompleted: true` で
+		 * 明示的に完成済みを要求した呼び出し側が `forming` を受け取っていた。
+		 * このテストはその不具合を「既知の不整合」として凍結していたもの。
 		 *
-		 * 原因は同じツール内で 2 つの優先順位規則が食い違っていること:
+		 * #133 で dedup の勝者選択を `rankPatterns` と同じ **statusScore 最優先**
+		 * （単一ソース: `patterns/ranking.ts` の `statusScore`）に揃えたので、
+		 * ここでは**突破確定済みの完成済みが形成中に押し出されないこと**を固定する。
 		 *
-		 * | 関数 | 優先順位 |
-		 * |---|---|
-		 * | `patterns/helpers.ts` の `globalDedup` | **confidence のみ** → 同値なら `range.end` |
-		 * | `patterns/ranking.ts` の `rankPatterns` | **`statusScore` 最優先** → 次に confidence |
-		 *
-		 * `globalDedup` が先に走って completed（整合度 0.96）を捨てるため、`rankPatterns` の
-		 * status 優先は手遅れになる（形成中は完成中の進捗から整合度 1.00 が付きやすい）。
-		 *
-		 * **本 PR（#132）では直さない。** `globalDedup` は全パターン種別を通る共通経路なので、
-		 * 直すと triangle / wedge / triple / H&S / flag にも波及し、704 ケースの再計測と
-		 * 増減 1 件ごとの正当性説明がいる。#132 の検証済みの状態（8/704・差分は追加のみ）を
-		 * 壊さないため #133 に分離した。既定（`includeForming: false`）では突破確定済みの
-		 * 完成済みが返ることは、1 つ上の `it` が固定している。
+		 * status の期待値が `'completed'` ではなく **undefined** なのは、完成済み double が
+		 * status を付与しない既存契約のため（「status 未設定は完成済み扱い」——
+		 * `detect_patterns.ts` の status バケット分け / `ranking.ts` の statusScore=2）。
+		 * 完成済みであることは status ではなく突破確定（`breakoutBarIndex` /
+		 * `confirmation`）で識別する。forming 候補はこれらを持たない。
 		 */
-		it('【既知の不整合 #133】includeForming: true では形成中が完成済みを押し出す（修正時に completed へ反転する）', async () => {
+		it('#133 修正済み: includeForming: true でも完成済み（突破 8/19）が形成中に押し出されない', async () => {
 			mockedAnalyzeIndicators.mockResolvedValue(indicatorsOk() as never);
 			const res = await detectPatterns('btc_jpy', '1day', 90, {
 				patterns: ['double_bottom'],
@@ -396,8 +390,12 @@ describe('issue #126 構造ゲート — BTC/JPY 日足 実データ回帰', () 
 				return idxs.includes(IDX.sharedTrough) && idxs.includes(IDX.trueTrough2);
 			});
 			expect(found).toHaveLength(1);
-			// ⚠️ 望ましい値ではない。#133 の修正で 'completed' に反転させること（上の docstring 参照）。
-			expect(found[0].status).toBe('forming');
+			// 完成済み＝ status 未設定（既存契約）。forming（status='forming'）ではないこと。
+			expect(found[0].status).toBeUndefined();
+			// 完成済みの実体は突破確定で識別する（1 つ上の it と同じ 8/19 = idx 82）
+			expect(found[0].breakoutBarIndex).toBe(82);
+			expect(found[0].confirmation).toMatchObject({ type: 'neckline_breakout', idx: 82 });
+			expect((found[0].pivots ?? []).map((v) => v.idx)).toEqual([IDX.sharedTrough, IDX.trueNeckline, IDX.trueTrough2]);
 		});
 
 		it('高安基準は帯の中央付近、終値基準は下限すれすれ（基準選択の根拠）', () => {
