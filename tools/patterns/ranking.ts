@@ -28,8 +28,14 @@ interface PatternWithStatus extends DeduplicablePattern {
  *
  * `expired`（issue #126）は「形成中だったが突破確認窓を使い切った」状態で、
  * 以後 `completed` にはならない。`invalid` と同じ最下位に置く。
+ *
+ * **status 優先度の単一ソース（issue #133）。** `rankPatterns` だけでなく
+ * `patterns/helpers.ts` の `deduplicatePatterns` / `globalDedup` も勝者選択の
+ * 最優先軸としてこれを使う。規則を複数箇所に書くと必ず食い違う
+ * （dedup が status を見ずに形成中を残し、rankPatterns の status 優先が
+ * 手遅れになっていたのが #133）ので、変更はここ 1 箇所で行うこと。
  */
-function statusScore(status: string | undefined): number {
+export function statusScore(status: string | undefined): number {
 	if (status === 'completed') return 3;
 	if (status === undefined) return 2;
 	if (status === 'forming' || status === 'near_completion') return 1;

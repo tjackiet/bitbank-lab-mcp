@@ -7,6 +7,48 @@
 
 ## [Unreleased]
 
+### Fixed（`detect_patterns` の dedup が status を見ず、形成中が完成済みを押し出していた。#133）
+
+**`includeForming: true` + `includeCompleted: true` のとき、同一構成点に完成済みと形成中の両方が成立すると、ネックライン突破が確定済みでも形成中だけが返っていた。** BTC/JPY 日足の実データ（構成点 8/3 → 8/10 → 8/14、突破 8/19 = idx 82）で、明示的に完成済みを要求した呼び出し側が `forming`（整合度 1.00）を受け取り、完成済み（同 0.96）は捨てられていた（#132 で「既知の不整合」としてテストに凍結していたもの）。
+
+原因は同じツール内で優先順位の規則が食い違っていたこと。`rankPatterns`（`patterns/ranking.ts`）は `statusScore` を最優先するが、その**前段**で走る dedup 2 つが status を一切見ていなかったため、rankPatterns に届く前に完成済みが捨てられていた。両方の勝者選択に statusScore を最優先で入れた:
+
+| 関数 | 旧 | 新 |
+|---|---|---|
+| `deduplicatePatterns`（各検出器内） | **`range.end` が新しい** → confidence → 高さ | **statusScore** → `range.end` が新しい → confidence → 高さ |
+| `globalDedup`（全種別統合後） | **confidence** → `range.end` が新しい | **statusScore** → confidence → `range.end` が新しい |
+
+- `deduplicatePatterns` の `range.end` 最優先は、形成中の `range.end` が常に最新足（完成済みは突破確定足）である以上、**形成中が構造的に必ず勝つ**規則だった。statusScore の後ろに下げ、**同 status 内でのみ**「より新しい形を採る」という元の意図を残した。同 status どうしの勝者は旧実装と完全に一致する。
+- **`statusScore` は `ranking.ts` から export して単一ソース化した**（completed=3 / 未設定=2 / forming・near_completion=1 / invalid・expired=0）。dedup 2 関数と `rankPatterns` の 3 箇所が同じ関数を参照し、スケール自体は `tests/patterns/ranking.test.ts` で固定した。
+- 着手前の切り分け（issue の指示）: 実データの double_bottom を捨てていたのは **`globalDedup`**。doubles は形成中候補を `deduplicatePatterns` の**後**に追加するため、そこでは衝突しない。一方 triangle / wedge / pennant は `includeForming: true` のとき形成中と完成済みが `deduplicatePatterns` を**一緒に**通るので、`globalDedup` だけ直すと種別によって規則が食い違う。**両方を同時に揃えた。**
+
+#### 検出結果の変化量（全 fixture 前後比較）
+
+`tests/detect_patterns_fixtures.test.ts` の fixture 22 件 × オプション 8 通り × 時間足 2 種 × `swingDepth` 2 種 = **704 ケース**を、`main`（161645b）と本ブランチの双方で走らせて突き合わせた結果（#131 / #132 と同じ手順・同じ 704 ケース）。
+
+| | 値 |
+|---|---|
+| 変化したケース | **0 / 704**。全ケース完全一致 |
+| パターン総数 | 320 → **320**（種別内訳も完全一致） |
+| status が変わった件数 | **0 件** |
+
+合成 fixture には同一構成点で形成中と完成済みが同時に成立するケースが 1 つも無いため、dedup の規則変更は現れない（#132 が「実データは 704 ケースの外」と記録したのと同じ関係）。
+
+**実データ（`tests/fixtures/btc_jpy_1day_2026.ts`、90 本 × オプション 8 通り × `swingDepth` 2 種 = 16 ケース）では 4 ケースが変化した。** すべて `swingDepth: 3` かつ `includeForming: true` の側（この fixture の完成済み double_bottom は `swingDepth: 2` ではピボット列が変わり検出されないため、衝突自体が起きない）:
+
+| ケース | before | after | 正当性 |
+|---|---|---|---|
+| `includeForming: true` + `includeCompleted: true`（± `includeInvalid` の 2 ケース） | forming の double_bottom（整合度 1.00、`range.end` 8/26、突破なし） | **完成済みの double_bottom（整合度 0.96、突破 8/19 = idx 82、status 未設定）** | #133 の症状そのもの。突破が確定した構造を「形成中」と報告するのは事実に反し、`rankPatterns` の定義（completed 系 > forming）とも矛盾していた |
+| `includeForming: true` + `includeCompleted: false`（± `includeInvalid` の 2 ケース） | forming の double_bottom（同上。ほか 2 種の forming と計 3 件） | **double_bottom は返らない**（ほか 2 種の forming は従来どおり） | dedup で完成済みが勝ち、`includeCompleted: false` の status フィルタで落ちる。この forming 候補は**突破が 8/19 に確定済みの構造**を「まだ形成中」として報告する stale な像で、「形成中の double_bottom は存在しない」が正しい情報。形成中だけを購読する呼び出し側に、完成した構造を形成中と偽って出し続けるほうが有害 |
+
+status が変わったのは **forming → 完成済み（status 未設定）が 1 実体 × 2 ケース**。消えた / 増えたパターンは上表の 4 ケース以外に無い。**`includeForming: false` の既定挙動は 704 + 16 の全ケースで不変**（実データの完成済み double_bottom が既定で突破 8/19 として返ることも従来どおり）。
+
+#### テスト
+
+- `tests/patterns/structural-gates-btcjpy.test.ts` の「【既知の不整合 #133】…」は、**期待値を緩めずに原因を潰して**「#133 修正済み: includeForming: true でも完成済み（突破 8/19）が形成中に押し出されない」に書き換えた（#130 → #132 と同じ扱い）。status のアサーションは issue の文言どおりの `'completed'` ではなく **undefined + 突破確定（`breakoutBarIndex` 82 / `confirmation` neckline_breakout）**で固定している——完成済み double は status を付与しない既存契約（「status 未設定は完成済み扱い」、`ranking.ts` の statusScore=2）のため。`status: 'completed'` を付与して合わせる案は、`includeForming: false` の既定出力（全完成済み double の payload）が変わって「既定挙動が変わらないこと」という受け入れ条件と衝突するため本 PR では行わない（付与するなら別 issue で 704 ケースの再計測とセットで行う）。
+- `tests/patterns/helpers.test.ts` に dedup 2 関数の status 優先の単体テスト（形成中が confidence / `range.end` で勝っていても完成済みが残る・invalid は完成済みに勝てない・同 status 内は従来規則・入力順に依存しない）を追加した。
+- `tests/patterns/ranking.test.ts` に statusScore のスケール（3 / 2 / 1 / 0）を固定するテストを追加した。dedup とソートが共有する単一ソースなので、序列の変更はここで顕在化する。
+
 ### Fixed（`detect_patterns` のダブルボトム偽陰性を潰した。**検出件数が増える**。#130 / #126）
 
 **BTC/JPY 日足 2026-08-03 → 08-10 → 08-14（安値切り上げ型）が完成済み `double_bottom` として検出され、ネックライン突破が 2026-08-19（idx 82）で確定するようになった。** #131 で偽陽性を潰したときに残していた偽陰性で、構造ゲート（#126）は当時からこの形を通していた（`ok: true` / 戻り率 0.528 / `necklineCrossIdx` 実在）。落としていたのは **3 つの別々の検査**で、**どれか 1 つでも残すと検出されない**（3 通りの ablation で確認済み）。

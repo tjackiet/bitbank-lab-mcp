@@ -1154,9 +1154,10 @@ export function detectWedges(ctx: DetectContext): DetectResult {
 	const pivotData = preparePivots(ctx);
 	const regressionPatterns = detectRegressionWedges(pivotData, barParams, ctx);
 	const formingPatterns = detectFormingWedges(pivotData, barParams, regressionPatterns, ctx);
-	// includeForming=false のときに forming / near_completion を残すと、
-	// 後段 globalDedup で completed が confidence/end-time の比較に負けて
-	// 消える可能性があるため、dedup より前で落とす。
+	// includeForming=false のとき forming / near_completion は dedup より前で落とす。
+	// #133 以降 dedup（deduplicatePatterns / globalDedup）は statusScore 最優先なので
+	// completed が forming に押し出されることは無くなったが、要求されていない status の
+	// 候補を dedup の比較対象に混ぜない意味で残している。
 	// 形成中ウィンドウでブレイク確認済みのもの（status='completed'）は
 	// 通常の完成済みと同列で扱う。
 	const merged = [...regressionPatterns, ...formingPatterns];
