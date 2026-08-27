@@ -111,7 +111,15 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 	// Unified pattern lifecycle options
 	includeForming: z.boolean().optional().default(false).describe('形成中パターンを含める'),
 	includeCompleted: z.boolean().optional().default(true).describe('完成済みパターンを含める'),
-	includeInvalid: z.boolean().optional().default(false).describe('無効化済みパターンを含める'),
+	includeInvalid: z
+		.boolean()
+		.optional()
+		.default(false)
+		.describe(
+			'無効化済み（`status=invalid`）および期限切れ（`status=expired`）のパターンを含める。' +
+				'期限切れ = 第2構成点の確定から突破確認窓を過ぎてもネックラインを突破しなかった候補で、' +
+				'既定ではノイズになるため出力されない。',
+		),
 	tz: z
 		.string()
 		.optional()
@@ -260,8 +268,84 @@ export const DetectedPatternSchema = z.object({
 			artifact: z.object({ identifier: z.string(), title: z.string() }),
 		})
 		.optional(),
-	// 統合: パターンのステータス（形成中/完成度近し/完成済み/無効化）
-	status: z.enum(['forming', 'near_completion', 'completed', 'invalid']).optional(),
+	// 統合: パターンのステータス（形成中/完成度近し/完成済み/無効化/期限切れ）
+	status: z
+		.enum(['forming', 'near_completion', 'completed', 'invalid', 'expired'])
+		.optional()
+		.describe(
+			'パターンの状態。' +
+				'`forming` = 形成途上（まだネックライン突破の余地がある）。' +
+				'`near_completion` = 突破目前。' +
+				'`completed` = ネックライン突破を検出器が確認済み。' +
+				'`invalid` = 構成点確定後に形が崩れて無効化された（理由は `invalidReason`）。' +
+				'`expired` = **期限切れ**。第2構成点の確定から突破確認窓を過ぎてもネックラインを' +
+				'突破しなかったもので、以後この候補が `completed` になることはない。' +
+				'`invalid` と同義ではない——形が崩れたのではなく、成立する時間を使い切った状態。' +
+				'既定では出力されず、`includeInvalid: true` で `invalid` と一緒に現れる。',
+		),
+	/** status='invalid' / 'expired' の理由コード（issue #126） */
+	invalidReason: z
+		.string()
+		.optional()
+		.describe(
+			'`status` が `invalid` / `expired` になった理由コード。' +
+				'`re_entered_trough_zone` = 第2構成点の確定後、ネックライン突破前に価格が' +
+				'谷（山）ゾーンへ戻った。`forming_expired` = 突破確認窓を過ぎた。',
+		),
+	/**
+	 * 整合度（confidence）のサブスコア。issue #126 で露出。
+	 * 構造ゲートを通過した候補どうしの**形の良さの比較**にのみ使う値で、
+	 * 構造的な妥当性そのものはゲート（hard reject）側が担保している。
+	 */
+	scoreComponents: z
+		.object({
+			symmetry: z.number().optional().describe('2 つの構成点（谷-谷 / 山-山）の同水準度。1 = 完全一致'),
+			retracement: z
+				.number()
+				.optional()
+				.describe('中間構成点の戻り率が許容帯の中央にどれだけ近いか。1 = 帯の中央、0 = 帯の端'),
+			breakoutQuality: z
+				.number()
+				.optional()
+				.describe(
+					'ネックライン突破の質。突破足の終値がネックラインをパターン高さの何割ぶん' +
+						'超えたかで測る。形成中パターンには付かない',
+				),
+			duration: z.number().optional().describe('パターンの形成期間スコア'),
+		})
+		.optional()
+		.describe(
+			'整合度の内訳。**ゲート通過を前提とした形状の良さ**であって、構造的妥当性の指標ではない' +
+				'（構造ゲートは `confidence` に減点として現れず、通らなければそもそも出力されない）。',
+		),
+	/** 構造ゲート（issue #126）の計測値 */
+	structureGate: z
+		.object({
+			retracementRatio: z
+				.number()
+				.optional()
+				.describe(
+					'先行値幅に対する中間構成点（ネックライン）の戻り率。' +
+						'**高安（extremePrice）基準**で算出する——終値基準では許容帯の余裕が薄く、' +
+						'ヒゲを含む実際の値幅と乖離するため。1.0 超は定義上そのパターンではない',
+				),
+			priorExtremeIdx: z
+				.number()
+				.int()
+				.optional()
+				.describe(`先行値幅の起点（第1構成点の直前のスイング極値）の位置。${PATTERN_INDEX_NOTE}`),
+			priorExtremePrice: z.number().optional().describe('先行値幅の起点の極値（high / low）'),
+			necklineCrossIdx: z
+				.number()
+				.int()
+				.optional()
+				.describe(
+					'第1構成点より前にネックライン水準を**終値で**抜けたバーの位置。' +
+						`この事象が無い候補は棄却される。${PATTERN_INDEX_NOTE}`,
+				),
+		})
+		.optional()
+		.describe('構造ゲートが実際に計測した値。棄却されなかった理由を呼び出し側が検算できるようにする。'),
 	// 形成中パターン用フィールド
 	apexDate: z.string().optional(), // アペックス（頂点）到達予定日
 	daysToApex: z.number().int().optional(), // アペックスまでの日数

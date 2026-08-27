@@ -399,7 +399,11 @@ describe('detectDoubles', () => {
 
 	it('形成中ダブルボトム: 確定谷2つ + 現在価格がネックライン付近', () => {
 		const candles: CandleData[] = [];
-		for (let i = 0; i < 50; i++) candles.push(mkCandle(50 - i, 130, 135, 125, 130));
+		// 谷1 より前はネックライン(130)より上で推移させる。構造ゲート（issue #126）は
+		// 「谷1 前にネックライン水準を終値で下抜けた事象」を要求するので、
+		// 旧 fixture のように終値がネックラインとぴったり同値のまま横ばいだと、
+		// そもそも下抜けという事象が存在せず棄却される。
+		for (let i = 0; i < 50; i++) candles.push(mkCandle(50 - i, 140, 145, 135, 140));
 		// valley1
 		candles[10] = mkCandle(40, 102, 105, 100, 102);
 		// peak between
@@ -410,7 +414,7 @@ describe('detectDoubles', () => {
 		for (let i = 40; i < 50; i++) candles[i] = mkCandle(50 - i, 125, 128, 122, 126);
 
 		const pivots: Pivot[] = [
-			{ idx: 5, price: 135, kind: 'H', extremePrice: 135 },
+			{ idx: 5, price: 140, kind: 'H', extremePrice: 145 },
 			{ idx: 10, price: 100, kind: 'L', extremePrice: 100 },
 			{ idx: 20, price: 130, kind: 'H', extremePrice: 130 },
 			{ idx: 30, price: 100, kind: 'L', extremePrice: 100 },
@@ -514,14 +518,15 @@ describe('detectDoubles', () => {
 
 	it('forming double_bottom: structureRange は valley1〜valley2 で閉じる（lastIdx は含まない）', () => {
 		const candles: CandleData[] = [];
-		for (let i = 0; i < 50; i++) candles.push(mkCandle(50 - i, 130, 135, 125, 130));
+		// 谷1 前をネックライン(130)より上にするのは上の fixture と同じ理由（issue #126）
+		for (let i = 0; i < 50; i++) candles.push(mkCandle(50 - i, 140, 145, 135, 140));
 		candles[10] = mkCandle(40, 102, 105, 100, 102);
 		candles[20] = mkCandle(30, 128, 130, 125, 128);
 		candles[30] = mkCandle(20, 103, 105, 100, 103);
 		for (let i = 40; i < 50; i++) candles[i] = mkCandle(50 - i, 125, 128, 122, 126);
 
 		const pivots: Pivot[] = [
-			{ idx: 5, price: 135, kind: 'H', extremePrice: 135 },
+			{ idx: 5, price: 140, kind: 'H', extremePrice: 145 },
 			{ idx: 10, price: 100, kind: 'L', extremePrice: 100 },
 			{ idx: 20, price: 130, kind: 'H', extremePrice: 130 },
 			{ idx: 30, price: 100, kind: 'L', extremePrice: 100 },

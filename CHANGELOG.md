@@ -7,6 +7,47 @@
 
 ## [Unreleased]
 
+### Changed（`detect_patterns` のダブルトップ / ボトムに構造ゲートを入れた。**検出件数が変わる**。#126）
+
+**構造として成立していない候補を、整合度の減点ではなく hard reject で落とす層を前段に置いた。** 落ちた候補は 1 件も出力されず、棄却理由は `view=debug` の `candidates` に理由コード付きで残る。BTC/JPY 日足 2026-05-29〜08-26 の実データでは、**整合度 1.00 で「形成中」と報告されていた 7/13 → 7/21 → 8/3 の候補が `neckline_above_pre_decline_high` で棄却される**（戻り率 2.046）。
+
+- **`neckline_above_pre_decline_high` / `neckline_below_pre_decline_low`（G1 / G2）** — ネックラインが先行値幅の起点を越えている、すなわち**戻り率 > 1.0**。「下抜けたものを抜け返す」という事象が定義できず、定義上そのパターンではないので**固定 reject**（閾値の調整対象にしない）。上記の偽陽性はここで落ちる。
+- **`no_neckline_cross_before_trough1` / `no_neckline_cross_before_peak1`（G1）** — 第1構成点より前に、ネックライン水準を**終値で**抜けたバーが実在すること。「その水準より下にあった」ではなく「上から下へ抜けた」を要求する——抜けていない線を抜け返しても反転シグナルにならない。ヒゲだけの一時的な割り込みを数えないよう終値基準。探索窓が 10 本未満で「交差が無い」を立証できない場合は素通しする（`validatePriorTrend` の `insufficient_data` と同じ安全側の倒し方）。
+- **`retracement_out_of_band`（G2）** — 戻り率が **0.20〜0.90** の外。
+- **`re_entered_trough_zone`（G5）** — 第2構成点の確定後、ネックライン突破前に終値が谷（山）ゾーン（パターン高さの下位 25%）へ戻ったもの。`status='invalid'` + `invalidReason` として出す。同水準の第3構成点があれば triple 側に委ね、`reclassified_as_triple_bottom` / `_top` として何も出さない。
+
+**価格基準は `extremePrice`（高安）を選んだ。**「共通ゲートに生の `price` を渡さない」という #126 / #128 の設計指針に加えて、実測が裏付けている。BTC/JPY 日足の実在パターン（先行高値 7/21 → 谷1 8/3 → 山 8/10）の戻り率は:
+
+| 基準 | preDeclineHigh | trough1 | peak | 戻り率 | 下限 0.20 までの余裕 |
+|---|---|---|---|---|---|
+| 終値 | 10,849,999 | 10,002,960 | 10,191,324 | **0.222** | 2.2 ポイント |
+| 高安 | 10,903,000 |  9,752,246 | 10,359,897 | **0.528** | 32.8 ポイント |
+
+終値基準では、**検出すべき正しいパターンが下限まで 2 ポイントしか余裕を持たない**。谷ゾーン再進入（G5）も同じで、終値基準でゾーンを組むとこの正しいパターンが 8/16 の終値で無効化される（終値基準のゾーン上限 10,050,051 に対し 8/16 終値 10,014,831。高安基準なら上限 9,904,159 で入らない）。
+
+**ネックラインの「線」だけは呼び出し側から明示的に受け取る。** 値幅の評価（戻り率）は基準の統一された `extremePrice` で測るが、ネックラインは線であって値幅ではなく、**後でブレイクを判定するのと同じ線**を検査しないと意味が無い。`detect_doubles` は `findBreakoutIdx` と `neckline` 配列に渡すのと同じ `b.price` を渡している。`Pivot` から導出させると、`price` の基準が検出器ごとに違う（#128）ぶんだけ共通ゲートの意味が呼び出し元ごとにずれる。
+
+**帯の上限 0.90 は実測では決まらない。** 実データが直接決めているのは「1.0 超は棄却」と「0.528 は通す」の 2 点だけ。0.90 にしたのは (a) 戻り率 0.90 以上ではネックラインが先行値幅の起点の 10% 以内に入り上値抵抗として意味を成さない、(b) 対称三角形は収束につれて戻り率が 0.79 → 0.91 と連続的に動くため 0.85 に置くと**同じ 1 つの三角形の中で通る脚と落ちる脚が混在する**（構造の切れ目でない場所に hard reject を置くことになる）、(c) 帯の内側の良し悪しは `scoreComponents.retracement` が連続的に評価するので hard reject 側を絞りすぎる必要がない、の 3 点による。レビュー提案値の 0.85 はそのまま採らなかった。
+
+**共通ユーティリティとして `tools/patterns/structural.ts` に置いた**（`validateReversalStructure` / `detectTroughZoneReentry` / `findNecklineCross` / `findPriorExtreme`）。double_top へは符号反転でそのまま適用済み。**head_and_shoulders / triple への適用は本 PR では行っていない**——検出件数への影響の確認が別途要るため。
+
+**ゲートの位置は `validatePriorTrend` の後ろ。** 前に置くと既存の棄却理由（`no_breakout` / `prior_trend_mismatch:*`）が構造ゲートの理由に置き換わり、debug の理由コード契約が黙って変わる。「スコアの前段」という要件は満たしつつ、既存の理由コードは温存している。
+
+### Added（`detect_patterns` の `status` に `expired`、整合度にサブスコア。#126）
+
+- **`status='expired'` を追加した（G4）。** 第2構成点の確定から突破確認窓（`MAX_BARS_FROM_EXTREMUM` = 20 本）を過ぎた形成中候補は、以後どれだけ待っても `completed` にならない。それを `forming` と報告するのは「まだ完成しうる」という誤った含意になる。**`invalid` と同義ではない**（形が崩れたのではなく成立する時間を使い切った）ため、#126 の提案にあった `invalidated` は新語を作らず既存の `invalid` を使い、追加したのは期限切れの 1 値のみ。既定では出力されず `includeInvalid: true` で `invalid` と一緒に現れる。期限を突破探索窓と同じ値にしてあるのは、「形成中＝まだ完成しうる」を両パスで一致させるにはそれしかないため。
+- **`data.patterns[*].scoreComponents` を露出した（G3）。** `symmetry` / `retracement` / `breakoutQuality` / `duration`。旧実装の `(tolMargin + symmetry + per) / 3` は `tolMargin` と `symmetry` がどちらも「2 点が同水準か」を測る同じ軸で、実質 2 軸だった。**戻り率**と**ブレイク品質**を独立軸として足した 4 軸平均に変えたので、**完成済み double の整合度が変わる**。
+- **`data.patterns[*].structureGate` を露出した。** `retracementRatio` / `priorExtremeIdx` / `priorExtremePrice` / `necklineCrossIdx`。棄却されなかった理由を呼び出し側が検算できるようにするため。
+- **`data.patterns[*].invalidReason` を追加した。** `status` が `invalid` / `expired` になった理由コード。
+- いずれも `.claude/rules/tools.md` 規約 2 の「足す」に該当し、既存フィールドは 1 つも削っていない。
+- **整合度の説明文に注記を入れた。** `content` の「0.8以上＝教科書的」の直前に、整合度が**ゲート通過を前提とした形状の良さ**であって構造的妥当性の指標ではないこと、構造的に無効な形は整合度が下がるのではなく出力されないことを明記した。
+
+### Fixed（回帰テストを実データで固定した。#126）
+
+- **`tests/fixtures/btc_jpy_1day_2026.ts`** に BTC/JPY 日足 2026-05-29〜08-26 の 90 本（`detect_patterns('btc_jpy','1day',90)` が実際にスキャンする窓そのもの）を凍結した。**合成 fixture では閾値の妥当性を検証できない**（閾値に合わせて合成できてしまう）ため、戻り率の帯・ネックライン交差・谷ゾーン再進入は `tests/patterns/structural-gates-btcjpy.test.ts` が実データに対して固定する。
+- **既知の偽陰性は残っている。** 同区間の 8/3 → 8/10 → 8/14（安値切り上げ型）は依然として未検出だが、**原因は本 PR の構造ゲートではない**。(1) `MIN_PIVOT_DISTANCE_BARS = 5` に対し 8/10 → 8/14 が 4 本、(2) サイズ検査（`validateTopSize` / `validateBottomSize`）が終値基準で、高安基準なら通る大きさ（5.87% / 5.13%）が終値基準では閾値割れ（1.85% / 1.67%）する。どちらも double_top / triple / H&S に共通する慣習なので、変更は検出件数への影響を見てから別途行う。**原因そのものをテストで固定してある**ので、期待値を緩めずに追える。
+- `tests/detect_doubles.test.ts` の形成中ダブルボトム fixture 2 件で、谷1 より前の終値をネックライン(130)より上に変えた。旧 fixture は終値がネックラインとぴったり同値のまま横ばいで、**そもそもネックラインを下抜けたという事象が存在しない**形だった（新しい `no_neckline_cross_before_trough1` が正しく弾く）。テストが検証している契約（`completionPct` / `targetMethod` / `structureRange` の境界）は変えていない。
+
 ### Changed（`detect_patterns` の `debug` 可観測性と価格基準を透明化した。**検出結果は変わらない**）
 - **`view=debug` の candidates を入力 `patterns` で絞るようにした（#124）。** 全検出器が `want` を**分類・出力の時点**でしか参照しておらず、**走査に入る時点**では見ていないため、候補は走査中に無条件で積まれていた。結果 `patterns=["double_bottom"]` を指定しても candidates は falling_wedge / rising_wedge で埋まり、`tools/detect_patterns.ts` の cap=200 トリム（accepted 優先 → rejected）で**要求した種別の棄却理由が押し出されていた**。合成データ 120 本での実測で `patterns=["double_bottom"]` の candidates は 164 件（うち falling_wedge 118 件）→ 8 件（すべて double_bottom の棄却理由）になる。
   - **絞り込みはトリム直前の 1 箇所**（`tools/patterns/candidate-filter.ts`）。各検出器の走査を `want` で早期スキップする案（計算量も減る）は採らなかった——6 ファイルに手を入れることになり「検出結果ゼロ変更」の保証が難しい。
