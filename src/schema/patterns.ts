@@ -94,7 +94,8 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 		.default(0.04)
 		.describe(
 			'同水準判定の許容誤差。大きいほど判定が緩くなる。head_and_shoulders / inverse_head_and_shoulders では' +
-				'肩の左右差の許容誤差とネックライン水平度にのみ使う（頭が肩よりどれだけ突出すべきかは' +
+				'肩の左右差の許容誤差にのみ使う（ネックライン水平度は本パラメータに依存しない固定閾値。' +
+				'頭が肩よりどれだけ突出すべきかは' +
 				'headProminencePct が別に持つ。issue #149——旧実装はここに頭の突出要求も相乗りしており、' +
 				'肩では「大きいほど緩い」・頭では「大きいほど厳しい」が同じ値に同時にかかっていた）。',
 		),
@@ -130,9 +131,11 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 				'  candidates は `patterns` で要求した種別（エイリアスは展開して照合）に**絞って**返す。' +
 				'`patterns` 未指定なら全種別。絞らないと cap（200件）を要求外の種別が食い潰し、' +
 				'要求した種別の棄却理由が押し出される。\n' +
-				'  candidates の `accepted:false` は 2 種類ある——`status` を持たず `includeInvalid` では' +
-				'拾えない候補段階の棄却（例: `head_not_higher`）と、一度パターンとして成立してから' +
-				'`status=invalid`/`expired` になったもの。区別は includeInvalid の説明を参照。',
+				'  candidates の各エントリは `status` を持たない。`accepted:false` は候補生成の時点での' +
+				'棄却（例: `head_not_higher`。`includeInvalid` では拾えない）。`accepted:true` は' +
+				'その後パターンとして成立したことを示すだけで、成立後に `status=invalid`/`expired` に' +
+				'なったかどうかは candidates からは分からない。それを見るには `data.patterns` 側を' +
+				'`includeInvalid=true` で見る（区別は includeInvalid の説明を参照）。',
 		),
 	// New: relevance filter for "current-involved" long-term patterns
 	requireCurrentInPattern: z.boolean().optional().default(false),
