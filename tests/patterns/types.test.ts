@@ -15,6 +15,7 @@ function makeCtx(candles: Array<{ isoTime?: string }>): DetectContext {
 		allPeaks: [],
 		allValleys: [],
 		tolerancePct: 0.04,
+		headProminencePct: 0.04,
 		minDist: 5,
 		want: new Set(),
 		includeForming: false,

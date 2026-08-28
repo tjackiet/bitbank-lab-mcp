@@ -36,6 +36,7 @@ function buildCtx(opts: {
 		allPeaks: opts.allPeaks ?? opts.pivots.filter((p) => p.kind === 'H'),
 		allValleys: opts.allValleys ?? opts.pivots.filter((p) => p.kind === 'L'),
 		tolerancePct: tol,
+		headProminencePct: tol,
 		minDist: opts.minDist ?? 5,
 		want: opts.want ?? new Set(),
 		includeForming: opts.includeForming ?? false,

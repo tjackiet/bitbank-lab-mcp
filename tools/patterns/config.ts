@@ -111,11 +111,13 @@ export function resolveParams(
 		swingDepth: number;
 		tolerancePct: number;
 		minBarsBetweenSwings: number;
+		headProminencePct: number;
 	}>,
 ): {
 	swingDepth: number;
 	tolerancePct: number;
 	minBarsBetweenSwings: number;
+	headProminencePct: number;
 	autoScaled: boolean;
 } {
 	const auto = getDefaultParamsForTf(tf);
@@ -143,9 +145,19 @@ export function resolveParams(
 			: (opts.minBarsBetweenSwings as number)
 		: auto.minBarsBetweenSwings;
 
+	// headProminencePct（H&S / 逆H&S の頭の最小突出率、issue #149）: スキーマに .default() を
+	// 付けていないため、呼び出し側が省略すれば opts.headProminencePct は確実に undefined になる
+	// （tolerancePct のような「スキーマ既定値と等しいか」の判定は不要）。未指定なら tolerancePct と
+	// 同じ時間軸オート表（tolAuto）を採用する——これは新パラメータ切り出し前に tolerancePct が
+	// 実質担っていた頭の判定閾値と数値上一致させ、既定値のままの挙動を変えないため。
+	const headProminencePct =
+		typeof opts.headProminencePct === 'number' && !Number.isNaN(opts.headProminencePct)
+			? opts.headProminencePct
+			: tolAuto;
+
 	const autoScaled = !(
 		Number.isFinite(opts.swingDepth as number) || Number.isFinite(opts.minBarsBetweenSwings as number)
 	);
 
-	return { swingDepth, tolerancePct, minBarsBetweenSwings, autoScaled };
+	return { swingDepth, tolerancePct, minBarsBetweenSwings, headProminencePct, autoScaled };
 }

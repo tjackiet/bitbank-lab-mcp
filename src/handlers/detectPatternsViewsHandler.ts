@@ -341,6 +341,10 @@ export function formatDebugView(
 		swingLines.length ? swingLines.join('\n') : 'なし',
 		'',
 		'【Candidates】',
+		// ❌ は候補生成の時点での棄却で、status を持たないため includeInvalid では拾えない
+		// （issue #149）。一度パターンとして成立してから無効化されたものは data.patterns 側で
+		// status=invalid/expired として別に出る。
+		'❌ = 候補段階の棄却（status なし。理由は [reason]。includeInvalid では拾えない）',
 		candLines.length
 			? candLines.join('\n')
 			: // 候補ゼロは「この窓でどの検出器も候補を組めなかった」の意。

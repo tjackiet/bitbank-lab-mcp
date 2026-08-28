@@ -142,6 +142,7 @@ describe('resolveParams', () => {
 		expect(result.swingDepth).toBe(6);
 		expect(result.tolerancePct).toBe(0.04);
 		expect(result.minBarsBetweenSwings).toBe(4);
+		expect(result.headProminencePct).toBe(0.04);
 		expect(result.autoScaled).toBe(true);
 	});
 
@@ -164,5 +165,27 @@ describe('resolveParams', () => {
 	it('カスタム tolerancePct はそのまま使用', () => {
 		const result = resolveParams('1day', { tolerancePct: 0.1 });
 		expect(result.tolerancePct).toBe(0.1);
+	});
+
+	// ── headProminencePct（issue #149） ──
+
+	it('headProminencePct 未指定時は tolerancePct と同じ時間軸オート値を使う', () => {
+		const result = resolveParams('1hour', {});
+		expect(result.headProminencePct).toBe(0.05); // 1hour のデフォルト（tolAuto と同値）
+		expect(result.tolerancePct).toBe(0.05);
+	});
+
+	it('カスタム headProminencePct はそのまま使用', () => {
+		const result = resolveParams('1day', { headProminencePct: 0.02 });
+		expect(result.headProminencePct).toBe(0.02);
+	});
+
+	it('tolerancePct を明示的に変えても headProminencePct には影響しない', () => {
+		// issue #149: 旧実装は同じ値を共有していたため、tolerancePct を下げると
+		// 意図とは逆に頭の判定が厳しくなった。分離後は tolerancePct を動かしても
+		// headProminencePct（未指定なら時間軸オート値のまま）は変わらない。
+		const result = resolveParams('1hour', { tolerancePct: 0.01 });
+		expect(result.tolerancePct).toBe(0.01);
+		expect(result.headProminencePct).toBe(0.05); // 1hour のオート値のまま
 	});
 });

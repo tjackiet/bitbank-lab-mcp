@@ -343,13 +343,13 @@ function enumerateHsWindows(ctx: DetectContext, side: 'top' | 'bottom'): HsWindo
 // ── Helper: Strict Inverse H&S (L-H-L-H-L) ──
 
 function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; found: boolean } {
-	const { candles, pivots, tolerancePct, near, debugCandidates } = ctx;
+	const { candles, pivots, tolerancePct, headProminencePct, near, debugCandidates } = ctx;
 	const patterns: DeduplicablePattern[] = [];
 	let found = false;
 
 	for (const { p0, p1, p2, p3, p4 } of enumerateHsWindows(ctx, 'bottom')) {
 		const shouldersNear = near(p0.price, p4.price) && isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
-		const headLower = p2.price < Math.min(p0.price, p4.price) * (1 - tolerancePct);
+		const headLower = p2.price < Math.min(p0.price, p4.price) * (1 - headProminencePct);
 		const necklineCheck = validateHorizontalNeckline(p1.price, p3.price, HS_NECKLINE_MAX_PCT);
 		if (shouldersNear && headLower && necklineCheck.ok) {
 			const start = candles[p0.idx].isoTime;
@@ -506,8 +506,9 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 					shouldersDiff: Math.abs(p0.price - p4.price),
 					shouldersDiffPct: Math.abs(p0.price - p4.price) / Math.max(1, Math.max(p0.price, p4.price)),
 					shoulderMaxPct: HS_SHOULDER_MAX_PCT,
+					tolerancePct,
 					head: p2.price,
-					thresholdPct: tolerancePct,
+					headProminencePct,
 					necklineP1: p1.price,
 					necklineP3: p3.price,
 					necklineDiffPct: necklineCheck.diffPct,
@@ -524,13 +525,13 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 // ── Helper: Strict H&S (H-L-H-L-H) ──
 
 function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; found: boolean } {
-	const { candles, pivots, tolerancePct, near, debugCandidates } = ctx;
+	const { candles, pivots, tolerancePct, headProminencePct, near, debugCandidates } = ctx;
 	const patterns: DeduplicablePattern[] = [];
 	let found = false;
 
 	for (const { p0, p1, p2, p3, p4 } of enumerateHsWindows(ctx, 'top')) {
 		const shouldersNear = near(p0.price, p4.price) && isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
-		const headHigher = p2.price > Math.max(p0.price, p4.price) * (1 + tolerancePct);
+		const headHigher = p2.price > Math.max(p0.price, p4.price) * (1 + headProminencePct);
 		const necklineCheck = validateHorizontalNeckline(p1.price, p3.price, HS_NECKLINE_MAX_PCT);
 		if (shouldersNear && headHigher && necklineCheck.ok) {
 			const start = candles[p0.idx].isoTime;
@@ -687,8 +688,9 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 					shouldersDiff: Math.abs(p0.price - p4.price),
 					shouldersDiffPct: Math.abs(p0.price - p4.price) / Math.max(1, Math.max(p0.price, p4.price)),
 					shoulderMaxPct: HS_SHOULDER_MAX_PCT,
+					tolerancePct,
 					head: p2.price,
-					thresholdPct: tolerancePct,
+					headProminencePct,
 					necklineP1: p1.price,
 					necklineP3: p3.price,
 					necklineDiffPct: necklineCheck.diffPct,
@@ -705,7 +707,7 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 // ── Helper: Relaxed H&S fallback ──
 
 function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
-	const { candles, pivots, allValleys, tolerancePct, minDist, debugCandidates } = ctx;
+	const { candles, pivots, allValleys, tolerancePct, headProminencePct, minDist, debugCandidates } = ctx;
 
 	for (const factors of RELAXED_FACTORS) {
 		for (let i = 0; i < pivots.length - 4; i++) {
@@ -725,7 +727,7 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 			const shouldersNearRelaxed =
 				Math.abs(p0.price - p4.price) / Math.max(1, Math.max(p0.price, p4.price)) <= tolerancePct * factors.shoulder &&
 				isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
-			const headHigherRelaxed = p2.price > Math.max(p0.price, p4.price) * (1 + tolerancePct * factors.head);
+			const headHigherRelaxed = p2.price > Math.max(p0.price, p4.price) * (1 + headProminencePct * factors.head);
 			const necklineCheck = validateHorizontalNeckline(p1.price, p3.price, HS_NECKLINE_MAX_PCT);
 			if (!shouldersNearRelaxed || !headHigherRelaxed || !necklineCheck.ok) {
 				if (shouldersNearRelaxed && headHigherRelaxed && !necklineCheck.ok) {
@@ -885,7 +887,7 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 // ── Helper: Relaxed Inverse H&S fallback ──
 
 function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
-	const { candles, pivots, allPeaks, tolerancePct, minDist, debugCandidates } = ctx;
+	const { candles, pivots, allPeaks, tolerancePct, headProminencePct, minDist, debugCandidates } = ctx;
 
 	for (const factors of RELAXED_FACTORS) {
 		for (let i = 0; i < pivots.length - 4; i++) {
@@ -905,7 +907,7 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 			const shouldersNearRelaxed =
 				Math.abs(p0.price - p4.price) / Math.max(1, Math.max(p0.price, p4.price)) <= tolerancePct * factors.shoulder &&
 				isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
-			const headLowerRelaxed = p2.price < Math.min(p0.price, p4.price) * (1 - tolerancePct * factors.head);
+			const headLowerRelaxed = p2.price < Math.min(p0.price, p4.price) * (1 - headProminencePct * factors.head);
 			const necklineCheck = validateHorizontalNeckline(p1.price, p3.price, HS_NECKLINE_MAX_PCT);
 			if (!(shouldersNearRelaxed && headLowerRelaxed && necklineCheck.ok)) {
 				if (shouldersNearRelaxed && headLowerRelaxed && !necklineCheck.ok) {

@@ -21,17 +21,27 @@ function buildCtx(opts: {
 	allPeaks?: Pivot[];
 	allValleys?: Pivot[];
 	tolerancePct?: number;
+	/**
+	 * 既定は tolerancePct に連動させず独立に 0.04（config.ts の時間軸オート表で '1day' に相当）とする。
+	 * 本番の resolveParams も「未指定なら headProminencePct は tolerancePct とは無関係に時間軸オート値」
+	 * という解決なので、ここで tolerancePct へフォールバックすると本番と違う結合を再現してしまう
+	 * （issue #149 が解消した結合そのもの）。tolerancePct と headProminencePct の相互作用を見たい
+	 * テストは両方を明示的に渡すこと（buildIssue146Ctx 等）。
+	 */
+	headProminencePct?: number;
 	want?: Set<string>;
 	includeForming?: boolean;
 	type?: string;
 }): DetectContext {
 	const tol = opts.tolerancePct ?? 0.04;
+	const headProm = opts.headProminencePct ?? 0.04;
 	return {
 		candles: opts.candles,
 		pivots: opts.pivots,
 		allPeaks: opts.allPeaks ?? opts.pivots.filter((p) => p.kind === 'H'),
 		allValleys: opts.allValleys ?? opts.pivots.filter((p) => p.kind === 'L'),
 		tolerancePct: tol,
+		headProminencePct: headProm,
 		minDist: 5,
 		want: opts.want ?? new Set(),
 		includeForming: opts.includeForming ?? false,
@@ -249,7 +259,7 @@ describe('detectHeadAndShoulders', () => {
 	});
 
 	it('頭が両肩より高くない → head_not_higher で rejected', () => {
-		// head=103, shoulders=100 → 103 > 100*1.04=104? No
+		// head=103, shoulders=100 → 103 > 100*(1+headProminencePct=0.04)=104? No（tolerancePct は無関係。issue #149）
 		const { candles, pivots } = buildHS({ head: 103 });
 		const ctx = buildCtx({ candles, pivots });
 		detectHeadAndShoulders(ctx);
@@ -322,7 +332,7 @@ describe('detectHeadAndShoulders', () => {
 	});
 
 	it('頭が両肩より低くない → head_not_lower で rejected', () => {
-		// head=97, shoulders=100 → 97 < 100*(1-0.04)=96? No (97 > 96)
+		// head=97, shoulders=100 → 97 < 100*(1-headProminencePct=0.04)=96? No (97 > 96)（tolerancePct は無関係。issue #149）
 		const { candles, pivots } = buildInverseHS({ head: 97 });
 		const ctx = buildCtx({ candles, pivots });
 		detectHeadAndShoulders(ctx);
@@ -1135,7 +1145,7 @@ describe('detectHeadAndShoulders', () => {
 
 		const ISSUE_146_WINDOW = [20, 26, 31, 38, 45];
 
-		function buildIssue146Ctx(): DetectContext {
+		function buildIssue146Ctx(opts?: { tolerancePct?: number; headProminencePct?: number }): DetectContext {
 			const total = 56;
 			const candles: CandleData[] = [];
 			for (let i = 0; i < total; i++) {
@@ -1157,11 +1167,13 @@ describe('detectHeadAndShoulders', () => {
 				kind,
 				extremePrice: kind === 'H' ? price + 8000 : price - 8000,
 			}));
-			// 1hour の既定（patterns/config.ts）: tolerancePct=0.05 / minBarsBetweenSwings=2
+			// 1hour の既定（patterns/config.ts）: tolerancePct=0.05 / headProminencePct=0.05（未指定時は
+			// tolerancePct と同じ時間軸オート値。issue #149）/ minBarsBetweenSwings=2
 			const ctx = buildCtx({
 				candles,
 				pivots,
-				tolerancePct: 0.05,
+				tolerancePct: opts?.tolerancePct ?? 0.05,
+				headProminencePct: opts?.headProminencePct ?? 0.05,
 				type: '1hour',
 				want: new Set(['head_and_shoulders']),
 			});
@@ -1185,7 +1197,8 @@ describe('detectHeadAndShoulders', () => {
 			// issue の受け入れ条件は「completed で検出される」ことではなく
 			// 「候補が評価されて理由付きで結論が出る」こと。この 5 点は頭が右肩を
 			// **1.85% しか上回っておらず**、strict が要求する頭のマージン
-			// （1hour の tolerancePct = 5%）に届かないので head_not_higher で棄却されるのが正しい。
+			// （1hour の headProminencePct = 5%。tolerancePct ではない——issue #149）
+			// に届かないので head_not_higher で棄却されるのが正しい。
 			const ctx = buildIssue146Ctx();
 			detectHeadAndShoulders(ctx);
 
@@ -1197,6 +1210,44 @@ describe('detectHeadAndShoulders', () => {
 			expect(details.leftShoulder).toBe(12_582_009);
 			expect(details.head).toBe(12_851_000);
 			expect(details.rightShoulder).toBe(12_617_817);
+		});
+
+		// ── tolerancePct / headProminencePct の分離（issue #149） ──
+
+		it('tolerancePct をどれだけ動かしても頭の判定（head_not_higher）は変わらない', () => {
+			// 肩差 0.284%（35,808 / 12,617,817）はどんな tolerancePct でも near() を通るため、
+			// tolerancePct を変えても shouldersNear は常に true のまま。headProminencePct を
+			// 5% に固定して tolerancePct だけを極端に振っても、頭のマージン不足（1.85% < 5%）
+			// による head_not_higher は変わらないことを確認する。
+			const low = buildIssue146Ctx({ tolerancePct: 0.005, headProminencePct: 0.05 });
+			detectHeadAndShoulders(low);
+			const high = buildIssue146Ctx({ tolerancePct: 0.1, headProminencePct: 0.05 });
+			detectHeadAndShoulders(high);
+
+			const candLow = findIssueWindow(low);
+			const candHigh = findIssueWindow(high);
+			expect(candLow?.reason).toBe('head_not_higher');
+			expect(candHigh?.reason).toBe('head_not_higher');
+
+			// 頭の判定に使った実際の閾値（headProminencePct）は tolerancePct に関わらず同じ。
+			const detailsLow = candLow?.details as { headProminencePct: number; tolerancePct: number };
+			const detailsHigh = candHigh?.details as { headProminencePct: number; tolerancePct: number };
+			expect(detailsLow.headProminencePct).toBe(0.05);
+			expect(detailsHigh.headProminencePct).toBe(0.05);
+			// tolerancePct 自体は debug に反映される（消えたわけではなく、頭の判定に使われないだけ）。
+			expect(detailsLow.tolerancePct).toBe(0.005);
+			expect(detailsHigh.tolerancePct).toBe(0.1);
+		});
+
+		it('headProminencePct を既定より緩めると head_not_higher が解消する', () => {
+			// 頭のマージンは 1.85%。headProminencePct を既定 5% から 1% まで下げると
+			// 「大きいほど厳しい」の向きどおり要求が緩み、head_not_higher では棄却されなくなる
+			// （tolerancePct は既定のまま動かしていない）。
+			const ctx = buildIssue146Ctx({ headProminencePct: 0.01 });
+			detectHeadAndShoulders(ctx);
+
+			const cand = findIssueWindow(ctx);
+			expect(cand?.reason).not.toBe('head_not_higher');
 		});
 
 		it('厳密に交互する列でも、肩を跨ぐ窓（gap>=3）は新たに生成される', () => {

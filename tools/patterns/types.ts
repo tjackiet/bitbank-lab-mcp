@@ -113,6 +113,13 @@ export interface DetectContext {
 	allPeaks: Pivot[];
 	allValleys: Pivot[];
 	tolerancePct: number;
+	/**
+	 * H&S / 逆 H&S 専用: 頭が両肩よりどれだけ突出していなければならないかの最小要求率（issue #149）。
+	 * `tolerancePct` とは向きが逆で、**大きいほど判定が厳しくなる**（最小要求を引き上げるため）。
+	 * `detect_hs.ts` の `headLower` / `headHigher` 判定にのみ使う。肩の同水準判定・ネックライン
+	 * 水平度は引き続き `tolerancePct`（同水準判定）と固定定数 `HS_NECKLINE_MAX_PCT`（水平度）が担う。
+	 */
+	headProminencePct: number;
 	minDist: number;
 	/** 検出対象パターン種別。空 = 全種 */
 	want: Set<string>;
