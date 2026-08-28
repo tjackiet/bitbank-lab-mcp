@@ -1108,4 +1108,129 @@ describe('detectHeadAndShoulders', () => {
 		const result = detectHeadAndShoulders(ctx);
 		expect(result.patterns).toHaveLength(0);
 	});
+
+	// ── 窓生成: 交互列が崩れていても頭を中心とした窓が作られる（issue #146） ──
+
+	describe('交互列が崩れたピボット列からの窓生成（issue #146）', () => {
+		/**
+		 * issue #146 が「実測済み」として報告した BTC/JPY 1時間足のピボット列。
+		 * swingDepth=3（1hour の既定）では**頭の直後に別の高値 12,726,672 が挟まり**、
+		 * 頭より右の交互が崩れる。旧実装は「配列上で連続する 5 ピボットが H-L-H-L-H」を
+		 * 要求していたため、頭 12,851,000 を中心とする窓が**一度も生成されなかった**
+		 * （`view=debug` の candidates にも棄却理由が残らない偽陰性）。
+		 *
+		 * **注意: これは値そのものを凍結した実データ fixture ではない。** issue が実測として
+		 * 報告したピボット列（価格・間隔）を入力にしている。窓生成が読むのは `kind` / `idx` /
+		 * `price` だけなので、「窓が作られるか」の回帰はこの入力で固定できる。
+		 */
+		const ISSUE_146_PIVOTS: Array<[number, number, 'H' | 'L']> = [
+			[8, 12_213_097, 'L'], //  起点の安値 8/24
+			[20, 12_582_009, 'H'], // 左肩 8/25
+			[26, 12_529_686, 'L'], // 谷1 8/25（浅い -0.42%）
+			[31, 12_851_000, 'H'], // 頭 8/25
+			[34, 12_726_672, 'H'], // 頭の直後の余計な高値 ← ここで交互が崩れる
+			[38, 12_531_708, 'L'], // 谷2 8/25
+			[45, 12_617_817, 'H'], // 右肩 8/26
+		];
+
+		const ISSUE_146_WINDOW = [20, 26, 31, 38, 45];
+
+		function buildIssue146Ctx(): DetectContext {
+			const total = 56;
+			const candles: CandleData[] = [];
+			for (let i = 0; i < total; i++) {
+				const c = 12_213_097 + Math.round((i / total) * 300_000);
+				candles.push(mkCandle(total - i, c, c + 5000, c - 5000, c));
+			}
+			for (const [idx, price, kind] of ISSUE_146_PIVOTS) {
+				candles[idx] = mkCandle(
+					total - idx,
+					price,
+					kind === 'H' ? price + 8000 : price + 3000,
+					kind === 'L' ? price - 8000 : price - 3000,
+					price,
+				);
+			}
+			const pivots: Pivot[] = ISSUE_146_PIVOTS.map(([idx, price, kind]) => ({
+				idx,
+				price,
+				kind,
+				extremePrice: kind === 'H' ? price + 8000 : price - 8000,
+			}));
+			// 1hour の既定（patterns/config.ts）: tolerancePct=0.05 / minBarsBetweenSwings=2
+			const ctx = buildCtx({
+				candles,
+				pivots,
+				tolerancePct: 0.05,
+				type: '1hour',
+				want: new Set(['head_and_shoulders']),
+			});
+			ctx.minDist = 2;
+			return ctx;
+		}
+
+		const findIssueWindow = (ctx: DetectContext) =>
+			ctx.debugCandidates.find(
+				(d) => d.type === 'head_and_shoulders' && JSON.stringify(d.indices) === JSON.stringify(ISSUE_146_WINDOW),
+			);
+
+		it('頭 12,851,000 を中心とする 5 点が候補として生成される', () => {
+			const ctx = buildIssue146Ctx();
+			detectHeadAndShoulders(ctx);
+			// 左肩 20 / 谷1 26 / 頭 31 / 谷2 38 / 右肩 45。頭の直後の高値 34 を挟んでも窓になる。
+			expect(findIssueWindow(ctx)).toBeDefined();
+		});
+
+		it('生成された候補は理由付きで結論が出る（頭のマージン不足で head_not_higher）', () => {
+			// issue の受け入れ条件は「completed で検出される」ことではなく
+			// 「候補が評価されて理由付きで結論が出る」こと。この 5 点は頭が右肩を
+			// **1.85% しか上回っておらず**、strict が要求する頭のマージン
+			// （1hour の tolerancePct = 5%）に届かないので head_not_higher で棄却されるのが正しい。
+			const ctx = buildIssue146Ctx();
+			detectHeadAndShoulders(ctx);
+
+			const cand = findIssueWindow(ctx);
+			expect(cand?.accepted).toBe(false);
+			expect(cand?.reason).toBe('head_not_higher');
+			// 棄却理由を出力から検算できる（#125 / #128 の方針）。
+			const details = cand?.details as { leftShoulder: number; head: number; rightShoulder: number };
+			expect(details.leftShoulder).toBe(12_582_009);
+			expect(details.head).toBe(12_851_000);
+			expect(details.rightShoulder).toBe(12_617_817);
+		});
+
+		it('厳密に交互する列でも、肩を跨ぐ窓（gap>=3）は新たに生成される', () => {
+			// **窓生成の緩和は「交互が崩れた区間だけ」に閉じていない。** 肩リスト上で
+			// 間に肩を跨ぐ組（gap>=3）は旧実装が作れなかった窓で、`H L H L H L H` のように
+			// 厳密に交互する列でも出る。#146 の 5 点自体が gap=3 の窓（肩リストの第 1 と第 4）
+			// なので、これは仕様であって副作用ではない——ここで固定しておかないと
+			// 「交互列なら旧実装と同一」という誤った不変条件が後から書き戻されうる。
+			//
+			// 肩 h0=0(100) / h1=20(118) / h2=40(130) / h3=60(101)。旧実装が作れた窓は
+			// 配列上で連続する [0,10,20,30,40] と [20,30,40,50,60] の 2 つだけで、
+			// どちらも肩が離れすぎ（100 vs 118 / 118 vs 101）。一方 (h0, h3) を肩に取ると
+			// 頭 = 間の最高値 130、肩は 100 と 101 で揃う。
+			const pts: Array<[number, number, 'H' | 'L']> = [
+				[0, 100, 'H'],
+				[10, 80, 'L'],
+				[20, 118, 'H'],
+				[30, 82, 'L'],
+				[40, 130, 'H'],
+				[50, 81, 'L'],
+				[60, 101, 'H'],
+			];
+			const candles: CandleData[] = Array.from({ length: 70 }, (_, i) => mkCandle(70 - i, 90, 95, 85, 90));
+			for (const [idx, price] of pts) candles[idx] = mkCandle(70 - idx, price, price + 2, price - 2, price);
+			const pivots: Pivot[] = pts.map(([idx, price, kind]) => ({ idx, price, kind, extremePrice: price }));
+
+			const ctx = buildCtx({ candles, pivots, want: new Set(['head_and_shoulders']) });
+			detectHeadAndShoulders(ctx);
+
+			const spanning = ctx.debugCandidates.find(
+				(d) => d.type === 'head_and_shoulders' && JSON.stringify(d.indices) === JSON.stringify([0, 10, 40, 50, 60]),
+			);
+			expect(spanning).toBeDefined();
+			expect(spanning?.accepted).toBe(true);
+		});
+	});
 });

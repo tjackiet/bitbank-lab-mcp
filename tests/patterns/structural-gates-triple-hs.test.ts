@@ -23,7 +23,13 @@ import detectPatterns from '../../tools/detect_patterns.js';
 
 type Candle = { isoTime: string; open: number; high: number; low: number; close: number; volume: number };
 type Cand = { type: string; accepted: boolean; reason?: string; indices?: number[]; details?: unknown };
-type Pat = { type: string; status?: string; confidence: number; structureGate?: Record<string, number> };
+type Pat = {
+	type: string;
+	status?: string;
+	confidence: number;
+	structureGate?: Record<string, number>;
+	pivots?: Array<{ idx: number }>;
+};
 
 /** 固定の起点から h 時間後。相対時刻にしないのは実行日でパターンが動かないようにするため。 */
 function mkCandle(h: number, close: number): Candle {
@@ -129,13 +135,30 @@ describe('detect_patterns: 実データに対する triple / H&S の構造ゲー
 		expect(hs?.structureGate?.necklineCrossIdx).toBe(9);
 	});
 
-	it('swingDepth=3 の H&S は先行上昇の起点よりネックラインが下で落ちる', async () => {
-		// 同じ頭 / 谷 / 右肩を左肩 idx 47 で読んだ形。左肩-頭の間に谷ピボットが無いため
+	it('swingDepth=3 の H&S: 縮退した 4 点の読みは落ち、#146 以降は 5 点の読みが残る', async () => {
+		// **左肩 idx 47 で読んだ 4 点の形は落ちたまま。** 左肩-頭の間に谷ピボットが無いため
 		// サイズ検査ともども頭-戻り-右肩の 3 点に縮退し、`first` は頭（idx 53）になる。
 		// 頭への上昇 851,964 円に対し谷までの下落が 1,150,754 円（戻り率 1.35）で、
 		// ネックライン 10,002,960 は上昇の起点 10,051,036 より**下**にある。
+		//
+		// **一方 5 点の読み（左肩 38 / 谷 45 / 頭 53 / 谷 66 / 右肩 73）は #146 で残るようになった。**
+		// 旧実装の窓生成は「配列上で連続する 5 ピボット」を要求しており、swingDepth=3 の
+		// ピボット列は `… H38 H42 L45 H47 H53 L66 H73 …` と交互が崩れているため、この 5 点は
+		// **窓として一度も生成されなかった**（候補にすら残らない偽陰性）。肩 2 つ + その間の
+		// 最高値を頭に取る窓生成にしたことで生成され、構造ゲートを**通過して**残る。
+		// 値動きとしては #139 の CHANGELOG が「実在する H&S」として既定 swingDepth で固定したもの
+		// （頭 10,849,999 / 谷 10,002,960 / 右肩 10,191,324）と同じで、swingDepth=3 では
+		// 縮退した 4 点ではなく 5 点の構造として読める、という違い。
 		const { patterns, candidates } = await detect(buildBtcJpy2026Candles(), { type: '1day', swingDepth: 3 });
-		expect(patterns.filter((p) => p.type === 'head_and_shoulders')).toHaveLength(0);
+
+		const hs = patterns.filter((p) => p.type === 'head_and_shoulders');
+		expect(hs).toHaveLength(1);
+		expect(hs[0].pivots?.map((q) => q.idx)).toEqual([38, 45, 53, 66, 73]);
+		// ゲートは**適用されたうえで通っている**（素通しではない）。
+		expect(hs[0].structureGate?.retracementRatio).toBeCloseTo(0.3923, 3);
+		expect(hs[0].structureGate?.priorExtremeIdx).toBe(33);
+		expect(hs[0].structureGate?.necklineCrossIdx).toBe(9);
+
 		const rej = rejected(candidates, 'head_and_shoulders', 'neckline_below_pre_decline_low');
 		expect(rej).toHaveLength(1);
 		expect(rej[0].indices).toEqual([47, 53, 66, 73]);
