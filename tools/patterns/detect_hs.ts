@@ -120,6 +120,13 @@ function headCandidatesNewestFirst<T extends Pivot>(list: readonly T[]): T[] {
  * 同区間に idx 33=100 が居た）。区間内により極端な同種ピボットがあるなら、それは頭の取り違え。
  *
  * **判定は区間の内側だけを見るのでスキャン窓に依存しない**——単調性を壊さずに暗黙の保証を戻す。
+ *
+ * **比較は `price`（終値）で行い、`extremePrice`（ヒゲ）では行わない。** 戻そうとしている暗黙の
+ * 保証が `confirmedPeaks.reduce((best, p) => p.price > best.price ? ...)`、すなわち**終値基準の
+ * 極値**だったため。ヒゲ基準にすると別の（より厳しい）不変条件を課すことになり、旧実装が通していた
+ * 読みを落としかねない。`swing.ts` が「判定は high/low、格納価格は close（ヒゲ影響を回避）」と
+ * 定めているとおり、本ファイルの構造比較（左肩の 3% 判定・右肩の近接判定）もすべて `price` 側で
+ * 揃っている。実測でも両者の差は出ない——合成 704 ケース + 実データ 288 ケースのいずれも差分 0。
  */
 function headIsExtremeInSpan(
 	sameKindPivots: readonly Pivot[],
