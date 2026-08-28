@@ -185,27 +185,129 @@ function buildHsCompletionFields(
 	};
 }
 
+// ── Helper: 候補 5 点窓の生成（issue #146） ──
+
+/** 候補 5 点窓。`p0`=左肩 / `p1`=谷1 / `p2`=頭 / `p3`=谷2 / `p4`=右肩（逆 H&S は谷↔山が入れ替わる）。 */
+interface HsWindow {
+	p0: Pivot;
+	p1: Pivot;
+	p2: Pivot;
+	p3: Pivot;
+	p4: Pivot;
+}
+
+/**
+ * 探索する肩の組（左肩 × 右肩）の上限。
+ *
+ * 窓生成は肩リストの**全ペア**を見るので組数は肩の数の 2 乗で増える。`limit` の
+ * スキーマ上限 365 本を最小の `swingDepth=2` で走らせても肩は 90 個前後（2 本に 1 つが
+ * ピボット、その半分が肩）で 4,000 組ほどにしかならないため、実運用では到達しない。
+ * 病的な入力（極端に多いピボット）で探索が発散しないための歯止めとして置く。
+ */
+const HS_MAX_SHOULDER_PAIRS = 5000;
+
+/**
+ * `list`（idx 昇順）から `(loIdx, hiIdx)` の**開区間**にある極値ピボットを返す。
+ * `lower=true` なら最安値、`false` なら最高値。該当が無ければ `null`。
+ *
+ * 価格基準が `price`（終値）なのは `detect_triples` の谷 / 山の採用（`v.price < m.price`）と、
+ * 既存の relaxed / 形成中 H&S の頭の採用（`p.price > best.price`）に合わせるため。
+ * 後段の `headHigher` / `shouldersNear` / ネックラインも同じ `price` を見る。
+ */
+function extremeBetween(list: ReadonlyArray<Pivot>, loIdx: number, hiIdx: number, lower: boolean): Pivot | null {
+	let best: Pivot | null = null;
+	for (const p of list) {
+		if (p.idx <= loIdx) continue;
+		if (p.idx >= hiIdx) break;
+		if (!best || (lower ? p.price < best.price : p.price > best.price)) best = p;
+	}
+	return best;
+}
+
+/**
+ * H&S / 逆 H&S の候補 5 点窓を列挙する（issue #146）。
+ *
+ * 旧実装は `pivots` の**配列上で連続する 5 点**を取り、それが `H-L-H-L-H`（逆は `L-H-L-H-L`）
+ * であることを要求していた。この「交互列要求」は 2 通りの実データの崩れ方に脆い:
+ *
+ * - 浅い谷が `swingDepth` の粒度で消え、左肩と頭が `H→H` で連続する
+ * - 頭の直後に別の高値が挟まり、頭より右の交互が崩れる
+ *
+ * どちらも**頭を中心とした窓が一度も生成されない**ため、`view=debug` の candidates にも
+ * 棄却理由が残らない（「候補は生成されるが判定で落ちる」#138 / #139 / #140 とは別クラスの偽陰性）。
+ *
+ * そこで `detect_triples` の窓生成（山リストだけを見て 3 山を取り、間に何が挟まっても窓は作る）に
+ * 寄せる。**肩リストから肩 2 つを取り、その間の最高値（逆 H&S は最安値）を頭に、
+ * 谷は「肩と頭の間」の各区間から取る。**
+ *
+ * ピボット列が厳密に交互しているとき、本関数の出力は**旧実装の出力を含む**
+ * （肩 2 つの間に肩が 1 つだけなら、それが頭で、谷は各区間に 1 つずつしかない = 旧実装と同じ 5 点）。
+ * 交互が崩れた区間でだけ新しい窓が増える。品質保証は窓生成ではなく後段のゲート
+ * （サイズ検査 #139 / 構造ゲート #140 / 先行トレンド / ネックライン水平性）が担う。
+ *
+ * **列挙順は「肩リスト上の間隔（`gap`）が狭い順」。** 旧実装の窓は必ず `gap=2`
+ * （肩 2 つの間に肩が 1 つ = 配列上で連続する 5 ピボット）なので、これで**旧実装の窓が
+ * 先頭に並ぶ**。窓を全件評価する strict 経路では順序は結果に効かないが、
+ * 「まず旧実装と同じ窓を見る」ことを列挙順として明示しておく。
+ *
+ * **本関数を使うのは strict の 2 経路だけで、`findRelaxedHS` / `findRelaxedInverseHS` は
+ * 旧実装のまま**（意図的な限定。#146）。relaxed は `RELAXED_FACTORS` を厳しい段から
+ * 順に試して**最初に条件を満たした窓で早期 `return`** するため、窓が増えると緩い段へ
+ * 落ちる前に厳しい段が別の窓を拾い、実データで**完成済み H&S が `near_completion` に
+ * 置き換わって消える**（実測は CHANGELOG）。strict だけなら実データ 96 ケースで
+ * 差分は**追加のみ・消失ゼロ**。#146 の 5 点は strict の許容誤差で通るので、
+ * relaxed へ広げなくても本 issue は解ける。
+ *
+ * 窓にしない組は 2 つ:
+ * - 谷が片側でも取れない組（ネックラインの 2 点が張れない）
+ * - 肩が窓の最高値（逆 H&S は最安値）になる組。どう読んでも H&S ではないので
+ *   候補にせず `view=debug` も汚さない。**許容誤差のマージン不足はここでは落とさない**
+ *   ——それは窓生成ではなく判定の問題で、`head_not_higher` として debug に残す価値がある
+ */
+function enumerateHsWindows(ctx: DetectContext, side: 'top' | 'bottom'): HsWindow[] {
+	const { pivots, minDist } = ctx;
+	const isTop = side === 'top';
+	const shoulders = pivots.filter((p) => p.kind === (isTop ? 'H' : 'L'));
+	const mids = pivots.filter((p) => p.kind === (isTop ? 'L' : 'H'));
+	const windows: HsWindow[] = [];
+	let pairs = 0;
+
+	// gap = 肩リスト上の左肩 → 右肩の距離。間に肩が 1 つ以上要るので 2 から始める。
+	for (let gap = 2; gap < shoulders.length; gap++) {
+		for (let i = 0; i + gap < shoulders.length; i++) {
+			if (++pairs > HS_MAX_SHOULDER_PAIRS) return windows;
+			const p0 = shoulders[i];
+			const p4 = shoulders[i + gap];
+			// 頭は肩 2 つの間の最高値（逆 H&S は最安値）。
+			const p2 = extremeBetween(shoulders, p0.idx, p4.idx, !isTop);
+			if (!p2) continue;
+			if (isTop ? !(p2.price > p0.price && p2.price > p4.price) : !(p2.price < p0.price && p2.price < p4.price))
+				continue;
+			// ネックラインの 2 点は「肩と頭の間」の各区間の最安値（逆 H&S は最高値）。
+			const p1 = extremeBetween(mids, p0.idx, p2.idx, isTop);
+			const p3 = extremeBetween(mids, p2.idx, p4.idx, isTop);
+			if (!p1 || !p3) continue;
+			if (
+				p1.idx - p0.idx < minDist ||
+				p2.idx - p1.idx < minDist ||
+				p3.idx - p2.idx < minDist ||
+				p4.idx - p3.idx < minDist
+			)
+				continue;
+			windows.push({ p0, p1, p2, p3, p4 });
+		}
+	}
+	return windows;
+}
+
 // ── Helper: Strict Inverse H&S (L-H-L-H-L) ──
 
 function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; found: boolean } {
-	const { candles, pivots, tolerancePct, minDist, near, debugCandidates } = ctx;
+	const { candles, pivots, tolerancePct, near, debugCandidates } = ctx;
 	const patterns: DeduplicablePattern[] = [];
 	let found = false;
 
-	for (let i = 0; i < pivots.length - 4; i++) {
-		const p0 = pivots[i],
-			p1 = pivots[i + 1],
-			p2 = pivots[i + 2],
-			p3 = pivots[i + 3],
-			p4 = pivots[i + 4];
-		if (!(p0.kind === 'L' && p1.kind === 'H' && p2.kind === 'L' && p3.kind === 'H' && p4.kind === 'L')) continue;
-		if (
-			p1.idx - p0.idx < minDist ||
-			p2.idx - p1.idx < minDist ||
-			p3.idx - p2.idx < minDist ||
-			p4.idx - p3.idx < minDist
-		)
-			continue;
+	for (const { p0, p1, p2, p3, p4 } of enumerateHsWindows(ctx, 'bottom')) {
 		const shouldersNear = near(p0.price, p4.price) && isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
 		const headLower = p2.price < Math.min(p0.price, p4.price) * (1 - tolerancePct);
 		const necklineCheck = validateHorizontalNeckline(p1.price, p3.price, HS_NECKLINE_MAX_PCT);
@@ -382,24 +484,11 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 // ── Helper: Strict H&S (H-L-H-L-H) ──
 
 function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; found: boolean } {
-	const { candles, pivots, tolerancePct, minDist, near, debugCandidates } = ctx;
+	const { candles, pivots, tolerancePct, near, debugCandidates } = ctx;
 	const patterns: DeduplicablePattern[] = [];
 	let found = false;
 
-	for (let i = 0; i < pivots.length - 4; i++) {
-		const p0 = pivots[i],
-			p1 = pivots[i + 1],
-			p2 = pivots[i + 2],
-			p3 = pivots[i + 3],
-			p4 = pivots[i + 4];
-		if (!(p0.kind === 'H' && p1.kind === 'L' && p2.kind === 'H' && p3.kind === 'L' && p4.kind === 'H')) continue;
-		if (
-			p1.idx - p0.idx < minDist ||
-			p2.idx - p1.idx < minDist ||
-			p3.idx - p2.idx < minDist ||
-			p4.idx - p3.idx < minDist
-		)
-			continue;
+	for (const { p0, p1, p2, p3, p4 } of enumerateHsWindows(ctx, 'top')) {
 		const shouldersNear = near(p0.price, p4.price) && isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
 		const headHigher = p2.price > Math.max(p0.price, p4.price) * (1 + tolerancePct);
 		const necklineCheck = validateHorizontalNeckline(p1.price, p3.price, HS_NECKLINE_MAX_PCT);
