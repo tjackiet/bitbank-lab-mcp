@@ -76,6 +76,7 @@ function buildCtx(tf: string, candles: CandleData[], includeForming: boolean): D
 		allPeaks: pivots.filter((p) => p.kind === 'H'),
 		allValleys: pivots.filter((p) => p.kind === 'L'),
 		tolerancePct,
+		headProminencePct: tolerancePct,
 		minDist: minBarsBetweenSwings,
 		want: new Set<string>(),
 		includeForming,

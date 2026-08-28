@@ -163,6 +163,20 @@ describe('detect_patterns: debug candidates の要求種別フィルタ（#124�
 		for (const c of rejected) expect(text).toContain(String(c.reason));
 	});
 
+	it('候補段階の棄却（❌）は status を持たず includeInvalid では拾えないことを content で説明する（issue #149）', async () => {
+		// head_not_higher 等の候補段階の棄却と、status=invalid/expired（構造ゲート通過後の無効化）は
+		// 別カテゴリで、後者だけが includeInvalid=true で拾える。この区別自体が content に出ていないと
+		// 「includeInvalid を立てても消えた候補が出てこない」を利用者が原因不明のまま観測することになる。
+		const candles = buildNoisyCandles();
+		const res = await run(candles, { patterns: ['double_bottom'], includeForming: true });
+		assertOk(res);
+		const rejected = (res.meta.debug?.candidates ?? []).filter((c) => !c.accepted);
+		expect(rejected.length).toBeGreaterThan(0);
+		const text = formatDebugView('hdr', res.meta, [], res).content[0].text;
+		expect(text).toContain('候補段階の棄却');
+		expect(text).toContain('includeInvalid では拾えない');
+	});
+
 	it('要求していない種別（wedge / triangle / flag）の候補は 1 件も出ない', async () => {
 		const candles = buildNoisyCandles();
 		const res = await run(candles, { patterns: ['double_bottom'], includeForming: true });

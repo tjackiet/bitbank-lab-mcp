@@ -29,7 +29,136 @@
 | 14 | #139 | triple / H&S にサイズ検査を横展開（#138 欠陥 2-2） | 減る |
 | 15 | #140 | triple / H&S に構造ゲートを横展開（#138 欠陥 2-1） | 減る |
 | 16 | #141 | 三角形の外れ値除去に除去率の上限を入れた | 実データで**減る**（合成 fixture は変わらない） |
-| 17 | 本 PR | H&S の窓生成から交互列要求を外した（#146） | 実データで**増える**（合成 fixture は変わらない） |
+| 17 | #148 | H&S の窓生成から交互列要求を外した（#146） | 実データで**増える**（合成 fixture は変わらない） |
+| 18 | 本 PR | H&S の `tolerancePct` が頭の突出率としても使われ意味が反転していたのを `headProminencePct` に分離（#149） | **変わらない**（既定値のまま） |
+
+### Fixed（`detect_hs` の `tolerancePct` が頭の判定でだけ意味が反転していたのを `headProminencePct` に分離。#149）
+
+#146 の実例（BTC/JPY 1時間足、左肩 12,582,009 / 頭 12,851,000 / 右肩 12,617,817）で
+Claude Desktop から実運用したところ、`tolerancePct` を 0.06 → 0.05 → 0.02 と**下げて緩めよう**
+としたユーザー操作が逆に効き、一貫して `head_not_higher` で落ち続けた。
+
+原因は `tools/patterns/detect_hs.ts` の頭の判定:
+
+```ts
+const headLower  = p2.price < Math.min(p0.price, p4.price) * (1 - tolerancePct);
+const headHigher = p2.price > Math.max(p0.price, p4.price) * (1 + tolerancePct);
+```
+
+`tolerancePct` が「頭が両肩よりどれだけ突出していなければならないかの最小要求率」として使われており、
+**大きくするほど判定が厳しくなる。** 一方 double / triple / triangle 系の `tolerancePct` は
+「同水準判定の許容誤差」——**大きいほど緩い。** 同じスキーマ・同じパラメータ名の 1 つの数値が、
+種別によって「許容度」にも「要求の厳しさ」にもなっていた。
+
+#### 追加で判明した事実（issue 未記載）
+
+**`tolerancePct` は H&S の中で実は 2 つの異なる役割を同時に持っていた。**
+
+```ts
+const shouldersNear = near(p0.price, p4.price) && isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
+//                    ^^^^ tolerancePct 経由（ctx.near、他種別と同じ「小さいほど厳しい」）
+const headLower = p2.price < Math.min(p0.price, p4.price) * (1 - tolerancePct);
+//                                                                ^^^^^^^^^^^^ 同じ tolerancePct が「大きいほど厳しい」で効く
+```
+
+**同じ 1 つの値が、肩の判定では「小さいほど厳格」、頭の判定では「大きいほど厳格」として
+同時にかかっていた。** ユーザーが片方（頭を緩めたい）を意図して動かすと、必ずもう片方（肩）が
+逆に動く。これは「description に明記する」（issue の方針 B）では解消できない構造的な理由——
+2 つの役割が同じ変数に同居していること自体が問題であり、分離（方針 A）でしか根治しない。
+
+#### 方針 A（専用パラメータへの分離）を採用
+
+上記の理由で方針 A を採用し、頭の突出率を新パラメータ `headProminencePct` に切り出した。
+
+- `tolerancePct` は H&S でも**肩の同水準判定（`near` / `shouldersNear`）にのみ残る**
+  （他種別と同じ「大きいほど緩い」の意味に統一される）。
+- `headProminencePct` が `headLower` / `headHigher`（strict 経路）と、relaxed fallback の
+  頭の緩和項（`tolerancePct * factors.head` だった箇所）を担う。
+- 数式の向き（`(1 ± X)`）はあえて反転させず、**名前で正しく説明する**方を選んだ
+  （issue が挙げたもう一方の選択肢）。反転させるには「突出率の上限」のような根拠のない
+  定数から引き算する形にせざるを得ず、複雑さの割に得るものがない。`headProminencePct` は
+  「最小要求」を表す名前で、`tolerancePct`（許容誤差）とは異なる種類の量だと明示すれば、
+  「大きいほど厳しい」という向きそのものは不自然ではない。
+- 既定値は未指定なら `tolerancePct` と同じ時間軸オート表（1hour/4hour=0.05, 8/12hour=0.045,
+  15/30min=0.06, 1week=0.035, 1month=0.03, 他=0.04）を使う（`resolveParams`）。
+  `tolerancePct` を明示的に変更しても `headProminencePct` には影響しない
+  ——両者は完全に独立した既定値解決を持つ。
+
+#### issue が確認を求めた 2 点
+
+1. **`necklineDiffPct`（ネックライン水平度）の閾値は `tolerancePct` でよいか？**
+   → 確認の結果、**現状もこの先も `tolerancePct` には依存しない。** `validateHorizontalNeckline`
+   は固定定数 `HS_NECKLINE_MAX_PCT`（0.05）だけを見ており、呼び出し側は `tolerancePct` を渡していない
+   （`tools/patterns/structural.ts`）。「肩の同水準判定・ネックライン水平度に tolerancePct を残す」という
+   issue の記述はネックライン側は実装上該当せず、今回は何も変えていない。
+2. **`shouldersNear` の二重ゲート（`near()` と `isSameLevel(.., HS_SHOULDER_MAX_PCT=0.05)`）は
+   どちらで律速するか？** → 時間軸オートの `tolerancePct` が 0.05 未満（1day/8h/12h/1week/1month）
+   なら `near()` が binding。0.05 と一致する 1hour/4hour は同値でどちらも同時に効く。0.05 を超える
+   15min/30min（オート値 0.06）は固定上限 `HS_SHOULDER_MAX_PCT` が binding になり、`tolerancePct`
+   をそれ以上緩めても肩の許容は 5% で頭打ちになる（`tests/patterns/detect_hs.test.ts` の
+   `tolerancePct=0.06` 系テストが既にこの境界を固定している）。
+
+#### 併せて対応（issue の「併せて検討」）
+
+候補生成の時点で落ちたもの（`head_not_higher` 等、`status` を持たない）と、構造ゲート通過後に
+`status=invalid`/`expired` になったもの（`includeInvalid=true` で拾える）は別カテゴリだが、
+この区別自体がツールの説明文にも `content` にも出ていなかった。別 issue には切らず本 PR で対応した:
+
+- `src/schema/patterns.ts` の `includeInvalid` / `view=debug` の description に区別を明記
+  （H&S 固有ではなく `detect_patterns` 全種別に共通の説明なので、全パターン種別に効く）。
+- `formatDebugView`（`view=debug` の実際の content 生成部）の【Candidates】見出し直下に
+  `❌ = 候補段階の棄却（status なし。理由は [reason]。includeInvalid では拾えない）` を追加。
+  LLM は `structuredContent` を読めず `content[0].text` だけを見るため（`.claude/rules/tools.md`）、
+  description だけでなく content 側にも明示した。
+
+#### 実測（704 ケース比較 + ablation）
+
+`tests/detect_patterns_fixtures.test.ts` の fixture 22 件 × オプション 8 通り
+（`includeForming` / `includeCompleted` / `includeInvalid`）× 時間足 2 種（`1day` / `1hour`）×
+`swingDepth` 2 種（2 / 3）= **704 ケース**を、変更前後で走らせて突き合わせた
+（#131 以降と同じ手順・同じ 704 ケース。`tolerancePct` / `headProminencePct` はどちらも未指定＝
+時間軸オートのまま）。
+
+| 項目 | 結果 |
+|---|---|
+| 変化したケース | **0 / 704**。全ケース完全一致（パターン合計 296 件で一致） |
+| 実データ回帰（`tests/fixtures/btc_jpy_1day_2026.ts`、時間足 3 種 × `swingDepth` 4 種 × オプション 8 通り = 96 ケース） | **0 / 96**。全ケース完全一致（パターン合計 336 件で一致） |
+
+**0/704 は「配線されていない」ことを意味しない。** `headProminencePct` を強制的に 0.5（頭が
+両肩より 50% 突出必須）に差し替える ablation を同じ 704 ケースで走らせたところ:
+
+| ablation | 変化したケース | 内訳 |
+|---|---|---|
+| `headProminencePct` を常に 0.5 に固定 | **32 / 704** | `head_and_shoulders` 16 件・`inverse_head_and_shoulders` 16 件が**全滅**。他の 11 種別（double / triple / triangle / wedge / flag / pennant）は**1 件も変化しない** |
+
+`headProminencePct` が H&S / 逆 H&S にのみ配線されており、既定値のままなら旧実装と数値上
+完全に等価であることの両方を確認した。
+
+#### 受け入れ条件の確認（issue の実例）
+
+`tests/patterns/detect_hs.test.ts` の `buildIssue146Ctx`（#146 実例の座標をそのまま使う既存 fixture）
+に 2 テストを追加した:
+
+- `tolerancePct` を 0.005 〜 0.1（スキーマ全域）で振っても、`headProminencePct` を固定していれば
+  `head_not_higher` の判定は変わらない（`tolerancePct` は頭の判定に無関係になったことの確認）。
+- `headProminencePct` を既定 0.05 から 0.01 まで緩めると、1.85% の頭マージン不足による
+  `head_not_higher` が解消する（新パラメータが実際に効くことの確認）。
+
+#### 変更ファイル
+
+- `tools/patterns/config.ts`: `resolveParams` に `headProminencePct` の解決を追加
+  （未指定時は `tolerancePct` と同じ時間軸オート表）。
+- `tools/patterns/types.ts`: `DetectContext.headProminencePct` を追加。
+- `tools/detect_patterns.ts`: `opts.headProminencePct` を受け取り `ctx` へ配線。
+- `tools/patterns/detect_hs.ts`: `findStrictHS` / `findStrictInverseHS` の `headHigher` /
+  `headLower`、および relaxed fallback（`findRelaxedHS` / `findRelaxedInverseHS`）の頭の緩和項を
+  `headProminencePct` に切り替え。debug candidates の詳細に `tolerancePct` と `headProminencePct`
+  を分けて出すようにした（旧 `thresholdPct` は削除）。
+- `src/schema/patterns.ts`: `headProminencePct` パラメータを新設。`tolerancePct` に H&S での
+  スコープを明記する description を追加。`includeInvalid` / `view=debug` に候補段階棄却との
+  区別を追記。
+- `src/handlers/detectPatternsViewsHandler.ts`: `formatDebugView` の Candidates セクションに
+  区別の説明行を追加。
 
 ### Fixed（`detect_hs` の**窓生成**から交互列要求を外した。**目視で明らかな H&S が候補にすら残らない偽陰性**が解消。#146）
 

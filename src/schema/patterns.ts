@@ -78,13 +78,40 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 				'- triple_top/triple_bottom: tolerancePct≈0.05',
 				'- triangle_*: tolerancePct≈0.06',
 				'- pennant: swingDepth≈5, minBarsBetweenSwings≈3',
+				'- head_and_shoulders/inverse_head_and_shoulders: shoulder-level tolerance is tolerancePct ' +
+					'(same "bigger = looser" meaning as other types); to loosen how much the head must stand out ' +
+					'above/below the shoulders, use headProminencePct instead (opposite direction: bigger = stricter).',
 				"Aliases: 'flag' → bull_flag + bear_flag, 'pennant' → bull/bear pennant, 'triangle' → asc/desc/sym.",
 			].join('\n'),
 		),
 	// Heuristics
 	swingDepth: z.number().int().min(1).max(10).optional().default(7),
-	tolerancePct: z.number().min(0).max(0.1).optional().default(0.04),
+	tolerancePct: z
+		.number()
+		.min(0)
+		.max(0.1)
+		.optional()
+		.default(0.04)
+		.describe(
+			'同水準判定の許容誤差。大きいほど判定が緩くなる。head_and_shoulders / inverse_head_and_shoulders では' +
+				'肩の左右差の許容誤差とネックライン水平度にのみ使う（頭が肩よりどれだけ突出すべきかは' +
+				'headProminencePct が別に持つ。issue #149——旧実装はここに頭の突出要求も相乗りしており、' +
+				'肩では「大きいほど緩い」・頭では「大きいほど厳しい」が同じ値に同時にかかっていた）。',
+		),
 	minBarsBetweenSwings: z.number().int().min(1).max(30).optional().default(5),
+	headProminencePct: z
+		.number()
+		.min(0)
+		.max(0.1)
+		.optional()
+		.describe(
+			'head_and_shoulders / inverse_head_and_shoulders 専用: 頭が両肩よりどれだけ突出していなければ' +
+				'ならないかの最小要求率。**tolerancePct とは向きが逆で、大きいほど判定が厳しくなる**' +
+				'（最小要求を引き上げるため）。緩めたい（=頭の突出要求を下げたい）ときは値を小さくする。\n' +
+				'未指定時は tolerancePct と同じ時間軸オート値（1hour/4hour=0.05, 8hour/12hour=0.045, ' +
+				'15min/30min=0.06, 1week=0.035, 1month=0.03, その他=0.04）を使う。tolerancePct を明示的に' +
+				'変更しても本パラメータには影響しない（H&S の頭の判定は tolerancePct から完全に独立）。',
+		),
 	view: z
 		.enum(['summary', 'detailed', 'full', 'debug'])
 		.optional()
@@ -102,7 +129,10 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 				'- debug（**階梯外**）: swings / candidates のみ。**検出パターンも上記 2 行も content に出ない**——出力を置換する view なので full の上位集合ではない。structuredContent に data.candidates を**足す**。\n' +
 				'  candidates は `patterns` で要求した種別（エイリアスは展開して照合）に**絞って**返す。' +
 				'`patterns` 未指定なら全種別。絞らないと cap（200件）を要求外の種別が食い潰し、' +
-				'要求した種別の棄却理由が押し出される。',
+				'要求した種別の棄却理由が押し出される。\n' +
+				'  candidates の `accepted:false` は 2 種類ある——`status` を持たず `includeInvalid` では' +
+				'拾えない候補段階の棄却（例: `head_not_higher`）と、一度パターンとして成立してから' +
+				'`status=invalid`/`expired` になったもの。区別は includeInvalid の説明を参照。',
 		),
 	// New: relevance filter for "current-involved" long-term patterns
 	requireCurrentInPattern: z.boolean().optional().default(false),
@@ -118,7 +148,11 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 		.describe(
 			'無効化済み（`status=invalid`）および期限切れ（`status=expired`）のパターンを含める。' +
 				'期限切れ = 第2構成点の確定から突破確認窓を過ぎてもネックラインを突破しなかった候補で、' +
-				'既定ではノイズになるため出力されない。',
+				'既定ではノイズになるため出力されない。\n' +
+				'**`true` にしても拾えるのは、一度パターンとして成立してから無効化された `status=invalid` / ' +
+				'`expired` のものだけ。** `head_not_higher` / `shoulders_not_near` 等、構造要件を満たさず' +
+				'**候補生成の時点で**落ちたものは `status` 自体を持たないため、`includeInvalid` では拾えない' +
+				'（見るには `view=debug` の `data.candidates` を使う。`accepted:false` の `reason` に理由が入る）。',
 		),
 	tz: z
 		.string()

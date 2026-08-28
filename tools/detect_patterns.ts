@@ -87,6 +87,11 @@ export default async function detectPatterns(
 		swingDepth: number;
 		tolerancePct: number;
 		minBarsBetweenSwings: number;
+		/**
+		 * H&S / 逆H&S 専用: 頭の最小突出率（issue #149）。未指定なら tolerancePct と同じ
+		 * 時間軸オート値を使う。tolerancePct とは向きが逆で、大きいほど判定が厳しくなる。
+		 */
+		headProminencePct: number;
 		strictPivots: boolean;
 		patterns: Array<z.infer<typeof PatternFilterEnum>>;
 		requireCurrentInPattern: boolean;
@@ -102,7 +107,13 @@ export default async function detectPatterns(
 ) {
 	try {
 		// --- パラメータ解決（patterns/config.ts から） ---
-		const { swingDepth, tolerancePct, minBarsBetweenSwings: minDist, autoScaled } = resolveParams(type, opts);
+		const {
+			swingDepth,
+			tolerancePct,
+			minBarsBetweenSwings: minDist,
+			headProminencePct,
+			autoScaled,
+		} = resolveParams(type, opts);
 		const strictPivots = opts.strictPivots !== false; // 既定: 厳格
 		// 統合オプション
 		const includeForming = opts.includeForming ?? false;
@@ -175,6 +186,7 @@ export default async function detectPatterns(
 			allPeaks: filterPeaks(pivots),
 			allValleys: filterValleys(pivots),
 			tolerancePct,
+			headProminencePct,
 			minDist,
 			want,
 			includeForming,
