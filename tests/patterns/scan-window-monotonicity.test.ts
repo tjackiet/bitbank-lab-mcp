@@ -18,6 +18,12 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dayjs } from '../../lib/datetime.js';
+import {
+	detectSwingPoints,
+	filterPeaks,
+	filterValleys,
+	type Candle as SwingCandle,
+} from '../../tools/patterns/swing.js';
 import { asMockResult, assertOk } from '../_assertResult.js';
 
 vi.mock('../../tools/analyze_indicators.js', () => ({ default: vi.fn() }));
@@ -113,22 +119,74 @@ describe('スキャン窓の単調性（issue #154）', () => {
 		expect(hasIssue154Pattern(await detect(prependBars(110, level)))).toBe(true);
 	});
 
-	it('頭が形成区間の最高値でない読みは採らない', async () => {
-		// 頭候補を総当たりにすると、頭より深い谷が [左肩, 右肩] の内側にある「頭の取り違え」が
-		// 通り得る。検出された H&S / 逆 H&S は、自分の構成点の中で頭が極値でなければならない。
+	it('頭が形成区間の極値でない読みは採らない（出力に含まれない対抗ピボットまで見る）', async () => {
+		// 頭候補を総当たりにすると、頭より極端な同種ピボットが [左肩, 右肩] の内側にあっても
+		// 通り得る（`headIsExtremeInSpan` が塞いでいる穴）。
+		//
+		// **構成点だけを見る検査では足りない。** 落とすべき対抗ピボットは、まさに出力に
+		// 含まれないものだからである。ここでは検出に使われたのと同じ `detectSwingPoints` を
+		// 呼び直して**窓の全ピボット**を復元し、その中に頭より極端なものが区間内に無いことを見る。
 		for (const candles of [buildBtcJpy2026Candles(), prependBars(110, 9_500_000), prependBars(110, 11_700_000)]) {
 			const pats = (await detect(candles)) as Array<{
 				type: string;
 				pivots?: Array<{ idx: number; price: number }>;
 			}>;
+			// detect() は swingDepth 未指定 = 1day のオート値（6）。検出側と同じ条件で復元する。
+			const allPivots = detectSwingPoints(candles as SwingCandle[], { swingDepth: 6, strictPivots: true });
 			for (const p of pats) {
 				const pivots = p.pivots ?? [];
 				if (pivots.length < 3) continue;
+				const isTop = p.type === 'head_and_shoulders';
+				const sameKind = isTop ? filterPeaks(allPivots) : filterValleys(allPivots);
 				const prices = pivots.map((v) => v.price);
-				const extreme = p.type === 'head_and_shoulders' ? Math.max(...prices) : Math.min(...prices);
+				const headPrice = isTop ? Math.max(...prices) : Math.min(...prices);
+				const head = pivots.find((v) => v.price === headPrice);
+				const from = pivots[0].idx;
+				const to = pivots[pivots.length - 1].idx;
+				expect(head).toBeDefined();
 				// 頭は構成点の内側（両端は肩）にある
-				expect(prices.slice(1, -1)).toContain(extreme);
+				expect(prices.slice(1, -1)).toContain(headPrice);
+				// 区間の内側に、頭より極端な同種ピボットが存在しない
+				const rivals = sameKind.filter(
+					(v) =>
+						v.idx > from && v.idx < to && v.idx !== head?.idx && (isTop ? v.price > headPrice : v.price < headPrice),
+				);
+				expect(rivals).toEqual([]);
 			}
 		}
+	});
+
+	it('頭より深い谷が形成区間の内側にある逆 H&S を採らない（#154 の総当たり化で開いた穴）', async () => {
+		// `completed_falling_wedge` fixture（tests/detect_patterns_fixtures.test.ts）の実系列。
+		// 頭候補を総当たりにしただけの中間実装では、頭 idx 12（終値 112）で形成中 逆 H&S が
+		// 通っていた——区間 [5, 36] の内側に idx 33（終値 100）が居るのに、である。
+		// `headIsExtremeInSpan` を外すとこのテストが落ちる。
+		const closes = [
+			146, 140, 134, 128, 122, 116, 127, 138, 133, 128, 122, 117, 112, 121, 130, 126, 121, 117, 112, 108, 115, 122, 118,
+			115, 111, 108, 104, 109, 114, 111, 108, 106, 103, 100, 103, 110, 118,
+		];
+		const candles = closes.map((close, i) => ({
+			open: close,
+			high: close + 3,
+			low: close - 3,
+			close,
+			isoTime: dayjs.utc('2026-01-01').add(i, 'day').toISOString(),
+			volume: 100,
+		}));
+		mocked.mockResolvedValue(
+			asMockResult({ ok: true, summary: 'ok', data: { chart: { candles, meta: { pastBuffer: 0 } } } }),
+		);
+		const res = await detectPatterns('btc_jpy', '1day', candles.length, {
+			swingDepth: 2,
+			includeForming: true,
+			includeCompleted: true,
+			includeInvalid: true,
+		});
+		assertOk(res);
+		const pats = res.data.patterns as Array<{ type: string; pivots?: Array<{ idx: number }> }>;
+		const bogus = pats.filter(
+			(p) => p.type === 'inverse_head_and_shoulders' && (p.pivots ?? []).some((v) => v.idx === 12),
+		);
+		expect(bogus).toEqual([]);
 	});
 });
