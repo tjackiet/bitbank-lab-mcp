@@ -1198,5 +1198,39 @@ describe('detectHeadAndShoulders', () => {
 			expect(details.head).toBe(12_851_000);
 			expect(details.rightShoulder).toBe(12_617_817);
 		});
+
+		it('厳密に交互する列でも、肩を跨ぐ窓（gap>=3）は新たに生成される', () => {
+			// **窓生成の緩和は「交互が崩れた区間だけ」に閉じていない。** 肩リスト上で
+			// 間に肩を跨ぐ組（gap>=3）は旧実装が作れなかった窓で、`H L H L H L H` のように
+			// 厳密に交互する列でも出る。#146 の 5 点自体が gap=3 の窓（肩リストの第 1 と第 4）
+			// なので、これは仕様であって副作用ではない——ここで固定しておかないと
+			// 「交互列なら旧実装と同一」という誤った不変条件が後から書き戻されうる。
+			//
+			// 肩 h0=0(100) / h1=20(118) / h2=40(130) / h3=60(101)。旧実装が作れた窓は
+			// 配列上で連続する [0,10,20,30,40] と [20,30,40,50,60] の 2 つだけで、
+			// どちらも肩が離れすぎ（100 vs 118 / 118 vs 101）。一方 (h0, h3) を肩に取ると
+			// 頭 = 間の最高値 130、肩は 100 と 101 で揃う。
+			const pts: Array<[number, number, 'H' | 'L']> = [
+				[0, 100, 'H'],
+				[10, 80, 'L'],
+				[20, 118, 'H'],
+				[30, 82, 'L'],
+				[40, 130, 'H'],
+				[50, 81, 'L'],
+				[60, 101, 'H'],
+			];
+			const candles: CandleData[] = Array.from({ length: 70 }, (_, i) => mkCandle(70 - i, 90, 95, 85, 90));
+			for (const [idx, price] of pts) candles[idx] = mkCandle(70 - idx, price, price + 2, price - 2, price);
+			const pivots: Pivot[] = pts.map(([idx, price, kind]) => ({ idx, price, kind, extremePrice: price }));
+
+			const ctx = buildCtx({ candles, pivots, want: new Set(['head_and_shoulders']) });
+			detectHeadAndShoulders(ctx);
+
+			const spanning = ctx.debugCandidates.find(
+				(d) => d.type === 'head_and_shoulders' && JSON.stringify(d.indices) === JSON.stringify([0, 10, 40, 50, 60]),
+			);
+			expect(spanning).toBeDefined();
+			expect(spanning?.accepted).toBe(true);
+		});
 	});
 });
