@@ -1232,5 +1232,36 @@ describe('detectHeadAndShoulders', () => {
 			expect(spanning).toBeDefined();
 			expect(spanning?.accepted).toBe(true);
 		});
+
+		it('肩を跨ぐ窓でも、外側の脚に肩を明確に超える山があれば窓にしない', () => {
+			// 肩を跨ぐ窓を許すと、**跨いだ先の山のほうが肩より高い**読みまで作れてしまう。
+			// H100-L80-H130-L80-H120-L80-H100 では (H0, H60) を肩に取ると頭 130 / 肩 100・100 で
+			// 一見きれいに揃うが、谷2(30) と右肩(60) の間に **右肩より 20% 高い山 H40(120)** がある。
+			// その山こそが右肩であって、H60 を右肩と読むのは肩の取り違え。
+			//
+			// 同水準（`HS_SHOULDER_MAX_PCT` = 5% 以内）の山は「幅のある肩」として通すので、
+			// 実データの双子の山（BTC/JPY 日足 idx 38 と 42 は差 0.08%）は落ちない。
+			const pts: Array<[number, number, 'H' | 'L']> = [
+				[0, 100, 'H'],
+				[10, 80, 'L'],
+				[20, 130, 'H'],
+				[30, 80, 'L'],
+				[40, 120, 'H'],
+				[50, 80, 'L'],
+				[60, 100, 'H'],
+			];
+			const candles: CandleData[] = Array.from({ length: 70 }, (_, i) => mkCandle(70 - i, 90, 95, 85, 90));
+			for (const [idx, price] of pts) candles[idx] = mkCandle(70 - idx, price, price + 2, price - 2, price);
+			const pivots: Pivot[] = pts.map(([idx, price, kind]) => ({ idx, price, kind, extremePrice: price }));
+
+			const ctx = buildCtx({ candles, pivots, want: new Set(['head_and_shoulders']) });
+			const result = detectHeadAndShoulders(ctx);
+
+			expect(result.patterns.filter((p) => p.type === 'head_and_shoulders')).toHaveLength(0);
+			const misAnchored = ctx.debugCandidates.find(
+				(d) => d.type === 'head_and_shoulders' && JSON.stringify(d.indices) === JSON.stringify([0, 10, 20, 30, 60]),
+			);
+			expect(misAnchored).toBeUndefined();
+		});
 	});
 });

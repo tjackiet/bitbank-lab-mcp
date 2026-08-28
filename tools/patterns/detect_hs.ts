@@ -225,6 +225,27 @@ function extremeBetween(list: ReadonlyArray<Pivot>, loIdx: number, hiIdx: number
 }
 
 /**
+ * 外側の脚（肩 ↔ 隣のネックライン点）に、`shoulder` を**明確に超える**肩が無いかを見る。
+ *
+ * 「明確に超える」は `HS_SHOULDER_MAX_PCT` を超えて高い（逆 H&S は低い）こと。同水準なら
+ * 幅のある肩の一部として通す——双子の山で肩がわずかに低い側に当たっただけで窓が消えると、
+ * 実在する H&S を落とすため（`enumerateHsWindows` の呼び出し箇所のコメント）。
+ */
+function outerShoulderOk(
+	shoulders: ReadonlyArray<Pivot>,
+	shoulder: Pivot,
+	loIdx: number,
+	hiIdx: number,
+	isTop: boolean,
+): boolean {
+	const outer = extremeBetween(shoulders, loIdx, hiIdx, !isTop);
+	if (!outer) return true;
+	const beyond = isTop ? outer.price > shoulder.price : outer.price < shoulder.price;
+	if (!beyond) return true;
+	return isSameLevel(outer.price, shoulder.price, HS_SHOULDER_MAX_PCT);
+}
+
+/**
  * H&S / 逆 H&S の候補 5 点窓を列挙する（issue #146）。
  *
  * 旧実装は `pivots` の**配列上で連続する 5 点**を取り、それが `H-L-H-L-H`（逆は `L-H-L-H-L`）
@@ -295,6 +316,17 @@ function enumerateHsWindows(ctx: DetectContext, side: 'top' | 'bottom'): HsWindo
 			const p1 = extremeBetween(mids, p0.idx, p2.idx, isTop);
 			const p3 = extremeBetween(mids, p2.idx, p4.idx, isTop);
 			if (!p1 || !p3) continue;
+			// **外側の脚（肩 ↔ 隣のネックライン点）に、肩を明確に超える肩があってはならない。**
+			// 超えているなら、その肩こそが左肩 / 右肩であって、この組は肩を取り違えた読みでしかない
+			// （取り違えていない読みは別の組として列挙されるので、パターンを落とすのではなく
+			// 誤った anchor を落とすだけ）。
+			//
+			// **「明確に超える」を `HS_SHOULDER_MAX_PCT` で測るのが肝。** 単純な `>` にすると、
+			// 双子の山（実データの BTC/JPY 日足 idx 38 と 42 は差 0.08%）で肩がわずかに低い側に
+			// 当たっただけで窓が消え、**実在する H&S を落とす**（実測で実データの改善が全て消えた）。
+			// 同水準なら「幅のある肩」の一部とみなして通し、肩として別格に高いものだけを弾く。
+			if (!outerShoulderOk(shoulders, p0, p0.idx, p1.idx, isTop)) continue;
+			if (!outerShoulderOk(shoulders, p4, p3.idx, p4.idx, isTop)) continue;
 			if (
 				p1.idx - p0.idx < minDist ||
 				p2.idx - p1.idx < minDist ||
