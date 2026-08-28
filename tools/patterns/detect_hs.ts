@@ -92,6 +92,48 @@ export function getHsFormingBarParams(tf: string): { minBars: number; maxBars: n
 	return patternBarRange(tf, FORMING_MIN_DAYS, FORMING_MAX_DAYS);
 }
 
+/**
+ * 形成中 H&S / 逆 H&S の頭候補を**新しい順**に並べる（issue #154）。
+ *
+ * 旧実装は頭を「スキャン窓全体の最高値ピーク（逆 H&S は最安値の谷）」1 点に決め打ちし、
+ * 他の頭候補を一切試さなかった。この決め方は**スキャン窓の左端に依存する**ため、
+ * `limit` を上げて窓を広げると頭が過去側へ飛び、狭い窓で見えていた形成中パターンが
+ * **候補として列挙されすらしなくなる**（#154 の症状: 1day で limit=90 → 1 件 /
+ * limit=200 → 0 件）。窓を広げただけで検出が消えるのは利用者の期待に反する。
+ *
+ * **新しい順に列挙するのが単調性の鍵。** ピボット判定は前後 `swingDepth` 本だけを見る局所判定
+ * なので、窓を左へ広げて増えるのは**より古い**頭候補だけで、既存の候補列の後ろに積まれる。
+ * 列挙順が新しい順なら、広い窓は狭い窓の列挙を**接頭辞として含む**——狭い窓で見つかった
+ * パターンは広い窓でも同じ頭から同じように見つかる。
+ */
+function headCandidatesNewestFirst<T extends Pivot>(list: readonly T[]): T[] {
+	return [...list].sort((a, b) => b.idx - a.idx);
+}
+
+/**
+ * 頭が**その形成区間の極値である**ことを検査する（issue #154）。
+ *
+ * 旧実装は頭を「窓全体の最高値ピーク / 最安値の谷」に決め打ちしていたため、この条件は
+ * **暗黙に成立していた**（窓全体の極値は当然その部分区間の極値でもある）。頭候補を総当たりに
+ * 変えるとこの暗黙の保証が外れ、`[左肩, 右肩]` の内側に頭より極端な同種ピボットがあっても
+ * 通ってしまう（実測: `completed_falling_wedge` fixture が頭 idx 12=112 で逆 H&S として通り、
+ * 同区間に idx 33=100 が居た）。区間内により極端な同種ピボットがあるなら、それは頭の取り違え。
+ *
+ * **判定は区間の内側だけを見るのでスキャン窓に依存しない**——単調性を壊さずに暗黙の保証を戻す。
+ */
+function headIsExtremeInSpan(
+	sameKindPivots: readonly Pivot[],
+	head: Pivot,
+	fromIdx: number,
+	toIdx: number,
+	isTop: boolean,
+): boolean {
+	return !sameKindPivots.some(
+		(p) =>
+			p.idx > fromIdx && p.idx < toIdx && p.idx !== head.idx && (isTop ? p.price > head.price : p.price < head.price),
+	);
+}
+
 // ── ネックラインブレイク検出（detect_doubles / detect_triples と同値の 1.5% バッファ） ──
 // H&S は傾きつきネックライン（谷1→谷2 / 山1→山2）を外挿して判定する。
 const HS_BREAKOUT_BUFFER_PCT = 0.015;
@@ -1066,17 +1108,31 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 
 // ── Helper: 形成中 H&S ──
 
-function tryFormingHS(ctx: DetectContext): DeduplicablePattern | null {
+function tryFormingHS(ctx: DetectContext): DeduplicablePattern[] {
+	const lastIdx = ctx.candles.length - 1;
+	const confirmedPeaks = ctx.allPeaks.filter((p) => p.idx < lastIdx - 2);
+	if (confirmedPeaks.length < 2) return [];
+
+	// 頭を 1 点に決め打ちせず全候補を試す（#154）。重複は globalDedup が畳む。
+	const out: DeduplicablePattern[] = [];
+	for (const head of headCandidatesNewestFirst(confirmedPeaks)) {
+		const found = formingHsForHead(ctx, confirmedPeaks, head);
+		if (found) out.push(found);
+	}
+	return out;
+}
+
+/** 頭候補 1 つを固定して形成中 H&S を組み立てる。組めなければ null（＝次の頭候補へ）。 */
+function formingHsForHead(
+	ctx: DetectContext,
+	confirmedPeaks: readonly Pivot[],
+	head: Pivot,
+): DeduplicablePattern | null {
 	const { candles, pivots, allPeaks, allValleys } = ctx;
 	const lastIdx = candles.length - 1;
 	const currentPrice = Number(candles[lastIdx]?.close ?? NaN);
 	const isoAt = (i: number) => candles[i]?.isoTime || '';
 	const formingBars = getHsFormingBarParams(ctx.type);
-
-	const confirmedPeaks = allPeaks.filter((p) => p.idx < lastIdx - 2);
-	if (confirmedPeaks.length < 2) return null;
-
-	const head = confirmedPeaks.reduce((best, p) => (p.price > best.price ? p : best), confirmedPeaks[0]);
 
 	// 左肩: 頭より左のピークで、頭より3%以上低い
 	const leftCandidates = confirmedPeaks.filter((p) => p.idx < head.idx && head.price > p.price * 1.03);
@@ -1111,6 +1167,9 @@ function tryFormingHS(ctx: DetectContext): DeduplicablePattern | null {
 		}
 	}
 	if (!rightShoulder) return null;
+
+	// 頭は形成区間の最高値であること（#154。総当たり化で外れた暗黙の保証を明示に戻す）
+	if (!headIsExtremeInSpan(allPeaks, head, left.idx, rightShoulder.idx, true)) return null;
 
 	// 完成度計算
 	const closeness =
@@ -1252,17 +1311,31 @@ function tryFormingHS(ctx: DetectContext): DeduplicablePattern | null {
 
 // ── Helper: 形成中 Inverse H&S ──
 
-function tryFormingInverseHS(ctx: DetectContext): DeduplicablePattern | null {
+function tryFormingInverseHS(ctx: DetectContext): DeduplicablePattern[] {
+	const lastIdx = ctx.candles.length - 1;
+	const confirmedValleys = ctx.allValleys.filter((v) => v.idx < lastIdx - 2);
+	if (confirmedValleys.length < 2) return [];
+
+	// 頭を 1 点に決め打ちせず全候補を試す（#154）。重複は globalDedup が畳む。
+	const out: DeduplicablePattern[] = [];
+	for (const head of headCandidatesNewestFirst(confirmedValleys)) {
+		const found = formingInverseHsForHead(ctx, confirmedValleys, head);
+		if (found) out.push(found);
+	}
+	return out;
+}
+
+/** 頭候補 1 つを固定して形成中 逆 H&S を組み立てる。組めなければ null（＝次の頭候補へ）。 */
+function formingInverseHsForHead(
+	ctx: DetectContext,
+	confirmedValleys: readonly Pivot[],
+	head: Pivot,
+): DeduplicablePattern | null {
 	const { candles, pivots, allPeaks, allValleys } = ctx;
 	const lastIdx = candles.length - 1;
 	const currentPrice = Number(candles[lastIdx]?.close ?? NaN);
 	const isoAt = (i: number) => candles[i]?.isoTime || '';
 	const formingBars = getHsFormingBarParams(ctx.type);
-
-	const confirmedValleys = allValleys.filter((v) => v.idx < lastIdx - 2);
-	if (confirmedValleys.length < 2) return null;
-
-	const head = confirmedValleys.reduce((best, v) => (v.price < best.price ? v : best), confirmedValleys[0]);
 
 	// 左肩: 頭より左の谷で、頭より3%以上高い
 	const leftCandidates = confirmedValleys.filter((v) => v.idx < head.idx && head.price < v.price * 0.97);
@@ -1296,6 +1369,9 @@ function tryFormingInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 		}
 	}
 	if (!rightShoulder) return null;
+
+	// 頭は形成区間の最安値であること（#154。総当たり化で外れた暗黙の保証を明示に戻す）
+	if (!headIsExtremeInSpan(allValleys, head, left.idx, rightShoulder.idx, false)) return null;
 
 	// 完成度計算
 	const closeness =
@@ -1468,14 +1544,12 @@ export function detectHeadAndShoulders(ctx: DetectContext): DetectResult {
 
 	// 3c) 形成中 H&S
 	if (includeForming && (want.size === 0 || want.has('head_and_shoulders'))) {
-		const forming = tryFormingHS(ctx);
-		if (forming) patterns.push(forming);
+		patterns.push(...tryFormingHS(ctx));
 	}
 
 	// 3d) 形成中 Inverse H&S
 	if (includeForming && (want.size === 0 || want.has('inverse_head_and_shoulders'))) {
-		const forming = tryFormingInverseHS(ctx);
-		if (forming) patterns.push(forming);
+		patterns.push(...tryFormingInverseHS(ctx));
 	}
 
 	return { patterns, found: { head_and_shoulders: foundHS, inverse_head_and_shoulders: foundInverseHS } };
