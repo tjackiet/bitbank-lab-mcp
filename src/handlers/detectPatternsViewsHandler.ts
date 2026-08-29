@@ -321,6 +321,28 @@ function formatDetailValue(v: unknown): string {
 	}
 }
 
+/**
+ * `details` 側に置かれたブレイク記録から方向を読む。系統は 2 つある。
+ *
+ * - `details.breakout` — triangle / pennant。未ブレイクは `breakout: null`
+ * - `details.breakInfo` — wedge の完成済みパス（`reason: 'revamped_ok'`）。未ブレイクは `breakInfo: null`
+ *
+ * **キーが在ること自体が「この検出器が答えた」印**なので、先に見つかった系統で打ち切り、
+ * 値が `null`（＝未ブレイク）でも次の系統へフォールバックしない。top-level の `null` を
+ * 欠損と畳まないのと同じ理由で、畳むと「未ブレイクなのに方向がある」行が出る。
+ * 検出器が違うので実際に両方を持つエントリは無いが、優先順を暗黙にしない。
+ *
+ * @returns 方向 / 答えはあるが方向が無いなら `null` / どちらのキーも無いなら `undefined`
+ */
+function breakDirectionFromDetails(details?: Record<string, unknown>): string | null | undefined {
+	if (!details) return undefined;
+	for (const key of ['breakout', 'breakInfo'] as const) {
+		if (!(key in details)) continue;
+		return (details[key] as { direction?: string | null } | null | undefined)?.direction ?? null;
+	}
+	return undefined;
+}
+
 export function formatDebugView(
 	hdr: string,
 	meta: PatternMeta,
@@ -348,12 +370,10 @@ export function formatDebugView(
 		// という値のある答え。`??` で書くと欠損と同じ扱いになり details 側に上書きされるので、
 		// キーの有無（`undefined`）だけで分岐する。出力スキーマの `z.string().nullish()` は
 		// 欠損と `null` を畳まないので、parse を通した後もこの区別は残る。
-		const dir =
-			c.breakoutDirection !== undefined
-				? c.breakoutDirection
-				: (c.details?.breakout as { direction?: string | null } | null | undefined)?.direction;
+		const dir = c.breakoutDirection !== undefined ? c.breakoutDirection : breakDirectionFromDetails(c.details);
 		const statusStr = status ? ` status=${status}` : '';
-		// 未ブレイクは `null`（wedge 形成中）または `details.breakout: null`（triangle / pennant）で来る。
+		// 未ブレイクは `null`（wedge 形成中）、`details.breakout: null`（triangle / pennant）、
+		// `details.breakInfo: null`（wedge 完成済み）のいずれかで来る。
 		// 「方向が無い」を `null` と書いても読み手に情報が増えないので、その場合は行ごと出さない。
 		const dirStr = dir ? ` breakoutDirection=${dir}` : '';
 		const pts = Array.isArray(c.points)
