@@ -22,11 +22,24 @@ interface SwingDebug {
 	isoTime?: string;
 }
 
-/** デバッグ候補エントリ */
+/**
+ * デバッグ候補エントリ。
+ *
+ * `status` / `breakoutDirection` は `CandDebugEntry`（`tools/patterns/types.ts`）が元から持つが、
+ * **検出器によって置き場所が 2 系統に割れている**:
+ * - top-level: `detect_wedges` の形成中パス、`detect_hs` の形成中成功エントリ（#155）
+ * - `details` 配下: `detect_triangles` / `detect_pennants`（`details.status` / `details.breakout.direction`）
+ *
+ * 読む側（`candLines`）で両方を 1 回だけ解決する。置き場所の統一は検出器 6 ファイルに
+ * 手が入るため別件（issue #160「やらないこと」）。
+ */
 interface CandidateDebug {
 	type: string;
 	accepted: boolean;
 	reason?: string;
+	status?: string;
+	/** ブレイク方向。未ブレイクの候補では `null` が入りうる（`CandDebugEntry` と同じ形）。 */
+	breakoutDirection?: string | null;
 	indices?: number[];
 	points?: Array<{ role: string; idx: number; price: number }>;
 	details?: Record<string, unknown>;
@@ -259,9 +272,10 @@ function formatCandidateDetails(c: CandidateDebug): string {
 			);
 		}
 		if (reason === 'detected' && d?.touchCount != null) {
-			lines.push(
-				`   touchCount: ${formatInt(d.touchCount)}, status: ${d?.status ?? 'n/a'}, confidence: ${d?.confidence ?? 'n/a'}`,
-			);
+			// `status` はここで出さない。triangle / pennant は `details.status` に、wedge / 形成中 H&S は
+			// top-level に置いており、置き場所ごとに別行が出ると同じ事実が 2 通りの書式で散る。
+			// 解決は `candLines` の 1 箇所に寄せてヘッダ行へ出す（issue #160）。
+			lines.push(`   touchCount: ${formatInt(d.touchCount)}, confidence: ${d?.confidence ?? 'n/a'}`);
 		}
 		return lines.length > 0 ? `\n${lines.join('\n')}` : '\n   details: (no fields)';
 	}
@@ -326,12 +340,28 @@ export function formatDebugView(
 	const candLines = cands.map((c, i: number) => {
 		const tag = c.accepted ? '✅' : '❌';
 		const reason = c.accepted ? (c.reason ? ` (${c.reason})` : '') : c.reason ? ` [${c.reason}]` : '';
+		// status / breakoutDirection は検出器ごとに top-level と `details` に割れている（型注釈参照）。
+		// **ここが唯一の解決点**。`formatCandidateDetails` 側では出さないので、書式は 1 通りに揃う。
+		// `status` は `CandDebugEntry` 側が `string | undefined` で null を取らないため `??` でよい。
+		const status = c.status ?? (c.details?.status as string | undefined);
+		// `breakoutDirection` は `string | null` で、**`null` は「この検出器が未ブレイクと判定した」**
+		// という値のある答え。`??` で書くと欠損と同じ扱いになり details 側に上書きされるので、
+		// キーの有無（`undefined`）だけで分岐する。出力スキーマの `z.string().nullish()` は
+		// 欠損と `null` を畳まないので、parse を通した後もこの区別は残る。
+		const dir =
+			c.breakoutDirection !== undefined
+				? c.breakoutDirection
+				: (c.details?.breakout as { direction?: string | null } | null | undefined)?.direction;
+		const statusStr = status ? ` status=${status}` : '';
+		// 未ブレイクは `null`（wedge 形成中）または `details.breakout: null`（triangle / pennant）で来る。
+		// 「方向が無い」を `null` と書いても読み手に情報が増えないので、その場合は行ごと出さない。
+		const dirStr = dir ? ` breakoutDirection=${dir}` : '';
 		const pts = Array.isArray(c.points)
 			? c.points.map((p) => `${p.role}@${p.idx}:${Math.round(Number(p.price)).toLocaleString('ja-JP')}`).join(', ')
 			: '';
 		const indices = Array.isArray(c.indices) ? ` indices=[${c.indices.join(',')}]` : '';
 		const detailsStr = formatCandidateDetails(c);
-		return `${i + 1}. ${tag} ${c.type}${reason}${indices}${pts ? `\n   ${pts}` : ''}${detailsStr}`;
+		return `${i + 1}. ${tag} ${c.type}${reason}${statusStr}${dirStr}${indices}${pts ? `\n   ${pts}` : ''}${detailsStr}`;
 	});
 
 	const text = [
@@ -344,7 +374,10 @@ export function formatDebugView(
 		// ❌ は候補生成の時点での棄却で、status を持たないため includeInvalid では拾えない
 		// （issue #149）。一度パターンとして成立してから無効化されたものは data.patterns 側で
 		// status=invalid/expired として別に出る。
+		// ✅ 側は #155 以降 status を持つ（形成中パスの成功エントリ等）が、これは**候補を組み立てた
+		// 時点**の status であって、その後 invalid / expired になったかは candidates からは分からない。
 		'❌ = 候補段階の棄却（status なし。理由は [reason]。includeInvalid では拾えない）',
+		'✅ の status = 候補を組み立てた時点の状態。成立後に invalid/expired になったかは data.patterns 側で見る',
 		candLines.length
 			? candLines.join('\n')
 			: // 候補ゼロは「この窓でどの検出器も候補を組めなかった」の意。
