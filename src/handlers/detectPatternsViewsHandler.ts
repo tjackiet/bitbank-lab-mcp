@@ -342,9 +342,16 @@ export function formatDebugView(
 		const reason = c.accepted ? (c.reason ? ` (${c.reason})` : '') : c.reason ? ` [${c.reason}]` : '';
 		// status / breakoutDirection は検出器ごとに top-level と `details` に割れている（型注釈参照）。
 		// **ここが唯一の解決点**。`formatCandidateDetails` 側では出さないので、書式は 1 通りに揃う。
+		// `status` は `CandDebugEntry` 側が `string | undefined` で null を取らないため `??` でよい。
 		const status = c.status ?? (c.details?.status as string | undefined);
+		// `breakoutDirection` は `string | null` で、**`null` は「この検出器が未ブレイクと判定した」**
+		// という値のある答え。`??` で書くと欠損と同じ扱いになり details 側に上書きされるので、
+		// キーの有無（`undefined`）だけで分岐する。出力スキーマの `z.string().nullish()` は
+		// 欠損と `null` を畳まないので、parse を通した後もこの区別は残る。
 		const dir =
-			c.breakoutDirection ?? (c.details?.breakout as { direction?: string | null } | null | undefined)?.direction;
+			c.breakoutDirection !== undefined
+				? c.breakoutDirection
+				: (c.details?.breakout as { direction?: string | null } | null | undefined)?.direction;
 		const statusStr = status ? ` status=${status}` : '';
 		// 未ブレイクは `null`（wedge 形成中）または `details.breakout: null`（triangle / pennant）で来る。
 		// 「方向が無い」を `null` と書いても読み手に情報が増えないので、その場合は行ごと出さない。

@@ -31,6 +31,7 @@ import { buildBtcJpy2026Candles } from '../fixtures/btc_jpy_1day_2026.js';
 
 type Candle = { isoTime: string; open: number; high: number; low: number; close: number; volume: number };
 
+/** 日足 1 本。close に対して high/low を等幅にずらす（本テストは価格構造そのものを見ない）。 */
 function makeCandle(dayOffset: number, close: number): Candle {
 	return {
 		isoTime: new Date(Date.UTC(2026, 0, 1 + dayOffset)).toISOString(),
@@ -42,6 +43,7 @@ function makeCandle(dayOffset: number, close: number): Candle {
 	};
 }
 
+/** 終値列を日足列に変換する。 */
 function fromCloses(closes: number[]): Candle[] {
 	return closes.map((close, index) => makeCandle(index, close));
 }
@@ -75,6 +77,7 @@ type Candidate = {
 
 const mockedAnalyzeIndicators = vi.mocked(analyzeIndicators);
 
+/** `analyze_indicators` をモックして `detectPatterns` を 1 回呼ぶ（既定で形成中を含める）。 */
 async function run(candles: Candle[], opts: Record<string, unknown> = {}) {
 	mockedAnalyzeIndicators.mockResolvedValueOnce(
 		asMockResult({ ok: true, summary: 'ok', data: { chart: { candles } } }),
@@ -87,6 +90,7 @@ function candidateHeaderLines(text: string, type: string): string[] {
 	return text.split('\n').filter((l) => new RegExp(`^\\d+\\. (✅|❌) ${type}\\b`).test(l));
 }
 
+/** 検出結果を `view=debug` の content テキストに整形する（LLM が実際に受け取る文字列）。 */
 function debugText(res: Parameters<typeof formatDebugView>[3] & { meta?: unknown }): string {
 	return formatDebugView('hdr', (res.meta ?? {}) as never, [], res).content[0].text;
 }
@@ -228,6 +232,30 @@ describe('formatDebugView: status / breakoutDirection の解決規則', () => {
 		expect(header).toContain('breakoutDirection=up');
 		expect(header).not.toContain('completed');
 		expect(header.match(/status=/g)).toHaveLength(1);
+	});
+
+	it('top-level の breakoutDirection: null は details 側で上書きされない', () => {
+		// `null` は欠損ではなく「この検出器が未ブレイクと判定した」という値のある答え。
+		// `c.breakoutDirection ?? details…` と書くと欠損と同じ扱いになり、details 側の
+		// 方向が漏れて「未ブレイクなのに方向がある」という矛盾した行が出る。
+		const text = formatDebugView(
+			'hdr',
+			meta([
+				{
+					type: 'rising_wedge',
+					accepted: true,
+					status: 'forming',
+					breakoutDirection: null,
+					details: { breakout: { idx: 7, direction: 'down' } },
+				},
+			]),
+			[],
+			res,
+		).content[0].text;
+
+		const header = text.split('\n').find((l) => l.startsWith('1. ')) ?? '';
+		expect(header).toContain('rising_wedge status=forming');
+		expect(header).not.toContain('breakoutDirection=');
 	});
 
 	it('未ブレイク（breakout: null / breakoutDirection: null）では breakoutDirection 行を出さない', () => {
