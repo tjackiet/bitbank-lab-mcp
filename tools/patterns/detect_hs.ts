@@ -71,7 +71,15 @@ const FORMING_MAX_DAYS = 90;
  * ここの日数は「その値がどこから来たか」を示す注記であって、暦日数の要件ではない。
  */
 export const FORMING_MIN_DAYS = 21;
-const FORMING_MIN_COMPLETION = 0.4;
+/**
+ * 形成中 H&S / 逆 H&S の完成度の下限。
+ *
+ * **現行の定数では到達しない。** `completion = min(1, (0.75 + 0.25 * progress) * (暫定右肩なら 0.9))`
+ * で `progress ∈ [0, 1]` なので最小値は `0.75 * 0.9 = 0.675` になり、0.4 を下回れない
+ * （実測でも合成 704 + 実データ 96 ケースで発火 0）。重み側（0.75 / 0.25 / 0.9）を触ったときに
+ * 効き始めるガードとして残してあり、`completion_below_min` の理由コードもそのために積む。
+ */
+export const FORMING_MIN_COMPLETION = 0.4;
 // detect_triples.ts と同値。形状不十分な forming 候補を上位表示させないための最低 confidence。
 const FORMING_MIN_CONFIDENCE = 0.5;
 
@@ -1129,7 +1137,24 @@ function tryFormingHS(ctx: DetectContext): DeduplicablePattern[] {
 	return out;
 }
 
-/** 頭候補 1 つを固定して形成中 H&S を組み立てる。組めなければ null（＝次の頭候補へ）。 */
+/**
+ * 頭候補 1 つを固定して形成中 H&S を組み立てる。組めなければ null（＝次の頭候補へ）。
+ *
+ * ## debug candidate の積み方（issue #155）
+ *
+ * 成功時に `accepted: true` を積む。**`accepted: true` は「検出器が組み立てた」であって
+ * 「最終出力に残った」ではない**——`tryFormingHS` は #154 以降すべての頭候補を試すので、
+ * ここで積んだ候補が後段 `detect_patterns.ts` の `globalDedup` に畳まれて `data.patterns`
+ * に出ないことがある。strict パス（`findStrictHS`）も `patterns.push` の直後＝dedup 前に
+ * 積んでおり、既存の約束と揃えてある。
+ *
+ * 棄却の理由コードは**構成点 4 点が揃った後の分岐にだけ**積む。左肩なし / 頭後の谷なし /
+ * 右肩なしの 3 分岐は「まだ形が無い」段階の脱落で、`headCandidatesNewestFirst` のループが
+ * 頭候補の数だけ回すぶんそのまま発火する（1hour × `limit=365` × `swingDepth=3` では確定
+ * ピークが数十個あり、H&S と逆 H&S 合わせて 100 件級）。`detect_patterns.ts` の cap=200 を
+ * 食い潰して**他の検出器の棄却理由を押し出す**ため積まない。積むなら頭候補ごとではなく
+ * 1 回だけ集約する形が要る（別途）。
+ */
 function formingHsForHead(
 	ctx: DetectContext,
 	confirmedPeaks: readonly Pivot[],
@@ -1176,17 +1201,44 @@ function formingHsForHead(
 	if (!rightShoulder) return null;
 
 	// 頭は形成区間の最高値であること（#154。総当たり化で外れた暗黙の保証を明示に戻す）
-	if (!headIsExtremeInSpan(allPeaks, head, left.idx, rightShoulder.idx, true)) return null;
+	if (!headIsExtremeInSpan(allPeaks, head, left.idx, rightShoulder.idx, true)) {
+		ctx.debugCandidates.push({
+			type: 'head_and_shoulders',
+			accepted: false,
+			reason: 'head_not_extreme_in_span',
+			indices: [left.idx, head.idx, postHeadValley.idx, rightShoulder.idx],
+			details: { spanFromIdx: left.idx, spanToIdx: rightShoulder.idx, headIdx: head.idx, headPrice: head.price },
+		});
+		return null;
+	}
 
 	// 完成度計算
 	const closeness =
 		1 - Math.abs(rightShoulder.price - left.price) / Math.max(1e-12, left.price * FORMING_RIGHT_TOLERANCE_PCT);
 	const progress = Math.max(0, Math.min(1, closeness));
 	const completion = Math.min(1, (0.75 + 0.25 * progress) * (isProvisional ? 0.9 : 1.0));
-	if (completion < FORMING_MIN_COMPLETION) return null;
+	if (completion < FORMING_MIN_COMPLETION) {
+		ctx.debugCandidates.push({
+			type: 'head_and_shoulders',
+			accepted: false,
+			reason: 'completion_below_min',
+			indices: [left.idx, head.idx, postHeadValley.idx, rightShoulder.idx],
+			details: { completion, threshold: FORMING_MIN_COMPLETION },
+		});
+		return null;
+	}
 
 	const formationBars = Math.max(0, rightShoulder.idx - left.idx);
-	if (formationBars < formingBars.minBars || formationBars > formingBars.maxBars) return null;
+	if (formationBars < formingBars.minBars || formationBars > formingBars.maxBars) {
+		ctx.debugCandidates.push({
+			type: 'head_and_shoulders',
+			accepted: false,
+			reason: 'formation_bars_out_of_range',
+			indices: [left.idx, head.idx, postHeadValley.idx, rightShoulder.idx],
+			details: { formationBars, minBars: formingBars.minBars, maxBars: formingBars.maxBars },
+		});
+		return null;
+	}
 
 	const trend = validatePriorTrend(candles, left.idx, rightShoulder.idx - left.idx, 'up_or_sideways');
 	if (!trend.ok) {
@@ -1282,6 +1334,48 @@ function formingHsForHead(
 	const formHsStructureRange = start && end ? { start, end } : undefined;
 	const formHsPrecedingTrend = buildPrecedingTrend(candles, trend, left.idx);
 
+	// 成功エントリ（issue #155）。構成点は 4 点で strict の 5 点とは違うため、頭後の谷は
+	// strict の `valley1` / `valley2` と混同しない専用 role で積む。先行谷（ネックラインの
+	// 左端）は `points` にだけ載せる——既存の棄却エントリと `indices` の並びを揃えるため。
+	// 暫定右肩は確定ピボットではなく最新足の終値なので role を分ける。
+	ctx.debugCandidates.push({
+		type: 'head_and_shoulders',
+		accepted: true,
+		status: 'forming',
+		indices: [left.idx, head.idx, postHeadValley.idx, rightShoulder.idx],
+		points: [
+			{ role: 'left_shoulder', idx: left.idx, price: left.price, isoTime: candles[left.idx]?.isoTime },
+			...(preHeadValley
+				? [
+						{
+							role: 'pre_head_valley',
+							idx: preHeadValley.idx,
+							price: preHeadValley.price,
+							isoTime: candles[preHeadValley.idx]?.isoTime,
+						},
+					]
+				: []),
+			{ role: 'head', idx: head.idx, price: head.price, isoTime: candles[head.idx]?.isoTime },
+			{
+				role: 'post_head_valley',
+				idx: postHeadValley.idx,
+				price: postHeadValley.price,
+				isoTime: candles[postHeadValley.idx]?.isoTime,
+			},
+			{
+				role: isProvisional ? 'right_shoulder_provisional' : 'right_shoulder',
+				idx: rightShoulder.idx,
+				price: rightShoulder.price,
+				isoTime: candles[rightShoulder.idx]?.isoTime,
+			},
+		],
+		details: {
+			confidence,
+			completionPct: Math.round(completion * 100),
+			method: isProvisional ? 'forming_hs_provisional' : 'forming_hs',
+		},
+	});
+
 	return {
 		type: 'head_and_shoulders',
 		confidence,
@@ -1333,6 +1427,11 @@ function tryFormingInverseHS(ctx: DetectContext): DeduplicablePattern[] {
 }
 
 /** 頭候補 1 つを固定して形成中 逆 H&S を組み立てる。組めなければ null（＝次の頭候補へ）。 */
+/**
+ * 頭候補 1 つを固定して形成中 逆 H&S を組み立てる。組めなければ null（＝次の頭候補へ）。
+ * debug candidate の積み方（成功エントリの意味・理由コードを積む分岐の範囲）は
+ * {@link formingHsForHead} の docstring が単一ソース。
+ */
 function formingInverseHsForHead(
 	ctx: DetectContext,
 	confirmedValleys: readonly Pivot[],
@@ -1378,17 +1477,44 @@ function formingInverseHsForHead(
 	if (!rightShoulder) return null;
 
 	// 頭は形成区間の最安値であること（#154。総当たり化で外れた暗黙の保証を明示に戻す）
-	if (!headIsExtremeInSpan(allValleys, head, left.idx, rightShoulder.idx, false)) return null;
+	if (!headIsExtremeInSpan(allValleys, head, left.idx, rightShoulder.idx, false)) {
+		ctx.debugCandidates.push({
+			type: 'inverse_head_and_shoulders',
+			accepted: false,
+			reason: 'head_not_extreme_in_span',
+			indices: [left.idx, head.idx, postHeadPeak.idx, rightShoulder.idx],
+			details: { spanFromIdx: left.idx, spanToIdx: rightShoulder.idx, headIdx: head.idx, headPrice: head.price },
+		});
+		return null;
+	}
 
 	// 完成度計算
 	const closeness =
 		1 - Math.abs(rightShoulder.price - left.price) / Math.max(1e-12, left.price * FORMING_RIGHT_TOLERANCE_PCT);
 	const progress = Math.max(0, Math.min(1, closeness));
 	const completion = Math.min(1, (0.75 + 0.25 * progress) * (isProvisional ? 0.9 : 1.0));
-	if (completion < FORMING_MIN_COMPLETION) return null;
+	if (completion < FORMING_MIN_COMPLETION) {
+		ctx.debugCandidates.push({
+			type: 'inverse_head_and_shoulders',
+			accepted: false,
+			reason: 'completion_below_min',
+			indices: [left.idx, head.idx, postHeadPeak.idx, rightShoulder.idx],
+			details: { completion, threshold: FORMING_MIN_COMPLETION },
+		});
+		return null;
+	}
 
 	const formationBars = Math.max(0, rightShoulder.idx - left.idx);
-	if (formationBars < formingBars.minBars || formationBars > formingBars.maxBars) return null;
+	if (formationBars < formingBars.minBars || formationBars > formingBars.maxBars) {
+		ctx.debugCandidates.push({
+			type: 'inverse_head_and_shoulders',
+			accepted: false,
+			reason: 'formation_bars_out_of_range',
+			indices: [left.idx, head.idx, postHeadPeak.idx, rightShoulder.idx],
+			details: { formationBars, minBars: formingBars.minBars, maxBars: formingBars.maxBars },
+		});
+		return null;
+	}
 
 	const trend = validatePriorTrend(candles, left.idx, rightShoulder.idx - left.idx, 'down_or_sideways');
 	if (!trend.ok) {
@@ -1481,6 +1607,46 @@ function formingInverseHsForHead(
 	const formIhsTarget = Math.round(formIhsNl + (formIhsNl - head.price));
 	const formIhsStructureRange = start && end ? { start, end } : undefined;
 	const formIhsPrecedingTrend = buildPrecedingTrend(candles, trend, left.idx);
+
+	// 成功エントリ（issue #155）。role の付け方は formingHsForHead 側と同じ約束で、
+	// 上下が反転するぶん「谷」が「山」になる。
+	ctx.debugCandidates.push({
+		type: 'inverse_head_and_shoulders',
+		accepted: true,
+		status: 'forming',
+		indices: [left.idx, head.idx, postHeadPeak.idx, rightShoulder.idx],
+		points: [
+			{ role: 'left_shoulder', idx: left.idx, price: left.price, isoTime: candles[left.idx]?.isoTime },
+			...(preHeadPeak
+				? [
+						{
+							role: 'pre_head_peak',
+							idx: preHeadPeak.idx,
+							price: preHeadPeak.price,
+							isoTime: candles[preHeadPeak.idx]?.isoTime,
+						},
+					]
+				: []),
+			{ role: 'head', idx: head.idx, price: head.price, isoTime: candles[head.idx]?.isoTime },
+			{
+				role: 'post_head_peak',
+				idx: postHeadPeak.idx,
+				price: postHeadPeak.price,
+				isoTime: candles[postHeadPeak.idx]?.isoTime,
+			},
+			{
+				role: isProvisional ? 'right_shoulder_provisional' : 'right_shoulder',
+				idx: rightShoulder.idx,
+				price: rightShoulder.price,
+				isoTime: candles[rightShoulder.idx]?.isoTime,
+			},
+		],
+		details: {
+			confidence,
+			completionPct: Math.round(completion * 100),
+			method: isProvisional ? 'forming_ihs_provisional' : 'forming_ihs',
+		},
+	});
 
 	return {
 		type: 'inverse_head_and_shoulders',
