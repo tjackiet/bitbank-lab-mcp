@@ -76,7 +76,7 @@
 - **`details.breakout: null` から `breakInfo` にフォールバックしない。** `details` 側の解決を `breakDirectionFromDetails` に切り出し、**キーが在ること自体が「この検出器が答えた」印**として先に見つかった系統で打ち切る。畳むと「未ブレイクなのに方向がある」行が出る——#160 が top-level の `null` を欠損と畳まないようにしたのと同じ規則を `details` 側にも通した。検出器が違うので実際に両方を持つエントリは無いが、優先順を暗黙にしない。
 - **`status4b` の型は 3 値（`completed` / `invalid` / `near_completion`）だが、この push 地点の式は `breakInfo.detected` の 2 分岐で `completed` / `near_completion` しか返さない。** テストは**実際に返る 2 値**を固定してあり、型に合わせて緩めていない。
 - **red-first で進めた。** 既存の終値列 fixture は**形成中パスにしか届かない**ため完成済みパスの候補行を検証できず、回帰パス（SG 平滑化ピボットの終値に回帰直線を当てる）に届く合成列を新規に組んだ（`buildCompletedFallingWedgeCandles`。山の終値が上限線・谷の終値が下限線に乗る 90 本 + ブレイクあり / なしの 2 種）。fixture を足すと既存アサーション（`typeof c.status === 'string'`）がそのまま赤くなることを確認してから直している。
-- **実測**（合成 10 種 × `patterns` セット 7 通り × `includeForming` 2 の **141 実行**。パターン 46 件 / 候補 2,881 件）: `data.patterns` と candidates の件数・`accepted` 内訳は**完全一致**。debug テキストで変わったのは **`✅ falling_wedge (revamped_ok)` の 176 行のみ**（`status=` / `breakoutDirection=` が付いた）。triangle / pennant / 形成中 wedge / 形成中 H&S の行は不変。
+- **実測**（合成 10 種 × `patterns` セット 7 通り × `includeForming` 2 の**全組み合わせ**。パターン 46 件 / 候補 2,881 件）: `data.patterns` と candidates の件数・`accepted` 内訳は**完全一致**。debug テキストで変わったのは **`✅ falling_wedge (revamped_ok)` の 176 行のみ**（`status=` / `breakoutDirection=` が付いた）。triangle / pennant / 形成中 wedge / 形成中 H&S の行は不変。
 
 ### Fixed（形成中 H&S / 逆 H&S の頭が「窓全体の極値」1 点に決め打ちされ、`limit` を上げると検出が消えていた。#154）
 
