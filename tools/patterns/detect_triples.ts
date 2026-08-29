@@ -25,7 +25,22 @@ export const FORMING_MIN_DAYS = 21;
 const FORMING_MAX_DAYS = 90;
 
 const FORMING_TOLERANCE_MULTIPLIER = 1.2;
-const FORMING_MIN_COMPLETION = 0.4;
+/**
+ * 形成中 Triple Top / Bottom の完成度の下限。
+ *
+ * **top 側では到達しない。** `completion = min(1, 0.66 + min(1, currentPrice / avgPeakPrice) * 0.34)`
+ * で価格は正なので `progress > 0`、つまり `completion > 0.66` になり 0.4 を下回れない
+ * （#155 の `detect_hs.ts` `FORMING_MIN_COMPLETION` と同じ事情）。重み側（0.66 / 0.34）を
+ * 触ったときに効き始めるガードとして残してある。
+ *
+ * **bottom 側は到達する。** あちらの `progress` は
+ * `(currentPrice - avgValleyPrice) / (avgPeakPrice - avgValleyPrice)` で**負を取りうる**
+ * （現在値が谷水準をわずかに下回るケース）。山と谷の差が小さい浅いパターンでは
+ * `progress < -0.7647` になり `completion < 0.4` に落ちる。
+ *
+ * `patterns/min-bars.ts` と同じく、到達性テストが参照するため export する。
+ */
+export const FORMING_MIN_COMPLETION = 0.4;
 const FORMING_MIN_CONFIDENCE = 0.5;
 // 形成中トリプル: 3 点目が現在価格で暫定のため、完成済みより上限を厳しくする。
 // confidence < 0.6（detectPatternsViewsHandler の低信頼ラベル境界）に抑え、
@@ -739,6 +754,21 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 
 // ── Helper: 形成中 Triple Top ──
 
+/**
+ * 形成中 Triple Top を組み立てる。組めなければ null。
+ *
+ * ## debug candidate の積み方（issue #158）
+ *
+ * 成功時に `accepted: true` / `status: 'forming'` を積む。**`accepted: true` は「検出器が
+ * 組み立てた」であって「最終出力に残った」ではない**——後段 `detect_patterns.ts` の
+ * `globalDedup` に畳まれて `data.patterns` に出ないことがある（#155 と同じ約束）。
+ * ループは成功で即 `return` するので、1 回の呼び出しで積まれる成功エントリは高々 1 件。
+ *
+ * 棄却の理由コードは**構成点が揃った後の分岐にだけ**積む。ピークペアを回すループなので、
+ * 揃う前の `continue`（`minDist` 不足 / `peakDiff` 超過 / `currentDiff` 超過）はペア数ぶん
+ * 発火し、`detect_patterns.ts` の cap=200 を食い潰して**他の検出器の棄却理由を押し出す**。
+ * #155 が `formingHsForHead` で置いた制約と同じ。
+ */
 function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
 	const { candles, pivots, allPeaks, allValleys, tolerancePct, minDist } = ctx;
 	const pcand: Pcand = (arg) => pushCand(ctx, arg);
@@ -808,7 +838,20 @@ function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
 		}
 
 		const formationBars = Math.max(0, lastIdx - peak1.idx);
-		if (formationBars < formingBars.minBars || formationBars > formingBars.maxBars) continue;
+		if (formationBars < formingBars.minBars || formationBars > formingBars.maxBars) {
+			pcand({
+				type: 'triple_top',
+				accepted: false,
+				reason: 'forming_bars_out_of_range',
+				idxs: [peak1.idx, peak2.idx, lastIdx],
+				pts: [
+					{ role: 'peak1', idx: peak1.idx, price: peak1.price },
+					{ role: 'peak2', idx: peak2.idx, price: peak2.price },
+					{ role: 'current', idx: lastIdx, price: currentPrice },
+				],
+			});
+			continue;
+		}
 
 		// ネックライン構成点: H-L-H-L-(現在足) という構造を強制するため、
 		// 谷を peak1-peak2 区間と peak2-現在足 区間にそれぞれ 1 つ以上要求する。
@@ -849,7 +892,15 @@ function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
 		// 3 点目が現在価格で暫定のため、completed より低い上限に抑える。
 		const confidence = Math.min(rawConfidence, FORMING_MAX_CONFIDENCE);
 
-		if (completion < FORMING_MIN_COMPLETION || confidence < FORMING_MIN_CONFIDENCE) continue;
+		if (completion < FORMING_MIN_COMPLETION || confidence < FORMING_MIN_CONFIDENCE) {
+			pcand({
+				type: 'triple_top',
+				accepted: false,
+				reason: completion < FORMING_MIN_COMPLETION ? 'forming_completion_below_min' : 'forming_confidence_below_min',
+				idxs: [peak1.idx, peak2.idx, lastIdx],
+			});
+			continue;
+		}
 
 		// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
 		const sizeReason = validatePatternSize('top', [peak1, v1, peak2, v2, { extremePrice: currentPrice }]);
@@ -883,6 +934,24 @@ function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
 		];
 
 		const formTtTarget = Math.round(avgValley - ((peak1.price + peak2.price) / 2 - avgValley));
+
+		// 成功エントリ（issue #158）。`indices` は既存の棄却エントリと同じ 3 点に揃え、
+		// ネックラインを引いた 2 谷は `points` にだけ足す（#155 の `pre_head_valley` と同じ扱い）。
+		// 最新足は確定ピボットではないので role を `current` で区別する。
+		pcand({
+			type: 'triple_top',
+			accepted: true,
+			status: 'forming',
+			idxs: [peak1.idx, peak2.idx, lastIdx],
+			pts: [
+				{ role: 'peak1', idx: peak1.idx, price: peak1.price },
+				{ role: 'valley1', idx: v1.idx, price: v1.price },
+				{ role: 'peak2', idx: peak2.idx, price: peak2.price },
+				{ role: 'valley2', idx: v2.idx, price: v2.price },
+				{ role: 'current', idx: lastIdx, price: currentPrice },
+			],
+		});
+
 		return {
 			type: 'triple_top',
 			confidence,
@@ -906,6 +975,11 @@ function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
 
 // ── Helper: 形成中 Triple Bottom ──
 
+/**
+ * 形成中 Triple Bottom を組み立てる。組めなければ null。
+ * debug candidate の積み方（成功エントリの意味・理由コードを積む分岐の範囲）は
+ * {@link tryFormingTripleTop} の docstring が単一ソース。
+ */
 function tryFormingTripleBottom(ctx: DetectContext): DeduplicablePattern | null {
 	const { candles, pivots, allPeaks, allValleys, tolerancePct, minDist } = ctx;
 	const pcand: Pcand = (arg) => pushCand(ctx, arg);
@@ -1011,7 +1085,20 @@ function tryFormingTripleBottom(ctx: DetectContext): DeduplicablePattern | null 
 		}
 
 		const formationBars = Math.max(0, lastIdx - valley1.idx);
-		if (formationBars < formingBars.minBars || formationBars > formingBars.maxBars) continue;
+		if (formationBars < formingBars.minBars || formationBars > formingBars.maxBars) {
+			pcand({
+				type: 'triple_bottom',
+				accepted: false,
+				reason: 'forming_bars_out_of_range',
+				idxs: [valley1.idx, valley2.idx, lastIdx],
+				pts: [
+					{ role: 'valley1', idx: valley1.idx, price: valley1.price },
+					{ role: 'valley2', idx: valley2.idx, price: valley2.price },
+					{ role: 'current', idx: lastIdx, price: currentPrice },
+				],
+			});
+			continue;
+		}
 
 		const progress = (currentPrice - avgValleyPrice) / Math.max(1e-12, avgPeakPrice - avgValleyPrice);
 		const completion = Math.min(1, 0.66 + Math.min(1, progress) * 0.34);
@@ -1019,7 +1106,15 @@ function tryFormingTripleBottom(ctx: DetectContext): DeduplicablePattern | null 
 		// 3 点目が現在価格で暫定のため、completed より低い上限に抑える。
 		const confidence = Math.min(rawConfidence, FORMING_MAX_CONFIDENCE);
 
-		if (completion < FORMING_MIN_COMPLETION || confidence < FORMING_MIN_CONFIDENCE) continue;
+		if (completion < FORMING_MIN_COMPLETION || confidence < FORMING_MIN_CONFIDENCE) {
+			pcand({
+				type: 'triple_bottom',
+				accepted: false,
+				reason: completion < FORMING_MIN_COMPLETION ? 'forming_completion_below_min' : 'forming_confidence_below_min',
+				idxs: [valley1.idx, valley2.idx, lastIdx],
+			});
+			continue;
+		}
 
 		// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
 		const sizeReason = validatePatternSize('bottom', [valley1, pTop1, valley2, pTop2, { extremePrice: currentPrice }]);
@@ -1050,6 +1145,23 @@ function tryFormingTripleBottom(ctx: DetectContext): DeduplicablePattern | null 
 		];
 
 		const formTbTarget = Math.round(avgPeakPrice + (avgPeakPrice - avgValleyPrice));
+
+		// 成功エントリ（issue #158）。`indices` は既存の棄却エントリと同じ 3 点に揃え、
+		// ネックラインを引いた 2 山は `points` にだけ足す。
+		pcand({
+			type: 'triple_bottom',
+			accepted: true,
+			status: 'forming',
+			idxs: [valley1.idx, valley2.idx, lastIdx],
+			pts: [
+				{ role: 'valley1', idx: valley1.idx, price: valley1.price },
+				{ role: 'peak1', idx: pTop1.idx, price: pTop1.price },
+				{ role: 'valley2', idx: valley2.idx, price: valley2.price },
+				{ role: 'peak2', idx: pTop2.idx, price: pTop2.price },
+				{ role: 'current', idx: lastIdx, price: currentPrice },
+			],
+		});
+
 		return {
 			type: 'triple_bottom',
 			confidence,

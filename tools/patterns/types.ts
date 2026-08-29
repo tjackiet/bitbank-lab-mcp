@@ -89,6 +89,15 @@ export interface CandDebugArg {
 	reason?: string;
 	idxs?: number[];
 	pts?: Array<{ role: string; idx: number; price: number }>;
+	/**
+	 * 候補を組み立てた時点の status（issue #158）。形成中パスの成功エントリが
+	 * 「完成済みとして採用された」と誤読されるのを防ぐための印で、`CandDebugEntry` 側には
+	 * 元からあったが `pushCand` に写経路が無く、`pcand` を使う検出器からは積めなかった。
+	 *
+	 * **渡さなければキー自体を出力しない**（下の spread）。#158 以前の呼び出し元は 1 つも
+	 * これを渡していないので、追加は既存出力に対して純粋に additive。
+	 */
+	status?: string;
 }
 
 /** debugCandidates 配列の要素 */
@@ -264,5 +273,7 @@ export function pushCand(ctx: DetectContext, arg: CandDebugArg): void {
 		reason: arg.reason,
 		indices: arg.idxs,
 		points,
+		// 未指定ならキーごと出さない（`status: undefined` を置くと deep-equal 比較が壊れる）
+		...(arg.status !== undefined ? { status: arg.status } : {}),
 	});
 }
