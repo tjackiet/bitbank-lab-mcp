@@ -540,6 +540,10 @@ export const DetectPatternsOutputSchema = z.union([
 								type: PatternFilterEnum,
 								accepted: z.boolean(),
 								reason: z.string().optional(),
+								// 候補が組み立てられた時点の status。形成中パスの成功エントリ（issue #155）が
+								// 「完成済みとして採用された」と誤読されるのを防ぐための印で、`CandDebugEntry`
+								// 側には元からあったが出力スキーマに無く **strip されていた**。
+								status: z.string().optional(),
 								indices: z.array(z.number().int()).optional().describe(PATTERN_INDEX_NOTE),
 								points: z
 									.array(
