@@ -7,7 +7,7 @@
 
 ## [Unreleased]
 
-### 読む順（`detect_patterns` 系の一連の変更。#114 → 本 PR）
+### 読む順（`detect_patterns` 系の一連の変更。#114 以降）
 
 **以下の `detect_patterns` 系エントリは 1 本の連続した作業で、起点は #114 の「スキャン窓を直近 `limit` 本に一致させた」変更。** 個々のエントリは新しい順に並んでいるため、逆順に全部読まないと話が再構成できない。ここに時系列の索引を置く（**各エントリの本文は削っていない**——判断根拠と却下案がリリース後に効く資産なので）。
 
@@ -31,7 +31,52 @@
 | 16 | #141 | 三角形の外れ値除去に除去率の上限を入れた | 実データで**減る**（合成 fixture は変わらない） |
 | 17 | #148 | H&S の窓生成から交互列要求を外した（#146） | 実データで**増える**（合成 fixture は変わらない） |
 | 18 | #153 | H&S の `tolerancePct` が頭の突出率としても使われ意味が反転していたのを `headProminencePct` に分離（#149） | **変わらない**（既定値のまま） |
-| 19 | 本 PR | 形成中 H&S / 逆 H&S の頭を窓全体の極値 1 点に決め打ちしていたのを総当たりに変えた（#154） | 合成 fixture は**変わらない** / 実データは窓を広げたときだけ**増える**（＝狭い窓で出ていたものが戻る） |
+| 19 | #156 | 形成中 H&S / 逆 H&S の頭を窓全体の極値 1 点に決め打ちしていたのを総当たりに変えた（#154） | 合成 fixture は**変わらない** / 実データは窓を広げたときだけ**増える**（＝狭い窓で出ていたものが戻る） |
+| 20 | #159 | 形成中 H&S / 逆 H&S の成功候補を `debug.candidates` に積む（#155） | **変わらない** |
+| 21 | #161 | candidates の `status` / `breakoutDirection` を content と出力スキーマに届ける（#160） | **変わらない** |
+| 22 | #164 | 完成済みウェッジの `status` / `breakoutDirection` が候補行に出ていなかったのを修正（#162） | **変わらない** |
+
+### Changed（`detect_patterns` の `view=debug` の配線 3 件。**`data.patterns` は 3 件とも 1 件も変わらない**。#155 / #160 / #162）
+
+**3 件とも「検出器が持っている情報が `view=debug` の出力まで届いていない」配線の修正で、検出結果は動いていない。** 見出しは 1 本にまとめてあるが、各 PR の却下案と実測は下に残す（要約すると根拠が落ちるため。本セクション冒頭「読む順」の方針）。
+
+#### 形成中 H&S / 逆 H&S の成功候補を `debug.candidates` に積む（#155 / PR #159）
+
+- **`accepted: true` は `globalDedup` の前に積む。** `tryFormingHS` は #154 以降すべての頭候補を試して複数返し、`globalDedup` は後段の `detect_patterns.ts` で走るので、**積んだ候補が `data.patterns` に出ないことがある**。strict パス（`push(patterns, …)` の直後に積む）と同じ既存の規約で、変えていない。`accepted: true` は「検出器が組み立てた」であって「最終出力に残った」ではない。
+- 構成点は **4 点**（左肩 / 頭 / 頭後の谷 / 右肩）で strict の 5 点と違うため role を分けた。頭後の谷は `post_head_valley`（逆 H&S は `post_head_peak`。strict の `valley1` / `valley2` と混同させない専用 role）、暫定右肩（`isProvisional`。確定ピボットではなく最新足の終値）は `right_shoulder_provisional`。`preHeadValley` が取れているときは `pre_head_valley` を `points` にだけ足す（`indices` は 4 点のまま——同じ関数の既存の棄却エントリと並びを揃えるため）。
+- **理由コードは構成点 4 点が揃った後の分岐にだけ足した**（`head_not_extreme_in_span` / `completion_below_min` / `formation_bars_out_of_range`）。**左肩なし / 頭後の谷なし / 右肩なしの 3 分岐は見送った**——`formingHsForHead` は頭候補ごとに呼ばれるので、この 3 分岐は「まだ形が無い」段階で頭候補の数だけ発火し（`1hour` × `limit=365` × `swingDepth=3` で H&S + 逆 H&S 合わせて 100 件級）、`detect_patterns.ts` の `cap = 200` を食い潰して**他の検出器の棄却理由を押し出す**。積むなら「頭候補ごとではなく 1 回だけ集約する」形が要る。理由は関数の docstring にも書いた。
+- **`completion_below_min` は現行定数では到達しない。** `completion = min(1, (0.75 + 0.25 × progress) × (暫定右肩なら 0.9))` で `progress ∈ [0, 1]` なので最小値は `0.75 × 0.9 = 0.675` > `FORMING_MIN_COMPLETION = 0.4`（実測でも 800 ケースで発火 0）。理由コードは足したうえで到達不能である旨とその算術を `FORMING_MIN_COMPLETION` の docstring に明記し、**テストは fixture ではなく算術境界を固定した**（重み 0.75 / 0.25 / 0.9 を触って下限が 0.4 を割り込んだら落ちる）。cap を食わないので分岐自体は残してある。
+- **`CandDebugEntry.status` が出力スキーマ（`src/schema/patterns.ts`）の candidates に無く Zod に strip されていた**のを解消した（随伴変更。積んでも出力に出ないままでは `status: 'forming'` を足す意味が無い）。副作用で `detect_wedges` が前から top-level に積んでいた `status` も届くようになる（800 ケース中 **464 エントリ**が新たに `status` を持つ。消えるフィールド・変わる値は無い）。`breakoutDirection` が同じ理由で strip されている件は**報告のみ**とし、#160 に送った。
+- **double / triple の形成中パスにも同じ穴がある**が、本エントリは H&S 2 経路に閉じ **#158 に分離**した。
+- **実測**（合成 704 ケース = fixture 22 × オプション 8 × 時間足 2 × `swingDepth` 2、実データ 96 ケース = `btc_jpy_1day_2026` × 時間足 3 × `swingDepth` 4 × オプション 8。計 **800**）:
+
+  | | before → after |
+  |---|---|
+  | `data.patterns` | **0 変化**（800 ケースすべて deep-equal） |
+  | candidates 総数 | 42,040 → **42,276**（+236） |
+  | `accepted: true` | 2,700 → **2,748**（+48 = 形成中 H&S 12 + 逆 H&S 36。検出されている件数とちょうど一致） |
+  | cap 到達ケース | 36 → **36**（新規 0・解消 0。もともと before の時点で 200 に達していた実データ側） |
+
+  320 件積まれて 84 件が cap で押し出され差し引き +236。**押し出された 84 件はすべて `accepted: false`**。`cap = 200` は上げていない（判断を仰ぐ対象なので勝手に触らない）。`patterns` で絞れば `candidate-filter` がトリム前に落とすので、該当種別の理由は残る。
+
+#### candidates の `status` / `breakoutDirection` を content と出力スキーマに届ける（#160 / PR #161）
+
+- **置き場所が top-level と `details` に割れている**（`detect_triangles` / `detect_pennants` は `details.status` と `details.breakout.direction`、`detect_wedges` の形成中パスと #155 の形成中 H&S は top-level）ため、候補行は wedge / 形成中 H&S の `status` を出せず、`breakoutDirection` は **4 検出器すべてで**出ていなかった。**読む側（`formatDebugView`）で 1 回だけ解決する**形にし、候補行のヘッダに `status=` / `breakoutDirection=` を出す。**producer 6 ファイルの統一は見送った**——検出器に手が入り「検出結果ゼロ変更」の保証が重くなるため、#160 の「やらないこと」のまま据え置き。
+- **`breakoutDirection: null` は欠損ではなく「この検出器が未ブレイクと判定した」という値のある答え**（`detect_wedges.ts:1027`）なので、`??` で畳まず **`!== undefined`（キーの有無）で分岐する**（CodeRabbit 指摘）。`??` のままだと top-level が `null` でも details 側に上書きされ、`status=forming breakoutDirection=down`（未ブレイクなのに方向がある）という矛盾した行が出る。現行の検出器は 2 系統を同時に積まないので**実データでは到達しない**（800 ケースの content テキストは修正前後で 1 文字も変わらない）が、ここが 2 系統を吸収する唯一の解決点で、`details.breakout` を持つ検出器が将来 top-level にも積んだ瞬間に黙って壊れるため直した。修正前の実装で実際に失敗することを確認した回帰テストを追加してある。出力スキーマの `z.string().nullish()` が欠損と `null` を畳まないことは zod v4 で実測確認済み。
+- **出力スキーマに宣言が無いと `parse`（`tools/detect_patterns.ts:547`）で strip され handler に届かない。** `breakoutDirection` はこれで消えていたので、スキーマ追加はドキュメント整備ではなく**配線そのもの**（#155 の `status` と同じ構図）。`PatternEntry.breakoutDirection` の `z.enum(['up','down'])` とは揃えていない——あちらは成立したパターンの確定値、こちらは `null` が正当に入る候補時点の観測値で、enum に揃えると parse error になる。
+- 二重表示を避けるため `formatCandidateDetails` の `detected` 行から `status` を外した。**消したのではなく canonical な行へ移した**（実測で triangle / pennant の内訳が 1 件も減っていないことを確認）。
+- **形成中 H&S の `status: forming` と `details.method: forming_hs` は両方残した。** 冗長だが等価ではない——`method` は暫定右肩を `forming_hs_provisional` / `forming_ihs_provisional` として区別するので `status` では表現できない情報を持ち、逆に `status` を落とすと #155 のスキーマ追加が意味を失う。どちらも情報の欠損なしには落とせないので両方の存在をテストで固定した。
+- **陳腐化していた説明文 4 箇所を訂正した**（`view` description は tool schema 経由で LLM に届くので実害がある）: 「candidates の各エントリは `status` を持たない」（#155 以降 誤り）/「`accepted: true` はその後パターンとして成立したことを示す」（形成中パスは dedup 前に積むので誤り）/ handler の凡例の ✅ 側（❌ 限定の記述は今も正しいが片手落ち）/ `tests/detect_patterns_debug.test.ts:177` の「型にも存在しない」（型には元からあった。アサーションは今も通るが**通る理由が変わっている**ので根拠を書き直した）。
+- **実測**（合成 704 ケース + 実データ 96 ケース = 800）: `data.patterns` **0 変化** / candidates の件数・`accepted` 件数・`accepted` 内訳とも **0 変化**。content に `status` が出た候補は 296 → **424**（wedge 120 件（rising 80 / falling 40）と形成中 H&S 8 件が新規。triangle / pennant の 296 件は不変）、`breakoutDirection` は triangle 3 種・flag / pennant・wedge 2 種で計 **336 行**（H&S は検出器がこのフィールドを持たないので出ない）。
+- **`detect_wedges` には 3 つ目の置き場所 `details.breakInfo.direction`（完成済みパス）がある**ことに気づいたが、本エントリでは触らず **#162 に送った**。
+
+#### 完成済みウェッジ（`revamped_ok`）の `status` / `breakoutDirection` が候補行に出ていなかったのを修正（#162 / PR #164）
+
+- 同じ `detect_wedges` の中で見え方が割れていた（形成中は `✅ falling_wedge status=forming breakoutDirection=up …` / 完成済みは `✅ falling_wedge (revamped_ok) indices=[…]` のみ）。**ブレイク済みのほうが方向の情報価値が高いので順序が逆**。原因は 2 つで、producer 側は計算済みの `status4b` をパターン側にだけ渡していた（`debugCandidates.push` に `status` が無い）、読む側は **3 つ目の置き場所** `details.breakInfo.direction` を見ていなかった。
+- **`details.breakout: null` から `breakInfo` にフォールバックしない。** `details` 側の解決を `breakDirectionFromDetails` に切り出し、**キーが在ること自体が「この検出器が答えた」印**として先に見つかった系統で打ち切る。畳むと「未ブレイクなのに方向がある」行が出る——#160 が top-level の `null` を欠損と畳まないようにしたのと同じ規則を `details` 側にも通した。検出器が違うので実際に両方を持つエントリは無いが、優先順を暗黙にしない。
+- **`status4b` の型は 3 値（`completed` / `invalid` / `near_completion`）だが、この push 地点の式は `breakInfo.detected` の 2 分岐で `completed` / `near_completion` しか返さない。** テストは**実際に返る 2 値**を固定してあり、型に合わせて緩めていない。
+- **red-first で進めた。** 既存の終値列 fixture は**形成中パスにしか届かない**ため完成済みパスの候補行を検証できず、回帰パス（SG 平滑化ピボットの終値に回帰直線を当てる）に届く合成列を新規に組んだ（`buildCompletedFallingWedgeCandles`。山の終値が上限線・谷の終値が下限線に乗る 90 本 + ブレイクあり / なしの 2 種）。fixture を足すと既存アサーション（`typeof c.status === 'string'`）がそのまま赤くなることを確認してから直している。
+- **実測**（合成 10 種 × `patterns` セット 7 通り × `includeForming` 2 の**全組み合わせ**。パターン 46 件 / 候補 2,881 件）: `data.patterns` と candidates の件数・`accepted` 内訳は**完全一致**。debug テキストで変わったのは **`✅ falling_wedge (revamped_ok)` の 176 行のみ**（`status=` / `breakoutDirection=` が付いた）。triangle / pennant / 形成中 wedge / 形成中 H&S の行は不変。
 
 ### Fixed（形成中 H&S / 逆 H&S の頭が「窓全体の極値」1 点に決め打ちされ、`limit` を上げると検出が消えていた。#154）
 
