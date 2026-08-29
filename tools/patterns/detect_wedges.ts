@@ -534,6 +534,10 @@ function buildRegressionEntry(
 		type: wedgeType,
 		accepted: true,
 		reason: 'revamped_ok',
+		// 形成中パス（`detectFormingWedges` の成功エントリ）と同じく top-level に置く。ここに無いと `view=debug` の
+		// 候補行に `status=` が出ず、同じ検出器なのに形成中だけ状態が見える形になる（issue #162）。
+		// 値は上の `status4b` と同一——パターン側（下の return）と候補側で別々に計算しない。
+		status: status4b,
 		indices: [startIdx, actualEndIdx],
 		details: {
 			slopeHigh: upper.slope,
