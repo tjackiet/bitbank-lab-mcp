@@ -174,7 +174,11 @@ describe('detect_patterns: debug candidates の要求種別フィルタ（#124�
 		assertOk(withoutInvalid);
 		const rejected = (withoutInvalid.meta.debug?.candidates ?? []).filter((c) => !c.accepted);
 		expect(rejected.length).toBeGreaterThan(0);
-		// candidates のエントリは元々 status を持たない（型にも存在しない）。
+		// `CandDebugEntry` には元から `status` があり、#155 以降は `accepted:true` のエントリ
+		// （形成中パスの成功候補）が実際に値を持つ。ここが依然 rejected 限定で通るのは
+		// 「型に無いから」ではなく、**棄却は status が決まる前の分岐で積まれる**ため。
+		// この非対称（❌ は status なし / ✅ は持ちうる）が issue #149 の区別そのものなので、
+		// ❌ 側だけを固定する。
 		for (const c of rejected) expect('status' in c).toBe(false);
 
 		const text = formatDebugView('hdr', withoutInvalid.meta, [], withoutInvalid).content[0].text;

@@ -131,11 +131,13 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 				'  candidates は `patterns` で要求した種別（エイリアスは展開して照合）に**絞って**返す。' +
 				'`patterns` 未指定なら全種別。絞らないと cap（200件）を要求外の種別が食い潰し、' +
 				'要求した種別の棄却理由が押し出される。\n' +
-				'  candidates の各エントリは `status` を持たない。`accepted:false` は候補生成の時点での' +
-				'棄却（例: `head_not_higher`。`includeInvalid` では拾えない）。`accepted:true` は' +
-				'その後パターンとして成立したことを示すだけで、成立後に `status=invalid`/`expired` に' +
-				'なったかどうかは candidates からは分からない。それを見るには `data.patterns` 側を' +
-				'`includeInvalid=true` で見る（区別は includeInvalid の説明を参照）。',
+				'  `accepted:false` は候補生成の時点での棄却（例: `head_not_higher`。`includeInvalid` では拾えない）で、' +
+				'`status` を持たない。`accepted:true` は**検出器が候補を組み立てた**ことを示すだけで、' +
+				'`data.patterns` に残ったことは意味しない（形成中パスの成功エントリは `globalDedup` より前に積むため、' +
+				'重複除去で最終出力から消えることがある）。エントリが持つ `status` / `breakoutDirection` も' +
+				'**組み立てた時点の観測値**であって、その後 `status=invalid`/`expired` になったかどうかは' +
+				'candidates からは分からない。それを見るには `data.patterns` 側を `includeInvalid=true` で見る' +
+				'（区別は includeInvalid の説明を参照）。',
 		),
 	// New: relevance filter for "current-involved" long-term patterns
 	requireCurrentInPattern: z.boolean().optional().default(false),
@@ -544,6 +546,11 @@ export const DetectPatternsOutputSchema = z.union([
 								// 「完成済みとして採用された」と誤読されるのを防ぐための印で、`CandDebugEntry`
 								// 側には元からあったが出力スキーマに無く **strip されていた**。
 								status: z.string().optional(),
+								// ブレイク方向。`CandDebugEntry` 側が `string | null`（未ブレイクの候補で `null`）
+								// なので nullable。`PatternEntry.breakoutDirection`（:395）は `z.enum(['up','down'])`
+								// だが**あちらは成立したパターンの確定値**で、こちらは候補時点の観測値。
+								// 揃えて enum にすると `null` と将来の分類値で parse error になる。
+								breakoutDirection: z.string().nullish(),
 								indices: z.array(z.number().int()).optional().describe(PATTERN_INDEX_NOTE),
 								points: z
 									.array(
