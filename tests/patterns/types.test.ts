@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { getSizeThresholdsForTf } from '../../tools/patterns/config.js';
 import type { DetectContext } from '../../tools/patterns/types.js';
 import { pushCand } from '../../tools/patterns/types.js';
 
@@ -21,6 +22,7 @@ function makeCtx(candles: Array<{ isoTime?: string }>): DetectContext {
 		includeForming: false,
 		debugCandidates: [],
 		type: '1day',
+		sizeThresholds: getSizeThresholdsForTf('1day'),
 		swingDepth: 6,
 		near: () => false,
 		pct: () => 0,

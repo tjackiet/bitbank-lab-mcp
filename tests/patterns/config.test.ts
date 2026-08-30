@@ -4,12 +4,14 @@ import {
 	getDefaultParamsForTf,
 	getDefaultToleranceForTf,
 	getMinFitForTf,
+	getSizeThresholdsForTf,
 	getTriangleCoeffForTf,
 	getTriangleWindowSize,
 	MIN_CONFIDENCE,
 	resolveParams,
 	SCHEMA_DEFAULTS,
 } from '../../tools/patterns/config.js';
+import { MIN_DEPTH_PCT, MIN_PATTERN_HEIGHT_PCT } from '../../tools/patterns/structural.js';
 
 describe('MIN_CONFIDENCE', () => {
 	it('主要パターン種別が定義されている', () => {
@@ -187,5 +189,61 @@ describe('resolveParams', () => {
 		const result = resolveParams('1hour', { tolerancePct: 0.01 });
 		expect(result.tolerancePct).toBe(0.01);
 		expect(result.headProminencePct).toBe(0.05); // 1hour のオート値のまま
+	});
+});
+
+describe('getSizeThresholdsForTf', () => {
+	it('1day はアンカーで structural.ts の定数と一致する（issue #152 で据え置き）', () => {
+		const t = getSizeThresholdsForTf('1day');
+		expect(t.heightPct).toBe(MIN_PATTERN_HEIGHT_PCT);
+		expect(t.depthPct).toBe(MIN_DEPTH_PCT);
+	});
+
+	it('1week / 1month / 未知の時間足も 1day と同値（緩める方向のみという前提）', () => {
+		for (const tf of ['1week', '1month', 'unknown']) {
+			expect(getSizeThresholdsForTf(tf)).toEqual({ heightPct: MIN_PATTERN_HEIGHT_PCT, depthPct: MIN_DEPTH_PCT });
+		}
+	});
+
+	it('1hour は実測 ATR 比（0.57% / 2.75%）から導いた値', () => {
+		expect(getSizeThresholdsForTf('1hour')).toEqual({ heightPct: 0.0062, depthPct: 0.0104 });
+	});
+
+	it('4hour は √t 推定値（4hour の ATR は未実測）', () => {
+		expect(getSizeThresholdsForTf('4hour')).toEqual({ heightPct: 0.0122, depthPct: 0.0204 });
+	});
+
+	/**
+	 * **これが本テーブルの不変条件。** 両方とも下限なので、時間足が短いほど値が小さく
+	 * （＝緩く）なっていないと「下位時間足だけ緩める」という設計が成立しない。
+	 * 1day を上回る値が 1 つでも入ると検出が減る方向に動き、issue #152 の受け入れ条件
+	 * （減る方向の変化 0 件）が壊れる。
+	 */
+	it('短い時間足ほど緩く、1day を上回る値は無い（単調性）', () => {
+		const order = ['1min', '5min', '15min', '30min', '1hour', '4hour', '8hour', '12hour', '1day'];
+		const rows = order.map((tf) => getSizeThresholdsForTf(tf));
+		for (let i = 1; i < rows.length; i++) {
+			expect(rows[i].heightPct).toBeGreaterThan(rows[i - 1].heightPct);
+			expect(rows[i].depthPct).toBeGreaterThan(rows[i - 1].depthPct);
+		}
+		for (const tf of [...order, '1week', '1month']) {
+			expect(getSizeThresholdsForTf(tf).heightPct).toBeLessThanOrEqual(MIN_PATTERN_HEIGHT_PCT);
+			expect(getSizeThresholdsForTf(tf).depthPct).toBeLessThanOrEqual(MIN_DEPTH_PCT);
+		}
+	});
+
+	/**
+	 * 導出は「1day を 1.0 とした ATR 比を 3% / 5% に掛ける」の 1 本だけ。
+	 * 比が height と depth で割れていたら、片方だけ緩めて棄却理由が
+	 * `valley_too_shallow` から `pattern_too_small` に移るだけ、という #152 の落とし穴に戻る。
+	 */
+	it('height と depth は同じ ATR 比から導出されている（片方だけ緩めていない）', () => {
+		for (const tf of ['1min', '5min', '15min', '30min', '1hour', '4hour', '8hour', '12hour', '1day']) {
+			const t = getSizeThresholdsForTf(tf);
+			const heightRatio = t.heightPct / MIN_PATTERN_HEIGHT_PCT;
+			const depthRatio = t.depthPct / MIN_DEPTH_PCT;
+			// 0.0001 刻みに丸めた表なので、比の一致は丸め誤差の範囲で見る
+			expect(Math.abs(heightRatio - depthRatio)).toBeLessThan(0.02);
+		}
 	});
 });

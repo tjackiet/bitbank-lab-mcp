@@ -155,7 +155,7 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 		}
 
 		// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
-		const sizeReason = validatePatternSize('top', [a, v1, b, v2, c]);
+		const sizeReason = validatePatternSize('top', [a, v1, b, v2, c], ctx.sizeThresholds);
 		if (sizeReason) {
 			pcand({ type: 'triple_top', accepted: false, reason: sizeReason, idxs: [a.idx, b.idx, c.idx] });
 			continue;
@@ -327,7 +327,7 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 		}
 
 		// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
-		const sizeReason = validatePatternSize('bottom', [a, p1, b, p2, c]);
+		const sizeReason = validatePatternSize('bottom', [a, p1, b, p2, c], ctx.sizeThresholds);
 		if (sizeReason) {
 			pcand({ type: 'triple_bottom', accepted: false, reason: sizeReason, idxs: [a.idx, b.idx, c.idx] });
 			continue;
@@ -501,7 +501,7 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 		}
 
 		// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
-		const sizeReason = validatePatternSize('top', [a, v1, b, v2, c]);
+		const sizeReason = validatePatternSize('top', [a, v1, b, v2, c], ctx.sizeThresholds);
 		if (sizeReason) {
 			pcand({ type: 'triple_top', accepted: false, reason: sizeReason, idxs: [a.idx, b.idx, c.idx] });
 			continue;
@@ -663,7 +663,7 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 		}
 
 		// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
-		const sizeReason = validatePatternSize('bottom', [a, p1, b, p2, c]);
+		const sizeReason = validatePatternSize('bottom', [a, p1, b, p2, c], ctx.sizeThresholds);
 		if (sizeReason) {
 			pcand({ type: 'triple_bottom', accepted: false, reason: sizeReason, idxs: [a.idx, b.idx, c.idx] });
 			continue;
@@ -912,7 +912,11 @@ function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
 		}
 
 		// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
-		const sizeReason = validatePatternSize('top', [peak1, v1, peak2, v2, { extremePrice: currentPrice }]);
+		const sizeReason = validatePatternSize(
+			'top',
+			[peak1, v1, peak2, v2, { extremePrice: currentPrice }],
+			ctx.sizeThresholds,
+		);
 		if (sizeReason) {
 			pcand({ type: 'triple_top', accepted: false, reason: sizeReason, idxs: [peak1.idx, peak2.idx, lastIdx] });
 			continue;
@@ -1134,7 +1138,11 @@ function tryFormingTripleBottom(ctx: DetectContext): DeduplicablePattern | null 
 		}
 
 		// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
-		const sizeReason = validatePatternSize('bottom', [valley1, pTop1, valley2, pTop2, { extremePrice: currentPrice }]);
+		const sizeReason = validatePatternSize(
+			'bottom',
+			[valley1, pTop1, valley2, pTop2, { extremePrice: currentPrice }],
+			ctx.sizeThresholds,
+		);
 		if (sizeReason) {
 			pcand({ type: 'triple_bottom', accepted: false, reason: sizeReason, idxs: [valley1.idx, valley2.idx, lastIdx] });
 			continue;

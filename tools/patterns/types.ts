@@ -1,6 +1,7 @@
 /**
  * detect_patterns 系モジュール共通の型定義
  */
+import type { SizeThresholds } from './structural.js';
 import type { Pivot } from './swing.js';
 
 /** トレンドライン（線形回帰の結果） */
@@ -129,6 +130,15 @@ export interface DetectContext {
 	 * 水平度は引き続き `tolerancePct`（同水準判定）と固定定数 `HS_NECKLINE_MAX_PCT`（水平度）が担う。
 	 */
 	headProminencePct: number;
+	/**
+	 * 反転パターンのサイズ検査の下限 2 つ（issue #152）。`getSizeThresholdsForTf(type)` を
+	 * `detect_patterns.ts` で **1 回だけ**解決して載せる。
+	 *
+	 * `structural.ts` は純粋関数のみで `DetectContext` を知らないため、`validatePatternSize`
+	 * には呼び出し側からこの値を渡す。検出器がモジュール定数
+	 * （`MIN_PATTERN_HEIGHT_PCT` / `MIN_DEPTH_PCT`）を直接読むと時間足別の値が効かなくなる。
+	 */
+	sizeThresholds: SizeThresholds;
 	minDist: number;
 	/** 検出対象パターン種別。空 = 全種 */
 	want: Set<string>;

@@ -23,7 +23,11 @@
 import { describe, expect, it } from 'vitest';
 import { dayjs } from '../../lib/datetime.js';
 import { CandleTypeEnum } from '../../src/schema/base.js';
-import { getDefaultParamsForTf, getDefaultToleranceForTf } from '../../tools/patterns/config.js';
+import {
+	getDefaultParamsForTf,
+	getDefaultToleranceForTf,
+	getSizeThresholdsForTf,
+} from '../../tools/patterns/config.js';
 import { detectDoubles, getDoubleFormingBarParams } from '../../tools/patterns/detect_doubles.js';
 import { detectHeadAndShoulders, getHsFormingBarParams } from '../../tools/patterns/detect_hs.js';
 import { detectTriples } from '../../tools/patterns/detect_triples.js';
@@ -82,6 +86,7 @@ function buildCtx(tf: string, candles: CandleData[], includeForming: boolean): D
 		includeForming,
 		debugCandidates: [],
 		type: tf,
+		sizeThresholds: getSizeThresholdsForTf(tf),
 		swingDepth,
 		near: (a, b) => Math.abs(a - b) <= Math.max(a, b) * tolerancePct,
 		pct: (a, b) => ((b - a) / Math.max(1, a)) * 100,
