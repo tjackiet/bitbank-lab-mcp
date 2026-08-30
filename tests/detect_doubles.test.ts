@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { dayjs } from '../lib/datetime.js';
+import { getSizeThresholdsForTf } from '../tools/patterns/config.js';
 import { detectDoubles } from '../tools/patterns/detect_doubles.js';
 import { linearRegressionWithR2 } from '../tools/patterns/regression.js';
 import type { Pivot } from '../tools/patterns/swing.js';
@@ -42,6 +43,7 @@ function buildCtx(opts: {
 		includeForming: opts.includeForming ?? false,
 		debugCandidates: [],
 		type: opts.type ?? '1day',
+		sizeThresholds: getSizeThresholdsForTf(opts.type ?? '1day'),
 		swingDepth: 7,
 		near: (a: number, b: number) => Math.abs(a - b) <= Math.max(a, b) * tol,
 		pct: (a: number, b: number) => ((b - a) / Math.max(1, a)) * 100,

@@ -431,7 +431,7 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 					});
 				}
 				// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
-				const sizeReason = validatePatternSize('bottom', [p0, p1, p2, p3, p4]);
+				const sizeReason = validatePatternSize('bottom', [p0, p1, p2, p3, p4], ctx.sizeThresholds);
 				if (sizeReason) {
 					debugCandidates.push({
 						type: 'inverse_head_and_shoulders',
@@ -613,7 +613,7 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 					});
 				}
 				// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
-				const sizeReason = validatePatternSize('top', [p0, p1, p2, p3, p4]);
+				const sizeReason = validatePatternSize('top', [p0, p1, p2, p3, p4], ctx.sizeThresholds);
 				if (sizeReason) {
 					debugCandidates.push({
 						type: 'head_and_shoulders',
@@ -828,7 +828,7 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 				});
 			}
 			// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
-			const sizeReason = validatePatternSize('top', [p0, p1, p2, p3, p4]);
+			const sizeReason = validatePatternSize('top', [p0, p1, p2, p3, p4], ctx.sizeThresholds);
 			if (sizeReason) {
 				debugCandidates.push({
 					type: 'head_and_shoulders',
@@ -1008,7 +1008,7 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 				});
 			}
 			// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
-			const sizeReason = validatePatternSize('bottom', [p0, p1, p2, p3, p4]);
+			const sizeReason = validatePatternSize('bottom', [p0, p1, p2, p3, p4], ctx.sizeThresholds);
 			if (sizeReason) {
 				debugCandidates.push({
 					type: 'inverse_head_and_shoulders',
@@ -1296,6 +1296,7 @@ function formingHsForHead(
 	const hsSizeReason = validatePatternSize(
 		'top',
 		preHeadValley ? [left, preHeadValley, head, postHeadValley, rightShoulder] : [head, postHeadValley, rightShoulder],
+		ctx.sizeThresholds,
 	);
 	if (hsSizeReason) {
 		ctx.debugCandidates.push({
@@ -1570,6 +1571,7 @@ function formingInverseHsForHead(
 	const ihsSizeReason = validatePatternSize(
 		'bottom',
 		preHeadPeak ? [left, preHeadPeak, head, postHeadPeak, rightShoulder] : [head, postHeadPeak, rightShoulder],
+		ctx.sizeThresholds,
 	);
 	if (ihsSizeReason) {
 		ctx.debugCandidates.push({

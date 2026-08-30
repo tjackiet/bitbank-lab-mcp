@@ -6,7 +6,7 @@ import { DetectPatternsOutputSchema, type PatternFilterEnum } from '../src/schem
 import analyzeIndicators from './analyze_indicators.js';
 import { buildStatistics } from './patterns/aftermath.js';
 import { filterCandidatesByWant } from './patterns/candidate-filter.js';
-import { resolveParams } from './patterns/config.js';
+import { getSizeThresholdsForTf, resolveParams } from './patterns/config.js';
 // --- 各パターン検出モジュール ---
 import { detectDoubles } from './patterns/detect_doubles.js';
 import { detectHeadAndShoulders } from './patterns/detect_hs.js';
@@ -187,6 +187,9 @@ export default async function detectPatterns(
 			allValleys: filterValleys(pivots),
 			tolerancePct,
 			headProminencePct,
+			// 反転パターンのサイズ検査の下限（issue #152）。**時間足の解決はここ 1 箇所だけ。**
+			// `structural.ts` / 各検出器は純粋関数側なので `tf` を知らない。
+			sizeThresholds: getSizeThresholdsForTf(type),
 			minDist,
 			want,
 			includeForming,

@@ -36,6 +36,149 @@
 | 21 | #161 | candidates の `status` / `breakoutDirection` を content と出力スキーマに届ける（#160） | **変わらない** |
 | 22 | #164 | 完成済みウェッジの `status` / `breakoutDirection` が候補行に出ていなかったのを修正（#162） | **変わらない** |
 | 23 | #166 | 形成中 double top / bottom・triple top / bottom の成功候補を `debug.candidates` に積む（#158。#155 の 4 経路への横展開） | **変わらない** |
+| 24 | PR-NUM | サイズ検査の 2 定数（`MIN_DEPTH_PCT` / `MIN_PATTERN_HEIGHT_PCT`）を時間足別のテーブルにした（#152） | 合成 fixture は**変わらない** / 実データは 1day 未満の時間足で**増える**（+8 / 800。減少 0） |
+
+### Changed（サイズ検査の下限を時間足別にした。#152 / PR-NUM）
+
+**`MIN_DEPTH_PCT` / `MIN_PATTERN_HEIGHT_PCT` が時間足に依らない固定パーセンテージで、ボラティリティに対する難易度が時間足間で揃っていなかった。** ATR で正規化すると BTC/JPY で `MIN_DEPTH_PCT = 5%` は 1day の 1.82 ATR に対し 1hour では **8.77 ATR**、`MIN_PATTERN_HEIGHT_PCT = 3%` は 1.09 ATR に対し **5.26 ATR**。結果として **1hour では H&S が実質的に検出不能**（`limit=365` / `headProminencePct=0.01` でも 0 件）で、棄却理由の 39% がサイズ検査だった。
+
+#### 決定
+
+- **`getSizeThresholdsForTf(tf)`（`tools/patterns/config.ts`）を追加し、`getDefaultToleranceForTf` と同型の静的テーブルにした。** 実行時に ATR へ連動させない——閾値が実データ（＝`limit`）の関数になると #154 の「窓を広げたのに検出が減る」を再導入する（#154 / PR #156 の結論）。**値の導出にだけ ATR を使い、テーブルは凍結する。**
+- **アンカーは 1day。現行値（3% / 5%）を据え置き、下位時間足のみ緩める。** 両定数とも下限なので変化は単調で、`tests/fixtures/btc_jpy_1day_2026.ts` の 1day の期待値は 1 件も動かない。
+- **2 つを同時に変えた。** 深さだけを 1.82 ATR に揃えても高さが 5.26 ATR のまま（1day の 1.09 ATR より 5 倍厳しい）なので、棄却が `valley_too_shallow` から `pattern_too_small` に**移るだけ**になる。
+- **種別ごとには分けない。** #139 が意図的に共通化した経緯（値が割れていたせいで BTC/JPY 1時間足の高さ 1.66% のレンジ往復が `triple_top` と `triple_bottom` に同時に化けた）を巻き戻さない。共有は維持したまま時間足依存にした。
+- **`MIN_DEPTH_PCT` / `MIN_PATTERN_HEIGHT_PCT` は削除せず残した。** テーブルの 1day 値（＝アンカーであり、1week / 1month / 未知の時間足のフォールバック）としてそのまま使う。docstring に「時間足別の値は `getSizeThresholdsForTf`。本定数は 1day 相当の基準値」と明記した。
+
+#### 導出テーブルと ATR 比
+
+1day を 1.0 とした ATR 比を 3% / 5% に掛ける。**`4hour` は実測ではない**——BTC/JPY の 4hour ATR は測っておらず、1day の 2.75% から √t で `2.75 / √6 = 1.12%` と推定した値（比 `1/√6 = 0.4082`）を使っている。`1hour` の 0.57% は #152 の実測で、√t 整合も取れている（`0.57 × √24 = 2.79 ≈ 2.75`）。
+
+| 時間足 | ATR 比（1day = 1.0） | 由来 | `heightPct` | `depthPct` |
+|---|---|---|---|---|
+| `1min` | 0.0264 | √t 推定 | 0.08% | 0.13% |
+| `5min` | 0.0589 | √t 推定 | 0.18% | 0.29% |
+| `15min` | 0.1021 | √t 推定 | 0.31% | 0.51% |
+| `30min` | 0.1443 | √t 推定 | 0.43% | 0.72% |
+| `1hour` | 0.2073 | **実測**（ATR 0.57% / 2.75%） | **0.62%** | **1.04%** |
+| `4hour` | 0.4082 | **√t 推定（未実測）** | **1.22%** | **2.04%** |
+| `8hour` | 0.5774 | √t 推定 | 1.73% | 2.89% |
+| `12hour` | 0.7071 | √t 推定 | 2.12% | 3.54% |
+| `1day` | 1.0 | **実測（アンカー）** | **3%（据え置き）** | **5%（据え置き）** |
+| `1week` / `1month` / 未知 | — | 据え置き | 3% | 5% |
+
+**`1day` 以上を据え置いたのは、√t を当てると締まる方向になるから。** 1week / 1month はボラが 1day より大きいので比が 1 を超え、「緩める方向のみ」という本変更の前提（＝検出が単調に増えるか不変）に反する。逆に **`1hour` 未満は据え置かずに √t で導出した**——据え置くとこれらの時間足には #152 の欠陥がそのまま残る（1hour より短い足は ATR 比がさらに小さいので、5% はより極端に厳しい）。テーブルの単調性（短い足ほど緩く、1day を上回る値が無いこと）と、height / depth が同じ ATR 比から出ていることは `tests/patterns/config.test.ts` が機械的に固定する。
+
+#### 配線
+
+`validatePatternSize`（`tools/patterns/structural.ts`）は純粋関数でモジュール定数を直接読んでおり `tf` を知らないので、**閾値を引数で受ける形にシグネチャを変えた**。`structural.ts` に `DetectContext` は持ち込まない（ファイル冒頭が「本ファイルは純粋関数のみ」と宣言している）。解決は `tf` を知っている `detect_patterns.ts` で **1 回だけ**行い、`DetectContext.sizeThresholds` に載せて各検出器へ配る。
+
+- `validatePatternSize` の call site **12 箇所**（`detect_hs.ts` 6 / `detect_triples.ts` 6）
+- `detect_doubles.ts` は `validatePatternSize` を使わずローカル関数を持つので個別に配線した: `validateTopSize` / `validateBottomSize`（引数追加。relaxed パスは `ctx` を持たないので `findRelaxedDoubleTop` / `findRelaxedDoubleBottom` にも引数を足した）、形成中ダブルボトムの深さ検査（`ctx.sizeThresholds.heightPct`）
+- `detect_doubles.ts` の `validateTopSize` の docstring（実在するダブルボトムが終値基準では 1.85% / 1.67% で 2 定数を割る、という #139 の経緯）は **1day の実例であることを明記して更新**した。閾値が緩い下位時間足では同じ数値でも通るが、**基準を `extremePrice` にする理由は閾値と独立**（値幅を終値で測ると実際の 1/3 に見える歪みは閾値をいくつにしても残る）。
+
+#### 実測（800 ケース比較）
+
+`tests/detect_patterns_fixtures.test.ts` の **fixture 22 件 × オプション 8 通り × 時間足 2 種（`1day` / `1hour`）× `swingDepth` 2 種（2 / 3）= 704 ケース**と、`tests/fixtures/btc_jpy_1day_2026.ts` の **時間足 3 種（`1day` / `4hour` / `1hour`）× `swingDepth` 4 種（既定 / 2 / 3 / 6）× オプション 8 通り = 96 ケース**を、`main`（8051572）と本ブランチの双方で走らせて突き合わせた（#131 以降と同じ手順・同じ 800 ケース）。
+
+| 指標 | before → after |
+|---|---|
+| `data.patterns` が変わったケース | **8 / 800**。**すべて増加。減少 0 / 消えた検出 0** |
+| 合成 704 | **0 / 704**（`data.patterns` も candidates の内訳も完全一致） |
+| 実データ 96 | `data.patterns` 8 件（`4hour`/`sd2` 4 + `1hour`/`sd2` 4）、candidates 32 件 |
+| **`1day` の実データ 32 ケース** | **0 変化**（アンカーを据え置いた設計どおり） |
+| パターン合計 | 632 → **640**（+8） |
+| `accepted` 候補 | 2,836 → **2,852**（+16） |
+| 候補総数 | 42,972 → 42,856 |
+
+**増えた検出は 1 実体だけ**（8 ケースはその 1 件が 2 時間足 × 4 オプションで現れたもの）。
+
+| | 値 |
+|---|---|
+| 種別 / 整合度 / status | `triple_top` / 0.80 / `completed` |
+| 期間 | 2026-07-15 → 2026-07-31（ブレイク 7/31） |
+| 構成点（`extremePrice`） | 山1 10,628,945（7/15）/ 谷1 10,166,206（7/17）/ 山2 10,903,000（7/21）/ 谷2 10,452,690（7/24）/ 山3 10,749,208（7/27） |
+
+**なぜそれが正しい検出か**（#139 のサイズ検査と #140 の構造ゲートを実測値で通過確認）:
+
+| 検査 | 実測値 | 判定 |
+|---|---|---|
+| パターン高さ（#139） | **6.758%** | 1hour 0.62% / 4hour 1.22% を大きく超える（1day の 3% すら超える） |
+| 谷1 の押し（#139） | **5.571%** | 1hour 1.04% / 4hour 2.04% を超える（1day の 5% も超える） |
+| 谷2 の押し（#139） | **3.449%** | 1hour / 4hour は通る。**1day の 5% を割るのがブロッカーだった唯一の項目** |
+| 戻り率（#140） | **0.8007** | band 0.2〜0.9 の内側 |
+| 先行極値（#140） | idx 45（2026-07-13, 10,051,036） | 取得済み（`no_prior_extreme` でスキップしていない） |
+| ネックライン交差（#140） | idx 16 | 第1構成点より前にネックライン 10,456,313 の終値下抜けが存在する |
+| ブレイク | idx 63（7/31）終値 9,918,187 でネックライン下抜け | `breakoutDirection: down` / `outcome: success` |
+
+**ブロッカーは「谷2 の押しが 3.449% で 5% に届かない」の 1 点だけで、他は全部通っていた。** 三山（10.63M / 10.90M / 10.75M）と二谷（10.17M / 10.45M）が揃い、ネックラインを下抜けて完成しているトリプルトップで、押しが 3.4% しかないことだけを理由に落ちていた。1day の閾値のままなら今も落ちる（`validatePatternSize` に 1day の値を渡すと `valley_too_shallow` を返す）——アンカーは動かしていない。
+
+#### `pattern_too_small` への移動が起きていないこと
+
+800 ケース合計のサイズ検査由来の理由コード:
+
+| 理由 | before | after | 差 |
+|---|---|---|---|
+| `pattern_too_small` | 32 | **0** | **−32** |
+| `valley_too_shallow` | 76 | 4 | −72 |
+| `peak_too_shallow` | 4 | 4 | ±0 |
+| `forming_pattern_height_below_min` | 8 | **0** | −8 |
+
+**`pattern_too_small` は増えるどころか 0 になった。** 高さと深さを同じ ATR 比で同時に下げたので、深さで通った候補が高さで落ちる経路が残っていない。解放された候補の移り先は件数がそのまま一致する:
+
+- `double_bottom:pattern_too_small` −32 → `double_bottom:valleys_not_equal_structural` +32
+- `double_bottom:forming_pattern_height_below_min` −8 → `double_bottom:forming_valleys_not_level` +8
+- `double_top:valley_too_shallow` −40 → `double_top:peaks_not_equal_structural` +16 / `double_top:reclassified_as_triple_top` +24
+- `triple_top:valley_too_shallow` −32 → `triple_top:ACCEPTED` +16 ほか。`triple_top:*_relaxed` が −56 / −56 / −16 と減っているのは **strict パスが見つかると relaxed フォールバックを走らせない**ためで、棄却が増えたのではない
+
+#### 1hour の棄却理由内訳（合成 1hour × 5 seed）
+
+**issue #152 本文の再現手順（bitbank public API から `1hour` を実取得）は、本実行環境が `public.bitbank.cc` への外向き接続をネットワークポリシーで塞いでいるため実行できなかった。** 代わりに **BTC/JPY 1hour の実測 ATR 0.57% に合わせた決定論的な合成系列**（LCG seed 固定・200 本・5 系統、実現 ATR 0.536〜0.593%）で、同じ呼び出し（H&S + 逆 H&S、`headProminencePct=0.01`、`includeInvalid`、`view=debug`）を前後で走らせた。候補数は 60〜130 で `cap = 200` に届いていないので内訳は censored されていない。
+
+| seed | 実現 ATR | before 検出 | after 検出 |
+|---|---|---|---|
+| 1 | 0.579% | **0** | 2 |
+| 7 | 0.536% | **0** | 2 |
+| 42 | 0.554% | **0** | 1 |
+| 1234 | 0.587% | **0** | 2 |
+| 99991 | 0.593% | **0** | 2 |
+
+**before は 5 系統すべてで 0 件**——issue #152 が報告した「1hour では H&S が実質的に検出不能」がそのまま再現する。after は 1〜2 件。理由コードの内訳（5 seed 合計）:
+
+| 理由 | before | after | 差 |
+|---|---|---|---|
+| `head_not_higher` | 128 | 128 | ±0 |
+| `valley_too_shallow` | 127 | **0** | −127 |
+| `head_not_lower` | 119 | 119 | ±0 |
+| `ACCEPTED` | 43 | 104 | +61 |
+| `neckline_below_pre_decline_low` | 0 | 54 | +54 |
+| `shoulders_not_near` | 36 | 36 | ±0 |
+| `peak_too_shallow` | 28 | 1 | −27 |
+| `retracement_out_of_band` | 0 | 18 | +18 |
+| `head_not_extreme_in_span` | 16 | 16 | ±0 |
+| `neckline_above_pre_decline_high` | 0 | 9 | +9 |
+| `pattern_too_small` | 9 | **0** | −9 |
+| `no_neckline_cross_before_trough1` | 0 | 6 | +6 |
+| `formation_bars_out_of_range` | 3 | 3 | ±0 |
+| `prior_trend_mismatch:up` | 1 | 1 | ±0 |
+
+**`pattern_too_small` は 9 → 0 で、移動先になっていない。** 加えて **サイズ検査以外の既存ゲートが 1 つも動いていない**（`head_not_higher` / `head_not_lower` / `shoulders_not_near` / `head_not_extreme_in_span` / `formation_bars_out_of_range` / `prior_trend_mismatch` がすべて ±0）ことが、変更がサイズ検査だけに閉じていることの裏取りになる。解放された 163 件のうち 148 件の行き先は `ACCEPTED` +61 と **#140 の構造ゲート**（`neckline_below_pre_decline_low` +54 / `retracement_out_of_band` +18 / `neckline_above_pre_decline_high` +9 / `no_neckline_cross_before_trough1` +6）で、「緩めた分の品質保証は #140 が担う」という #152 の設計どおりに動いている。残る 15 件は候補総数そのものの減少（510 → 495）で、**strict パスが成立すると relaxed フォールバック（`findRelaxedHS` / `findRelaxedInverseHS`）を走らせない**ため relaxed が積んでいた棄却エントリが消える分（`detect_hs.ts` は relaxed も同じ理由コード名を使うので、内訳の行では strict と分離できない）。
+
+#### #139 の形（1hour の 1.66% レンジ往復）が戻るか
+
+**戻らない。** `tests/patterns/size-gates-triple-hs.test.ts` の高さ 1.533% のレンジ往復を 1hour で走らせると、**サイズ検査は通る**（1hour の下限の 2.5 倍 / 1.47 倍。実測 ATR 0.57% で読むと 2.69 ATR）が、`triple_bottom` は **0 件**のままで #140 の構造ゲートが `retracement_out_of_band`（レンジの往復は戻り率がちょうど 1.0）で落とす。**#139 の芯は「1 本のレンジが `triple_top` と `triple_bottom` の両方に化ける」という構造的矛盾**のほうで、そこは #140 が担保している。
+
+`triple_top` 側は 1 件残るが、これは**スキャン窓の左端の窓**で、構造ゲートが先行極値を取れずスキップする仕様（`no_prior_extreme`）による。先行極値が取れる 2 つ目以降の窓は top 側も同じ `retracement_out_of_band` で落ちている。左端の窓が構造ゲートを通らないのは #140 の既存の性質で、本 PR で変わっていない。
+
+テストは **1day（アンカー。閾値据え置き）でサイズ検査そのものの回帰を見る it** と、**1hour で「サイズは通るが同時検出にはならない」を固定する it** の 2 本に分けた。
+
+#### やらなかったこと
+
+- **肩の対称性**（`HS_SHOULDER_MAX_PCT` / `tolerancePct` / `shoulderTolerancePct`）→ #167 に分離。肩許容は**上限**パラメータで極性が逆（ATR 本数を揃えると 1hour は緩むのではなく締まる。実測で全体 −164 件）
+- **`getDefaultToleranceForTf` の変更** → ATR 導出値の実測で 6 種別 −164 件。加えて `headProminencePct` の既定値が同じ表から来ていて向きが逆なので、1 つの値を動かすと 2 つの軸が反対方向に動く。`src/schema/patterns.ts:112` の description が表の値をリテラル公開しており MCP 公開契約の変更にもなる
+- **実行時の ATR 連動**（#154 / PR #156 の結論）
+- **`MIN_DEPTH_PCT` の種別ごと分割**（#139 の共通化を巻き戻す）
+- **1day の値の変更**
 
 ### Changed（`detect_patterns` の `view=debug` の配線 4 件。**`data.patterns` は 4 件とも 1 件も変わらない**。#155 / #158 / #160 / #162）
 

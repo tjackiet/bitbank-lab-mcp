@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dayjs } from '../../lib/datetime.js';
+import { getSizeThresholdsForTf } from '../../tools/patterns/config.js';
 import { detectHeadAndShoulders } from '../../tools/patterns/detect_hs.js';
 import { linearRegressionWithR2 } from '../../tools/patterns/regression.js';
 import type { Pivot } from '../../tools/patterns/swing.js';
@@ -42,6 +43,7 @@ function buildCtx(opts: {
 		allValleys: opts.allValleys ?? opts.pivots.filter((p) => p.kind === 'L'),
 		tolerancePct: tol,
 		headProminencePct: headProm,
+		sizeThresholds: getSizeThresholdsForTf(opts.type ?? '1day'),
 		minDist: 5,
 		want: opts.want ?? new Set(),
 		includeForming: opts.includeForming ?? false,

@@ -35,10 +35,20 @@ export const HS_NECKLINE_MAX_PCT = 0.05;
  * **double なら弾かれる小ささの形が triple / H&S では通っていた**（issue #138 欠陥 2-2）。
  * BTC/JPY 1時間足で高さ 1.66% のレンジ往復が `triple_top` と `triple_bottom` に
  * 同時に化けたのがこれ。値を揃えるために、定数と検査本体をここへ引き上げた。
+ *
+ * **時間足別の実効値は `config.ts` の `getSizeThresholdsForTf` が持つ（issue #152）。**
+ * 本定数は **1day 相当の基準値**で、同関数のアンカー（1day / 1week / 1month / 未知の
+ * 時間足のフォールバック）としてそのまま使われる。検出器から直接参照してはならない——
+ * `tf` を知っている層（`detect_patterns.ts`）で 1 回だけ解決し、`DetectContext.sizeThresholds`
+ * 経由で配る。
  */
 export const MIN_PATTERN_HEIGHT_PCT = 0.03;
 
-/** {@link MIN_PATTERN_HEIGHT_PCT} と対。谷 / 山 1 つあたりの戻りの深さの下限。 */
+/**
+ * {@link MIN_PATTERN_HEIGHT_PCT} と対。谷 / 山 1 つあたりの戻りの深さの下限。
+ *
+ * 時間足別の実効値と本定数の位置づけは {@link MIN_PATTERN_HEIGHT_PCT} の docstring を参照。
+ */
 export const MIN_DEPTH_PCT = 0.05;
 
 /** 前提トレンド判定で「横ばい」とみなす priorReturn の範囲 */
@@ -364,15 +374,28 @@ export type StructuralSkipReason =
 	| 'insufficient_history';
 
 /**
+ * サイズ検査の下限 2 つ。**どちらも下限で、小さいほど緩い。**
+ *
+ * 実値は時間足別（`config.ts` の `getSizeThresholdsForTf`。issue #152）。1day 相当の
+ * 基準値が {@link MIN_PATTERN_HEIGHT_PCT} / {@link MIN_DEPTH_PCT}。
+ */
+export interface SizeThresholds {
+	/** パターン高さ（構成点の高安の全振幅）の下限 */
+	heightPct: number;
+	/** 谷 / 山 1 つあたりの戻りの深さの下限 */
+	depthPct: number;
+}
+
+/**
  * サイズ検査の不合格理由コード。`detect_doubles.ts` が既に debug candidates へ
  * 載せている 3 コードと同じ命名で、種別をまたいで同じ意味を持つ。
  */
 export type PatternSizeRejectReason =
-	/** パターン高さ（構成点の全振幅）が {@link MIN_PATTERN_HEIGHT_PCT} 未満 */
+	/** パターン高さ（構成点の全振幅）が {@link SizeThresholds.heightPct} 未満 */
 	| 'pattern_too_small'
-	/** top: 山に挟まれた谷の押しが {@link MIN_DEPTH_PCT} 未満 */
+	/** top: 山に挟まれた谷の押しが {@link SizeThresholds.depthPct} 未満 */
 	| 'valley_too_shallow'
-	/** bottom: 谷に挟まれた山の戻りが {@link MIN_DEPTH_PCT} 未満 */
+	/** bottom: 谷に挟まれた山の戻りが {@link SizeThresholds.depthPct} 未満 */
 	| 'peak_too_shallow';
 
 /**
@@ -404,24 +427,30 @@ export type PatternSizeRejectReason =
  *
  * 形成中パターンの暫定構成点（3 点目 / 暫定右肩）は極値判定を通っていないので、
  * `{ extremePrice: 現在足の終値 }` を渡す（既存の形成中 H&S の暫定右肩と同じ扱い）。
+ *
+ * **`thresholds` は引数で受ける（issue #152）。** 時間足別の値になったが、本ファイルは
+ * 純粋関数のみで `DetectContext` を知らないので、解決は `tf` を知っている
+ * `detect_patterns.ts` で 1 回だけ行い `DetectContext.sizeThresholds` で配る。
+ * ここでモジュール定数を直接読むと時間足別の値が効かない。
  */
 export function validatePatternSize(
 	side: ReversalSide,
 	points: ReadonlyArray<Pick<Pivot, 'extremePrice'>>,
+	thresholds: SizeThresholds,
 ): PatternSizeRejectReason | null {
 	const prices = points.map((p) => p.extremePrice);
 	if (prices.length < 3 || prices.some((v) => !Number.isFinite(v))) return null;
 
 	const hi = Math.max(...prices);
 	const lo = Math.min(...prices);
-	if ((hi - lo) / Math.max(1, hi) < MIN_PATTERN_HEIGHT_PCT) return 'pattern_too_small';
+	if ((hi - lo) / Math.max(1, hi) < thresholds.heightPct) return 'pattern_too_small';
 
 	const shallow: PatternSizeRejectReason = side === 'top' ? 'valley_too_shallow' : 'peak_too_shallow';
 	for (let i = 1; i < prices.length - 1; i += 2) {
 		const flankAvg = (prices[i - 1] + prices[i + 1]) / 2;
 		const depthPct =
 			side === 'top' ? (flankAvg - prices[i]) / Math.max(1, flankAvg) : (prices[i] - flankAvg) / Math.max(1, flankAvg);
-		if (depthPct < MIN_DEPTH_PCT) return shallow;
+		if (depthPct < thresholds.depthPct) return shallow;
 	}
 	return null;
 }
