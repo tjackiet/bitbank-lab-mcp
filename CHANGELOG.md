@@ -36,9 +36,9 @@
 | 21 | #161 | candidates の `status` / `breakoutDirection` を content と出力スキーマに届ける（#160） | **変わらない** |
 | 22 | #164 | 完成済みウェッジの `status` / `breakoutDirection` が候補行に出ていなかったのを修正（#162） | **変わらない** |
 | 23 | #166 | 形成中 double top / bottom・triple top / bottom の成功候補を `debug.candidates` に積む（#158。#155 の 4 経路への横展開） | **変わらない** |
-| 24 | PR-NUM | サイズ検査の 2 定数（`MIN_DEPTH_PCT` / `MIN_PATTERN_HEIGHT_PCT`）を時間足別のテーブルにした（#152） | 合成 fixture は**変わらない** / 実データは 1day 未満の時間足で**増える**（+8 / 800。減少 0） |
+| 24 | #168 | サイズ検査の 2 定数（`MIN_DEPTH_PCT` / `MIN_PATTERN_HEIGHT_PCT`）を時間足別のテーブルにした（#152） | 合成 fixture は**変わらない** / 実データは 1day 未満の時間足で**増える**（+8 / 800。減少 0） |
 
-### Changed（サイズ検査の下限を時間足別にした。#152 / PR-NUM）
+### Changed（サイズ検査の下限を時間足別にした。#152 / PR #168）
 
 **`MIN_DEPTH_PCT` / `MIN_PATTERN_HEIGHT_PCT` が時間足に依らない固定パーセンテージで、ボラティリティに対する難易度が時間足間で揃っていなかった。** ATR で正規化すると BTC/JPY で `MIN_DEPTH_PCT = 5%` は 1day の 1.82 ATR に対し 1hour では **8.77 ATR**、`MIN_PATTERN_HEIGHT_PCT = 3%` は 1.09 ATR に対し **5.26 ATR**。結果として **1hour では H&S が実質的に検出不能**（`limit=365` / `headProminencePct=0.01` でも 0 件）で、棄却理由の 39% がサイズ検査だった。
 
