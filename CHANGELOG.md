@@ -37,6 +37,34 @@
 | 22 | #164 | 完成済みウェッジの `status` / `breakoutDirection` が候補行に出ていなかったのを修正（#162） | **変わらない** |
 | 23 | #166 | 形成中 double top / bottom・triple top / bottom の成功候補を `debug.candidates` に積む（#158。#155 の 4 経路への横展開） | **変わらない** |
 | 24 | #168 | サイズ検査の 2 定数（`MIN_DEPTH_PCT` / `MIN_PATTERN_HEIGHT_PCT`）を時間足別のテーブルにした（#152） | 合成 fixture は**変わらない** / 実データは 1day 未満の時間足で**増える**（+8 / 800。減少 0） |
+| 25 | #170 | 形成中 double top / bottom のサイズ検査を完成済みと揃えた（#169） | 回帰コーパス（合成 704 + 実データ 96）は**変わらない**（0 / 800）/ 新 fixture では**減る** |
+
+### Fixed（形成中 double のサイズ検査を完成済みと揃えた。#169 / PR #170）
+
+**反転パターンの形成中パスのうち、double の 2 経路だけがサイズ検査を持っていなかった / 中途半端だった。** triple / H&S の形成中パスは #139 で完成済みと同じ `validatePatternSize`（高さ + 深さ）を通るようになっていたが、double の形成中 2 経路はローカル実装のまま取り残されていた。
+
+| 経路 | 高さ（`heightPct`） | 深さ（`depthPct`） |
+|---|---|---|
+| 完成済み double top / bottom（`validateTopSize` / `validateBottomSize`） | ✅ | ✅ |
+| 完成済み・形成中 triple / H&S（`validatePatternSize`） | ✅ | ✅ |
+| 形成中 double bottom（修正前） | ✅（両脚それぞれ） | **なし** |
+| **形成中 double top（修正前）** | **なし** | **なし** |
+
+形成中 double top は**下限が 1 つも無く、どんな微細な揺れでも `double_top` を出していた**——押しが 0.5% しかない形が整合度 0.99 で報告される。形成中 double bottom は `heightPct` 以上 `depthPct` 未満の帯（1day なら 3〜5%）が「形成中は通るのに完成した瞬間に `peak_too_shallow` で落ちる」候補になっていた。
+
+#### 決定
+
+- **形成中 double top**: 完成済みと同じ `validateTopSize` を、同じ 3 点構造に掛ける。3 点目（暫定の山2）は確定ピボットではないので `{ extremePrice: 最新足の終値 }` を渡す——triple / H&S の形成中パスと同じ idiom。`validateTopSize` / `validateBottomSize` の引数型は `Pivot` から `Pick<Pivot, 'extremePrice'>` へ緩めた（`validatePatternSize` と同じ形）。
+- **形成中 double bottom**: 現行の**両脚**の高さチェック（`forming_pattern_height_below_min`）は残したうえで、完成済みと同じ `validateBottomSize` を足した。単純に置き換えると `validateBottomSize` の高さが `|谷1 − 山| / max(…)` ＝ **左脚しか見ない**ため、**右脚の要求が消える**（片方で緩み、片方で締まる）。両脚チェックを残すと `validateBottomSize` の高さは両脚チェックに包含されるので、実際に発火しうるのは `peak_too_shallow` だけになり、**形成中 ⊇ 完成済みの厳しさ**が成立する。
+- **理由コードは `forming_` 接頭辞付きの新規コード**（`forming_pattern_too_small` / `forming_valley_too_shallow` / `forming_peak_too_shallow`）。完成済みと同名にすると `view=debug` の候補一覧でどちらの経路で落ちたか読めなくなる。既存の `forming_pattern_height_below_min`（#166 のテストが名前を固定している）は**改名していない**。
+- **配置は各経路の既存の棄却検査をすべて通過した後**（`validatePatternSize` の docstring の規約）。前に置くと固有の理由コードを持つ候補の `reason` を横取りする。
+- **`FORMING_TOLERANCE_MULTIPLIER = 1.5`（水準一致判定の緩和）は変更していない。** 「形成中は早期警告なので緩くてよい」は意図的な設計で、緩めてよいのは「同水準か」の判定であって「そもそも形と呼べる大きさか」ではない。
+
+#### 影響
+
+- **回帰コーパス（合成 704 + 実データ 96 = 800 ケース）は 0 / 800 変化。** `data.patterns` / 候補内訳ともに完全一致（パターン合計 640 → 640、`accepted` 候補 2,852 → 2,852、候補総数 42,856 → 42,856）。**増える方向の変化も 0 件**（下限を足すだけなので単調に減るか不変）。
+- **現行コーパスがこの分岐を踏んでいない**ことが計測で確認できた。形成中 double bottom は新しい深さ検査に 104 回到達するがすべて通過し、**形成中 double top は 368 回呼ばれてサイズ検査の位置に一度も到達しない**（全件がそれより手前の `forming_no_valley_after_peak` / `forming_peak_level_out_of_tolerance` / `forming_peaks_not_level` / `forming_bars_out_of_range` で落ちている）。減る実例は `tests/patterns/size-gates-forming-doubles.test.ts` の専用 fixture が担保する。
+- `view=debug` の候補一覧に新しい理由コードが 3 つ増える。
 
 ### Changed（サイズ検査の下限を時間足別にした。#152 / PR #168）
 
