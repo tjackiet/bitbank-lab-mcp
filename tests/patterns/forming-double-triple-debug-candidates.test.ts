@@ -25,7 +25,8 @@ import analyzeIndicators from '../../tools/analyze_indicators.js';
 import detectPatterns from '../../tools/detect_patterns.js';
 import { MIN_FORMING_COMPLETION } from '../../tools/patterns/detect_doubles.js';
 import { FORMING_MIN_COMPLETION as TRIPLE_MIN_COMPLETION } from '../../tools/patterns/detect_triples.js';
-import { type CandDebugEntry, type DetectContext, pushCand } from '../../tools/patterns/types.js';
+import type { CandDebugEntry, DetectContext, PatternEntry } from '../../tools/patterns/types.js';
+import { pushCand } from '../../tools/patterns/types.js';
 import { buildBtcJpy2026Candles } from '../fixtures/btc_jpy_1day_2026.js';
 
 type Candle = {
@@ -37,20 +38,10 @@ type Candle = {
 	volume: number;
 };
 
-type Candidate = {
-	type: string;
-	accepted: boolean;
-	reason?: string;
-	status?: string;
-	indices?: number[];
-	points?: Array<{ role: string; idx: number; price: number; isoTime?: string }>;
-};
-
-type Pattern = {
-	type: string;
-	status?: string;
-	pivots?: Array<{ idx: number }>;
-};
+// 検出器の出力型をそのまま使う。ローカルに再宣言すると、debug 出力の契約が変わっても
+// この回帰テストが落ちなくなる（CodeRabbit 指摘）。
+type Candidate = CandDebugEntry;
+type Pattern = Pick<PatternEntry, 'type' | 'status' | 'pivots'>;
 
 /** 合成列の基準日（UTC）。実データ fixture と重ならない年初に置く。 */
 const SYNTHETIC_START = '2026-01-01';

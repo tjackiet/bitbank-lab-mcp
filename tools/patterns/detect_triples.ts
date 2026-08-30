@@ -893,11 +893,20 @@ function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
 		const confidence = Math.min(rawConfidence, FORMING_MAX_CONFIDENCE);
 
 		if (completion < FORMING_MIN_COMPLETION || confidence < FORMING_MIN_CONFIDENCE) {
+			// この時点ではネックラインの 2 谷まで揃っているので、成功エントリと同じ 5 点を積む
+			// （同じ経路の ✅ と ❌ を並べて読めるようにするのが #158 の目的）。
 			pcand({
 				type: 'triple_top',
 				accepted: false,
 				reason: completion < FORMING_MIN_COMPLETION ? 'forming_completion_below_min' : 'forming_confidence_below_min',
 				idxs: [peak1.idx, peak2.idx, lastIdx],
+				pts: [
+					{ role: 'peak1', idx: peak1.idx, price: peak1.price },
+					{ role: 'valley1', idx: v1.idx, price: v1.price },
+					{ role: 'peak2', idx: peak2.idx, price: peak2.price },
+					{ role: 'valley2', idx: v2.idx, price: v2.price },
+					{ role: 'current', idx: lastIdx, price: currentPrice },
+				],
 			});
 			continue;
 		}
@@ -1107,11 +1116,19 @@ function tryFormingTripleBottom(ctx: DetectContext): DeduplicablePattern | null 
 		const confidence = Math.min(rawConfidence, FORMING_MAX_CONFIDENCE);
 
 		if (completion < FORMING_MIN_COMPLETION || confidence < FORMING_MIN_CONFIDENCE) {
+			// ネックラインの 2 山まで揃っているので成功エントリと同じ 5 点を積む（top 側と同じ理由）。
 			pcand({
 				type: 'triple_bottom',
 				accepted: false,
 				reason: completion < FORMING_MIN_COMPLETION ? 'forming_completion_below_min' : 'forming_confidence_below_min',
 				idxs: [valley1.idx, valley2.idx, lastIdx],
+				pts: [
+					{ role: 'valley1', idx: valley1.idx, price: valley1.price },
+					{ role: 'peak1', idx: pTop1.idx, price: pTop1.price },
+					{ role: 'valley2', idx: valley2.idx, price: valley2.price },
+					{ role: 'peak2', idx: pTop2.idx, price: pTop2.price },
+					{ role: 'current', idx: lastIdx, price: currentPrice },
+				],
 			});
 			continue;
 		}
