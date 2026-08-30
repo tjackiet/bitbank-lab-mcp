@@ -35,7 +35,7 @@
 | 20 | #159 | 形成中 H&S / 逆 H&S の成功候補を `debug.candidates` に積む（#155） | **変わらない** |
 | 21 | #161 | candidates の `status` / `breakoutDirection` を content と出力スキーマに届ける（#160） | **変わらない** |
 | 22 | #164 | 完成済みウェッジの `status` / `breakoutDirection` が候補行に出ていなかったのを修正（#162） | **変わらない** |
-| 23 | 本 PR | 形成中 double top / bottom・triple top / bottom の成功候補を `debug.candidates` に積む（#158。#155 の 4 経路への横展開） | **変わらない** |
+| 23 | #166 | 形成中 double top / bottom・triple top / bottom の成功候補を `debug.candidates` に積む（#158。#155 の 4 経路への横展開） | **変わらない** |
 
 ### Changed（`detect_patterns` の `view=debug` の配線 4 件。**`data.patterns` は 4 件とも 1 件も変わらない**。#155 / #158 / #160 / #162）
 
@@ -60,7 +60,7 @@
 
   320 件積まれて 84 件が cap で押し出され差し引き +236。**押し出された 84 件はすべて `accepted: false`**。`cap = 200` は上げていない（判断を仰ぐ対象なので勝手に触らない）。`patterns` で絞れば `candidate-filter` がトリム前に落とすので、該当種別の理由は残る。
 
-#### 形成中 double / triple の成功候補を `debug.candidates` に積む（#158 / 本 PR）
+#### 形成中 double / triple の成功候補を `debug.candidates` に積む（#158 / PR #166）
 
 **#155（形成中 H&S / 逆 H&S）の 4 経路への横展開**（`tryFormingDoubleTop` / `tryFormingDoubleBottom` / `tryFormingTripleTop` / `tryFormingTripleBottom`）。判断の大半は #155 のものをそのまま適用したので、ここには**#155 と事情が違った 3 点**だけを書く。
 
