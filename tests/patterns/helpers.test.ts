@@ -469,7 +469,10 @@ describe('deduplicatePatterns', () => {
 		expect(result[0].status).toBeUndefined();
 	});
 
-	it('同 status どうしでは従来どおり range.end が新しいほうが勝つ（confidence が低くても）', () => {
+	// issue #142: 同 status 内の順序は confidence → range.end。`globalDedup` と同じ。
+	// #135 までは range.end が先で、最も新しく終わる 1 つに絞り込んだ時点で confidence が
+	// 一度も比較されなかった（= 広い窓の低品質候補が勝つ）。
+	it('同 status どうしでは confidence が高いほうが勝つ（range.end が古くても）', () => {
 		const older: DeduplicablePattern = {
 			type: 'double_top',
 			confidence: 0.9,
@@ -484,7 +487,46 @@ describe('deduplicatePatterns', () => {
 		};
 		const result = deduplicatePatterns([older, newer]);
 		expect(result).toHaveLength(1);
+		expect(result[0].range?.end).toBe('2024-01-10');
+		expect(result[0].confidence).toBe(0.9);
+	});
+
+	it('confidence が同点なら range.end が新しいほうが勝つ（#142 の入れ替えは同点では効かない）', () => {
+		const older: DeduplicablePattern = {
+			type: 'double_top',
+			confidence: 0.8,
+			status: 'forming',
+			range: { start: '2024-01-01', end: '2024-01-10' },
+		};
+		const newer: DeduplicablePattern = {
+			type: 'double_top',
+			confidence: 0.8,
+			status: 'forming',
+			range: { start: '2024-01-02', end: '2024-01-12' },
+		};
+		const result = deduplicatePatterns([older, newer]);
+		expect(result).toHaveLength(1);
 		expect(result[0].range?.end).toBe('2024-01-12');
+	});
+
+	// #133 / PR #135 の不変条件。#142 の入れ替えは statusScore の**下**なので、
+	// confidence をどれだけ高くしても形成中は完成済みを押し出せない。
+	it('形成中は confidence が高くても完成済みに勝てない（statusScore が最優先のまま）', () => {
+		const completed: DeduplicablePattern = {
+			type: 'double_top',
+			confidence: 0.6,
+			status: 'completed',
+			range: { start: '2024-01-01', end: '2024-01-10' },
+		};
+		const forming: DeduplicablePattern = {
+			type: 'double_top',
+			confidence: 1.0,
+			status: 'forming',
+			range: { start: '2024-01-02', end: '2024-01-12' },
+		};
+		const result = deduplicatePatterns([completed, forming]);
+		expect(result).toHaveLength(1);
+		expect(result[0].status).toBe('completed');
 		expect(result[0].confidence).toBe(0.6);
 	});
 });

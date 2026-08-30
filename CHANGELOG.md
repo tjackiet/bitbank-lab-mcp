@@ -38,6 +38,113 @@
 | 23 | #166 | 形成中 double top / bottom・triple top / bottom の成功候補を `debug.candidates` に積む（#158。#155 の 4 経路への横展開） | **変わらない** |
 | 24 | #168 | サイズ検査の 2 定数（`MIN_DEPTH_PCT` / `MIN_PATTERN_HEIGHT_PCT`）を時間足別のテーブルにした（#152） | 合成 fixture は**変わらない** / 実データは 1day 未満の時間足で**増える**（+8 / 800。減少 0） |
 | 25 | #170 | 形成中 double top / bottom のサイズ検査を完成済みと揃えた（#169） | 回帰コーパス（合成 704 + 実データ 96）は**変わらない**（0 / 800）/ 新 fixture では**減る** |
+| 26 | #142 | 検出器内 dedup の勝者選択を `globalDedup` と同じ confidence 優先に揃えた | 実データ・合成とも**変わる**（48 / 800。入れ替え 3 実体 + 追加 1 実体） |
+
+### Fixed（dedup の勝者選択を 2 層で揃えた。#142）
+
+**dedup は 2 層あり、同 status 内の優先順が逆になっていた。**
+
+| | `deduplicatePatterns`（検出器内・先に走る） | `globalDedup`（全種別横断・後） |
+|---|---|---|
+| 対象 | 同一 `type` のみ | `categoryMap` で同カテゴリも |
+| 重複閾値 | `> 0.5` | `>= 0.7` |
+| 勝者選択（修正前） | statusScore → **`range.end`** → confidence → 高さ | statusScore → **confidence** → `range.end` |
+
+`deduplicatePatterns` は statusScore が並んだ時点で `range.end` の**最大値だけに絞り込む**ため、
+そこで 1 件に決まると **confidence が一度も比較されない**。広い窓ほど終端が新しくなりやすいので、
+**同じ値動きに対して最も当てはまりの悪い解釈が代表として選ばれる**。
+
+#### #142 が報告した実例は #141 で消えている
+
+issue は BTC/JPY 日足で「confidence 0.82 / r2 0.602・0.648 / 外れ値除去 6 + 12 = 18 点の
+候補（idx 0〜81）が 0.91 / 0.88 / 0.85 を押し出す」と報告していたが、**#141 / PR #143 の
+除去率上限がこの候補自体を棄却する**ようになったため、現在の `main` では再現しない
+（`excessive_outlier_removal` / `lowerRemovalRate 0.632 > 0.5`。棄却側は
+`tests/patterns/outlier-cap-btcjpy.test.ts` が固定済み）。
+
+**issue の原因分析（「`globalDedup` の飲み込みの連鎖」）は誤りだった。**
+`maxOutlierRemovalRate` だけを ablate（0.5 → 1.0）して #141 以前の状態を作ると実例が再現し、
+押し出していたのは `deduplicatePatterns` であることが確認できる——3 候補は**すべて同一 `type`**
+（`triangle_symmetrical`）なので、同カテゴリを束ねる `globalDedup` に届く前に決着していた。
+
+    winner : triangle_symmetrical 0.82  2026-05-29→08-19  (idx [0,82])
+    dropped: triangle_symmetrical 0.87  2026-07-28→08-18
+             triangle_symmetrical 0.91  2026-06-08→07-14
+
+#### 実例は消えたが機構は生きている
+
+現行 `main`（ablation なし）で 800 ケースを走らせ、`range.end` の絞り込みが**厳密に
+confidence の高い候補**を消す瞬間を計測すると **96 発火 / 6 実体**。最悪例は同じ fixture の
+`rising_wedge` で、**0.95 が 0.82 に負けていた**。
+
+#### 決定（案 D）
+
+`deduplicatePatterns` の `range.end` と confidence を入れ替え、`globalDedup` と同じ
+**statusScore → confidence → `range.end` → 高さ**にした。
+
+- **`statusScore` 最優先の構造は触っていない。** 入れ替えは statusScore の**下**なので、
+  #133 / PR #135 の不変条件（形成中が完成済みを押し出さない）は構造上通らない。
+  `helpers.test.ts` に「形成中は confidence 1.0 でも完成済みに勝てない」を明示的に足した。
+- **`range.end` 最優先に根拠は無かった。** 初期インポート（`0b726e1`）由来で、PR #135 は
+  「『より新しい形を採る』は同 status 内に限定して**残す**」と書いており statusScore を
+  上に挿しただけ。#135 の docstring が挙げる根拠（形成中は `range.end` が常に最新足）は
+  **statusScore を `range.end` より前に置く根拠**であって、`range.end` を confidence より
+  前に置く根拠ではない。
+- **`overlapRatio` の分母（min duration）は変更していない**（案 B）。飲み込むこと自体は
+  重複報告の抑止として正しく、問題は「飲み込んだあとどちらを残すか」なので勝者選択で直る。
+  分母を変えると 2 層 × 全種別の挙動が動き blast radius が桁違いになる。
+- **`globalDedup` の逐次置換のクラスタリング化（案 C）も見送った。** 案 D で実例が直り、
+  順序依存が実際に出力を変える例が現行コーパスに無いため。必要になれば別 PR。
+- **品質指標の追加（案 A）は不要だった。** 種別ごとに指標が違う（三角形の `r2` は double に
+  無い）ため共通指標への正規化という新しい設計が要るが、優先順の不整合が原因だったので
+  そこまで要らない。
+
+#### 影響（800 ケース比較）
+
+`tests/detect_patterns_fixtures.test.ts` の **fixture 22 件 × オプション 8 通り × 時間足 2 種
+× `swingDepth` 2 種 = 704 ケース**と、`tests/fixtures/btc_jpy_1day_2026.ts` の
+**時間足 3 種 × `swingDepth` 4 種 × オプション 8 通り = 96 ケース**を前後で突き合わせた
+（#131 以降と同じ手順・同じ 800 ケース）。
+
+| 指標 | before → after |
+|---|---|
+| `data.patterns` が変わったケース | **48 / 800**（合成 16 / 実データ 32） |
+| 差分の実体 | **4 件**（残りは時間足 × オプション × `swingDepth` の複製） |
+| パターン総数 | 640 → **656**（+16。すべて下記 1 実体の複製） |
+| `accepted` 候補 / 候補総数 | 2,852 / 42,856 → **不変**（検出ロジックは触っていない） |
+
+##### 変化した 4 実体（before → after の対）
+
+いずれも**同一 `type`・同一 `status`** 内での入れ替えで、statusScore は一度も跨いでいない。
+
+| # | ケース | 種別 / status | before | after | 複製数 |
+|---|---|---|---|---|---|
+| 1 | 実データ `1day` | `rising_wedge` / completed | （出力に無し） | **0.95** 06-23→07-13 | 16 |
+| 2 | 実データ `1hour` | `triangle_symmetrical` / completed | 0.86 07-28→08-16 | **0.87** 07-26→08-14 | 16 |
+| 3 | 合成 `1day` | `triangle_ascending` / forming | 0.77 01-10→02-01 | **0.78** 01-07→01-29 | 8 |
+| 4 | 合成 `1hour` | `triangle_ascending` / forming | 0.73 01-15→02-01 | **0.79** 01-05→01-29 | 8 |
+
+**2 / 3 / 4 は 1 対 1 の置換**（より当てはまりの良い候補に差し替わっただけ。件数は変わらない）。
+
+**1 だけが純増（+1 件 × 16 ケース = +16）で、2 段目の影響を含む。** 修正前は
+`deduplicatePatterns` が広い `rising_wedge` 0.82（06-18→08-20、63 日）を代表に選び、
+それが後段 `globalDedup` で `falling_wedge`（07-08→08-17）と**重なり率 1.00** で衝突して
+**丸ごと消えていた**（`categoryMap` で両者は同カテゴリ `wedge`）。狭い 0.95（20 日）が
+代表になると `falling_wedge` との重なり率は **0.25** で閾値 0.70 に届かないため、
+**2 つの別々の構造として両方残る**。
+
+**これが #142 の言う「飲み込みの連鎖」の実体**だが、**連鎖の起点は `globalDedup` ではなく
+検出器内 dedup の誤った代表選択**だった。低品質な広い窓が代表に選ばれた結果、本来無関係な
+別種別と衝突して**正しいウェッジが出力から完全に失われていた**。
+
+#### テスト
+
+- `tests/patterns/dedup-confidence-priority-btcjpy.test.ts`（新規）— 実データで実体 1 / 2 と
+  #133 の不変条件を固定。**4 アサーションすべてが旧順序で落ちることを確認済み**。
+- `tests/patterns/helpers.test.ts` — 「同 status どうしでは**従来どおり** `range.end` が
+  新しいほうが勝つ」を反転した。このテストは PR #135 が追加した継承挙動の characterization
+  であって設計不変条件ではない（#135 自身が #133 のテストを反転したのと同じ形）。
+  confidence 同点なら `range.end` が効くことと、形成中が完成済みに勝てないことも足した。
 
 ### Fixed（形成中 double のサイズ検査を完成済みと揃えた。#169 / PR #170）
 
