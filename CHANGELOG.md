@@ -35,10 +35,11 @@
 | 20 | #159 | 形成中 H&S / 逆 H&S の成功候補を `debug.candidates` に積む（#155） | **変わらない** |
 | 21 | #161 | candidates の `status` / `breakoutDirection` を content と出力スキーマに届ける（#160） | **変わらない** |
 | 22 | #164 | 完成済みウェッジの `status` / `breakoutDirection` が候補行に出ていなかったのを修正（#162） | **変わらない** |
+| 23 | #166 | 形成中 double top / bottom・triple top / bottom の成功候補を `debug.candidates` に積む（#158。#155 の 4 経路への横展開） | **変わらない** |
 
-### Changed（`detect_patterns` の `view=debug` の配線 3 件。**`data.patterns` は 3 件とも 1 件も変わらない**。#155 / #160 / #162）
+### Changed（`detect_patterns` の `view=debug` の配線 4 件。**`data.patterns` は 4 件とも 1 件も変わらない**。#155 / #158 / #160 / #162）
 
-**3 件とも「検出器が持っている情報が `view=debug` の出力まで届いていない」配線の修正で、検出結果は動いていない。** 見出しは 1 本にまとめてあるが、各 PR の却下案と実測は下に残す（要約すると根拠が落ちるため。本セクション冒頭「読む順」の方針）。
+**4 件とも「検出器が持っている情報が `view=debug` の出力まで届いていない」配線の修正で、検出結果は動いていない。** 見出しは 1 本にまとめてあるが、各 PR の却下案と実測は下に残す（要約すると根拠が落ちるため。本セクション冒頭「読む順」の方針）。
 
 #### 形成中 H&S / 逆 H&S の成功候補を `debug.candidates` に積む（#155 / PR #159）
 
@@ -58,6 +59,36 @@
   | cap 到達ケース | 36 → **36**（新規 0・解消 0。もともと before の時点で 200 に達していた実データ側） |
 
   320 件積まれて 84 件が cap で押し出され差し引き +236。**押し出された 84 件はすべて `accepted: false`**。`cap = 200` は上げていない（判断を仰ぐ対象なので勝手に触らない）。`patterns` で絞れば `candidate-filter` がトリム前に落とすので、該当種別の理由は残る。
+
+#### 形成中 double / triple の成功候補を `debug.candidates` に積む（#158 / PR #166）
+
+**#155（形成中 H&S / 逆 H&S）の 4 経路への横展開**（`tryFormingDoubleTop` / `tryFormingDoubleBottom` / `tryFormingTripleTop` / `tryFormingTripleBottom`）。判断の大半は #155 のものをそのまま適用したので、ここには**#155 と事情が違った 3 点**だけを書く。
+
+- **`pushCand` が `status` を落としていた**（`tools/patterns/types.ts`）。`CandDebugEntry` には `status` があるのに `CandDebugArg` に無く、写経路が無かった。`detect_triples` は 4 経路とも `pcand`（= `pushCand`）しか使っておらず、これを直さないと `status: 'forming'` を積めない。**`CandDebugArg` に `status?: string` を足し、渡されたときだけキーを出す**（`...(arg.status !== undefined ? { status } : {})`）。`status: undefined` を常に置くと deep-equal 比較が壊れるため spread にしてある。**#158 以前の呼び出し元は 1 つもこれを渡していない**ので追加は純粋に additive で、`types.ts` の変更だけを適用した 800 ケースの出力は main と **byte 単位で同一**（8,204,452 バイト）であることを実測した。`details` は今回使わないので足していない。**`detect_doubles` の形成中 2 経路は元から `ctx.debugCandidates.push` を直接呼んでいる**が、**本 PR が新たに積むエントリだけ** `pushCand` を使った（`isoTime` の埋め方を手書きで増やさないため）。**既存の直呼び 7 箇所（先行トレンド / 構造ゲート / reclassify）はそのまま**——出力が動かないことを保証するのが優先で、ファイル全体の API 統一は本 PR の範囲外（CodeRabbit 指摘を受けて記述を実態に合わせた）。
+- **`tryFormingDoubleTop` には #155 の cap 制約を適用しなかった。** #155 が「構成点が揃った後の分岐にだけ理由コードを積む」としたのは `formingHsForHead` が**頭候補ごとに呼ばれる**ためで、`tryFormingDoubleTop` は `lastConfirmedPeak` を 1 点取って直線的にガードを並べる**ループの無い**関数なので、1 回の呼び出しで各分岐はたかだか 1 回しか発火しない。**7 つの `return null` すべてに理由コードを足した**（`forming_no_confirmed_peak` / `forming_no_valley_after_peak` / `forming_peak_level_out_of_tolerance` / `forming_peaks_not_level` / `forming_current_at_or_below_valley` / `forming_completion_below_min` / `forming_bars_out_of_range`）。**この経路は #158 以前は完全に無音**で、なぜ形成中ダブルトップが出ないのかが debug から追えなかった。関数先頭の want / ピボット総数ガードだけは「この種別が要求されていない」であって候補の棄却ではないので積んでいない。
+- **残り 3 経路（すべてループ）は #155 と同じ制約を適用した。** 構成点が揃った後の分岐にだけ積み、揃う前の `continue` には積んでいない。積んだのは `tryFormingDoubleBottom` が 5 件（`forming_pattern_height_below_min` / `forming_valleys_not_level` / `forming_current_below_valley_zone` / `forming_completion_below_min` / `forming_bars_out_of_range`。**見送りは** 谷ペアの `minDist` 不足と「間に山が無い」の 2 分岐）、triple 2 経路が各 2 件（`forming_bars_out_of_range` と `forming_completion_below_min` / `forming_confidence_below_min`。**見送りは** `minDist` 不足 / `peakDiff`（`valleyDiff`）超過 / `currentDiff` 超過）。
+
+そのほか #155 から引き継いだ点:
+
+- **`accepted: true` の意味は変えていない**（dedup 前 ＝「検出器が組み立てた」であって「最終出力に残った」ではない）。4 経路とも成功で即 `return` するので、1 回の呼び出しで積まれる成功エントリは**各経路 1 件が上限**。
+- `points` の role は**その経路の既存の棄却エントリに揃えた**（double top は `peak1` / `valley` / `forming_peak`、double bottom は `valley1` / `peak` / `valley2` / `current`、triple は `peak1` / `peak2` / `current`）ので、同じ経路の ✅ と ❌ が並んで読める。最新足の終値（確定ピボットではない）は double top の `forming_peak`、他 3 経路の `current` で区別する。triple の**ネックラインを引いた 2 点**（`valley1` / `valley2`、bottom は `peak1` / `peak2`）は `points` にだけ足した——`indices` は既存の棄却エントリと同じ 3 点のまま（#155 の `pre_head_valley` と同じ扱い）。
+- **`forming_completion_below_min` は 4 経路のうち 3 経路で到達しない。** double 2 経路は `completion = min(1, 0.66 + progress × 0.34)` で `progress` が `[0, 1]` にクランプ済みなので下限 0.66 > 0.4、triple top も `progress = min(1, currentPrice / avgPeakPrice)` が価格の正値性から必ず正なので同じ。**triple bottom だけは到達する**——あちらの `progress` は `(current − avgValley) / (avgPeak − avgValley)` で**負を取りうる**ため、山谷差の小さい浅い形では `completion < 0.4` に落ちる（fixture あり）。到達しない 3 経路は #155 と同じく `MIN_FORMING_COMPLETION` / `FORMING_MIN_COMPLETION` の docstring に算術を明記し、**テストは fixture ではなく境界を固定した**。
+- **`double_bottom` の成功エントリだけ `status` を `'forming'` 決め打ちにしていない。** この経路は `checkPostPivotInvalidation` と `FORMING_EXPIRY_BARS` で `invalid` / `expired` になったパターンも同じ `return` から返すので、**返すパターンと同じ式**（`terminal ? terminal.status : 'forming'`）を積む。決め打ちにすると期限切れの候補が「まだ形成中」と読める——`status` を足した目的（#155: 完成済みと誤読させない印）と逆向きになる。実測 800 ケースでは `forming` 102 / `invalid` 96 / `expired` 94。
+- **実測**（合成 704 ケース = 価格列 11 系統 × パラメータ 8 × オプション 8、実データ 96 ケース = `btc_jpy_1day_2026` の窓 12 通り × オプション 8。計 **800**。#155 とは corpus の組み方が違うので件数は直接比較できない）:
+
+  | | before → after |
+  |---|---|
+  | `data.patterns` | **0 変化**（800 ケースすべて deep-equal） |
+  | 追加された `accepted: true` | **+436**（`double_top` 40 / `double_bottom` 292（forming 102・invalid 96・expired 94）/ `triple_top` 23 / `triple_bottom` 81） |
+  | 追加された `accepted: false`（新設の理由コード） | **+1,325** |
+  | 消えた候補 | **31**（**すべて `accepted: false`**。全件が cap 到達ケース内） |
+  | cap 到達ケース | 5 → **6**（新規 1 件。実データ 75 本 × `swingDepth: 2`） |
+
+  押し出された 31 件の内訳は triple の棄却理由 16 件（`forming_neckline_not_horizontal` 4 / `valleys_missing` 系 5 / ほか 7）、`rising_wedge / r2_below_threshold` 8 件、`triangle_symmetrical / r2_below_threshold` 6 件。**`cap = 200` は上げていない**（判断を仰ぐ対象）。`patterns` で絞れば `candidate-filter` がトリム前に落とすので該当種別の理由は残る。
+
+  **`accepted: true` の増分と `data.patterns` の形成中件数がズレる経路がある。** `double_top`（40 ↔ 40）と `triple_bottom`（81 ↔ 81）は一致、`triple_top` は 23 ↔ 22 で 1 件が `globalDedup` に畳まれた。`double_bottom` は 102 ↔ 23 で差が大きく、内訳は **`globalDedup` が同じ構成点の完成済み `double_bottom` を勝たせた 70 件** と、**dedup で完成済みが勝ったあと `includeCompleted: false` で消えた 9 件**（この 9 件は before も after も `data.patterns` が空で、変わったのは candidates に痕跡が残るようになったことだけ）。これは #155 で明記した「積むのは dedup の前」の帰結で、意味は変えていない。
+
+- **relaxed H&S / 逆 H&S の `fallback_relaxed` は `points` を持たない**（`tools/patterns/detect_hs.ts:903` / `:1083`。`indices` のみで `status` も無い）ことを確認したが、同じクラスの別経路なので**報告のみ**とし本エントリでは触っていない。
 
 #### candidates の `status` / `breakoutDirection` を content と出力スキーマに届ける（#160 / PR #161）
 

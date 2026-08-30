@@ -54,7 +54,16 @@ const MAX_FORMING_DAYS = 90;
 const FORMING_PEAK_TOLERANCE_PCT = 0.05;
 const FORMING_BASE_COMPLETION = 0.66;
 const FORMING_COMPLETION_RANGE = 0.34;
-const MIN_FORMING_COMPLETION = 0.4;
+/**
+ * 形成中ダブルトップの完成度の下限。
+ *
+ * **現行の定数では到達しない。** `completion = min(1, FORMING_BASE_COMPLETION + progress * FORMING_COMPLETION_RANGE)`
+ * で `progress ∈ [0, 1]` なので最小値は `FORMING_BASE_COMPLETION = 0.66` になり、0.4 を下回れない。
+ * 重み側（0.66 / 0.34）を触ったときに効き始めるガードとして残してあり、
+ * `forming_completion_below_min` の理由コードもそのために積む（issue #158。#155 の
+ * `FORMING_MIN_COMPLETION`（`detect_hs.ts`）と同じ事情）。
+ */
+export const MIN_FORMING_COMPLETION = 0.4;
 /**
  * 形成中ダブルトップ / ボトムの形成期間の下限の日数由来。**実効値はバー数**で、
  * `getDoubleFormingBarParams` が `patterns/bar-thresholds.ts` の換算を通して決める。
@@ -723,6 +732,27 @@ function findRelaxedDoubleBottom(
 
 // ── Helper: 形成中ダブルトップ検索 ──
 
+/**
+ * 形成中ダブルトップを組み立てる。組めなければ null。
+ *
+ * ## debug candidate の積み方（issue #158）
+ *
+ * 成功時に `accepted: true` / `status: 'forming'` を積む。**`accepted: true` は「検出器が
+ * 組み立てた」であって「最終出力に残った」ではない**——後段 `detect_patterns.ts` の
+ * `globalDedup` に畳まれて `data.patterns` に出ないことがある。strict / relaxed パスも
+ * `patterns.push` の直後＝dedup 前に積んでおり、既存の約束と揃えてある（#155 と同じ）。
+ *
+ * 棄却の理由コードは**全分岐に積む**。{@link tryFormingDoubleBottom} や
+ * `detect_triples.ts` の形成中 2 経路と違い**この関数にはループが無く**、
+ * `lastConfirmedPeak` を 1 点だけ取って直線的にガードを並べるので、1 回の呼び出しで
+ * 各分岐はたかだか 1 回しか発火しない。#155 が「構成点が揃う前の分岐には積まない」と
+ * したのは頭候補ごとにループする `formingHsForHead` の cap=200 対策で、ここには当て
+ * はまらない。積まないと**この経路は完全に無音**になり、なぜ形成中ダブルトップが
+ * 出ないのかが debug から追えない。
+ *
+ * 例外は関数先頭の want / ピボット総数ガードで、これは「この種別が要求されていない」
+ * 「窓にピボットが 1 つも無い」であって候補の棄却ではないため積まない。
+ */
 function tryFormingDoubleTop(ctx: DetectContext): PatternEntry | null {
 	const { candles, allPeaks, allValleys, want } = ctx;
 	if (!(want.size === 0 || want.has('double_top')) || allPeaks.length < 1 || allValleys.length < 1) return null;
@@ -732,25 +762,65 @@ function tryFormingDoubleTop(ctx: DetectContext): PatternEntry | null {
 	const isoAt = (i: number) => candles[i]?.isoTime || '';
 
 	const lastConfirmedPeak = [...allPeaks].reverse().find((p) => p.idx < lastIdx - 2);
-	if (!lastConfirmedPeak) return null;
+	if (!lastConfirmedPeak) {
+		pushCand(ctx, { type: 'double_top', accepted: false, reason: 'forming_no_confirmed_peak' });
+		return null;
+	}
 	const valleyAfterPeak = allValleys.find((v) => v.idx > lastConfirmedPeak.idx && v.idx < lastIdx - 1);
-	if (!valleyAfterPeak || valleyAfterPeak.idx <= lastConfirmedPeak.idx) return null;
+	if (!valleyAfterPeak || valleyAfterPeak.idx <= lastConfirmedPeak.idx) {
+		pushCand(ctx, {
+			type: 'double_top',
+			accepted: false,
+			reason: 'forming_no_valley_after_peak',
+			idxs: [lastConfirmedPeak.idx],
+			pts: [{ role: 'peak1', idx: lastConfirmedPeak.idx, price: lastConfirmedPeak.price }],
+		});
+		return null;
+	}
 
 	const leftPeak = lastConfirmedPeak;
 	const valley = valleyAfterPeak;
+	// 構成点 3 点（山1 / 谷 / 暫定の山2＝最新足）が確定したのでここから先は共通の形で積む。
+	// 最新足は確定ピボットではないので role を `forming_peak` で区別する（既存の棄却
+	// エントリと同じ role 名。同じ経路の ✅ と ❌ が並んで読めるようにするため）。
+	const formingPts = [
+		{ role: 'peak1', idx: leftPeak.idx, price: leftPeak.price },
+		{ role: 'valley', idx: valley.idx, price: valley.price },
+		{ role: 'forming_peak', idx: lastIdx, price: currentPrice },
+	];
+	const formingIdxs = [leftPeak.idx, valley.idx, lastIdx];
+	const rejectForming = (reason: string) => {
+		pushCand(ctx, { type: 'double_top', accepted: false, reason, idxs: formingIdxs, pts: formingPts });
+	};
+
 	const leftPct = currentPrice / Math.max(1, leftPeak.price);
-	if (leftPct < 1 - FORMING_PEAK_TOLERANCE_PCT || leftPct > 1 + FORMING_PEAK_TOLERANCE_PCT) return null;
-	if (!isSameLevel(currentPrice, leftPeak.price, DOUBLE_LEVEL_MAX_PCT)) return null;
-	if (currentPrice <= valley.price) return null;
+	if (leftPct < 1 - FORMING_PEAK_TOLERANCE_PCT || leftPct > 1 + FORMING_PEAK_TOLERANCE_PCT) {
+		rejectForming('forming_peak_level_out_of_tolerance');
+		return null;
+	}
+	if (!isSameLevel(currentPrice, leftPeak.price, DOUBLE_LEVEL_MAX_PCT)) {
+		rejectForming('forming_peaks_not_level');
+		return null;
+	}
+	if (currentPrice <= valley.price) {
+		rejectForming('forming_current_at_or_below_valley');
+		return null;
+	}
 
 	const ratio = (currentPrice - valley.price) / Math.max(EPSILON, leftPeak.price - valley.price);
 	const progress = Math.max(0, Math.min(1, ratio));
 	const completion = Math.min(1, FORMING_BASE_COMPLETION + progress * FORMING_COMPLETION_RANGE);
-	if (completion < MIN_FORMING_COMPLETION) return null;
+	if (completion < MIN_FORMING_COMPLETION) {
+		rejectForming('forming_completion_below_min');
+		return null;
+	}
 
 	const formationBars = Math.max(0, lastIdx - leftPeak.idx);
 	const formingBars = getDoubleFormingBarParams(ctx.type);
-	if (formationBars < formingBars.minBars || formationBars > formingBars.maxBars) return null;
+	if (formationBars < formingBars.minBars || formationBars > formingBars.maxBars) {
+		rejectForming('forming_bars_out_of_range');
+		return null;
+	}
 
 	const trend = validatePriorTrend(candles, leftPeak.idx, lastIdx - leftPeak.idx, 'up_or_sideways');
 	if (!trend.ok) {
@@ -817,6 +887,16 @@ function tryFormingDoubleTop(ctx: DetectContext): PatternEntry | null {
 
 	const structureGate = buildStructureGate(gate);
 
+	// 成功エントリ（issue #158）。構成点・並びは上の棄却エントリと同じにして、
+	// 同じ経路の ✅ と ❌ が並んで読めるようにする。
+	pushCand(ctx, {
+		type: 'double_top',
+		accepted: true,
+		status: 'forming',
+		idxs: formingIdxs,
+		pts: formingPts,
+	});
+
 	return {
 		type: 'double_top',
 		confidence,
@@ -847,6 +927,19 @@ function tryFormingDoubleTop(ctx: DetectContext): PatternEntry | null {
 
 // ── Helper: 形成中ダブルボトム検索 ──
 
+/**
+ * 形成中ダブルボトムを組み立てる。組めなければ null。
+ *
+ * ## debug candidate の積み方（issue #158）
+ *
+ * 成功エントリの意味（`accepted: true` は dedup 前＝「検出器が組み立てた」）は
+ * {@link tryFormingDoubleTop} の docstring が単一ソース。
+ *
+ * 棄却の理由コードは**構成点 3 点（谷1 / 山 / 谷2）が揃った後の分岐にだけ**積む。
+ * この関数は谷ペアを回すループなので、揃う前の `continue`（`minDist` 不足 / 間に山が
+ * 無い）はペア数ぶん発火し、`detect_patterns.ts` の cap=200 を食い潰して**他の検出器の
+ * 棄却理由を押し出す**。#155 が `formingHsForHead` で置いた制約と同じ。
+ */
 function tryFormingDoubleBottom(ctx: DetectContext): PatternEntry | null {
 	const { candles, allPeaks, allValleys, tolerancePct, want, minDist } = ctx;
 	if (!(want.size === 0 || want.has('double_bottom')) || allValleys.length < 2) return null;
@@ -868,25 +961,54 @@ function tryFormingDoubleBottom(ctx: DetectContext): PatternEntry | null {
 		if (!peaksBetween.length) continue;
 		const midPeak = peaksBetween.reduce((best, p) => (p.price > best.price ? p : best), peaksBetween[0]);
 
+		// 構成点 3 点が揃った。以降の棄却はこの並びで積む（既存の棄却エントリと同じ
+		// role 名 / indices の並びにして、同じ経路の ✅ と ❌ が並んで読めるようにする）。
+		// 最新足は確定ピボットではないので role を `current` で区別する。
+		const formingIdxs = [leftValley.idx, midPeak.idx, rightValley.idx, lastIdx];
+		const formingPts = [
+			{ role: 'valley1', idx: leftValley.idx, price: leftValley.price },
+			{ role: 'peak', idx: midPeak.idx, price: midPeak.price },
+			{ role: 'valley2', idx: rightValley.idx, price: rightValley.price },
+			{ role: 'current', idx: lastIdx, price: currentPrice },
+		];
+		const rejectForming = (reason: string) => {
+			pushCand(ctx, { type: 'double_bottom', accepted: false, reason, idxs: formingIdxs, pts: formingPts });
+		};
+
 		// 値幅の評価なので基準は `extremePrice`（{@link validateBottomSize} と同じ理由）。
 		// 完成済みパスと同じ MIN_PATTERN_HEIGHT_PCT を使う以上ここだけ終値基準にすると、
 		// 「形成中は通るのに完成した瞬間にサイズ検査で落ちる」候補ができる。
 		const leftDepth = (midPeak.extremePrice - leftValley.extremePrice) / Math.max(EPSILON, midPeak.extremePrice);
 		const rightDepth = (midPeak.extremePrice - rightValley.extremePrice) / Math.max(EPSILON, midPeak.extremePrice);
-		if (!(leftDepth >= MIN_PATTERN_HEIGHT_PCT && rightDepth >= MIN_PATTERN_HEIGHT_PCT)) continue;
+		if (!(leftDepth >= MIN_PATTERN_HEIGHT_PCT && rightDepth >= MIN_PATTERN_HEIGHT_PCT)) {
+			rejectForming('forming_pattern_height_below_min');
+			continue;
+		}
 
 		const valleyDiff =
 			Math.abs(leftValley.price - rightValley.price) / Math.max(1, Math.max(leftValley.price, rightValley.price));
-		if (valleyDiff > Math.min(tolerancePct * FORMING_TOLERANCE_MULTIPLIER, DOUBLE_LEVEL_MAX_PCT)) continue;
-		if (currentPrice < rightValley.price * (1 - FORMING_VALLEY_INVALID_PCT)) continue;
+		if (valleyDiff > Math.min(tolerancePct * FORMING_TOLERANCE_MULTIPLIER, DOUBLE_LEVEL_MAX_PCT)) {
+			rejectForming('forming_valleys_not_level');
+			continue;
+		}
+		if (currentPrice < rightValley.price * (1 - FORMING_VALLEY_INVALID_PCT)) {
+			rejectForming('forming_current_below_valley_zone');
+			continue;
+		}
 
 		const upRatio = (currentPrice - rightValley.price) / Math.max(EPSILON, midPeak.price - rightValley.price);
 		const progress = Math.max(0, Math.min(1, upRatio));
 		const completion = Math.min(1, 0.66 + 0.34 * progress);
-		if (completion < 0.4) continue;
+		if (completion < 0.4) {
+			rejectForming('forming_completion_below_min');
+			continue;
+		}
 
 		const formationBars = Math.max(0, lastIdx - leftValley.idx);
-		if (formationBars < formingBars.minBars || formationBars > formingBars.maxBars) continue;
+		if (formationBars < formingBars.minBars || formationBars > formingBars.maxBars) {
+			rejectForming('forming_bars_out_of_range');
+			continue;
+		}
 
 		const trend = validatePriorTrend(candles, leftValley.idx, lastIdx - leftValley.idx, 'down_or_sideways');
 		if (!trend.ok) {
@@ -1004,6 +1126,17 @@ function tryFormingDoubleBottom(ctx: DetectContext): PatternEntry | null {
 		const precedingTrend = buildPrecedingTrend(candles, trend, leftValley.idx);
 
 		const structureGate = buildStructureGate(gate);
+
+		// 成功エントリ（issue #158）。`status` は組み立て時点の値なので、`terminal` が付いた
+		// （= invalid / expired）ケースはその値を出す。'forming' 決め打ちにすると
+		// 「まだ形成中」と誤読させる。
+		pushCand(ctx, {
+			type: 'double_bottom',
+			accepted: true,
+			status: terminal ? terminal.status : 'forming',
+			idxs: formingIdxs,
+			pts: formingPts,
+		});
 
 		return {
 			type: 'double_bottom',
