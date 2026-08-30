@@ -11,6 +11,7 @@ import {
 	DOUBLE_LEVEL_MAX_PCT,
 	detectTroughZoneReentry,
 	isSameLevel,
+	type PatternSizeRejectReason,
 	type PriorTrendResult,
 	RETRACEMENT_MAX,
 	RETRACEMENT_MIN,
@@ -172,8 +173,17 @@ function buildNecklineConfirmation(candles: CandleData[], breakoutIdx: number): 
  * 「2 点が同じ水準か」は値幅ではなく水準の一致の問題で、ヒゲ 1 本で同水準判定が動くのを
  * 避けるために終値を見ている。ネックラインの「線」も同じ理由で終値基準
  * （`structural.ts` の {@link ReversalSide} の docstring を参照）。
+ *
+ * **引数は `Pick<Pivot, 'extremePrice'>`**（`validatePatternSize` と同じ形）。形成中パスの
+ * 暫定構成点（最新足）は極値判定を通っていないので `Pivot` を組み立てられず、
+ * `{ extremePrice: 最新足の終値 }` を渡す（issue #169。triple / H&S の形成中パスと同じ idiom）。
  */
-function validateTopSize(a: Pivot, b: Pivot, c: Pivot, thresholds: SizeThresholds): string | null {
+function validateTopSize(
+	a: Pick<Pivot, 'extremePrice'>,
+	b: Pick<Pivot, 'extremePrice'>,
+	c: Pick<Pivot, 'extremePrice'>,
+	thresholds: SizeThresholds,
+): PatternSizeRejectReason | null {
 	const heightPct = Math.abs(a.extremePrice - b.extremePrice) / Math.max(1, Math.max(a.extremePrice, b.extremePrice));
 	if (heightPct < thresholds.heightPct) return 'pattern_too_small';
 	const peakAvg = (a.extremePrice + c.extremePrice) / 2;
@@ -182,14 +192,31 @@ function validateTopSize(a: Pivot, b: Pivot, c: Pivot, thresholds: SizeThreshold
 	return null;
 }
 
-/** {@link validateTopSize} の符号反転版。価格基準の根拠は同関数の docstring を参照。 */
-function validateBottomSize(a: Pivot, b: Pivot, c: Pivot, thresholds: SizeThresholds): string | null {
+/** {@link validateTopSize} の符号反転版。価格基準・引数型の根拠は同関数の docstring を参照。 */
+function validateBottomSize(
+	a: Pick<Pivot, 'extremePrice'>,
+	b: Pick<Pivot, 'extremePrice'>,
+	c: Pick<Pivot, 'extremePrice'>,
+	thresholds: SizeThresholds,
+): PatternSizeRejectReason | null {
 	const heightPct = Math.abs(a.extremePrice - b.extremePrice) / Math.max(1, Math.max(a.extremePrice, b.extremePrice));
 	if (heightPct < thresholds.heightPct) return 'pattern_too_small';
 	const valleyAvg = (a.extremePrice + c.extremePrice) / 2;
 	const peakHeightPct = (b.extremePrice - valleyAvg) / Math.max(1, valleyAvg);
 	if (peakHeightPct < thresholds.depthPct) return 'peak_too_shallow';
 	return null;
+}
+
+/**
+ * 完成済みのサイズ検査の理由コードを、形成中パス用に `forming_` 接頭辞付きへ写す（issue #169）。
+ *
+ * **完成済みと同じ `pattern_too_small` / `valley_too_shallow` / `peak_too_shallow` を
+ * そのまま使わない。** `view=debug` の候補一覧は完成済みと形成中の棄却が同じ配列に並ぶので、
+ * 同名だとどちらの経路で落ちたかが読めなくなる。形成中の既存の理由コードが
+ * `forming_` 接頭辞で揃っている（`forming_bars_out_of_range` 等）のに合わせる。
+ */
+function formingSizeReason(reason: PatternSizeRejectReason): string {
+	return `forming_${reason}`;
 }
 
 // ── Helper: 構造ゲート（issue #126）──
@@ -852,6 +879,24 @@ function tryFormingDoubleTop(ctx: DetectContext): PatternEntry | null {
 		});
 	}
 
+	// サイズ検査（issue #169）。**完成済み double top と同じ `validateTopSize` を同じ 3 点構造で
+	// 掛ける。** 3 点目（暫定の山2）は確定ピボットではないので `{ extremePrice: 最新足の終値 }` を
+	// 渡す——triple / H&S の形成中パスが `validatePatternSize` へ暫定構成点を渡すのと同じ idiom
+	// （`detect_triples.ts` / `detect_hs.ts`、および `validatePatternSize` の docstring）。
+	//
+	// **高さ（`(leftPeak − valley) / leftPeak`）は 3 点目を見ない**ので、暫定点のノイズは高さ判定に
+	// 入らない。深さの分母 `peakAvg` には暫定点が入るが、これは形成中 triple / H&S と同じ扱い。
+	//
+	// **配置が最後なのは `validatePatternSize` の docstring の規約**（「既存の棄却検査をすべて
+	// 通過した後」）に従ったもの。前に置くと固有の理由コードを持つ候補の `reason` を横取りして
+	// `view=debug` の診断が変わる。最後に置けば「これまで accepted だった候補だけを落とす」ことが
+	// 位置から保証される。
+	const sizeReason = validateTopSize(leftPeak, valley, { extremePrice: currentPrice }, ctx.sizeThresholds);
+	if (sizeReason) {
+		rejectForming(formingSizeReason(sizeReason));
+		return null;
+	}
+
 	// 形成中でも構造ゲートは完成済みと同じものを掛ける。ゲートを通らない形は、
 	// 形成が進んでも有効なパターンにはならない（issue #126 G1 / G2）。
 	// 暫定右肩（最新足）は確定ピボットではないので、第2構成点には left/valley だけで
@@ -984,6 +1029,11 @@ function tryFormingDoubleBottom(ctx: DetectContext): PatternEntry | null {
 		// 値幅の評価なので基準は `extremePrice`（{@link validateBottomSize} と同じ理由）。
 		// 完成済みパスと同じ `sizeThresholds.heightPct` を使う以上ここだけ終値基準にすると、
 		// 「形成中は通るのに完成した瞬間にサイズ検査で落ちる」候補ができる。
+		//
+		// **サイズ検査のうち高さだけがここにある。** 深さ（`depthPct`）は既存の棄却検査を
+		// すべて通過した後（構造ゲートの直前）で `validateBottomSize` として掛ける（issue #169）。
+		// 位置が分かれているのは配置規約の都合で、この両脚チェックの理由コード
+		// `forming_pattern_height_below_min` は #166 のテストが名前を固定しているため改名しない。
 		const leftDepth = (midPeak.extremePrice - leftValley.extremePrice) / Math.max(EPSILON, midPeak.extremePrice);
 		const rightDepth = (midPeak.extremePrice - rightValley.extremePrice) / Math.max(EPSILON, midPeak.extremePrice);
 		if (!(leftDepth >= ctx.sizeThresholds.heightPct && rightDepth >= ctx.sizeThresholds.heightPct)) {
@@ -1043,6 +1093,27 @@ function tryFormingDoubleBottom(ctx: DetectContext): PatternEntry | null {
 				reason: 'prior_trend_insufficient_data',
 				indices: [leftValley.idx, midPeak.idx, rightValley.idx, lastIdx],
 			});
+		}
+
+		// 深さ検査（issue #169）。**完成済み double bottom と同じ `validateBottomSize` を、
+		// 同じ 3 点（すべて確定ピボット）に掛ける。** 形成中ダブルボトムの構成点は
+		// `leftValley` / `midPeak` / `rightValley` の 3 点だけで完成した L-H-L になっており、
+		// `currentPrice` は有効性判定（`forming_current_below_valley_zone`）と完成度にしか
+		// 使われない**構成点ではない**ので、完成済みと同一の点に同一の検査が掛かる。
+		//
+		// **上の `forming_pattern_height_below_min`（両脚チェック）は残す。** `validateBottomSize`
+		// の高さは `|leftValley − midPeak| / max(...)` ＝ **左脚しか見ない**ので、置き換えると
+		// 右脚の要求が消える。両脚チェックを残したうえで深さを足すと、`validateBottomSize` の
+		// 高さ（左脚 ≥ heightPct）は両脚チェックに包含されるため、ここで実際に発火しうるのは
+		// `peak_too_shallow` だけになる。結果として **形成中 ⊇ 完成済みの厳しさ**が成立し、
+		// 「形成中は通るのに完成した瞬間にサイズ検査で落ちる」候補が閉じる。
+		//
+		// 配置が最後なのは `validatePatternSize` の docstring の規約（「既存の棄却検査をすべて
+		// 通過した後」）に従ったもの。理由は {@link tryFormingDoubleTop} の同じ検査のコメント参照。
+		const sizeReason = validateBottomSize(leftValley, midPeak, rightValley, ctx.sizeThresholds);
+		if (sizeReason) {
+			rejectForming(formingSizeReason(sizeReason));
+			continue;
 		}
 
 		const gate = validateReversalStructure({
