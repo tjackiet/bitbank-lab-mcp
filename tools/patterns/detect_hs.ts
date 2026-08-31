@@ -75,8 +75,11 @@ const RELAXED_FACTORS = [
  * 到達せず棄却エントリが 1 件も残らないが、そのときは `fallback_relaxed` の
  * `accepted: true` が積まれるので「なぜ何も出ないのか」を追う用途には影響しない。
  *
- * ネックライン水平性は段に依存しない（`validateHorizontalNeckline` に factors が入らない）ため、
- * 落ちる窓の集合は末尾の段が上位集合になる。よって末尾の段に寄せても取りこぼしは無い。
+ * **ネックラインについては**段に依存しない（`validateHorizontalNeckline` に factors が入らない）
+ * ため、落ちる窓の集合は末尾の段が上位集合になる。**肩では集合の向きが逆**——肩の閾値は
+ * 末尾の段のほうが緩い（`shoulder: 1.6` → `2.0`）ので、肩で落ちる窓は `×1.6` 段のほうが多く、
+ * 末尾の段は部分集合になる。それでも取りこぼしが無い根拠は上の 2 つ目の箇条書きと同じで、
+ * 「`×1.6` で落ちて `×2.0` で通る窓は最終的な棄却ではないので報告すべきでない」。
  */
 function isFinalRelaxedStage(factors: (typeof RELAXED_FACTORS)[number]): boolean {
 	return factors === RELAXED_FACTORS[RELAXED_FACTORS.length - 1];
