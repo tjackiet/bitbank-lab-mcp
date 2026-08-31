@@ -44,6 +44,160 @@
 | 29 | #138 | triple の「同水準」判定に**高さ相対の hard gate**（`MAX_LEVEL_SPREAD_RATIO`）を足し、無音だった 3 点同水準の棄却を可観測化した | 実データで**減る**（−20 / 800。**増加 0**）/ 合成 fixture は変わらない |
 | 30 | #180 | cap で切られた `debug.candidates` / `debug.swings` の総数と省略件数を申告する（cap の値もトリム戦略も変えない） | **変わらない**（0 / 800） |
 | 31 | #182 | `swingDepth` / `tolerancePct` / `minBarsBetweenSwings` の description に**時間軸オートとスキーマ既定値の sentinel 置換**を明記した（`resolveParams` も `.default()` も触っていない） | **変わらない**（description のみ） |
+| 32 | #184 | `meta.effective_params` が**出力スキーマ未宣言で毎回 strip されていた**のを宣言し、実効パラメータ行を全 view の `content` に出した。`headProminencePct` を追加し、壊れていた `autoScaled` を per-parameter の `source` に置換 | **変わらない**（`meta` / `content` のみ） |
+
+### Fixed（`meta.effective_params` が出力スキーマ未宣言で毎回 strip され、**どのクライアントにも届いていなかった**。#184）
+
+**根本原因は D（出力スキーマ未宣言）。** `tools/detect_patterns.ts` は #114 以前から `meta.effective_params`
+を載せていたが、`src/schema/patterns.ts` の `meta` に宣言が無かった。Zod の object は未宣言のキーを
+**エラーにせず黙って落とす**ので、`DetectPatternsOutputSchema.parse()` を通した時点で消えていた。
+
+    parse ok = true
+    meta keys after parse = count,pair,type,visualization_hints
+    effective_params survived = false
+
+**parse は成功する。** だから壊れていることが出力にもテストにも現れない。実質デッドコードだった
+（`effective_params` は本リポジトリの履歴の起点から載っており、#114 より前からずっと届いていない）。
+
+本 issue の 5 つの欠陥（D / E / A / B / C）は全部この 1 面の話で、**D を直さない限り A / B / C を
+実装しても 1 バイトも届かない**。順に D → E → A → B → C で直した。
+
+#### D. 出力スキーマに宣言した（+ 再発防止）
+
+`meta` の宣言は `pair` / `type` / `count` / `scan` / `visualization_hints` / `debug` / `warning` /
+`warnings` の 8 つだけだった。9 つ目として `effective_params` を宣言し、`.describe()` に
+**「解決後の実効値であって入力値ではない」「sentinel 置換により入力値と一致しないことがある」**（#182）を明記した。
+
+**これは #155（`debug.candidates[].status`）/ #160（同 `breakoutDirection`）に続く 3 回目。**
+3 回ともレビューで見つかっていない。人手で気づけないクラスなので機械で固定した:
+
+`tests/detect_patterns_meta_schema_parity.test.ts` — `DetectPatternsOutputSchema.parse` を spy して
+**入力（ツールが実際に載せた meta）と出力（宣言されていて生き残った meta）のキーパス集合が一致する**
+ことを検証する。配列は `[]` を挟んで全要素を合算するので `debug.candidates[].status` のような
+**配列要素の中の strip** も捕まえる。実際に宣言を消して確認した:
+
+    // effective_params の宣言を消したとき
+    AssertionError: … strip されているキー: [ 'effective_params', 'effective_params.swingDepth', … 13 件 ]
+    // candidates の status 宣言を消したとき（= #155 の再現）
+    AssertionError: … strip されているキー: [ 'debug.candidates[].status' ]
+
+**横断テスト（全ツール一括）にはしていない。** 理由は 3 つで、いずれも現状の作りに由来する:
+
+1. **`ToolDefinition`（`src/tool-definition.ts`）が `outputSchema` を持たない。** 出力スキーマは各ツールの
+   モジュール内部でしか参照されないので、`tool-registry` からツールを列挙しても schema に手が届かない。
+2. **上流フィクスチャがツールごとに違う。** `parse` を通すには実際に走らせる必要があり、bitbank REST の
+   応答（candlestick / ticker / depth / transactions / pairs）をツールごとに用意することになる。
+   `OutputSchema.parse` を持つ 40 ファイルのうち 16 は Private 系で、API キーと HMAC 署名クライアントの
+   モックも要る。
+3. **`meta` は条件付きで組まれる**（`...(scan ? { scan } : {})` 等）ので、1 回の happy path では
+   meta の全形を踏めない。動的なので静的解析でキーを列挙することもできない。
+
+無理に一般化すると「全ツールを浅く 1 回走らせて、たまたま出たキーだけ見る」テストになり、
+**落ちないが守ってもいない**状態になる。代わりに**横展開しやすい形**にした——判定ロジックを
+`tests/_schemaKeyParity.ts`（`keyPaths` / `expectNoStrippedKeys`）に切り出したので、
+新しいツールの parity テストは「上流モック + `parse` の spy + `expectNoStrippedKeys`」の 3 ステップで書ける。
+
+同じヘルパを `data` 側にも当てたところ、**別クラスの既知欠落が 4 件見つかった**
+（`patterns[]._method` / `patterns[].breakout{,.idx,.price}`）。宣言を足すと `data.patterns` の中身が
+変わるため #184 では直さず、`KNOWN_DATA_STRIPS` として**理由つきで記録**した。allowlist は増えれば落ちるし、
+逆に宣言されても（「実際には strip されていない」で）落ちる。
+
+#### E. 0 件時メッセージが生入力値を出し、それを基準に緩和を助言していた
+
+`src/handlers/detectPatternsViewsHandler.ts` の旧実装:
+
+    const effTol = meta?.effective_params?.tolerancePct ?? tolerancePct ?? 'default';
+
+D により第 1 項は**常に `undefined`**。第 2 項の**生入力値**に落ちていた。1hour・パラメータ未指定での実測:
+
+    パターンは検出されませんでした（tolerancePct=0.04）。
+    ・必要に応じて tolerance を 0.03-0.06 に緩和してください
+
+**実効値は 0.05 なのに 0.04 と表示し、その 0.04 を基準に緩和を助言していた。** これが #182 の誤報告
+（LLM が「0.04 → 0.05 に緩めて再検出した」と報告したが、1hour では前後とも実効 0.05 で no-op）を誘発した。
+助言の「0.03-0.06」も実効 0.05 に対しては**半分が締める方向**を指していた。
+
+値の表示は C の共通行に一本化し、`effTol` のフォールバックごと消した（`formatDetailedView` の
+`tolerancePct` 引数も削除）。助言は実効値基準に書き換えた:
+
+    パターンは検出されませんでした。
+    ・検討パターン: 既定セット
+    ・緩めるなら tolerancePct に実効値 0.05 より大きい値を指定してください（上限 0.1）。0.05 以下は締める方向です（スキーマ既定値 0.04 は sentinel なので時間軸オート値に戻ります）
+
+**実効値を持たない meta では数値を主張しない**（`実効値は上の実効パラメータ行を参照` に落とす）。
+今回の欠陥はまさに「実効値が無いときに入力値で代用した」ことなので、そこを回帰テストで固定した。
+
+#### A. `headProminencePct` を `effective_params` に足した
+
+`resolveParams` は #149 / PR #153 の時点で返しており、`detect_patterns.ts` でも分割代入済みだったが、
+`effective_params` に載せる 4 つ目として足されていなかった（追随漏れ）。D のスキーマ宣言にも含めてある。
+
+#### B. `autoScaled` を廃止し、per-parameter の `source` にした（案 B-2）
+
+旧 `autoScaled` は `swingDepth` / `minBarsBetweenSwings` が**どちらも未指定**のときだけ `true` になる
+集約フラグだった。ところが MCP 経路では 3 パラメータとも `.default()` が埋まるため
+`opts.swingDepth === undefined` の経路が**存在しない**。実測:
+
+    {"pair":"btc_jpy","type":"1hour"}                -> opts 7/5/0.04 -> resolved 3/2/0.05 | autoScaled = false
+    {"pair":"btc_jpy","type":"1hour","swingDepth":4} -> opts 4/5/0.04 -> resolved 4/2/0.05 | autoScaled = false
+    直接呼び resolveParams("1hour", {})                                      | autoScaled = true
+
+1 行目が問題で、**何も指定していない（解決値が完全に時間軸オート）のに `false`** を返していた。
+集約フラグでは「どのパラメータが auto でどれが明示か」も表現できず、C で LLM に見せたい情報にも足りない。
+
+そこで `resolveParams` の戻り値を `autoScaled: boolean` → `sources: { <param>: 'auto' | 'explicit' }` に
+変え、`meta.effective_params` も**パラメータごとに `{ value, source }`** にした。
+
+**shape 変更だが破壊的ではない。** D により `effective_params` は**外部に一度も出たことがない**ので、
+既存クライアントは壊れない。規約 2（`structuredContent` からフィールドを削らない）にも抵触しない
+——届いていなかったものは「既存の契約」ではないため。**shape を変えるなら今が唯一のタイミング**だった。
+
+`.default()` がある限り「未指定」と「既定値を明示指定」は区別できないので、`auto` はその 2 つを畳んでいる
+（本 PR では区別しない——どちらでも実効値は同じで、見せたいのは実効値のほう）。区別が要るなら
+issue #182 案 B（`.default()` 除去）が前提。`headProminencePct` だけは `.default()` が無いので
+`auto` = 未指定と同義。
+
+**実効値の計算は 1 行も変えていない。** 入れ子三項を `xxxExplicit` の平坦な述語に書き換えたが、
+**パラメータごとの述語は元のまま**にしてある（`swingDepth` / `minBarsBetweenSwings` は `Number.isFinite`、
+`tolerancePct` / `headProminencePct` は `typeof number && !NaN`）。揃えると `Infinity` の扱いが変わって
+実効値が動くため。`Infinity` / `NaN` のエッジケースもテストで固定した。
+
+再発防止として、**`DetectPatternsInputSchema.parse()` を通した値で**検証するテストを足した
+（`tests/patterns/config.test.ts`）。既存テストが `resolveParams` の直接呼びだけだったことが、
+「MCP 経路では `.default()` が埋まる」を見逃した原因。
+
+#### C. 実効パラメータ行を `content` に出した（本丸）
+
+**LLM は `structuredContent` を読めない**（`.claude/rules/tools.md`）。`meta` に載せるだけでは
+目的を達しないので、**4 つの view すべて**のヘッダ直下に 1 行出す:
+
+    実効パラメータ（入力値ではない）: swingDepth=3(auto) / minBarsBetweenSwings=2(auto) / tolerancePct=0.05(auto) / headProminencePct=0.05(auto) ※auto=1hour の時間軸オート値（スキーマ既定値 7/5/0.04 の明示指定も auto）
+
+- **常に出す。** 「行が無い = 渡した値がそのまま効いた」を LLM に推論させるのは不確実なため。
+  **足が 20 本未満で `'insufficient data'` に落ちる経路も含む。** `ok()` を返す経路は 2 つあり、
+  当初は早期 return 側に `effective_params` を足しておらず、`meta` の形が candle 本数に依存していた
+  （PR レビューで指摘されて修正。欠陥 A と同じ追随漏れのクラス）。パラメータは早期 return より
+  **前**に解決済みなので、足りなかった側でも実効値は申告できる。構築を `resolveParams` 直後の
+  1 箇所に集約し、両経路で同じオブジェクトを渡すことで足し忘れの余地を消した。
+- **sentinel 置換が可視になる。** `swingDepth=7` を渡して `swingDepth=3(auto)` と出るのがその状態。
+  `※` 注記は `auto` が 1 つも無い呼び出し（全パラメータ明示）では出さない——存在しない印の説明はしない。
+- **`debug` にも出す。** 階梯外（出力の置換）なので上位集合規約の対象外だが、診断が目的の view で
+  いちばん要る情報で、規約は「出してはいけない」とは言っていない。
+- 行は `detectPatternsHandler` で**1 回だけ**組んで 4 view に配る。view ごとに組み直すと文言がずれ、
+  上位集合テストが意味を失う。
+
+固定費は `auto` を含む場合 **175 文字 + 改行 1**（全パラメータ明示なら 116 文字）。同じ view にある
+`trustNote`（200 文字超）より軽い。`summary` にも入れてあり（入れないと規約 §3 違反）、
+`tests/view-content-superset.test.ts` の**定型要素**に新しい抽出子として追加した。
+
+#### 触っていないもの
+
+- `resolveParams` の sentinel 置換ロジック（実効値の**計算**）— 述語は元のまま
+- `.default()`（#182 案 B）/ `getDefaultParamsForTf` / `getDefaultToleranceForTf`
+- 検出結果
+
+**`data.patterns` は変わらない。** `meta` と `content` にしか触っていないため、800 ケース測定は行っていない
+（合成 fixture の回帰テストは全件通過）。
 
 ### Fixed（スイング検出 3 パラメータの**スキーマ既定値が sentinel** であることがどこにも書かれていなかった。#182）
 

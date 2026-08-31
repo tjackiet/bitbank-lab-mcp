@@ -176,7 +176,40 @@ export function getTriangleWindowSize(tf: string): number {
 }
 
 /**
- * オプションとスキーマデフォルトから実効パラメータを解決する
+ * パラメータの実効値がどこから来たか。
+ *
+ * - `explicit`: 呼び出し側が渡した値がそのまま効いた
+ * - `auto`: 時間軸オート表（{@link getDefaultParamsForTf} / {@link getDefaultToleranceForTf}）から解決した
+ *
+ * **`auto` は「未指定」と「スキーマ既定値（= sentinel）を明示指定」を畳んでいる。**
+ * `swingDepth=7` / `minBarsBetweenSwings=5` / `tolerancePct=0.04` には `.default()` が
+ * 付いているため、`resolveParams` に届いた時点で両者は同一の値であり区別できない（#182 / #184）。
+ * どちらでも実効値は同じなので、見せたいほう（実効値）は失われない。
+ * 区別が要るなら `.default()` の除去（#182 案 B）が前提になる。
+ */
+export type ParamSource = 'auto' | 'explicit';
+
+/** {@link resolveParams} が返す、パラメータごとの由来。 */
+export interface ResolvedParamSources {
+	swingDepth: ParamSource;
+	tolerancePct: ParamSource;
+	minBarsBetweenSwings: ParamSource;
+	headProminencePct: ParamSource;
+}
+
+/**
+ * オプションとスキーマデフォルトから実効パラメータを解決する。
+ *
+ * 実効値の**計算**は #184 でも一切変えていない（sentinel 置換のルールはそのまま）。
+ * 変えたのは由来の申告だけで、旧 `autoScaled: boolean` を廃止し
+ * パラメータごとの {@link ParamSource} に置き換えた（#184 欠陥 B / 案 B-2）。
+ *
+ * 旧 `autoScaled` は `swingDepth` / `minBarsBetweenSwings` が**どちらも未指定**のときだけ
+ * `true` になる集約フラグだった。ところが MCP 経路では 3 パラメータとも `.default()` が
+ * 埋まるため `opts.swingDepth` が `undefined` になる経路が存在せず、**常に `false`** を返していた
+ * （`{"pair":"btc_jpy","type":"1hour"}` = 完全オートでも `false`）。
+ * 集約フラグでは「どのパラメータが auto でどれが明示か」も表現できないため、
+ * per-parameter の由来に作り直してある。
  */
 export function resolveParams(
 	tf: string,
@@ -191,46 +224,52 @@ export function resolveParams(
 	tolerancePct: number;
 	minBarsBetweenSwings: number;
 	headProminencePct: number;
-	autoScaled: boolean;
+	sources: ResolvedParamSources;
 } {
 	const auto = getDefaultParamsForTf(tf);
 	const tolAuto = getDefaultToleranceForTf(tf);
 
 	// swingDepth: スキーマ既定値(7)が来た場合は時間軸オートに置換
-	const swingDepth = Number.isFinite(opts.swingDepth as number)
-		? (opts.swingDepth as number) === SCHEMA_DEFAULTS.swingDepth
-			? auto.swingDepth
-			: (opts.swingDepth as number)
-		: auto.swingDepth;
+	// （`explicit` = 「有限値が来た」かつ「それが sentinel ではない」。旧実装の入れ子三項と同値で、
+	//   由来の判定を実効値の判定と同じ 1 つの述語から導くために平坦化してある）
+	const swingDepthExplicit =
+		Number.isFinite(opts.swingDepth as number) && (opts.swingDepth as number) !== SCHEMA_DEFAULTS.swingDepth;
+	const swingDepth = swingDepthExplicit ? (opts.swingDepth as number) : auto.swingDepth;
 
 	// tolerancePct: スキーマ既定値(0.04)が来た場合は時間軸オートを採用
-	const tolerancePct =
-		typeof opts.tolerancePct === 'number' && !Number.isNaN(opts.tolerancePct)
-			? (opts.tolerancePct as number) === SCHEMA_DEFAULTS.tolerancePct
-				? tolAuto
-				: (opts.tolerancePct as number)
-			: tolAuto;
+	// **述語は swingDepth と揃えない。** 旧実装が `typeof === 'number' && !Number.isNaN` で
+	// 判定していたため、`Number.isFinite` に揃えると `Infinity` の扱いが変わる（実効値が動く）。
+	const tolerancePctExplicit =
+		typeof opts.tolerancePct === 'number' &&
+		!Number.isNaN(opts.tolerancePct) &&
+		opts.tolerancePct !== SCHEMA_DEFAULTS.tolerancePct;
+	const tolerancePct = tolerancePctExplicit ? (opts.tolerancePct as number) : tolAuto;
 
 	// minBarsBetweenSwings: 同様に既定値(5)なら時間軸オートに置換
-	const minBarsBetweenSwings = Number.isFinite(opts.minBarsBetweenSwings as number)
-		? (opts.minBarsBetweenSwings as number) === SCHEMA_DEFAULTS.minBarsBetweenSwings
-			? auto.minBarsBetweenSwings
-			: (opts.minBarsBetweenSwings as number)
-		: auto.minBarsBetweenSwings;
+	const minBarsExplicit =
+		Number.isFinite(opts.minBarsBetweenSwings as number) &&
+		(opts.minBarsBetweenSwings as number) !== SCHEMA_DEFAULTS.minBarsBetweenSwings;
+	const minBarsBetweenSwings = minBarsExplicit ? (opts.minBarsBetweenSwings as number) : auto.minBarsBetweenSwings;
 
 	// headProminencePct（H&S / 逆H&S の頭の最小突出率、issue #149）: スキーマに .default() を
 	// 付けていないため、呼び出し側が省略すれば opts.headProminencePct は確実に undefined になる
 	// （tolerancePct のような「スキーマ既定値と等しいか」の判定は不要）。未指定なら tolerancePct と
 	// 同じ時間軸オート表（tolAuto）を採用する——これは新パラメータ切り出し前に tolerancePct が
 	// 実質担っていた頭の判定閾値と数値上一致させ、既定値のままの挙動を変えないため。
-	const headProminencePct =
-		typeof opts.headProminencePct === 'number' && !Number.isNaN(opts.headProminencePct)
-			? opts.headProminencePct
-			: tolAuto;
+	// **本パラメータの `auto` だけは「未指定」と同義**（sentinel 値との衝突が無い）。
+	const headProminenceExplicit = typeof opts.headProminencePct === 'number' && !Number.isNaN(opts.headProminencePct);
+	const headProminencePct = headProminenceExplicit ? (opts.headProminencePct as number) : tolAuto;
 
-	const autoScaled = !(
-		Number.isFinite(opts.swingDepth as number) || Number.isFinite(opts.minBarsBetweenSwings as number)
-	);
-
-	return { swingDepth, tolerancePct, minBarsBetweenSwings, headProminencePct, autoScaled };
+	return {
+		swingDepth,
+		tolerancePct,
+		minBarsBetweenSwings,
+		headProminencePct,
+		sources: {
+			swingDepth: swingDepthExplicit ? 'explicit' : 'auto',
+			tolerancePct: tolerancePctExplicit ? 'explicit' : 'auto',
+			minBarsBetweenSwings: minBarsExplicit ? 'explicit' : 'auto',
+			headProminencePct: headProminenceExplicit ? 'explicit' : 'auto',
+		},
+	};
 }

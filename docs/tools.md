@@ -371,6 +371,31 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 `undefined` が正規の sentinel になっているため、明示値はすべてそのまま通る（#149 / PR #153）。
 3 パラメータから `.default()` を外す案は本 issue のスコープ外（#182 案 B）。
 
+### 実効パラメータは content に出る（#184）
+
+**解決後の実効値は推測しなくていい。** 4 つの view すべて（`debug` を含む）で、ヘッダ直下に 1 行出る。
+
+```text
+実効パラメータ（入力値ではない）: swingDepth=3(auto) / minBarsBetweenSwings=2(auto) / tolerancePct=0.05(auto) / headProminencePct=0.05(auto) ※auto=1hour の時間軸オート値（スキーマ既定値 7/5/0.04 の明示指定も auto）
+```
+
+| 表記 | 意味 |
+|---|---|
+| `(auto)` | 上の時間軸オート表から解決した。**「未指定」と「スキーマ既定値の明示指定」を畳んでいる**（`.default()` がある限り両者は区別できない） |
+| `(指定)` | 渡した値がそのまま効いた |
+
+`swingDepth=7` を渡して `swingDepth=3(auto)` と出るのが sentinel 置換の起きた状態。
+末尾の `※` 注記は `auto` が 1 つも無い呼び出し（全パラメータ明示）では出ない。
+
+構造化データは `meta.effective_params`（パラメータごとに `{ value, source }`）。
+**#184 まで出力スキーマに宣言が無く `parse()` が黙って strip していたため、
+このフィールドはどのクライアントにも届いていなかった。** `meta` のキーとスキーマ宣言の一致は
+`tests/detect_patterns_meta_schema_parity.test.ts` が parse 後の実出力で固定している。
+
+検出 0 件のときの緩和の助言も**実効値基準**になっている
+（`緩めるなら tolerancePct に実効値 0.05 より大きい値を指定してください`）。
+旧文言の「0.03-0.06 に緩和」は実効 0.05 の `1hour` では半分が締める方向だった。
+
 ### 表示日時の tz 化
 
 `tz` パラメータ（既定 `Asia/Tokyo`）で表示日時を整形する。`get_candles` の `tz` と揃えるのが推奨。
@@ -392,7 +417,8 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 
 ### 期間 2 行の意味（混同注意）
 
-`summary` / `detailed` / `full` の `content` にはヘッダ直下に 2 行が出る。**別の量**なので混同しないこと。
+`summary` / `detailed` / `full` の `content` にはヘッダ直下に 2 行が出る（`debug` では出ない。
+実効パラメータ行だけは 4 view 共通）。**別の量**なので混同しないこと。
 
 | 行 | 何を指すか | 構造化データ |
 |---|---|---|
