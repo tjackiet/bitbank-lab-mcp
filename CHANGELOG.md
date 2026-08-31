@@ -48,6 +48,144 @@
 | 33 | #187 | `MAX_VALLEY_SPREAD`（1.5%）を削除した（#178 項目 2）。top / bottom と strict / relaxed の 2 つの非対称が同時に解消し、理由コード `valley_spread_excess` が消える | **変わらない**（0 / 896） |
 | 34 | #186 | strict triple のネックライン水平性が**同じ式を 2 つの名前で 2 回**測っていたのを `NECKLINE_SLOPE_LIMIT` 1 本に畳んだ。理由コード `valleys_not_equal` / `peaks_not_equal` が triple から消える（#172 / #174 の H&S と同じ失敗の横展開） | **変わらない**（0 / 896。既定パス）/ `tolerancePct < 0.02` を明示したときだけ**緩む** |
 | 35 | #189 | relaxed / strict の provenance `patterns[]._fallback` が**出力スキーマ未宣言で毎回 strip され、一度もクライアントに届いていなかった**のを宣言した（#155 / #160 / #184 に続く 4 回目）。あわせて #184 の parity ガードが**フィクスチャ依存で取りこぼしていた**穴を塞いだ | **変わらない**（検出結果は不変。消えていたフィールドが `structuredContent` に残るだけ） |
+| 36 | #191 | `view=debug` に**棄却理由の集計ブロック**を出し（LLM の手集計が実測で外れていた）、`_fallback` の provenance を `content` に届け（#189 の残り半分）、`view` description の並び順の食い違いを実装に合わせた | **変わらない**（表示層と description のみ） |
+
+### Added / Fixed（`view=debug` の棄却理由を集計して出し、relaxed provenance を `content` に届け、`view` description を実装に合わせた。#191）
+
+`detect_patterns` の `content` 出力 3 点の修正。**`data.patterns` は 1 件も動かない**——
+触ったのは表示層（`src/handlers/detectPatternsViewsHandler.ts`）とスキーマの `.describe()` だけである。
+
+#### A. `view=debug` に棄却理由の集計を出す（本命）
+
+**起票の直接の根拠はライブ実測。** btc_jpy 1時間足（`limit=365`, `view=debug`,
+`patterns=["triple_top","triple_bottom"]`）で候補 69 件（accepted 7 / rejected 62）を LLM に
+集計させたところ**失敗した**:
+
+- 「62 件」と宣言 → 提示した表の合計は **57 件**（5 件の不整合）
+- 表を 2 度作り直し、順位が飛んだ（1, 2, 3, 4, 5, 5, 5, 8, 9, 9, 11）
+- 最後は「念のため件数を数え直します」で停止
+
+`formatDebugView` は候補を**番号付きリストで列挙するだけ**で、集計を出していなかった。
+`view=debug` の目的は #144 / #145 が定めたとおり「なぜ検出されなかったかを理由コードで追う」ことで、
+それには数える必要がある。**集計元（`meta.debug.candidates`）は既に手元にあるので、
+表示層だけで消せる失敗モードだった。**
+
+`【Candidates】` の見出しの直後（❌ / ✅ の凡例より前、列挙より前）に 2 段のブロックを出す:
+
+```text
+【Candidates】 69 / 全 69 件（省略なし）
+▼ 候補の内訳: 全 69 件 = accepted 7 件 + rejected 62 件（cap 省略なし＝全候補の内訳）
+▼ 棄却理由の内訳（type 別 → reason 別。合計は上の rejected 62 件と一致する）
+   - triple_top 40 件: peaks_not_equal 21 / valleys_missing 12 / valley_too_shallow 7
+   - triple_bottom 22 件: peak_too_shallow 15 / peaks_missing 7
+```
+
+**列挙より前**に置いたのは、長いリストを読み切る前に全体像が要るため。
+
+- **分母は 3 つとも書く**（総数 / accepted / rejected）。今回の混乱は「69 件中 7 件が accepted」から
+  62 を自分で引き算したところで起きているので、引き算をさせない。
+- **`type` と `reason` の 2 軸で数える**（`reason` だけに畳まない）。`patterns` で絞らない実行では
+  13 種別が混ざり、`triple_bottom:valleys_missing` と `double_bottom:valleys_missing` が同じ行に
+  潰れると帰属が読めない。type ごとに 1 行へまとめたので、**type 別の合計と reason 別の内訳の
+  どちらも引き算なしで読める**（行数は type 数で頭打ち）。
+- **合計は必ず一致する。** type 行の合計 = 上の rejected 件数、行内の reason の合計 = その type の件数。
+  type 20 種 / 行内 reason 10 種を超えたら残余に畳むが、**畳んだ分も件数で残す**
+  （`（他 5 種別）15 件` / `他 3 種 6`）。畳んで落とすと、まさに本 issue が消したい「合計が合わない表」になる。
+
+**cap との整合（要件 2 / 3）。** cap 飽和時は分母が「表示分」に変わる:
+
+```text
+【Candidates】 200 / 全 289 件（89 件省略。accepted は全件残っているため省略分はすべて棄却理由）
+▼ 候補の内訳: 表示 200 件 = accepted 17 件 + rejected 183 件（全 289 件のうち 89 件は cap で省略されており、**この集計に入っていない**）
+▼ 棄却理由の内訳（type 別 → reason 別。合計は上の rejected 183 件と一致する。**全 289 件の内訳ではない**）
+```
+
+「棄却理由の内訳 183 件」とだけ書くと **289 件の内訳だと誤読される**。censored な内訳からの
+誤帰属は #152 → #167 / #172 で実際に起きているので、分母と見出しの両方に断りを入れた。
+見出し行（#180 / PR #181 の `formatTrimNote`）と集計は **`resolveTrimCounts` という同じ関数から
+申告値を取る**ので、数字が食い違うことはない（別々に計算していたら食い違いうる）。
+`candidatesTotal` の申告が無い呼び出しでは分母が `受け取った N 件` になり、
+「省略なし」とは書かない（#180 が見出し行ごと落としているのと同じ理由）。
+
+**やらなかったこと**: `meta.debug.candidates` の中身・cap の値・トリム戦略・候補の列挙・
+`formatTrimNote` の文言は 1 つも変えていない。集計ブロックは**足すだけ**である。
+
+#### B. `_fallback` を `content` に出す（#189 / PR #190 の残り半分）
+
+PR #190 でスキーマに宣言したので**機械クライアントには届く**ようになったが、`content` には
+出していなかった。ライブテストで LLM はこう答えた:
+
+> 私が受け取れるのは `content[0].text` だけで、`structuredContent.data.patterns[]` の中身は
+> 読めません。（中略）「なし」と書くこともできません（値が無いのか、私に見えていないだけなのかを
+> 区別できないため）
+
+**推測で埋めることを明示的に拒否しており、これは正しい判断。** relaxed のペナルティ係数は
+検出器ごとに違い（double 0.85 / triple 0.95 / H&S 0.95）、`finalizeConf` の種別別係数と丸めも
+通るので confidence から逆算もできない（PR #190 の `.describe()` に既述）。
+
+**採った案: B-1（パターン行の末尾に provenance）＋ `summary` 用の集計行。**
+
+```text
+検出経路: 全 7 件とも strict（relaxed フォールバック由来は 0 件）
+検出経路: strict 5 件 / relaxed フォールバック由来 2 件（relaxed_triple_x1.25×2）※該当パターンは見出し行の末尾に同じ値が [ ] 付きで出る（summary はパターン行を出さないので件数のみ）
+1. triple_top (パターン整合度: 0.72) [relaxed_triple_x1.25]
+```
+
+- **B-1 と B-3 の単独採用は規約 §3（上位集合）に抵触する。** `summary` は個々のパターンの詳細を
+  出さない view なので、パターン行に印を付ける方式だけでは `summary` に provenance が届かない。
+  そこで**件数の集計行を 3 view 共通の定型行として置き**、パターン単位の印は `detailed` / `full` への
+  **追加**にした（§2 の「足す」は許容、「削る」は禁止）。`debug` は階梯外だが、パターンを列挙しない
+  view なので帰属の対象が出ず、行を出さない。
+- **relaxed が 0 件でも行を出す。** 「行が無い = relaxed なし」を推論させると、上の LLM の指摘
+  （値が無いのか出していないのかを区別できない）がそのまま残る。実効パラメータ行（#184）と同じ理由。
+- B-2（`~` のような印だけ付ける）は採らなかった。印の意味を description に書く必要がある点は
+  B-1 と同じで、**値そのものを出せば `data.patterns[]._fallback` と 1 対 1 で照合できる**のに対し、
+  独自の印は写像を 1 つ増やすだけになる。
+- 型の準備として `PatternEntry`（`tools/patterns/types.ts`）に `_fallback?: string` を**明示的に宣言**した
+  （親の `[key: string]: unknown` 経由では `unknown` にしかならず、表示層でキャストが要る）。
+  PR #190 がスキーマ側でやったことの型側の対応物である。
+
+**やらなかったこと**: `_fallback` の値の形式（`relaxed_triple_x2` と `relaxed_hs_x2.0_0.4` の表記揺れ）、
+relaxed のペナルティ係数、`structuredContent` はいずれも不変。
+
+#### C. `view` description を実装に合わせた（#172 / #174 / #182 と同じクラス）
+
+`src/schema/patterns.ts` の `view` の description が「`実効パラメータ` 行は 4 view すべてで
+**ヘッダ直下**に出る」と「summary / detailed / full では、さらに**ヘッダ直下**に 2 行が出る」と
+両方書いており、両立していなかった。実装は `debug` だけがヘッダ直下で、他 3 view は期間 2 行の
+下（ヘッダから 4 行目）である。**ライブテストで LLM 自身がこの食い違いを指摘した。**
+
+**C-1（description を実際の並びに直す）を採った。** 行頭ラベル `実効パラメータ（入力値ではない):`
+は一意なので、順序は機械的な抽出に影響しない——実装を動かす C-2 は `content` を変える割に
+得るものが無い。あわせて:
+
+- `summary` の列挙から抜けていた `実効パラメータ` 行を足した（実際には出ている）。
+- A の集計ブロックと B の検出経路行を description に書いた（何が出るか、cap 時に何と言うか、印の意味）。
+- `DetectedPatternSchema._fallback` の `.describe()` から
+  「**本フィールドは structuredContent にのみ載る**」を削り、`content` 側の出方に差し替えた（B で嘘になったため）。
+- `docs/tools.md` 側にも同じ「ヘッダ直下」の誤りがあったので直し、A / B の節を足した。
+
+#### `content` の増分（全実行に乗る固定費）
+
+| view | 増分 | 内訳 |
+|---|---|---|
+| `summary` / `detailed` / `full` | **+45〜46 文字 / +1 行** | 検出経路行（relaxed 0 件の文面）。relaxed があるときは 121 文字前後 ＋ 該当パターン 1 件につき 22 文字 |
+| `debug` | **+402〜1,236 文字 / +4〜12 行**（実測 4 シナリオ） | 集計ブロック（見出し 2 行 ＋ type 行）。type 行は最大 21 行で頭打ち |
+
+`summary` の 452 → 497 文字（+10%）が相対的には最大だが、絶対量は 1 行である。`debug` は
+22,240 → 23,476 文字（+5.6%）で、**候補 200 件の列挙が既に 20,000 文字級**であることを踏まえれば
+集計ブロックの費用は小さい。
+
+#### 回帰テスト
+
+- `tests/detectPatternsViewsHandler.test.ts` — 集計ブロック 9 ケース（cap 飽和時の文面、分母の書き分け、
+  `type` × `reason` の分割、残余に畳んでも合計が一致すること、候補 0 件では出さないこと）＋
+  検出経路行 7 ケース。**合計の一致は文言ではなく parser で機械的に検証する**（壊れたのがそこなので）。
+- `tests/view-content-superset.test.ts` — `detectionRouteLines()` を定型要素（`fixedElements`）に追加し、
+  `summary` ⊆ `detailed` ⊆ `full` に検出経路行が乗ることを固定。パターン単位の印が `detailed` / `full` への
+  **追加**であって `summary` の定型要素を削っていないことも同テストで示す。集計ブロックの抽出関数
+  （`rejectionSummaryLines()`）は**階梯外**なので `fixedElements` には入れず、`debug` 側で個別に固定した。
+- `tests/view-structured-content-invariance.test.ts` — 変更なしで通る（`structuredContent` は不変）。
 
 ### Fixed（relaxed の provenance `patterns[]._fallback` が出力スキーマ未宣言で毎回 strip され、**一度もクライアントに届いていなかった**。#189）
 

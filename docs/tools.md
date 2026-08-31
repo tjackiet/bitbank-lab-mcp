@@ -373,7 +373,9 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 
 ### 実効パラメータは content に出る（#184）
 
-**解決後の実効値は推測しなくていい。** 4 つの view すべて（`debug` を含む）で、ヘッダ直下に 1 行出る。
+**解決後の実効値は推測しなくていい。** 4 つの view すべて（`debug` を含む）で 1 行出る。
+**位置は view で違う**（行頭ラベルが一意なので機械的な抽出には影響しない）: `debug` はヘッダの直下、
+`summary` / `detailed` / `full` は期間 2 行の**下**（＝ヘッダから 4 行目）。
 
 ```text
 実効パラメータ（入力値ではない）: swingDepth=3(auto) / minBarsBetweenSwings=2(auto) / tolerancePct=0.05(auto) / headProminencePct=0.05(auto) ※auto=1hour の時間軸オート値（スキーマ既定値 7/5/0.04 の明示指定も auto）
@@ -418,7 +420,7 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 ### 期間 2 行の意味（混同注意）
 
 `summary` / `detailed` / `full` の `content` にはヘッダ直下に 2 行が出る（`debug` では出ない。
-実効パラメータ行だけは 4 view 共通）。**別の量**なので混同しないこと。
+実効パラメータ行だけは 4 view 共通で、この 2 行の**下**に来る）。**別の量**なので混同しないこと。
 
 | 行 | 何を指すか | 構造化データ |
 |---|---|---|
@@ -602,9 +604,63 @@ accepted も押し出されうる（`content` はこの 2 つを区別して書�
 
 いずれにせよ理由コードの内訳を集計する用途では、**`candidatesOmitted` が 0 であることを確認するか
 `patterns` で種別を絞って呼び直す**こと。censored な内訳から集計すると誤った帰属をする
-（実例: #152 → #167）。
+（実例: #152 → #167）。**集計そのものはツール側で済ませてある**（次節）。
 
 `swings` は逆に**先頭から** 200 件を残すので、`swingsOmitted > 0` のとき落ちているのは**直近側**。
+
+### 棄却理由の内訳は content に出る（#191）
+
+**数え直さないこと。** `【Candidates】` の見出しの直後、候補の列挙より前に集計ブロックが出る。
+
+```text
+【Candidates】 69 / 全 69 件（省略なし）
+▼ 候補の内訳: 全 69 件 = accepted 7 件 + rejected 62 件（cap 省略なし＝全候補の内訳）
+▼ 棄却理由の内訳（type 別 → reason 別。合計は上の rejected 62 件と一致する）
+   - triple_top 40 件: peaks_not_equal 21 / valleys_missing 12 / valley_too_shallow 7
+   - triple_bottom 22 件: peak_too_shallow 15 / peaks_missing 7
+```
+
+- **分母は 3 つとも書く**（総数 / accepted / rejected）。引き算をさせない。
+- 内訳は **type と reason の 2 軸**で数える。`reason` だけに畳むと
+  `triple_bottom:valleys_missing` と `double_bottom:valleys_missing` が同じ行に潰れて帰属が読めない。
+- **合計は必ず一致する。** type 行の合計 = 上の rejected 件数、行内の reason の合計 = その type の件数。
+  type が 20 種 / 1 行の reason が 10 種を超えたら残余に畳むが、**畳んだ分も件数で残す**
+  （`（他 3 種別）5 件` / `他 4 種 6`）。
+
+**cap で押し出しが起きているときは分母が「表示分」に変わる:**
+
+```text
+【Candidates】 200 / 全 289 件（89 件省略。accepted は全件残っているため省略分はすべて棄却理由）
+▼ 候補の内訳: 表示 200 件 = accepted 17 件 + rejected 183 件（全 289 件のうち 89 件は cap で省略されており、**この集計に入っていない**）
+▼ 棄却理由の内訳（type 別 → reason 別。合計は上の rejected 183 件と一致する。**全 289 件の内訳ではない**）
+```
+
+この状態の内訳から母集団（全 289 件）の傾向を語らないこと。全体の内訳が要るなら
+`patterns` で種別を絞って呼び直す。`candidatesTotal` の申告が無い呼び出し（ハンドラ直呼び等）では
+分母が `受け取った N 件` になり、省略の有無は不明として扱う。
+
+起票の根拠は**ライブでの実測**で、候補 69 件（accepted 7 / rejected 62）を LLM に集計させたところ
+「62 件」と宣言しながら提示した表の合計が 57 件になり、順位も飛んだ。集計元
+（`meta.debug.candidates`）は既に手元にあるので、表示層だけで消せる失敗モードだった。
+
+### 検出経路（strict / relaxed）は content に出る（#191）
+
+`summary` / `detailed` / `full` の実効パラメータ行の次に 1 行出る（`debug` はパターンを列挙しないので出さない）。
+
+```text
+検出経路: 全 7 件とも strict（relaxed フォールバック由来は 0 件）
+検出経路: strict 5 件 / relaxed フォールバック由来 2 件（relaxed_triple_x1.25×2）※該当パターンは見出し行の末尾に同じ値が [ ] 付きで出る（summary はパターン行を出さないので件数のみ）
+```
+
+- **relaxed が 0 件でも行を出す。** 行が無いことを「relaxed なし」と読ませると、
+  値が無いのか content に出していないのかを呼び出し側が区別できない（#189 で `_fallback` が
+  structuredContent に届くようになった後も、LLM 側にはこの状態が残っていた）。
+- `detailed` / `full` では relaxed 由来のパターンの見出し行末尾に `[relaxed_triple_x1.25]` が付く。
+  値は `data.patterns[*]._fallback` と同じで、**表記は検出器ごとに揃っていない**
+  （前方一致で判別し、係数の数値比較に使わない）。
+- `summary` は個々のパターン行を出さない view なので、届くのは検出経路行の**件数だけ**。
+
+パターン 0 件のときは行そのものを出さない（帰属の対象が無く、ヘッダが `0件を検出` と言う）。
 
 照合は入力エイリアスを展開して行う（`triangle` → 3 種、`flag` / `pennant` → 各 2 種）。
 候補ラベル側にも方向・形状の分類前に付く **umbrella ラベル**があり、入力エイリアスとは

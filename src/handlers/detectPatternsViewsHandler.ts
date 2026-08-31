@@ -130,6 +130,9 @@ const toTs = (s?: string): number => {
 const fmtPointList = (arr: unknown): string =>
 	Array.isArray(arr) ? arr.map((p: IndexedPoint) => `[${p.index}:${formatRounded(p.price)}]`).join(', ') : 'n/a';
 
+/** キーの昇順比較。`localeCompare` は ICU の有無で並びが揺れるので使わない（並びはテストで固定する）。 */
+const byKeyAsc = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
 /** default ケースで details から列挙するフィールド数の上限（content 肥大の抑制）。 */
 const GENERIC_DETAILS_MAX_FIELDS = 16;
 /** ネストしたオブジェクト値を JSON 化するときの最大長。 */
@@ -196,6 +199,55 @@ export function buildEffectiveParamsLine(meta: PatternMeta | undefined, type: st
 	// 置換が起きていないので注記ごと落とす（読み手に存在しない印の説明をしない）。
 	const note = hasAuto ? ` ※auto=${type} の時間軸オート値（スキーマ既定値 7/5/0.04 の明示指定も auto）` : '';
 	return `${EFFECTIVE_PARAMS_LABEL}: ${parts.join(' / ')}${note}`;
+}
+
+/**
+ * `content` の「検出経路:」行のラベル（行頭の識別子）。
+ * `tests/view-content-superset.test.ts` が定型要素の抽出に使うので、変えるなら向こうも直す。
+ */
+export const DETECTION_ROUTE_LABEL = '検出経路';
+
+/**
+ * 検出経路（strict / relaxed）の申告行（issue #191 B。#189 / PR #190 の残り半分）。
+ *
+ * **なぜ content に出すか**: relaxed フォールバック由来の provenance `_fallback` は PR #190 で
+ * 出力スキーマに宣言され機械クライアントには届くようになったが、`content` には出ていなかった。
+ * LLM は `content[0].text` しか読めない（`.claude/rules/tools.md`）ため、ライブテストで LLM は
+ * 「`structuredContent.data.patterns[]` は読めないので relaxed 由来かどうかは答えられない。
+ * 『なし』とも書けない（値が無いのか、自分に見えていないだけなのかを区別できないため）」と回答した。
+ * **推測で埋めることを拒否したのは正しい判断**で、実際 confidence からの逆算もできない
+ * （relaxed のペナルティ係数が検出器ごとに違い、`finalizeConf` の種別別係数と丸めも通る）。
+ *
+ * **relaxed が 0 件でも行を出す。** 「行が無い = relaxed なし」を LLM に推論させると、
+ * 上記の「値が無いのか出していないのか区別できない」がそのまま残る（実効パラメータ行と同じ理由）。
+ *
+ * **summary / detailed / full の 3 view に同一の文字列で出す。** 個々のパターンの詳細を出さない
+ * `summary` に provenance を載せる手段は件数の集計しかなく、これを `detailed` / `full` だけに
+ * 出すと上位集合規約（`.claude/rules/tools.md` §3）違反になる。パターン単位の印
+ * （見出し行末尾の `[relaxed_…]`）は `detailed` / `full` への**追加**なので規約上は問題ない（§2「足す」）。
+ *
+ * @param pats `data.patterns`。**0 件なら空文字**（ヘッダが `0件を検出` と言うので帰属の対象が無い）
+ */
+export function buildDetectionRouteLine(pats: PatternEntry[]): string {
+	if (!Array.isArray(pats) || pats.length === 0) return '';
+	const byTag = new Map<string, number>();
+	for (const p of pats) {
+		const tag = typeof p?._fallback === 'string' ? p._fallback.trim() : '';
+		if (!tag) continue;
+		byTag.set(tag, (byTag.get(tag) ?? 0) + 1);
+	}
+	const relaxed = [...byTag.values()].reduce((sum, n) => sum + n, 0);
+	if (relaxed === 0) {
+		return `${DETECTION_ROUTE_LABEL}: 全 ${formatInt(pats.length)} 件とも strict（relaxed フォールバック由来は 0 件）`;
+	}
+	const breakdown = [...byTag.entries()]
+		.sort((a, b) => b[1] - a[1] || byKeyAsc(a[0], b[0]))
+		.map(([tag, n]) => `${tag}×${formatInt(n)}`)
+		.join(', ');
+	return (
+		`${DETECTION_ROUTE_LABEL}: strict ${formatInt(pats.length - relaxed)} 件 / relaxed フォールバック由来 ${formatInt(relaxed)} 件` +
+		`（${breakdown}）※該当パターンは見出し行の末尾に同じ値が [ ] 付きで出る（summary はパターン行を出さないので件数のみ）`
+	);
 }
 
 // ── debug view: candidate details ──
@@ -432,11 +484,133 @@ function breakDirectionFromDetails(details?: Record<string, unknown>): string | 
  * @param omittedNote 省略が起きているときだけ添える注記（何が落ちたのかの説明）
  */
 function formatTrimNote(kept: number, total?: number, omitted?: number, omittedNote?: string): string {
-	if (typeof total !== 'number' || !Number.isFinite(total)) return '';
+	const trim = resolveTrimCounts(kept, total, omitted);
+	if (!trim) return '';
+	const tail =
+		trim.dropped > 0 ? `${formatInt(trim.dropped)} 件省略${omittedNote ? `。${omittedNote}` : ''}` : '省略なし';
+	return ` ${formatInt(kept)} / 全 ${formatInt(trim.total)} 件（${tail}）`;
+}
+
+/**
+ * cap トリムの申告値（総数 / 省略件数）を解決する。**`formatTrimNote`（見出し行）と
+ * `formatRejectionSummary`（集計ブロック）の単一ソース。**
+ *
+ * 2 箇所で別々に計算すると、見出しが「89 件省略」と言いながら集計が全件の内訳を名乗る、
+ * という食い違いが生じうる——issue #191 要件 2 / 3 が禁じているのがまさにそれ。
+ *
+ * @returns 総数が申告されていなければ `null`（＝件数が分からない。「省略なし」と書いてはいけない状態）
+ */
+function resolveTrimCounts(kept: number, total?: number, omitted?: number): { total: number; dropped: number } | null {
+	if (typeof total !== 'number' || !Number.isFinite(total)) return null;
 	const dropped =
 		typeof omitted === 'number' && Number.isFinite(omitted) ? Math.max(0, omitted) : Math.max(0, total - kept);
-	const tail = dropped > 0 ? `${formatInt(dropped)} 件省略${omittedNote ? `。${omittedNote}` : ''}` : '省略なし';
-	return ` ${formatInt(kept)} / 全 ${formatInt(total)} 件（${tail}）`;
+	return { total, dropped };
+}
+
+/**
+ * 棄却理由の集計ブロックの 2 つの見出し（issue #191 A）。
+ * `tests/detectPatternsViewsHandler.test.ts` / `tests/view-content-superset.test.ts` が
+ * 抽出に使うので、変えるならテスト側も直す。
+ */
+export const CANDIDATE_BREAKDOWN_LABEL = '▼ 候補の内訳';
+export const REJECTION_SUMMARY_LABEL = '▼ 棄却理由の内訳';
+
+/** 集計ブロックに並べる type 行の上限。超過分は残余行 1 本に畳む（**合計は必ず一致させる**）。 */
+const REJECTION_SUMMARY_MAX_TYPES = 20;
+/** 1 つの type 行に並べる reason の上限。超過分は行内の残余に畳む（同上）。 */
+const REJECTION_SUMMARY_MAX_REASONS = 10;
+
+/**
+ * 棄却理由の集計ブロック（issue #191 A）。`【Candidates】` の見出し行の**直後**に置く。
+ *
+ * **なぜツール側で数えるか**: `view=debug` の目的は「なぜ検出されなかったかを理由コードで追う」
+ * （#144 / #145）ことで、それには数える必要がある。ところが候補の列挙だけを返すと、LLM は
+ * 数十行の手集計を外す——ライブの btc_jpy 1hour（候補 69 件 = accepted 7 / rejected 62）で
+ * **「62 件」と宣言しながら提示した表の合計は 57 件**になり、順位も飛んだ。
+ * `meta.debug.candidates` に集計元は既にあるので、これは表示層だけで消せる失敗モードである。
+ *
+ * 設計上の約束（#191 要件 1〜3）:
+ * 1. **分母を書き切る。** 総数 / accepted / rejected の 3 つを出し、読み手に引き算をさせない
+ *    （上記の失敗は「69 件中 7 件が accepted」から 62 を導くところで起きた）。
+ * 2. **cap で切られているときは「表示分の集計」であることを明記する。** censored な内訳から
+ *    母集団を語る誤帰属は #152 → #167 / #172 で実際に起きている。
+ * 3. **見出し行（`formatTrimNote`）と数字が食い違わない。** 申告値は `resolveTrimCounts` で共有する。
+ *
+ * **`type:reason` の 2 軸で数える**（`reason` だけに畳まない）。`patterns` で絞らない実行では
+ * 13 種別が混ざり、`triple_bottom:valleys_missing` と `double_bottom:valleys_not_equal` が
+ * 同じ行に潰れると帰属が読めなくなる。type ごとに 1 行へまとめることで、
+ * type 別の合計と reason 別の内訳の**どちらも引き算なしで読める**（行数は type 数で頭打ち）。
+ *
+ * @param cands `meta.debug.candidates`（cap トリム後に**実際に返した**配列）
+ * @param total トリム前の総数（`meta.debug.candidatesTotal`）。欠けていれば分母を「受け取った N 件」と書く
+ * @param omitted 押し出された件数（`meta.debug.candidatesOmitted`）
+ * @returns 集計ブロックの行。候補 0 件なら空配列（列挙側が「なし（…）」を出すので二重に言わない）
+ */
+function formatRejectionSummary(cands: CandidateDebug[], total?: number, omitted?: number): string[] {
+	if (cands.length === 0) return [];
+	const accepted = cands.filter((c) => c.accepted).length;
+	const rejected = cands.length - accepted;
+	const trim = resolveTrimCounts(cands.length, total, omitted);
+	const censored = !!trim && trim.dropped > 0;
+
+	// 分母。`表示` / `全` / `受け取った` の 3 語で「この集計が何の内訳か」を先に確定させる。
+	const scope = !trim
+		? `受け取った ${formatInt(cands.length)} 件`
+		: censored
+			? `表示 ${formatInt(cands.length)} 件`
+			: `全 ${formatInt(cands.length)} 件`;
+	const scopeNote = !trim
+		? '（総数の申告が無いため cap 省略の有無は不明。この集計は受け取った分のみ）'
+		: censored
+			? `（全 ${formatInt(trim.total)} 件のうち ${formatInt(trim.dropped)} 件は cap で省略されており、**この集計に入っていない**）`
+			: '（cap 省略なし＝全候補の内訳）';
+	const lines = [
+		`${CANDIDATE_BREAKDOWN_LABEL}: ${scope} = accepted ${formatInt(accepted)} 件 + rejected ${formatInt(rejected)} 件${scopeNote}`,
+	];
+
+	if (rejected === 0) {
+		// 「棄却が 0 件」と「集計を出していない」を区別できるように、行ごと落とさず明示する。
+		lines.push(`${REJECTION_SUMMARY_LABEL}: なし（rejected 0 件）`);
+		return lines;
+	}
+
+	const byType = new Map<string, { count: number; reasons: Map<string, number> }>();
+	for (const c of cands) {
+		if (c.accepted) continue;
+		const type = String(c.type || 'unknown');
+		// 理由なしの棄却も数から落とさない（落とすと行の合計が rejected と合わなくなる）。
+		const reason = c.reason ? String(c.reason) : '(reason なし)';
+		const entry = byType.get(type) ?? { count: 0, reasons: new Map<string, number>() };
+		entry.count += 1;
+		entry.reasons.set(reason, (entry.reasons.get(reason) ?? 0) + 1);
+		byType.set(type, entry);
+	}
+	const sortedTypes = [...byType.entries()].sort((a, b) => b[1].count - a[1].count || byKeyAsc(a[0], b[0]));
+	const shownTypes = sortedTypes.slice(0, REJECTION_SUMMARY_MAX_TYPES);
+	const restTypes = sortedTypes.slice(REJECTION_SUMMARY_MAX_TYPES);
+
+	lines.push(
+		`${REJECTION_SUMMARY_LABEL}（type 別 → reason 別。合計は上の rejected ${formatInt(rejected)} 件と一致する${
+			censored ? `。**全 ${formatInt(trim.total)} 件の内訳ではない**` : ''
+		}）`,
+	);
+	for (const [type, entry] of shownTypes) {
+		const reasons = [...entry.reasons.entries()].sort((a, b) => b[1] - a[1] || byKeyAsc(a[0], b[0]));
+		const shownReasons = reasons.slice(0, REJECTION_SUMMARY_MAX_REASONS);
+		const restReasons = reasons.slice(REJECTION_SUMMARY_MAX_REASONS);
+		const parts = shownReasons.map(([reason, n]) => `${reason} ${formatInt(n)}`);
+		// 畳んだ分も件数で残す。落とすと行内の合計が type の件数と合わなくなる。
+		if (restReasons.length > 0) {
+			const restCount = restReasons.reduce((sum, [, n]) => sum + n, 0);
+			parts.push(`他 ${formatInt(restReasons.length)} 種 ${formatInt(restCount)}`);
+		}
+		lines.push(`   - ${type} ${formatInt(entry.count)} 件: ${parts.join(' / ')}`);
+	}
+	if (restTypes.length > 0) {
+		const restCount = restTypes.reduce((sum, [, entry]) => sum + entry.count, 0);
+		lines.push(`   - （他 ${formatInt(restTypes.length)} 種別）${formatInt(restCount)} 件`);
+	}
+	return lines;
 }
 
 export function formatDebugView(
@@ -519,6 +693,9 @@ export function formatDebugView(
 		swingLines.length ? swingLines.join('\n') : 'なし',
 		'',
 		`【Candidates】${candsNote}`,
+		// 棄却理由の集計（#191 A）。**列挙より前**に置く——長いリストを読み切る前に全体像が要る。
+		// 見出しの申告値（`candsNote`）と同じ `resolveTrimCounts` を通しているので数字は食い違わない。
+		...formatRejectionSummary(cands, meta?.debug?.candidatesTotal, meta?.debug?.candidatesOmitted),
 		// ❌ は候補生成の時点での棄却で、status を持たないため includeInvalid では拾えない
 		// （issue #149）。一度パターンとして成立してから無効化されたものは data.patterns 側で
 		// status=invalid/expired として別に出る。
@@ -890,8 +1067,14 @@ export function formatPatternLine(
 		}
 	}
 
+	// relaxed フォールバック由来の provenance（#191 B。値は `data.patterns[]._fallback` と同一）。
+	// **見出し行の末尾に付ける**——行数を増やさずに済み、`検出経路:` 行の集計と同じ語彙で照合できる。
+	// strict 由来（`_fallback` なし）には何も付けない。「印が無い = strict」は
+	// ヘッダ直下の `検出経路:` 行が件数で裏づけるので、ここでの黙りは推測にならない。
+	const fallbackTag = typeof p?._fallback === 'string' && p._fallback.trim() ? ` [${p._fallback.trim()}]` : '';
+
 	const lines = [
-		`${idx + 1}. ${name} (パターン整合度: ${conf})`,
+		`${idx + 1}. ${name} (パターン整合度: ${conf})${fallbackTag}`,
 		lowConfWarning,
 		...periodLines,
 		statusLine,
@@ -927,7 +1110,9 @@ export function formatSummaryView(
 	const in30 = within(30 * 86400000);
 	const in90 = within(90 * 86400000);
 	const formingHint = includeForming ? '' : '\n※形成中は includeForming=true を指定してください。';
-	const text = `${hdr}（${typeSummary || '分類なし'}、直近30日: ${in30}件、直近90日: ${in90}件）\n${periodBlock ? `${periodBlock}\n` : ''}${effectiveParamsLine ? `${effectiveParamsLine}\n` : ''}検討パターン: ${patterns?.length ? patterns.join(', ') : '既定セット'}${formingHint}\n詳細は structuredContent.data.patterns を参照。`;
+	// 検出経路行（#191 B）。**3 view で同じ関数から組む**ので文言がずれない（= 上位集合テストが意味を持つ）。
+	const routeLine = buildDetectionRouteLine(pats);
+	const text = `${hdr}（${typeSummary || '分類なし'}、直近30日: ${in30}件、直近90日: ${in90}件）\n${periodBlock ? `${periodBlock}\n` : ''}${effectiveParamsLine ? `${effectiveParamsLine}\n` : ''}${routeLine ? `${routeLine}\n` : ''}検討パターン: ${patterns?.length ? patterns.join(', ') : '既定セット'}${formingHint}\n詳細は structuredContent.data.patterns を参照。`;
 	return { content: [{ type: 'text', text }], structuredContent: toStructured(res) };
 }
 
@@ -949,7 +1134,8 @@ export function formatFullView(
 		: '';
 	const trustNote =
 		'\n\nパターン整合度について（形状一致度・対称性・期間から算出）:\n  0.8以上 = 理想的な形状（教科書的パターン）\n  0.7-0.8 = 標準的な形状（他指標と併用推奨）\n  0.6-0.7 = やや不明瞭（慎重に判断）\n  0.6未満 = 形状不十分\n  ※ status=forming は最終構成点が未確定のため、整合度に関わらず「参考材料」として扱う';
-	const text = `${hdr}（${typeSummary || '分類なし'}）\n${periodBlock ? `${periodBlock}\n` : ''}${effectiveParamsLine ? `${effectiveParamsLine}\n` : ''}\n【検出パターン（全件）】\n${body}${overlayNote}${trustNote}`;
+	const routeLine = buildDetectionRouteLine(pats);
+	const text = `${hdr}（${typeSummary || '分類なし'}）\n${periodBlock ? `${periodBlock}\n` : ''}${effectiveParamsLine ? `${effectiveParamsLine}\n` : ''}${routeLine ? `${routeLine}\n` : ''}\n【検出パターン（全件）】\n${body}${overlayNote}${trustNote}`;
 	return { content: [{ type: 'text', text }], structuredContent: toStructured(res) };
 }
 
@@ -998,7 +1184,8 @@ export function formatDetailedView(
 	const trustNote =
 		'\n\nパターン整合度について（形状一致度・対称性・期間から算出）:\n  0.8以上 = 理想的な形状（教科書的パターン）\n  0.7-0.8 = 標準的な形状（他指標と併用推奨）\n  0.6-0.7 = やや不明瞭（慎重に判断）\n  0.6未満 = 形状不十分\n  ※ status=forming は最終構成点が未確定のため、整合度に関わらず「参考材料」として扱う';
 	const usage = `\n\nusage_example:\n  step1: detect_patterns を実行\n  step2: structuredContent.data.overlays を取得\n  step3: render_chart_svg の overlays に渡す`;
-	const text = `${hdr}（${typeSummary || '分類なし'}）\n${periodBlock ? `${periodBlock}\n` : ''}${effectiveParamsLine ? `${effectiveParamsLine}\n` : ''}\n${top.length ? `【検出パターン】\n${body}` : ''}${none}${overlayNote}${trustNote}${usage}`;
+	const routeLine = buildDetectionRouteLine(pats);
+	const text = `${hdr}（${typeSummary || '分類なし'}）\n${periodBlock ? `${periodBlock}\n` : ''}${effectiveParamsLine ? `${effectiveParamsLine}\n` : ''}${routeLine ? `${routeLine}\n` : ''}\n${top.length ? `【検出パターン】\n${body}` : ''}${none}${overlayNote}${trustNote}${usage}`;
 	return {
 		content: [{ type: 'text', text }],
 		structuredContent: {

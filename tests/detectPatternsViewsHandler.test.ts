@@ -4,6 +4,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+	buildDetectionRouteLine,
 	buildTypeSummary,
 	formatDebugView,
 	formatDetailedView,
@@ -378,6 +379,262 @@ describe('formatDebugView: cap トリムの申告行（#180）', () => {
 		expect(text).toContain('【Swings】\n');
 		expect(text).not.toContain('省略なし');
 		expect(text).not.toContain('件省略');
+	});
+});
+
+// ── 棄却理由の集計ブロック（issue #191 A） ──
+
+/**
+ * 集計ブロックの type 行を読み戻す。**文言ではなく数字の整合を検証するため**の parser で、
+ * 「行の合計 = 上に書いた rejected 件数」が崩れていないかをここで機械的に見る
+ * （LLM に手集計させたときに壊れたのがまさにこの整合。#191 の起票根拠）。
+ */
+function parseRejectionRows(text: string): Array<{ type: string; count: number; reasons: Array<[string, number]> }> {
+	const rows: Array<{ type: string; count: number; reasons: Array<[string, number]> }> = [];
+	for (const line of text.split('\n')) {
+		const m = line.match(/^\s+- (\S+) (\d+) 件: (.+)$/u);
+		if (!m) continue;
+		const reasons = m[3].split(' / ').map((part) => {
+			const r = part.match(/^(.+) (\d+)$/u);
+			return [r ? r[1] : part, r ? Number(r[2]) : Number.NaN] as [string, number];
+		});
+		rows.push({ type: m[1], count: Number(m[2]), reasons });
+	}
+	return rows;
+}
+
+/** 残余行（`- （他 N 種別）M 件`）。畳んだ分も合計に入れ続けることの検証に使う。 */
+function parseRestRow(text: string): { types: number; count: number } | null {
+	const m = text.match(/^\s+- （他 (\d+) 種別）(\d+) 件$/mu);
+	return m ? { types: Number(m[1]), count: Number(m[2]) } : null;
+}
+
+const rejects = (type: string, reason: string | undefined, n: number) =>
+	Array.from({ length: n }, () => ({ type, accepted: false, ...(reason === undefined ? {} : { reason }) }));
+
+describe('formatDebugView: 棄却理由の集計ブロック（#191 A）', () => {
+	it('cap 省略なし: 分母を書き切り、type 別 → reason 別の内訳の合計が rejected と一致する', () => {
+		const candidates = [
+			{ type: 'triple_top', accepted: true },
+			...rejects('triple_top', 'peaks_not_equal', 5),
+			...rejects('triple_top', 'valleys_missing', 3),
+			...rejects('double_bottom', 'no_breakout', 2),
+		];
+		const meta = {
+			debug: { swings: [], candidates, candidatesTotal: 11, candidatesOmitted: 0, swingsTotal: 0, swingsOmitted: 0 },
+		};
+		const text = formatDebugView('hdr', meta, [], makeDebugViewRes()).content[0].text;
+
+		// 分母は 3 つとも書く。**読み手に引き算をさせない**（#191 要件 1）
+		expect(text).toContain('▼ 候補の内訳: 全 11 件 = accepted 1 件 + rejected 10 件（cap 省略なし＝全候補の内訳）');
+		expect(text).toContain('▼ 棄却理由の内訳（type 別 → reason 別。合計は上の rejected 10 件と一致する）');
+		expect(text).toContain('   - triple_top 8 件: peaks_not_equal 5 / valleys_missing 3');
+		expect(text).toContain('   - double_bottom 2 件: no_breakout 2');
+
+		const rows = parseRejectionRows(text);
+		// 件数の多い type が先。同数なら type 名の昇順（並びは実装で固定してある）
+		expect(rows.map((r) => r.type)).toEqual(['triple_top', 'double_bottom']);
+		expect(rows.reduce((sum, r) => sum + r.count, 0)).toBe(10);
+		for (const row of rows) expect(row.reasons.reduce((sum, [, n]) => sum + n, 0)).toBe(row.count);
+
+		// 集計ブロックは**列挙より前**（長いリストを読み切る前に全体像が要る）
+		expect(text.indexOf('▼ 候補の内訳')).toBeGreaterThan(text.indexOf('【Candidates】'));
+		expect(text.indexOf('▼ 棄却理由の内訳')).toBeLessThan(text.indexOf('❌ = 候補段階の棄却'));
+	});
+
+	/**
+	 * cap 飽和時（#191 要件 2 / 3）。**「棄却理由の内訳 183 件」とだけ書くと 289 件の内訳だと誤読される。**
+	 * censored な内訳からの誤帰属は #152 → #167 / #172 で実際に起きているので、ここで文言を固定する。
+	 */
+	it('cap 飽和: 集計が「表示分のみ」であることを明記し、見出しの申告値と食い違わない', () => {
+		const candidates = [
+			...Array.from({ length: 17 }, () => ({ type: 'triple_top', accepted: true })),
+			...rejects('rising_wedge', 'no_convergence', 100),
+			...rejects('rising_wedge', 'r2_below_threshold', 43),
+			...rejects('triple_bottom', 'peaks_missing', 40),
+		];
+		expect(candidates).toHaveLength(200);
+		const meta = {
+			debug: {
+				swings: [],
+				candidates,
+				candidatesTotal: 289,
+				candidatesOmitted: 89,
+				swingsTotal: 0,
+				swingsOmitted: 0,
+			},
+		};
+		const text = formatDebugView('hdr', meta, [], makeDebugViewRes()).content[0].text;
+
+		// 見出し（#180）と集計（#191）は同じ申告値から組む。数字が食い違って見えないこと
+		expect(text).toContain(
+			'【Candidates】 200 / 全 289 件（89 件省略。accepted は全件残っているため省略分はすべて棄却理由）',
+		);
+		expect(text).toContain(
+			'▼ 候補の内訳: 表示 200 件 = accepted 17 件 + rejected 183 件（全 289 件のうち 89 件は cap で省略されており、**この集計に入っていない**）',
+		);
+		expect(text).toContain(
+			'▼ 棄却理由の内訳（type 別 → reason 別。合計は上の rejected 183 件と一致する。**全 289 件の内訳ではない**）',
+		);
+
+		// 合計は 200 − accepted であって 289 ではない（#191 要件 3）
+		const rows = parseRejectionRows(text);
+		expect(rows.reduce((sum, r) => sum + r.count, 0)).toBe(183);
+		expect(text).not.toContain('全 289 件 = accepted');
+	});
+
+	/**
+	 * 総数の申告が無い meta（ハンドラ直呼び等）。`formatTrimNote` が見出し行ごと落とすのと同じ理由で、
+	 * 「全 N 件」と書くと本 issue が禁じている censored な内訳の誤帰属を再導入する。
+	 */
+	it('総数の申告が無い meta では「受け取った N 件」と書き、省略の有無を断定しない', () => {
+		const text = formatDebugView('hdr', makeMeta(rejects('triple_top', 'peaks_not_equal', 3)), [], makeDebugViewRes())
+			.content[0].text;
+		expect(text).toContain(
+			'▼ 候補の内訳: 受け取った 3 件 = accepted 0 件 + rejected 3 件（総数の申告が無いため cap 省略の有無は不明。この集計は受け取った分のみ）',
+		);
+		expect(text).not.toContain('全 3 件 =');
+		expect(text).not.toContain('cap 省略なし');
+	});
+
+	it('rejected が 0 件のとき「なし（rejected 0 件）」と明示する（集計を出していないのと区別する）', () => {
+		const meta = makeMeta([
+			{ type: 'triple_top', accepted: true },
+			{ type: 'triple_bottom', accepted: true },
+		]);
+		const text = formatDebugView('hdr', meta, [], makeDebugViewRes()).content[0].text;
+		expect(text).toContain('▼ 候補の内訳: 受け取った 2 件 = accepted 2 件 + rejected 0 件');
+		expect(text).toContain('▼ 棄却理由の内訳: なし（rejected 0 件）');
+	});
+
+	/**
+	 * `reason` だけに畳むと `triple_bottom:valleys_missing` と `double_bottom:valleys_missing` が
+	 * 同じ行に潰れて帰属が読めなくなる（#191 要件 4）。**type で分けることを固定する。**
+	 */
+	it('type が違えば同じ reason でも行を分ける', () => {
+		const meta = makeMeta([
+			...rejects('triple_bottom', 'valleys_missing', 4),
+			...rejects('double_bottom', 'valleys_missing', 2),
+		]);
+		const text = formatDebugView('hdr', meta, [], makeDebugViewRes()).content[0].text;
+		expect(text).toContain('   - triple_bottom 4 件: valleys_missing 4');
+		expect(text).toContain('   - double_bottom 2 件: valleys_missing 2');
+	});
+
+	it('type 行が上限（20）を超えたら残余行に畳み、合計は rejected と一致し続ける', () => {
+		// 25 種別 × それぞれ件数を変える（件数降順で 20 種が残り、5 種が畳まれる）
+		const candidates = Array.from({ length: 25 }, (_, i) =>
+			rejects(`type_${String(i).padStart(2, '0')}`, 'r', 25 - i),
+		).flat();
+		const total = candidates.length;
+		const text = formatDebugView('hdr', makeMeta(candidates), [], makeDebugViewRes()).content[0].text;
+
+		const rows = parseRejectionRows(text);
+		expect(rows).toHaveLength(20);
+		const rest = parseRestRow(text);
+		expect(rest?.types).toBe(5);
+		// 畳んだ分を落とすと合計が合わなくなる（まさに本 issue が消したい失敗）
+		expect(rows.reduce((sum, r) => sum + r.count, 0) + (rest?.count ?? 0)).toBe(total);
+	});
+
+	it('reason が上限（10）を超えたら行内で畳み、合計は type の件数と一致し続ける', () => {
+		const candidates = Array.from({ length: 13 }, (_, i) =>
+			rejects('triple_top', `reason_${String(i).padStart(2, '0')}`, 13 - i),
+		).flat();
+		const text = formatDebugView('hdr', makeMeta(candidates), [], makeDebugViewRes()).content[0].text;
+		const [row] = parseRejectionRows(text);
+		expect(row.reasons).toHaveLength(11); // 10 種 + 残余 1
+		expect(row.reasons.at(-1)?.[0]).toBe('他 3 種');
+		expect(row.reasons.reduce((sum, [, n]) => sum + n, 0)).toBe(row.count);
+	});
+
+	it('reason を持たない棄却も (reason なし) として数に入れる', () => {
+		const meta = makeMeta([...rejects('triple_top', undefined, 2), ...rejects('triple_top', 'peaks_not_equal', 1)]);
+		const text = formatDebugView('hdr', meta, [], makeDebugViewRes()).content[0].text;
+		expect(text).toContain('   - triple_top 3 件: (reason なし) 2 / peaks_not_equal 1');
+	});
+
+	it('候補 0 件のときは集計ブロックごと出さない（列挙側の「なし（…）」と二重に言わない）', () => {
+		const meta = { debug: { swings: [], candidates: [], candidatesTotal: 0, candidatesOmitted: 0 } };
+		const text = formatDebugView('hdr', meta, [], makeDebugViewRes()).content[0].text;
+		expect(text).not.toContain('▼ 候補の内訳');
+		expect(text).not.toContain('▼ 棄却理由の内訳');
+		expect(text).toContain('なし（この窓では要求種別の候補が 1 つも組まれていない');
+	});
+});
+
+// ── 検出経路（relaxed provenance）の申告（issue #191 B / #189） ──
+
+describe('buildDetectionRouteLine', () => {
+	it('relaxed が 0 件でも行を出す（「行が無い = relaxed なし」を推論させない）', () => {
+		const pats = [makePattern(), makePattern(), makePattern()];
+		expect(buildDetectionRouteLine(pats)).toBe('検出経路: 全 3 件とも strict（relaxed フォールバック由来は 0 件）');
+	});
+
+	it('relaxed 由来があるとき strict / relaxed の件数と段の内訳を出す', () => {
+		const pats = [
+			makePattern(),
+			makePattern({ type: 'triple_top', _fallback: 'relaxed_triple_x1.25' }),
+			makePattern({ type: 'triple_bottom', _fallback: 'relaxed_triple_x1.25' }),
+			makePattern({ type: 'head_and_shoulders', _fallback: 'relaxed_hs_x1.6_0.6' }),
+		];
+		const line = buildDetectionRouteLine(pats);
+		// 件数は 3 つとも書く（strict / relaxed / 段ごと）。読み手に引き算をさせない
+		expect(line).toContain('検出経路: strict 1 件 / relaxed フォールバック由来 3 件');
+		// 件数降順 → 値の昇順で固定（表記揺れはそのまま出す。揃えるのは別件。#190）
+		expect(line).toContain('（relaxed_triple_x1.25×2, relaxed_hs_x1.6_0.6×1）');
+		expect(line).toContain('summary はパターン行を出さないので件数のみ');
+	});
+
+	it('パターン 0 件では行を出さない（帰属の対象が無く、ヘッダが 0 件と言う）', () => {
+		expect(buildDetectionRouteLine([])).toBe('');
+	});
+
+	it('_fallback が空文字 / 非文字列のエントリは relaxed に数えない', () => {
+		const pats = [makePattern({ _fallback: '  ' }), makePattern({ _fallback: undefined })];
+		expect(buildDetectionRouteLine(pats)).toBe('検出経路: 全 2 件とも strict（relaxed フォールバック由来は 0 件）');
+	});
+});
+
+describe('検出経路行と provenance の view 別の出方（#191 B / 規約 §3）', () => {
+	const relaxedPats = [
+		makePattern({ type: 'triple_top', _fallback: 'relaxed_triple_x1.25' }),
+		makePattern({ type: 'double_top' }),
+	];
+
+	it('summary / detailed / full に同一文言の検出経路行が出る（summary に出さないと §3 違反）', () => {
+		const line = buildDetectionRouteLine(relaxedPats);
+		const summary = formatSummaryView('hdr', relaxedPats, '', '', undefined, false, emptyRes).content[0].text;
+		const detailed = formatDetailedView('hdr', relaxedPats, '', '', emptyMeta, undefined, emptyRes).content[0].text;
+		const full = formatFullView('hdr', relaxedPats, '', '', emptyMeta, emptyRes).content[0].text;
+		for (const [view, text] of [
+			['summary', summary],
+			['detailed', detailed],
+			['full', full],
+		] as const) {
+			expect(text, `view=${view} に検出経路行が無い`).toContain(line);
+		}
+	});
+
+	it('detailed / full ではパターン見出し行の末尾に provenance が付き、summary には行そのものが無い', () => {
+		const detailed = formatDetailedView('hdr', relaxedPats, '', '', emptyMeta, undefined, emptyRes).content[0].text;
+		const full = formatFullView('hdr', relaxedPats, '', '', emptyMeta, emptyRes).content[0].text;
+		for (const text of [detailed, full]) {
+			expect(text).toContain('1. triple_top (パターン整合度: 0.75) [relaxed_triple_x1.25]');
+			// strict 由来には印を付けない（印の無さは検出経路行の件数が裏づける）
+			expect(text).toContain('2. double_top (パターン整合度: 0.75)\n');
+		}
+		// summary は**パターン行を出さない view** なので、印は付きようがない。届くのは件数の集計だけ
+		// （§3 は下位 view に無いものを上位が足すのを許す。逆は不可）。
+		const summary = formatSummaryView('hdr', relaxedPats, '', '', undefined, false, emptyRes).content[0].text;
+		expect(summary).not.toContain('[relaxed_triple_x1.25]');
+		expect(summary).not.toContain('パターン整合度');
+		expect(summary).toContain('検出経路: strict 1 件 / relaxed フォールバック由来 1 件（relaxed_triple_x1.25×1）');
+	});
+
+	it('debug には検出経路行を出さない（パターンを列挙しない view なので帰属の対象が出ない）', () => {
+		const text = formatDebugView('hdr', emptyMeta, relaxedPats, makeDebugViewRes()).content[0].text;
+		expect(text).not.toContain('検出経路');
 	});
 });
 
