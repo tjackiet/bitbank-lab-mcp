@@ -1410,6 +1410,20 @@ describe('detectHeadAndShoulders', () => {
 		 * **注意: これは値そのものを凍結した実データ fixture ではない。** issue が実測として
 		 * 報告したピボット列（価格・間隔）を入力にしている。窓生成が読むのは `kind` / `idx` /
 		 * `price` だけなので、「窓が作られるか」の回帰はこの入力で固定できる。
+		 *
+		 * ## `tests/patterns/hs-window-btcjpy-1hour.test.ts` との役割分担（issue #157）
+		 *
+		 * #157 で実データ fixture（`tests/fixtures/btc_jpy_1hour_2026_08.ts`）を凍結したが、
+		 * **本 describe は置き換えず残している。守る対象が違う。**
+		 *
+		 * | | 入力 | 守るもの |
+		 * |---|---|---|
+		 * | 本 describe | 人手で書き写したピボット列 | **窓生成ロジック単体**。`enumerateHsWindows` が交互列の崩れた `kind`/`idx`/`price` から窓を作るか。`tolerancePct` / `headProminencePct` の分離（#149）の振り分けもここ |
+		 * | `hs-window-btcjpy-1hour.test.ts` | 実データ OHLC 365 本 | **`detectSwingPoints` を含む配線**。実 OHLC から実際にどのピボットが出るか、スライス後の idx が窓の idx と対応するか |
+		 *
+		 * 実データ側に一本化すると、`detectSwingPoints` の回帰と窓生成の回帰が同じ 1 本の失敗に
+		 * 潰れてどちらが壊れたか切り分けられなくなる。逆に本 describe だけでは
+		 * 「`detectSwingPoints` がそのピボットを本当に出すか」が未検証のまま残る（#157 の指摘）。
 		 */
 		const ISSUE_146_PIVOTS: Array<[number, number, 'H' | 'L']> = [
 			[8, 12_213_097, 'L'], //  起点の安値 8/24
