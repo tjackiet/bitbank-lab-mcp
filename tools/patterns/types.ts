@@ -99,6 +99,14 @@ export interface CandDebugArg {
 	 * これを渡していないので、追加は既存出力に対して純粋に additive。
 	 */
 	status?: string;
+	/**
+	 * 棄却理由の診断値（issue #138）。`CandDebugEntry` 側には元からあったが `pushCand` に
+	 * 写経路が無く、`pcand` を使う検出器からは積めなかった（`status` と同じ事情。#158）。
+	 *
+	 * **渡さなければキー自体を出力しない**（下の spread）。既存の呼び出し元は 1 つも
+	 * これを渡していないので、追加は既存出力に対して純粋に additive。
+	 */
+	details?: Record<string, unknown>;
 }
 
 /** debugCandidates 配列の要素 */
@@ -285,5 +293,6 @@ export function pushCand(ctx: DetectContext, arg: CandDebugArg): void {
 		points,
 		// 未指定ならキーごと出さない（`status: undefined` を置くと deep-equal 比較が壊れる）
 		...(arg.status !== undefined ? { status: arg.status } : {}),
+		...(arg.details !== undefined ? { details: arg.details } : {}),
 	});
 }

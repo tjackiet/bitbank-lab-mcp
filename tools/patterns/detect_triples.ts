@@ -8,7 +8,8 @@ import { patternBarRange } from './bar-thresholds.js';
 import { finalizeConf, periodScoreDays } from './helpers.js';
 import { clamp01, relDev } from './regression.js';
 import { applyReversalGate, buildStructureGate } from './reversal-gate.js';
-import { validatePatternSize } from './structural.js';
+import { type LevelSpreadMetrics, levelSpreadMetrics, validateLevelSpread, validatePatternSize } from './structural.js';
+import type { Pivot } from './swing.js';
 import type { CandleData, DeduplicablePattern, DetectContext, DetectResult } from './types.js';
 import { pushCand } from './types.js';
 
@@ -76,6 +77,42 @@ export function getTripleFormingBarParams(tf: string): { minBars: number; maxBar
 
 type Pcand = (arg: Parameters<typeof pushCand>[1]) => void;
 
+/**
+ * 同水準判定で落ちた候補の診断値（issue #138）。
+ *
+ * `spreadPct` は価格水準基準（= `near` / `tolerancePct` が見ている量）、`heightPct` は
+ * パターン高さの価格水準比、`spreadRatio` が**両者の比**——「同水準の許容幅がパターン自身の
+ * 高さの何倍か」を読むための値で、issue #138 の実例では 0.68 だった。
+ *
+ * `allPoints` にネックライン構成点が欠けている（`null`）候補では高さを測れないので
+ * `heightAbs` / `heightPct` / `spreadRatio` は `null` になり、content にも出ない。
+ */
+function levelSpreadDetails(
+	mainPoints: ReadonlyArray<Pivot>,
+	allPoints: ReadonlyArray<Pivot | null>,
+	levelTolerancePct: number,
+): Record<string, unknown> {
+	return levelSpreadDetailsFrom(levelSpreadMetrics(mainPoints, allPoints), levelTolerancePct);
+}
+
+/**
+ * {@link levelSpreadDetails} の、計測値を既に持っている呼び出し側用。
+ *
+ * `levelTolerancePct` は **その経路の同水準判定が実際に使った許容誤差**で、strict では
+ * `tolerancePct`、relaxed では `tolerancePct × factor`。生のパラメータ値をエコーする
+ * フィールドではないので、名前を `tolerancePct` にしない。
+ */
+function levelSpreadDetailsFrom(m: LevelSpreadMetrics, levelTolerancePct: number): Record<string, unknown> {
+	return {
+		spreadAbs: m.spreadAbs,
+		spreadPct: m.spreadPct,
+		heightAbs: m.heightAbs,
+		heightPct: m.heightPct,
+		spreadRatio: m.spreadRatio,
+		levelTolerancePct,
+	};
+}
+
 // ── Helper: ネックラインブレイクインデックスを検出 ──
 // detect_doubles.ts と同じロジック（終値ベース、1.5% バッファ、20 バーまで）
 
@@ -109,17 +146,33 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 			b = highsOnly[i + 1],
 			c = highsOnly[i + 2];
 		if (b.idx - a.idx < minDist || c.idx - b.idx < minDist) continue;
+
+		// 谷の探索を同水準判定より**前**に出してある（issue #138）。**判定順は変えていない**
+		// （`three_peaks_not_level` → `valleys_missing` の順で棄却する）。先に引くのは、
+		// 3 山が同水準でないときの棄却エントリにパターン高さ（5 点の全振幅）を載せるため。
+		const v1cands = allValleys.filter((v: { idx: number }) => v.idx > a.idx && v.idx < b.idx);
+		const v2cands = allValleys.filter((v: { idx: number }) => v.idx > b.idx && v.idx < c.idx);
+		const v1 = v1cands.length ? v1cands.reduce((m, v) => (v.price < m.price ? v : m)) : null;
+		const v2 = v2cands.length ? v2cands.reduce((m, v) => (v.price < m.price ? v : m)) : null;
+
 		const nearAll = near(a.price, b.price) && near(b.price, c.price) && near(a.price, c.price);
-		if (!nearAll) continue;
+		if (!nearAll) {
+			// issue #138: ここは #174 以前の relaxed 肩落ちと同じ「無音の continue」だった。
+			// 新しい高さ相対ゲートの計測にも、この段で何件落ちているかの baseline が要る。
+			pcand({
+				type: 'triple_top',
+				accepted: false,
+				reason: 'three_peaks_not_level',
+				idxs: [a.idx, b.idx, c.idx],
+				details: levelSpreadDetails([a, b, c], [a, v1, b, v2, c], tolerancePct),
+			});
+			continue;
+		}
 		const start = candles[a.idx].isoTime;
 		const structureEnd = candles[c.idx].isoTime;
 		if (!(start && structureEnd)) continue;
 
 		// Additional strict checks: valleys equality and neckline slope
-		const v1cands = allValleys.filter((v: { idx: number }) => v.idx > a.idx && v.idx < b.idx);
-		const v2cands = allValleys.filter((v: { idx: number }) => v.idx > b.idx && v.idx < c.idx);
-		const v1 = v1cands.length ? v1cands.reduce((m, v) => (v.price < m.price ? v : m)) : null;
-		const v2 = v2cands.length ? v2cands.reduce((m, v) => (v.price < m.price ? v : m)) : null;
 		if (!(v1 && v2)) {
 			pcand({ type: 'triple_top', accepted: false, reason: 'valleys_missing', idxs: [a.idx, b.idx, c.idx] });
 			continue;
@@ -179,6 +232,23 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 			debugCandidates: ctx.debugCandidates,
 		});
 		if (!gate) continue;
+
+		// 高さ相対の同水準検査（issue #138）。**既存の棄却検査（構造ゲートを含む）をすべて
+		// 通過した後**に置く——`validatePatternSize` の docstring と同じ理由で、
+		// 前に置くと固有の理由コードを持つ候補の `reason` を横取りする。
+		const topSpread = levelSpreadMetrics([a, b, c], [a, v1, b, v2, c]);
+		const topSpreadReason = validateLevelSpread('top', topSpread);
+		if (topSpreadReason) {
+			pcand({
+				type: 'triple_top',
+				accepted: false,
+				reason: topSpreadReason,
+				idxs: [a.idx, b.idx, c.idx],
+				details: levelSpreadDetailsFrom(topSpread, tolerancePct),
+			});
+			continue;
+		}
+
 		const structureGate = buildStructureGate(gate);
 
 		// ネックライン下抜けを検出（c.idx 以降、最大 MAX_BARS_FROM_EXTREMUM バー）
@@ -270,22 +340,40 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 			b = lowsOnly[i + 1],
 			c = lowsOnly[i + 2];
 		if (b.idx - a.idx < minDist || c.idx - b.idx < minDist) continue;
-		const nearAll = near(a.price, b.price) && near(b.price, c.price) && near(a.price, c.price);
-		if (!nearAll) continue;
-		const start = candles[a.idx].isoTime;
-		const structureEnd = candles[c.idx].isoTime;
-		if (!(start && structureEnd)) continue;
 
-		// Additional strict checks: 3 valleys near + spread limit, peaks near and neckline slope limit
-		const valleyPrices = [a.price, b.price, c.price];
-		const valleyNearStrict = near(a.price, b.price) && near(b.price, c.price) && near(a.price, c.price);
-		const valleyMin = Math.min(...valleyPrices);
-		const valleyMax = Math.max(...valleyPrices);
-		const valleySpreadValid = (valleyMax - valleyMin) / Math.max(1, valleyMin) <= MAX_VALLEY_SPREAD;
+		// 山の探索を同水準判定より**前**に出してある（issue #138）。理由は
+		// `findStrictTripleTop` の同じ箇所のコメントを参照（判定順は変えていない）。
 		const p1cands = allPeaks.filter((v: { idx: number }) => v.idx > a.idx && v.idx < b.idx);
 		const p2cands = allPeaks.filter((v: { idx: number }) => v.idx > b.idx && v.idx < c.idx);
 		const p1 = p1cands.length ? p1cands.reduce((m, v) => (v.price > m.price ? v : m)) : null;
 		const p2 = p2cands.length ? p2cands.reduce((m, v) => (v.price > m.price ? v : m)) : null;
+
+		const nearAll = near(a.price, b.price) && near(b.price, c.price) && near(a.price, c.price);
+		if (!nearAll) {
+			// issue #138: top 側と同じ無音の continue だった。
+			pcand({
+				type: 'triple_bottom',
+				accepted: false,
+				reason: 'three_valleys_not_level',
+				idxs: [a.idx, b.idx, c.idx],
+				details: levelSpreadDetails([a, b, c], [a, p1, b, p2, c], tolerancePct),
+			});
+			continue;
+		}
+		const start = candles[a.idx].isoTime;
+		const structureEnd = candles[c.idx].isoTime;
+		if (!(start && structureEnd)) continue;
+
+		// Additional strict checks: 3 valleys spread limit, peaks near and neckline slope limit.
+		//
+		// **3 谷の同水準判定（`nearAll`）はここには無い。** 以前は `valleyNearStrict` として
+		// 同じ式をもう一度評価していたが、上の `nearAll` で `continue` 済みなので常に `true` で、
+		// 下の `'valleys_not_equal'` は**到達不能**だった（issue #138 の確認事項 C）。
+		// 3 谷が同水準でない候補は上の `three_valleys_not_level` が受け持つ。
+		const valleyPrices = [a.price, b.price, c.price];
+		const valleyMin = Math.min(...valleyPrices);
+		const valleyMax = Math.max(...valleyPrices);
+		const valleySpreadValid = (valleyMax - valleyMin) / Math.max(1, valleyMin) <= MAX_VALLEY_SPREAD;
 		if (!(p1 && p2)) {
 			pcand({ type: 'triple_bottom', accepted: false, reason: 'peaks_missing', idxs: [a.idx, b.idx, c.idx] });
 			continue;
@@ -293,17 +381,11 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 		const peaksNear = Math.abs(p1.price - p2.price) / Math.max(1, Math.max(p1.price, p2.price)) <= tolerancePct;
 		const necklineSlope = Math.abs(p1.price - p2.price) / Math.max(1, Math.max(p1.price, p2.price));
 		const necklineValid = necklineSlope <= NECKLINE_SLOPE_LIMIT;
-		if (!(valleyNearStrict && valleySpreadValid && peaksNear && necklineValid)) {
+		if (!(valleySpreadValid && peaksNear && necklineValid)) {
 			pcand({
 				type: 'triple_bottom',
 				accepted: false,
-				reason: !valleyNearStrict
-					? 'valleys_not_equal'
-					: !valleySpreadValid
-						? 'valley_spread_excess'
-						: !peaksNear
-							? 'peaks_not_equal'
-							: 'neckline_slope_excess',
+				reason: !valleySpreadValid ? 'valley_spread_excess' : !peaksNear ? 'peaks_not_equal' : 'neckline_slope_excess',
 				idxs: [a.idx, b.idx, c.idx],
 			});
 			continue;
@@ -351,6 +433,23 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 			debugCandidates: ctx.debugCandidates,
 		});
 		if (!gate) continue;
+
+		// 高さ相対の同水準検査（issue #138）。配置の理由は `findStrictTripleTop` の同じ箇所を参照。
+		// **top と対称**（既存の `MAX_VALLEY_SPREAD` は bottom にしか無いという #138 確認事項 B の
+		// 非対称を、本ゲートでは持ち込まない）。
+		const bottomSpread = levelSpreadMetrics([a, b, c], [a, p1, b, p2, c]);
+		const bottomSpreadReason = validateLevelSpread('bottom', bottomSpread);
+		if (bottomSpreadReason) {
+			pcand({
+				type: 'triple_bottom',
+				accepted: false,
+				reason: bottomSpreadReason,
+				idxs: [a.idx, b.idx, c.idx],
+				details: levelSpreadDetailsFrom(bottomSpread, tolerancePct),
+			});
+			continue;
+		}
+
 		const structureGate = buildStructureGate(gate);
 
 		// ネックライン上抜けを検出（c.idx 以降、最大 MAX_BARS_FROM_EXTREMUM バー）
@@ -525,6 +624,27 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 			debugCandidates: ctx.debugCandidates,
 		});
 		if (!gate) continue;
+
+		// 高さ相対の同水準検査（issue #138）。**strict と同じ検査を relaxed にも掛ける。**
+		// `detectTriples` は strict がその種別を 0 件にした瞬間に relaxed へフォールバックするので
+		// （`detectTriples` の relaxed fallback ループ）、strict にだけ入れても relaxed が同じ 3 山を
+		// `tolerancePct × factor` で拾い直し、`confidence × 0.95` の同一パターンを返す
+		// ——実測で `data.patterns` は 1 件も減らず confidence が 0.80 → 0.79 に変わるだけだった。
+		// 理由コードに `_relaxed` を付けないのは `validatePatternSize` の扱いと揃えるため
+		// （共有の構造バリデータは経路をまたいで同じコードを返す）。
+		const relaxedTopSpread = levelSpreadMetrics([a, b, c], [a, v1, b, v2, c]);
+		const relaxedTopSpreadReason = validateLevelSpread('top', relaxedTopSpread);
+		if (relaxedTopSpreadReason) {
+			pcand({
+				type: 'triple_top',
+				accepted: false,
+				reason: relaxedTopSpreadReason,
+				idxs: [a.idx, b.idx, c.idx],
+				details: levelSpreadDetailsFrom(relaxedTopSpread, tolTriple),
+			});
+			continue;
+		}
+
 		const structureGate = buildStructureGate(gate);
 
 		// ネックライン下抜け検出
@@ -687,6 +807,22 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 			debugCandidates: ctx.debugCandidates,
 		});
 		if (!gate) continue;
+
+		// 高さ相対の同水準検査（issue #138）。relaxed に掛ける理由は
+		// `findRelaxedTripleTop` の同じ箇所のコメントを参照。
+		const relaxedBottomSpread = levelSpreadMetrics([a, b, c], [a, p1, b, p2, c]);
+		const relaxedBottomSpreadReason = validateLevelSpread('bottom', relaxedBottomSpread);
+		if (relaxedBottomSpreadReason) {
+			pcand({
+				type: 'triple_bottom',
+				accepted: false,
+				reason: relaxedBottomSpreadReason,
+				idxs: [a.idx, b.idx, c.idx],
+				details: levelSpreadDetailsFrom(relaxedBottomSpread, tolTriple),
+			});
+			continue;
+		}
+
 		const structureGate = buildStructureGate(gate);
 
 		// ネックライン上抜け検出

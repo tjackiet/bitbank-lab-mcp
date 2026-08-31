@@ -515,6 +515,129 @@ export type PatternSizeRejectReason =
 	| 'peak_too_shallow';
 
 /**
+ * 主構成点の水準ばらつき（`price` 基準）と、パターン高さ（`extremePrice` 基準）の実測値。
+ *
+ * **分子と分母で価格基準が違うのは意図的**（issue #138）。それぞれ既存の慣行に合わせている:
+ *
+ * | | 基準 | 合わせた既存実装 |
+ * |---|---|---|
+ * | 分子（水準ばらつき） | `Pivot.price`（終値） | 同水準判定（`near` / `isSameLevel`）。#131 / #132 の「水準同一性は終値」 |
+ * | 分母（パターン高さ） | `Pivot.extremePrice`（高安） | {@link validatePatternSize}。同じく #131 / #132 の「値幅は高安」 |
+ *
+ * `extremePrice` 基準の全振幅は `price` 基準の全振幅**以上**（山は `high >= close`、
+ * 谷は `low <= close`）なので、**比は保守的に（小さめに）出る**＝この比を上限として使う
+ * 検査は棄却が控えめになる。安全側に倒すための選択で、逆（分母を `price`）にすると
+ * ヒゲの分だけ棄却が増える。
+ */
+export interface LevelSpreadMetrics {
+	/** 主構成点の `price` の max - min（絶対額） */
+	spreadAbs: number;
+	/** 同、価格水準に対する比。分母は主構成点の最大値（`relDev` と同じく `Math.max(1, …)` でクランプ） */
+	spreadPct: number;
+	/** 全構成点の `extremePrice` の max - min（絶対額）。構成点が欠けていれば `null` */
+	heightAbs: number | null;
+	/** 同、価格水準に対する比。分母は {@link validatePatternSize} と同じ `Math.max(1, hi)` */
+	heightPct: number | null;
+	/** `spreadAbs / heightAbs`。高さが 0 か構成点欠損なら `null` */
+	spreadRatio: number | null;
+}
+
+/**
+ * 主構成点の水準ばらつきをパターン高さで正規化した比を測る（issue #138）。
+ *
+ * `mainPoints` は同水準であるべき点（triple なら 3 山 / 3 谷）、`allPoints` は
+ * パターン全体の構成点（triple なら 5 点）。`allPoints` に欠損（`null`）が混じる場合は
+ * 高さを測れないので `heightAbs` / `heightPct` / `spreadRatio` を `null` にして
+ * **ばらつきだけを返す**（棄却理由の details 用。呼び出し側が高さの確定前に呼べる）。
+ */
+export function levelSpreadMetrics(
+	mainPoints: ReadonlyArray<Pick<Pivot, 'price'>>,
+	allPoints: ReadonlyArray<Pick<Pivot, 'extremePrice'> | null | undefined>,
+): LevelSpreadMetrics {
+	const levels = mainPoints.map((p) => p.price);
+	const spreadAbs = Math.max(...levels) - Math.min(...levels);
+	const spreadPct = spreadAbs / Math.max(1, Math.max(...levels));
+
+	const extremes = allPoints.map((p) => p?.extremePrice);
+	const complete = extremes.every((v): v is number => Number.isFinite(v));
+	if (!complete) return { spreadAbs, spreadPct, heightAbs: null, heightPct: null, spreadRatio: null };
+
+	const hi = Math.max(...extremes);
+	const lo = Math.min(...extremes);
+	const heightAbs = hi - lo;
+	return {
+		spreadAbs,
+		spreadPct,
+		heightAbs,
+		heightPct: heightAbs / Math.max(1, hi),
+		spreadRatio: heightAbs > 0 ? spreadAbs / heightAbs : null,
+	};
+}
+
+/**
+ * 主構成点の水準ばらつきの、**パターン高さに対する**上限（issue #138）。
+ *
+ * ## なぜ価格水準の % では足りないのか
+ *
+ * 同水準判定（`near` / `tolerancePct`）は `|a-b| / max(a,b)` を見るので、**パターン自身の
+ * 高さと無関係**。issue #138 の実例（BTC/JPY 1時間足）では許容幅がパターン高さの 3 倍あり、
+ * 3 山が高さの 68% ばらついて単調に切り下がっていても「同水準」を通った。
+ *
+ * ## 0.5 の意味
+ *
+ * `spreadRatio = 主構成点のばらつき / パターン高さ`。top なら
+ * `高さ = 最高の山 - 最安の谷 = ばらつき + 最低の山からネックラインまでの押し` なので、
+ * **`spreadRatio > 0.5` は「山の水準帯が、その山から谷までの押しより厚い」**を意味する。
+ * 水準帯が押しより厚い形は、水平なレジスタンスに 3 回当たった形として読めない
+ * （目視すれば単なる下降線 / 頭の突出した H&S）。#131 の「構造として成立しない形は
+ * 減点ではなく hard reject」の系列。
+ *
+ * ## 時間足別テーブルを持たない理由
+ *
+ * **パターン自身の高さで正規化しているので、ボラティリティの水準に依らない。**
+ * `getSizeThresholdsForTf`（#152）が時間足別なのは、あちらが価格水準の % を絶対的な下限として
+ * 使っており ATR に対する難易度が時間足間で揃わなかったため。本比は無次元なのでその問題が無い。
+ *
+ * ## `tolerancePct` との関係
+ *
+ * **独立した AND 条件**で、`tolerancePct` の意味も既定値も変えない（#152 で
+ * 「`getDefaultToleranceForTf` は触らない」と決めた理由がそのまま当てはまる）。
+ * 実効的な水準ばらつきの上限は `min(tolerancePct × 価格水準, 本定数 × パターン高さ)`。
+ */
+export const MAX_LEVEL_SPREAD_RATIO = 0.5;
+
+/**
+ * 主構成点の水準ばらつきがパターン高さに対して過大な場合の理由コード。
+ * {@link PatternSizeRejectReason} と同じく side ごとに別コードにしてある。
+ */
+export type PatternLevelSpreadRejectReason =
+	/** top: 3 山（主構成点）のばらつきが {@link MAX_LEVEL_SPREAD_RATIO} × パターン高さを超える */
+	| 'peak_spread_vs_height_excess'
+	/** bottom: 3 谷（主構成点）のばらつきが同上 */
+	| 'valley_spread_vs_height_excess';
+
+/**
+ * 高さ相対の同水準検査（issue #138）。不合格理由 or `null` を返す。
+ *
+ * **`metrics.spreadRatio` が `null`（高さを測れない / 高さ 0）のときは `null` を返す**——
+ * 判定材料が無い候補を落とすと、この検査が意図していない理由で検出が減る。
+ *
+ * **呼び出しは各検出経路の「既存の棄却検査をすべて通過した後」に置くこと。**
+ * 理由は {@link validatePatternSize} の docstring と同じ（固有の理由コードを持つ候補の
+ * `reason` を横取りしない）。本検査は構造ゲート（`validateReversalStructure`）よりも後に置く
+ * ——サイズ検査より後、というだけでは構造ゲートの理由を横取りしてしまう。
+ */
+export function validateLevelSpread(
+	side: ReversalSide,
+	metrics: LevelSpreadMetrics,
+	maxRatio: number = MAX_LEVEL_SPREAD_RATIO,
+): PatternLevelSpreadRejectReason | null {
+	if (metrics.spreadRatio === null || !Number.isFinite(metrics.spreadRatio)) return null;
+	if (metrics.spreadRatio <= maxRatio) return null;
+	return side === 'top' ? 'peak_spread_vs_height_excess' : 'valley_spread_vs_height_excess';
+}
+
+/**
  * 反転パターンのサイズ検査（issue #138 欠陥 2-2）。不合格理由 or `null` を返す。
  *
  * `points` は**構成点を時系列順に並べた交互列**で、両端が主構成点（`side='top'`
