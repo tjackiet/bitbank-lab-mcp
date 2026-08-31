@@ -61,8 +61,9 @@
 
 `DetectedPatternSchema`（`src/schema/patterns.ts`）に宣言が無く passthrough も無いので、
 返す直前の `DetectPatternsOutputSchema.parse()` が**エラーにせず黙って落としていた**。
-#155（`candidates[].status`）/ #160（`breakoutDirection`）/ #184（`meta.effective_params`）に続く
-**4 回目**の同一クラスの欠陥で、今回は**そのために書いた parity テストがあったのにすり抜けた**（後述）。
+これは #155（`candidates[].status`）/ #160（`breakoutDirection`）/ #184（`meta.effective_params`）
+に続く**4 回目**の同一クラスの欠陥で、今回は**そのために書いた parity テストがあったのに
+すり抜けた**（後述）。
 
 #### 何が見えなくなっていたか
 
@@ -194,8 +195,8 @@ double / triple / H&S の形成中パス（6 箇所）は踏んでいない。**
 は実態と合っていない。落ちているのは 3 山の同水準判定 `nearAll` で、理由コードは
 **`three_peaks_not_level`**。**`triple_top` に `peaks_not_equal` は存在したことがない**
 （あちらは `triple_bottom` 側の `valleys_not_equal` の対で、それも #186 / PR #188 で削除済み）。
-#188 以前から名前だけが誤っていた。名前を実態に合わせ、**再び離れないよう理由コードそのものを
-アサートする 1 行を足した**（名前は検証されないが、アサートは検証される）。
+つまり #188 以前から名前だけが誤っていた。名前を実態に合わせ、**再び離れないよう理由コード
+そのものをアサートする 1 行を足した**（名前は検証されないが、アサートは検証される）。
 
 
 ### Changed（strict triple のネックライン判定を `NECKLINE_SLOPE_LIMIT` 1 本に畳んだ。#186）

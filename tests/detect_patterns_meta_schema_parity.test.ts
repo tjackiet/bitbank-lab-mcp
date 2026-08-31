@@ -310,9 +310,12 @@ describe('detect_patterns: meta に載せたキーが出力スキーマで strip
 		for (const p of withFallback) {
 			expect(p._fallback, `${p.type} の _fallback`).toMatch(/^relaxed_(double|triple|hs|ihs)_x[\d._]+$/);
 		}
-		// 設計どおり triple_top が relaxed 第 1 段（factor 1.25）で拾われていること。
-		// ここが変わったらフィクスチャが別の経路に流れている。
+		// 設計どおりの段で拾われていること。ここが変わったらフィクスチャが別の経路に流れている。
+		// **2 段とも固定する**——第 1 段だけを見ていると、第 2 段だけが退行しても通ってしまう
+		// （`detectTriples` の relaxed ループは `[1.25, 2.0]` を順に試す独立した段）。
 		expect(patterns.find((p) => p.type === 'triple_top')?._fallback).toBe('relaxed_triple_x1.25');
+		// 第 2 段は係数 2.0 だが `${2.0}` は `'2'` なので `x2`（`.describe()` の表記の注記を参照）。
+		expect(patterns.find((p) => p.type === 'triple_bottom')?._fallback).toBe('relaxed_triple_x2');
 	});
 
 	it('effective_params の 4 パラメータが value / source ごと生き残る（#184 欠陥 D / A）', async () => {
