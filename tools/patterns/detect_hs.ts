@@ -303,6 +303,34 @@ function outerShoulderOk(
 }
 
 /**
+ * 肩が同水準でないときの棄却理由コード（issue #172）。
+ *
+ * 肩の判定は**同じ指標（左右肩の相対差）を 2 つの閾値で測る AND**で、実効閾値は
+ * `min(tolerancePct, HS_SHOULDER_MAX_PCT)`。ところが理由コードが `shoulders_not_near`
+ * の 1 種類しかなかったため、**`view=debug` を `reason` で集計するとどちらのゲートで
+ * 落ちたかが消えていた**。#152 / #167 はこれを見て「`HS_SHOULDER_MAX_PCT` が律速」と
+ * 帰属し、存在しない偽陰性を追って issue が 2 本立った（実測では `HS_SHOULDER_MAX_PCT`
+ * 律速は全時間足で 0 件、支配的なのは `:both`）。`view=debug` は LLM が理由コードで
+ * 集計する導線（#144 / #145）なので、同じ誤読を LLM もする。
+ *
+ * 接尾辞はファイル内の既存 idiom（`prior_trend_mismatch:${classification}`）に合わせる。
+ *
+ * | コード | 意味 | 緩めれば通るか |
+ * |---|---|---|
+ * | `shoulders_not_near:tolerance` | `tolerancePct` のみ超過 | `tolerancePct` を緩めれば通る |
+ * | `shoulders_not_near:cap` | {@link HS_SHOULDER_MAX_PCT} のみ超過 | 定数を緩めれば通る |
+ * | `shoulders_not_near:both` | 両方超過 | **どちらを緩めても通らない** |
+ *
+ * `:cap` は `tolerancePct > HS_SHOULDER_MAX_PCT` のときしか発火しない。tf-auto でそう
+ * なるのは `15min` / `30min`（0.06 > 0.05）だけで、他の時間足では呼び出し側が
+ * `tolerancePct` を 0.05 超で明示したときに限る（{@link HS_SHOULDER_MAX_PCT} の docstring）。
+ */
+function shouldersNotNearReason(withinTolerance: boolean, withinCap: boolean): string {
+	if (!withinTolerance && !withinCap) return 'shoulders_not_near:both';
+	return withinTolerance ? 'shoulders_not_near:cap' : 'shoulders_not_near:tolerance';
+}
+
+/**
  * H&S / 逆 H&S の候補 5 点窓を列挙する（issue #146）。
  *
  * 旧実装は `pivots` の**配列上で連続する 5 点**を取り、それが `H-L-H-L-H`（逆は `L-H-L-H-L`）
@@ -405,7 +433,11 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 	let found = false;
 
 	for (const { p0, p1, p2, p3, p4 } of enumerateHsWindows(ctx, 'bottom')) {
-		const shouldersNear = near(p0.price, p4.price) && isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
+		// 肩は 2 ゲートの AND。どちらの conjunct で落ちたかを `reason` に出すため短絡評価をやめて
+		// 別々に評価する（`near` / `isSameLevel` とも副作用の無い純粋比較なので判定は不変。issue #172）。
+		const shouldersWithinTolerance = near(p0.price, p4.price);
+		const shouldersWithinCap = isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
+		const shouldersNear = shouldersWithinTolerance && shouldersWithinCap;
 		const headLower = p2.price < Math.min(p0.price, p4.price) * (1 - headProminencePct);
 		const necklineCheck = validateHorizontalNeckline(p1.price, p3.price, HS_NECKLINE_MAX_PCT);
 		if (shouldersNear && headLower && necklineCheck.ok) {
@@ -547,7 +579,7 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 			}
 		} else {
 			const reason = !shouldersNear
-				? 'shoulders_not_near'
+				? shouldersNotNearReason(shouldersWithinTolerance, shouldersWithinCap)
 				: !headLower
 					? 'head_not_lower'
 					: !necklineCheck.ok
@@ -587,7 +619,11 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 	let found = false;
 
 	for (const { p0, p1, p2, p3, p4 } of enumerateHsWindows(ctx, 'top')) {
-		const shouldersNear = near(p0.price, p4.price) && isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
+		// 肩は 2 ゲートの AND。どちらの conjunct で落ちたかを `reason` に出すため短絡評価をやめて
+		// 別々に評価する（`near` / `isSameLevel` とも副作用の無い純粋比較なので判定は不変。issue #172）。
+		const shouldersWithinTolerance = near(p0.price, p4.price);
+		const shouldersWithinCap = isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
+		const shouldersNear = shouldersWithinTolerance && shouldersWithinCap;
 		const headHigher = p2.price > Math.max(p0.price, p4.price) * (1 + headProminencePct);
 		const necklineCheck = validateHorizontalNeckline(p1.price, p3.price, HS_NECKLINE_MAX_PCT);
 		if (shouldersNear && headHigher && necklineCheck.ok) {
@@ -729,7 +765,7 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 			}
 		} else {
 			const reason = !shouldersNear
-				? 'shoulders_not_near'
+				? shouldersNotNearReason(shouldersWithinTolerance, shouldersWithinCap)
 				: !headHigher
 					? 'head_not_higher'
 					: !necklineCheck.ok

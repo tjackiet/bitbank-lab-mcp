@@ -155,7 +155,7 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 				'期限切れ = 第2構成点の確定から突破確認窓を過ぎてもネックラインを突破しなかった候補で、' +
 				'既定ではノイズになるため出力されない。\n' +
 				'**`true` にしても拾えるのは、一度パターンとして成立してから無効化された `status=invalid` / ' +
-				'`expired` のものだけ。** `head_not_higher` / `shoulders_not_near` 等、構造要件を満たさず' +
+				'`expired` のものだけ。** `head_not_higher` / `shoulders_not_near:both` 等、構造要件を満たさず' +
 				'**候補生成の時点で**落ちたものは `status` 自体を持たないため、`includeInvalid` では拾えない' +
 				'（見るには `view=debug` の `data.candidates` を使う。`accepted:false` の `reason` に理由が入る）。',
 		),

@@ -39,6 +39,109 @@
 | 24 | #168 | サイズ検査の 2 定数（`MIN_DEPTH_PCT` / `MIN_PATTERN_HEIGHT_PCT`）を時間足別のテーブルにした（#152） | 合成 fixture は**変わらない** / 実データは 1day 未満の時間足で**増える**（+8 / 800。減少 0） |
 | 25 | #170 | 形成中 double top / bottom のサイズ検査を完成済みと揃えた（#169） | 回帰コーパス（合成 704 + 実データ 96）は**変わらない**（0 / 800）/ 新 fixture では**減る** |
 | 26 | #142 | 検出器内 dedup の勝者選択を `globalDedup` と同じ confidence 優先に揃えた | 実データ・合成とも**変わる**（48 / 800。入れ替え 3 実体 + 追加 1 実体） |
+| 27 | #172 | `shoulders_not_near` を 2 つの conjunct ごとに分け、`HS_SHOULDER_MAX_PCT` の役割を docstring に書いた | **変わらない**（理由コード文字列と docstring のみ） |
+
+### Fixed（`shoulders_not_near` を conjunct ごとに分けた。#172）
+
+**肩の判定は 2 つのゲートの AND なのに、棄却理由が 1 種類しか無かった。**
+
+    const shouldersNear = near(p0.price, p4.price) && isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
+
+`near` は `|a−b| / max(a,b) <= tolerancePct`（`regression.ts`）、`isSameLevel` は `relDiff` に対する
+同じ式（`structural.ts`）で、**同じ指標を 2 つの閾値で測っているだけ**。実効閾値は
+`min(tolerancePct, HS_SHOULDER_MAX_PCT)` になる。`details` には `shouldersDiffPct` /
+`tolerancePct` / `shoulderMaxPct` が入っているので情報は揃っていたが、
+**`reason` で集計すると区別が消えていた。**
+
+#### 実害: 存在しない偽陰性を追って issue が 2 本立った
+
+#152 / #167 は「1day で `shoulders_not_near` が 73%」→「`HS_SHOULDER_MAX_PCT` が律速」と帰属した。
+実測（#167 のクローズコメント）では **`HS_SHOULDER_MAX_PCT` 律速は全時間足で 0 件**で、
+支配的なのは「両方超過」——どちらを緩めても通らない候補だった。境界付近 4 件を目視しても、
+肩を 5.5% まで緩めて増える検出は 0 件（頭の突出かネックライン水平度で落ちる）。
+
+`view=debug` は LLM が理由コードで集計する導線（#144 / #145）なので、**同じ誤読を LLM もする。**
+
+#### 3 コードに分けた
+
+接尾辞は同ファイルの既存 idiom（`prior_trend_mismatch:${classification}`）に合わせた。
+
+| コード | 条件 | 緩めれば通るか |
+|---|---|---|
+| `shoulders_not_near:tolerance` | `tolerancePct` のみ超過 | `tolerancePct` を緩めれば通る |
+| `shoulders_not_near:cap` | `HS_SHOULDER_MAX_PCT` のみ超過 | 定数を緩めれば通る |
+| `shoulders_not_near:both` | 両方超過 | **どちらを緩めても通らない** |
+
+対象は **strict 2 経路のみ**（`findStrictInverseHS` / `findStrictHS`）。issue 本文は
+「relaxed 2 経路は別の理由コードで積んでいる」と書いていたが、**実際には relaxed は肩で
+落ちたとき何も積まずに `continue` している**（`debugCandidates.push` するのは「肩と頭は通って
+ネックラインだけ落ちた」ケースの `neckline_not_horizontal` だけ）。つまり `shoulders_not_near` は
+strict の専有で、**relaxed の肩落ちが無音なのは #155 と同じクラスの診断性の穴**（本変更では
+触っていない。別件）。
+
+判定そのものは変えていない。`near(...)` と `isSameLevel(...)` はどちらも副作用の無い純粋比較なので、
+短絡評価をやめて 2 つの `const` に分けても結果は不変。
+
+#### 実測: 検出は 1 件も動かず、旧コードの件数は新 3 コードの合計と一致
+
+合成グリッド 1188 ケース（5 点合成の右肩掃引 × `tolerancePct` 7 値 × 6 時間足 × 上下、
+および疑似乱数ピボット列 × `includeForming`）で 3,706 件の candidate を採取し、baseline と比較した。
+
+| | baseline | 変更後 |
+|---|---|---|
+| `data.patterns` 相当（590 件） | — | **完全一致（差分 0）** |
+| `debug.candidates` 件数 | 3,706 | 3,706 |
+| `accepted:true` / `false` | 1,210 / 2,496 | 1,210 / 2,496 |
+| `reason` 以外のフィールド | — | **完全一致（差分 0）** |
+| 旧 `shoulders_not_near` | **1,282** | 0 |
+| `:tolerance` / `:cap` / `:both` | 0 | **124 / 268 / 890（計 1,282）** |
+
+**旧 1,282 = 新 3 コードの合計**で、分割の取りこぼしは無い。変わったのは `reason` 文字列だけ
+（1,282 件ちょうど）。**実データ（BTC/JPY）での再測はこの環境からネットワークが閉じているため
+行っていない**——ただし変更は理由文字列の分岐のみで入力データに依存しないため、
+合成グリッドで示した不変性がそのまま効く。
+
+`:cap` が上表で 268 件出ているのは `tolerancePct` を 0.06 / 0.08 / 0.12 と明示した格子を
+含むため。**`tolerancePct <= HS_SHOULDER_MAX_PCT` の格子（0.03 / 0.04 / 0.05）では `:cap` は
+1 件も出ない**——構造上出せない（下記）。
+
+#### `HS_SHOULDER_MAX_PCT` の docstring（`structural.ts`）
+
+`/** H&S / IHS の左右肩同水準の構造上限 */` の 1 行だけでは「肩の許容誤差はこの定数」と読める。
+実際には `getDefaultToleranceForTf` の tf-auto 値と `min` を取るので、
+**既定パスでこの定数が律速するのは `15min` / `30min`（0.06 > 0.05）だけ**:
+
+| 時間足 | `tolerancePct`（tf-auto） | `HS_SHOULDER_MAX_PCT` | 実効値 | 律速側 |
+|---|---|---|---|---|
+| `1hour` / `4hour` | 0.05 | 0.05 | 0.05 | 同値 |
+| `1day`（他） | 0.04 | 0.05 | **0.04** | **`tolerancePct`** |
+| `8hour` / `12hour` | 0.045 | 0.05 | 0.045 | `tolerancePct` |
+| `1week` / `1month` | 0.035 / 0.03 | 0.05 | 0.035 / 0.03 | `tolerancePct` |
+| **`15min` / `30min`** | **0.06** | 0.05 | **0.05** | **本定数** |
+
+**この定数の役割は「呼び出し側が `tolerancePct` を明示的に緩めすぎたときの天井」。**
+`resolveParams` はスキーマ既定値 0.04 のときだけ tf-auto に差し替え、明示値はそのまま通すので、
+`tolerancePct: 0.08` を渡して初めて（tf-auto 0.06 の 2 足を除き）効く。
+
+docstring には**もう 1 つの役割**も書いた——`outerShoulderOk`（窓生成）では
+`tolerancePct` と AND を取らない単独の閾値として「同水準の肩」を測っている。
+
+`HS_NECKLINE_MAX_PCT` にも対の docstring を付けた。あちらは `tolerancePct` と AND を取らない
+**独立した固定閾値**で、schema の `tolerancePct` description が公開している契約でもある。
+**同じ 0.05 でも効き方が違う**ので、混同しない書き方にしてある。
+
+#### テストの一致方法を 2 通り使い分けた
+
+- **肩ゲートそのものが主題のテスト**（「両肩が離れすぎ」「`tolerancePct=0.06` でも肩 ±6% なら
+  検出しない」）は**接尾辞まで固定**する。どちらの conjunct で落ちたかがそのテストの内容だから。
+- **肩の棄却が前置条件でしかないテスト**（relaxed フォールバックの 2 本）は
+  **前置一致（`startsWith`）**にする。主題は relaxed 側で、接尾辞を増やしても壊すべきではない。
+
+加えて 3 コードそれぞれの最小ケースと、「接尾辞なしの旧コードが積まれないこと」＋
+「`tolerancePct <= HS_SHOULDER_MAX_PCT` では `:cap` が発火しないこと」を掃引で固定した。
+`:cap` のテストは `getDefaultToleranceForTf('15min')` / `('30min')` から許容誤差を引いている——
+`:cap` は `tolerancePct > HS_SHOULDER_MAX_PCT` のときしか成立せず、tf-auto でそうなるのは
+この 2 足だけなので、マジックナンバーではなく tf-auto 表に結び付けた。
 
 ### Fixed（dedup の勝者選択を 2 層で揃えた。#142）
 

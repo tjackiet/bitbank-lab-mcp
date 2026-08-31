@@ -20,10 +20,69 @@ import type { Pivot } from './swing.js';
 /** double_top / double_bottom の2点（山-山、谷-谷）同水準の構造上限 */
 export const DOUBLE_LEVEL_MAX_PCT = 0.03;
 
-/** H&S / IHS の左右肩同水準の構造上限 */
+/**
+ * H&S / IHS の左右肩同水準の構造上限。**「肩の許容誤差」そのものではない**（issue #172）。
+ *
+ * ## 肩の判定における役割: `tolerancePct` に対する天井
+ *
+ * `detect_hs.ts` の strict / relaxed 両経路は、肩の同水準判定を
+ * **`near(p0, p4)` と `isSameLevel(p0, p4, HS_SHOULDER_MAX_PCT)` の AND** で行う。
+ * `near` は `|a−b| / max(a,b) <= tolerancePct`（`regression.ts`）、`isSameLevel` は
+ * {@link relDiff} に対する同じ式なので、**同じ指標を 2 つの閾値で測っているだけ**。
+ * したがって実効閾値は:
+ *
+ *     min(tolerancePct, HS_SHOULDER_MAX_PCT)
+ *
+ * `tolerancePct` は `config.ts` の `getDefaultToleranceForTf` が時間足ごとに返す
+ * （`resolveParams` がスキーマ既定値 0.04 のときだけ tf-auto に差し替える）。
+ * **既定パスで本定数が律速するのは `15min` / `30min` だけ**:
+ *
+ * | 時間足 | `tolerancePct`（tf-auto） | `HS_SHOULDER_MAX_PCT` | 実効値 | 律速側 |
+ * |---|---|---|---|---|
+ * | `1hour` / `4hour` | 0.05 | 0.05 | 0.05 | 同値 |
+ * | `1day`（他） | 0.04 | 0.05 | **0.04** | **`tolerancePct`** |
+ * | `8hour` / `12hour` | 0.045 | 0.05 | 0.045 | `tolerancePct` |
+ * | `1week` / `1month` | 0.035 / 0.03 | 0.05 | 0.035 / 0.03 | `tolerancePct` |
+ * | **`15min` / `30min`** | **0.06** | 0.05 | **0.05** | **本定数** |
+ *
+ * **本定数の役割は「呼び出し側が `tolerancePct` を明示的に緩めすぎたときの天井」。**
+ * `resolveParams` は明示値をそのまま通すので、`tolerancePct: 0.08` を渡して初めて
+ * （tf-auto 0.06 の 2 足を除き）本定数が効く。
+ *
+ * 実測でも**全時間足で「本定数のみが律速した棄却 = 0 件」**（#167 のクローズコメント。
+ * BTC/JPY `limit=200` / `headProminencePct: 0.01`）。棄却の支配的な内訳は「両方超過」で、
+ * どちらの閾値を緩めても通らない候補だった。この内訳は `view=debug` の
+ * `shoulders_not_near:{tolerance,cap,both}` で読める（#172。`detect_hs.ts` の
+ * `shouldersNotNearReason`）。**この定数を動かす提案は、まず `:cap` の実測件数を見ること。**
+ *
+ * ## もう 1 つの役割: 窓生成での「同水準の肩」判定
+ *
+ * `detect_hs.ts` の `outerShoulderOk`（`enumerateHsWindows` から呼ばれる）でも使う。
+ * こちらは**外側の脚にある肩が anchor の肩を「明確に」超えているか**の判定で、
+ * **`tolerancePct` と AND を取らない単独の閾値**。同水準（本定数以内）なら「幅のある肩」の
+ * 一部として窓を通す。詳細は `outerShoulderOk` のコメントを参照。
+ *
+ * ## {@link HS_NECKLINE_MAX_PCT} との違い
+ *
+ * あちらは `tolerancePct` と AND を取らない**独立した固定閾値**で、常に 5% が実効値
+ * （`tolerancePct` を動かしてもネックライン水平度は動かない。schema の `tolerancePct`
+ * description が公開している契約でもある）。本定数は肩の判定では `tolerancePct` と
+ * `min` を取るので、**同じ 0.05 でも効き方が違う。**
+ */
 export const HS_SHOULDER_MAX_PCT = 0.05;
 
-/** H&S / IHS のネックライン構成点（p1, p3）同水準の構造上限 */
+/**
+ * H&S / IHS のネックライン構成点（p1, p3）同水準の構造上限。
+ *
+ * **`tolerancePct` と AND を取らない独立した固定閾値**で、常にこの値が実効値になる
+ * （`validateHorizontalNeckline` の `maxPct` にそのまま渡る）。呼び出し側が
+ * `tolerancePct` を動かしてもネックラインの水平度要求は動かない——schema の
+ * `tolerancePct` description が「ネックライン水平度は本パラメータに依存しない固定閾値」
+ * として公開している契約。
+ *
+ * 肩側の {@link HS_SHOULDER_MAX_PCT} は同じ 0.05 でも `tolerancePct` と `min` を取る
+ * ため効き方が違う。**混同しないこと。**
+ */
 export const HS_NECKLINE_MAX_PCT = 0.05;
 
 /**
