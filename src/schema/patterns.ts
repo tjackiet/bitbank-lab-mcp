@@ -74,10 +74,16 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 		.describe(
 			[
 				'Patterns to detect. Recommended params (guideline):',
-				'- double_top/double_bottom: default (swingDepth=7, tolerancePct=0.04, minBarsBetweenSwings=5)',
+				'- double_top/double_bottom: leave swingDepth / tolerancePct / minBarsBetweenSwings unset — the ' +
+					'timeframe-auto values ARE the recommendation. Passing 7 / 0.04 / 5 explicitly does not pin those ' +
+					'numbers: they are the schema defaults and get replaced by the timeframe-auto values (see each param).',
 				'- triple_top/triple_bottom: tolerancePct≈0.05',
 				'- triangle_*: tolerancePct≈0.06',
 				'- pennant: swingDepth≈5, minBarsBetweenSwings≈3',
+				'- The ≈ values above are absolute targets, NOT "looser than the default". Compare them with the ' +
+					'timeframe-auto table in each parameter first: tolerancePct is already 0.05 on 1hour/4hour ' +
+					'(≈0.05 is a no-op there) and already 0.06 on 15min/30min (≈0.05 TIGHTENS it), and ' +
+					'swingDepth / minBarsBetweenSwings are already 5 / 3 on 4hour/8hour/12hour.',
 				'- head_and_shoulders/inverse_head_and_shoulders: shoulder-level tolerance is tolerancePct ' +
 					'(same "bigger = looser" meaning as other types); to loosen how much the head must stand out ' +
 					'above/below the shoulders, use headProminencePct instead (opposite direction: bigger = stricter).',
@@ -85,7 +91,25 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 			].join('\n'),
 		),
 	// Heuristics
-	swingDepth: z.number().int().min(1).max(10).optional().default(7),
+	swingDepth: z
+		.number()
+		.int()
+		.min(1)
+		.max(10)
+		.optional()
+		.default(7)
+		.describe(
+			'スイング検出の窓の深さ。ピボット（山 / 谷）と認めるのに前後何本ぶんの比較を要求するか。' +
+				'大きいほどピボットが減り、検出されるパターンも減る。窓の前後 swingDepth 本は' +
+				'ピボット候補から外れるので limit の実効下限にも効く（limit の説明を参照）。\n' +
+				'**未指定なら時間軸オート**: 1min/5min=2, 15min/30min/1hour=3, 4hour/8hour/12hour=5, ' +
+				'1day=6, 1week=7, 1month=8。\n' +
+				'**⚠ 既定値 7 を明示的に渡しても時間軸オートに置換される**（7 は「未指定」の sentinel 扱い）。' +
+				'`swingDepth=7` は 1hour では 3、1day では 6 として実行される。' +
+				'指定した値をそのまま効かせたいなら 7 以外を渡すこと（6 や 8 はそのまま通る）。' +
+				'**深くしたい / 浅くしたいときは上の時間軸オート値と比べて選ぶ**' +
+				'（例: 1hour の auto は 3 なので、7 を渡すのは「深くする」ではなく「auto に戻す」）。',
+		),
 	tolerancePct: z
 		.number()
 		.min(0)
@@ -95,11 +119,36 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 		.describe(
 			'同水準判定の許容誤差。大きいほど判定が緩くなる。head_and_shoulders / inverse_head_and_shoulders では' +
 				'肩の左右差の許容誤差にのみ使う（ネックライン水平度は本パラメータに依存しない固定閾値。' +
-				'頭が肩よりどれだけ突出すべきかは' +
+				'頭が肩よりどれだけ突出すべきかは ' +
 				'headProminencePct が別に持つ。issue #149——旧実装はここに頭の突出要求も相乗りしており、' +
-				'肩では「大きいほど緩い」・頭では「大きいほど厳しい」が同じ値に同時にかかっていた）。',
+				'肩では「大きいほど緩い」・頭では「大きいほど厳しい」が同じ値に同時にかかっていた）。\n' +
+				'**未指定なら時間軸オート**: 1hour/4hour=0.05, 8hour/12hour=0.045, 15min/30min=0.06, ' +
+				'1week=0.035, 1month=0.03, その他=0.04。\n' +
+				'**⚠ 既定値 0.04 を明示的に渡しても時間軸オートに置換される**（0.04 は「未指定」の sentinel 扱い）。' +
+				'1hour では `tolerancePct=0.04` が 0.05 として実行されるので、' +
+				'**0.04 → 0.05 に「緩めた」つもりの再検出は 1hour では何も緩んでいない**（前後とも実効 0.05）。' +
+				'指定した値をそのまま効かせたいなら 0.04 以外を渡し、' +
+				'**緩める / 締めるの判断は上の時間軸オート値との比較で行うこと**' +
+				'（1hour の auto は 0.05 なので、緩めるなら 0.055 以上。0.045 は auto より厳しい）。',
 		),
-	minBarsBetweenSwings: z.number().int().min(1).max(30).optional().default(5),
+	minBarsBetweenSwings: z
+		.number()
+		.int()
+		.min(1)
+		.max(30)
+		.optional()
+		.default(5)
+		.describe(
+			'ピボット（山 / 谷）どうしに要求する最小間隔（バー数）。大きいほど近接ピボットが排除され、' +
+				'検出されるパターンも減る。\n' +
+				'**未指定なら時間軸オート**: 1min/5min=1, 15min/30min/1hour=2, 4hour/8hour/12hour=3, ' +
+				'1day=4, 1week=5, 1month=6（swingDepth と同じ表の別列。両者は必ず同じ時間軸オートから来る）。\n' +
+				'**⚠ 既定値 5 を明示的に渡しても時間軸オートに置換される**（5 は「未指定」の sentinel 扱い）。' +
+				'`minBarsBetweenSwings=5` は 1hour では 2、1day では 4 として実行される。' +
+				'指定した値をそのまま効かせたいなら 5 以外を渡すこと（4 や 6 はそのまま通る）。' +
+				'**広げたい / 狭めたいときは上の時間軸オート値と比べて選ぶ**' +
+				'（例: 1hour の auto は 2 なので、5 を渡すのは「広げる」ではなく「auto に戻す」）。',
+		),
 	headProminencePct: z
 		.number()
 		.min(0)

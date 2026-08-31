@@ -336,6 +336,41 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 
 ## detect_patterns 詳細ガイド
 
+### スイング検出パラメータは時間軸オート（**スキーマ既定値は sentinel**）
+
+`swingDepth` / `tolerancePct` / `minBarsBetweenSwings` は**未指定なら時間軸ごとの既定値に解決される**
+（`tools/patterns/config.ts` の `getDefaultParamsForTf` / `getDefaultToleranceForTf`）。
+
+| 時間足 | `swingDepth` | `minBarsBetweenSwings` | `tolerancePct` |
+|---|---|---|---|
+| `1min` / `5min` | 2 | 1 | 0.04 |
+| `15min` / `30min` | 3 | 2 | 0.06 |
+| `1hour` | 3 | 2 | 0.05 |
+| `4hour` | 5 | 3 | 0.05 |
+| `8hour` / `12hour` | 5 | 3 | 0.045 |
+| `1day` | 6 | 4 | 0.04 |
+| `1week` | 7 | 5 | 0.035 |
+| `1month` | 8 | 6 | 0.03 |
+
+`headProminencePct`（H&S / 逆 H&S 専用）は未指定時に `tolerancePct` と同じ列を使う。
+
+**スキーマ既定値そのもの（`swingDepth=7` / `tolerancePct=0.04` / `minBarsBetweenSwings=5`）を
+明示的に渡しても、時間軸オートに置換される。** `resolveParams` が「スキーマ既定値と等しいか」で
+未指定を判定しているため、この 3 値だけは固定値として要求できない。
+
+| 呼び出し | `1hour` | `4hour` | `1day` |
+|---|---|---|---|
+| `{swingDepth: 7, tolerancePct: 0.04, minBarsBetweenSwings: 5}` | 3 / 0.05 / 2 | 5 / 0.05 / 3 | 6 / 0.04 / 4 |
+| `{swingDepth: 6, tolerancePct: 0.041, minBarsBetweenSwings: 4}` | 6 / 0.041 / 4 | 6 / 0.041 / 4 | 6 / 0.041 / 4 |
+
+**1 だけずらせば通る。ちょうど既定値のときだけ通らない。** 実害は「緩めたつもりが no-op」で、
+`1hour` で `tolerancePct` を 0.04 → 0.05 に変えても実効値は前後とも 0.05（issue #182）。
+緩める / 締めるの判断は**上の表の時間軸オート値との比較**で行うこと。
+
+`headProminencePct` だけがこの問題を持たない——スキーマに `.default()` を付けておらず、
+`undefined` が正規の sentinel になっているため、明示値はすべてそのまま通る（#149 / PR #153）。
+3 パラメータから `.default()` を外す案は本 issue のスコープ外（#182 案 B）。
+
 ### 表示日時の tz 化
 
 `tz` パラメータ（既定 `Asia/Tokyo`）で表示日時を整形する。`get_candles` の `tz` と揃えるのが推奨。

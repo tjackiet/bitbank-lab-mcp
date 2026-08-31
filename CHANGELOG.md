@@ -43,6 +43,72 @@
 | 28 | #174 | #172 の docstring が relaxed 経路について誤っていたのを訂正し、relaxed の肩落ちを `debug.candidates` に積む | **変わらない**（0 / 800） |
 | 29 | #138 | triple の「同水準」判定に**高さ相対の hard gate**（`MAX_LEVEL_SPREAD_RATIO`）を足し、無音だった 3 点同水準の棄却を可観測化した | 実データで**減る**（−20 / 800。**増加 0**）/ 合成 fixture は変わらない |
 | 30 | #180 | cap で切られた `debug.candidates` / `debug.swings` の総数と省略件数を申告する（cap の値もトリム戦略も変えない） | **変わらない**（0 / 800） |
+| 31 | #182 | `swingDepth` / `tolerancePct` / `minBarsBetweenSwings` の description に**時間軸オートとスキーマ既定値の sentinel 置換**を明記した（`resolveParams` も `.default()` も触っていない） | **変わらない**（description のみ） |
+
+### Fixed（スイング検出 3 パラメータの**スキーマ既定値が sentinel** であることがどこにも書かれていなかった。#182）
+
+**`swingDepth=7` / `tolerancePct=0.04` / `minBarsBetweenSwings=5` を明示的に渡すと、時間軸オート値に
+置換される。** `resolveParams`（`tools/patterns/config.ts`）が「スキーマ既定値と等しいか」で未指定を
+判定しているためで、**この 3 値だけは固定値として要求できない。**
+
+    // swingDepth: スキーマ既定値(7)が来た場合は時間軸オートに置換
+    const swingDepth = Number.isFinite(opts.swingDepth as number)
+        ? (opts.swingDepth as number) === SCHEMA_DEFAULTS.swingDepth
+            ? auto.swingDepth
+            : (opts.swingDepth as number)
+        : auto.swingDepth;
+
+挙動自体は意図的で `tests/patterns/config.test.ts` が既に固定している。**問題はどこにも書かれて
+いなかったこと**で、`swingDepth` と `minBarsBetweenSwings` には `.describe()` すら無く、
+`tolerancePct` の `.describe()` は #149 の H&S 意味論しか書いていなかった。
+
+| 呼び出し | `1hour` | `4hour` | `1day` |
+|---|---|---|---|
+| `{swingDepth: 7, tolerancePct: 0.04, minBarsBetweenSwings: 5}` | 3 / 0.05 / 2 | 5 / 0.05 / 3 | 6 / 0.04 / 4 |
+| `{swingDepth: 6, tolerancePct: 0.041, minBarsBetweenSwings: 4}` | 6 / 0.041 / 4 | 6 / 0.041 / 4 | 6 / 0.041 / 4 |
+
+**1 だけずらせば通る。ちょうど既定値のときだけ通らない。**
+
+#### 実害: LLM が「緩めて再検出した」と報告するが、実効値は前後とも同じ
+
+Claude Desktop の実機テストで、LLM が「`tolerancePct` を 0.04 → 0.05 に緩めて再検出した」と報告した。
+`1hour` では **0.04 も 0.05 に解決される**ので、実効値は前後とも 0.05。**何も緩んでいない。**
+`tolerancePct` は description があるぶんかえって危険で、「大きいほど緩い」と書いてあるため
+0.04 → 0.05 が効くと読める。#172 / #174 と同じ、**description が LLM に誤った結論を出させるクラス**。
+
+#### `headProminencePct` だけが既に正解の形だった
+
+`headProminencePct`（#149 / PR #153）はこの問題を持たない。理由は 2 つ:
+
+1. **`.default()` を付けていない。** `undefined` が正規の sentinel になるので、明示値はすべてそのまま通る
+   （`config.ts` の同パラメータのコメントに理由がある）。
+2. **description に時間軸オートの表を書いてある。**
+
+本変更は**この 2 つ目だけを 3 パラメータに横展開した**。`.default()` の除去（#182 案 B）は入れていない
+——外すと「既定値を明示指定したのに置換される」は消えるが、**入力スキーマの契約変更**になるため別途。
+
+#### 変更点（`src/schema/patterns.ts` の description のみ）
+
+| 対象 | 変更 |
+|---|---|
+| `swingDepth`（`.describe()` 新規） | 意味 ＋ 時間軸オート表（1min/5min=2, 15min/30min/1hour=3, 4hour/8hour/12hour=5, 1day=6, 1week=7, 1month=8）＋ **既定値 7 は sentinel** |
+| `minBarsBetweenSwings`（`.describe()` 新規） | 意味 ＋ 時間軸オート表（1min/5min=1, 15min/30min/1hour=2, 4hour/8hour/12hour=3, 1day=4, 1week=5, 1month=6）＋ **既定値 5 は sentinel** |
+| `tolerancePct`（既存 `.describe()` に追記） | **#149 の H&S 意味論はそのまま残し**、後ろに時間軸オート表（`headProminencePct` と同一文言）＋ **既定値 0.04 は sentinel** ＋ 上記 no-op の実例 |
+| `patterns` の推奨行 | `- double_top/double_bottom: default (swingDepth=7, tolerancePct=0.04, minBarsBetweenSwings=5)` が**字面として sentinel 値そのもの**だったので「未指定のままにせよ」に書き換え。`≈` の推奨値が時間軸オートと衝突しうる旨も 1 行足した（`1hour`/`4hour` で `tolerancePct≈0.05` は no-op、`15min`/`30min` では**締める**側） |
+
+表は 2 パラメータそれぞれに**値そのものを書いた**（片方から参照させない）。LLM は 1 パラメータの
+description だけを読んで判断しうるため。
+
+`docs/tools.md` の「detect_patterns 詳細ガイド」にも同じ表と置換の説明を足した（数値は schema と同一）。
+
+#### 触っていないもの
+
+- `resolveParams` / `getDefaultParamsForTf` / `getDefaultToleranceForTf` — 1 バイトも変えていない
+- `.default()` — 3 つとも残している（#182 案 B）
+- `content` / `meta` の出力（`effective_params` に `headProminencePct` が漏れている件も含めて別 PR）
+
+**`data.patterns` は変わらない。** #172（docstring のみ）と同じ扱いで、description 文字列に依存する
+テストも無いため 800 ケース測定は行っていない。
 
 ### Fixed（`view=debug` の `debug.candidates` が cap=200 で黙って切られ、切られたことが出力から分からなかった。#180 案 1）
 
