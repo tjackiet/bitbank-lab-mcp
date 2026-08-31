@@ -46,6 +46,160 @@
 | 31 | #182 | `swingDepth` / `tolerancePct` / `minBarsBetweenSwings` の description に**時間軸オートとスキーマ既定値の sentinel 置換**を明記した（`resolveParams` も `.default()` も触っていない） | **変わらない**（description のみ） |
 | 32 | #184 | `meta.effective_params` が**出力スキーマ未宣言で毎回 strip されていた**のを宣言し、実効パラメータ行を全 view の `content` に出した。`headProminencePct` を追加し、壊れていた `autoScaled` を per-parameter の `source` に置換 | **変わらない**（`meta` / `content` のみ） |
 | 33 | #187 | `MAX_VALLEY_SPREAD`（1.5%）を削除した（#178 項目 2）。top / bottom と strict / relaxed の 2 つの非対称が同時に解消し、理由コード `valley_spread_excess` が消える | **変わらない**（0 / 896） |
+| 34 | #186 | strict triple のネックライン水平性が**同じ式を 2 つの名前で 2 回**測っていたのを `NECKLINE_SLOPE_LIMIT` 1 本に畳んだ。理由コード `valleys_not_equal` / `peaks_not_equal` が triple から消える（#172 / #174 の H&S と同じ失敗の横展開） | **変わらない**（0 / 896。既定パス）/ `tolerancePct < 0.02` を明示したときだけ**緩む** |
+
+### Changed（strict triple のネックライン判定を `NECKLINE_SLOPE_LIMIT` 1 本に畳んだ。#186）
+
+`findStrictTripleTop` / `findStrictTripleBottom` は、ネックライン構成 2 点（top なら 2 谷、
+bottom なら 2 山）の水平性を**分子も分母も完全に同一の式**で 2 回測っていた:
+
+    valleysNear   = |v1 - v2| / max(1, max(v1, v2)) <= tolerancePct         // 既定 0.03〜0.06
+    necklineSlope = |v1 - v2| / max(1, max(v1, v2))
+    necklineValid = necklineSlope <= NECKLINE_SLOPE_LIMIT                   // 0.02
+
+    if (!(valleysNear && necklineValid)) reject(!valleysNear ? 'valleys_not_equal' : 'neckline_slope_excess')
+
+違うのは閾値だけで、**`tolerancePct` の時間軸オートはすべて 0.02 より大きい**
+（`getDefaultToleranceForTf`: 1month 0.03 〜 15min/30min 0.06）。したがって既定パスでは
+`necklineValid ⟹ valleysNear` が恒真、`if` 全体は **`necklineSlope > 0.02` と等価**で、
+`tolerancePct` は**棄却理由コードのラベルを分けているだけ**だった。
+
+#### 害は「理由コードが間違ったつまみを指す」こと
+
+`valleys_not_equal` / `peaks_not_equal` を見た読み手（人間も LLM も）は
+「`tolerancePct` を緩めれば通る」と読む。**通らない。** `NECKLINE_SLOPE_LIMIT` が先に効くので、
+名前が `neckline_slope_excess` に変わるだけで結果は同じ。`view=debug` の理由コードは
+「なぜ検出されなかったか」を追うための唯一の導線（#144 / #145）なので、そこが誤った再試行を
+示唆するのは #172（H&S の `shoulders_not_near`）とまったく同じ失敗である。
+
+#### 採った案: 述語を 1 本にする（#172 の接尾辞方式は採らない）
+
+判定を `NECKLINE_SLOPE_LIMIT` だけにし、`valleysNear` / `peaksNear` を削除した。
+
+    if (necklineSlope > NECKLINE_SLOPE_LIMIT) reject('neckline_slope_excess')
+
+**#172 の `shoulders_not_near:{both,cap,tolerance}` 方式（接尾辞で conjunct を分ける）は採らない。**
+あちらは 2 つの述語が**別の量**（肩の左右差と、その絶対上限）を測っていたので分類に意味があった。
+ここは**同じ量**なので、`necklineValid ⟹ valleysNear` から `:tolerance` は既定パスで到達不能、
+残る `:both` / `:cap` は「`spread > tolerancePct` か否か」を言うだけで、
+**どちらも「`tolerancePct` を緩めても通らない」点で同じ**。分類が読み手の次の行動を変えない。
+`min(tolerancePct, NECKLINE_SLOPE_LIMIT)` に畳む案（挙動が締まる方向）も、
+既定パスでは現行と同一で `tolerancePct < 0.02` の範囲だけを締めるため、
+**同じ 1 点に逆向きの変更を入れるだけ**になるので採らない。
+
+#### 消える理由コード（`view=debug` の契約変更）
+
+| 理由コード | 変更 |
+|---|---|
+| `triple_top` の `valleys_not_equal` | **消える** → `neckline_slope_excess` に再配分 |
+| `triple_bottom` の `peaks_not_equal` | **消える** → `neckline_slope_excess` に再配分 |
+
+**`double_top` / `double_bottom` の同名コード（`detect_doubles.ts`）と、triple の relaxed 経路の
+`valleys_not_equal_relaxed` / `peaks_not_equal_relaxed` は対象外**（別の判定・別のコード文字列）。
+relaxed 経路は逐次の `if` で述語の重複が無く、そもそも `valleysNear` 相当の検査を持たない。
+
+#### 実測（合成 704 + 実データ A 96 + 実データ B 96 = 896 ケース。`main` = fe3a0a3 と比較）
+
+| | before → after |
+|---|---|
+| `data.patterns` | **0 / 896**（全ケース JSON deep-equal。合計 1,388 件で不変） |
+| `debug.candidates` の配列の中身（cap 200） | 80 / 896 で変化（合成 16 / 実データ A 64 / **実データ B 0**）。**全件が `accepted: false` の `reason` 文字列の入れ替わりで、配列長・並び・`accepted` は不変** |
+| `debug.swings` | **0 / 896** |
+| `accepted: true` の候補 | 5,160 → **5,160** |
+
+理由コードの再配分（cap を外して全件を数えたもの。cap 200 のままだと押し出しで過小に見える）:
+
+| 理由コード | before → after |
+|---|---|
+| `triple_bottom:peaks_not_equal` | 104 → **0**（−104） |
+| `triple_bottom:neckline_slope_excess` | 288 → **392**（+104） |
+| `triple_top:valleys_not_equal` | 16 → **0**（−16） |
+| `triple_top:neckline_slope_excess` | 200 → **216**（+16） |
+| 棄却候補の合計 | 226,328 → **226,328** |
+
+**1:1 の置き換えなのでエントリ数は原理的に不変**（コードを消す方向で、分岐そのものは減らない）。
+実測でも cap 統計は完全に不変:
+
+| | before → after |
+|---|---|
+| `candidatesTotal` / `candidatesOmitted` / `swingsTotal` / `swingsOmitted` が変わったケース | **0 / 896** |
+| `candidatesTotal` の合計（標準コーパス 800） | 45,636 → **45,636** |
+| `candidatesOmitted > 0`（標準コーパス） | **32 / 800** で不変 |
+| `candidatesTotal` の分布（標準コーパス） | min 4 / p50 39 / p95 185 / max 289 / mean 57.0 で不変 |
+| 押し出し総数（標準コーパス） | **1,588 件**で不変 |
+
+#### 2 系列で分布がまったく違う（実データ B では 1 件も動かない）
+
+| 系列 | `valleys_not_equal` | `peaks_not_equal` | 動いた候補 |
+|---|---|---|---|
+| 合成 704 | 0 | 16 | 16 |
+| 実データ A（`btc_jpy_1day_2026`） | 16 | 88 | 104 |
+| **実データ B（`btc_jpy_1hour_2026_08`）** | **0** | **0** | **0** |
+
+実データ B の triple 系棄却はサイズ検査が支配的で（`peak_too_shallow` 1,460 /
+`pattern_too_small` 1,320 / `valley_too_shallow` 1,208）、strict のネックライン判定に
+**到達する前に落ちている**。#178 項目 2 の測定で判明した「2 系列で理由コードの分布が大きく違う」が
+そのまま出た形で、**片方の系列だけで測っていたら「変化なし」と誤って結論していた**。
+
+#### `tolerancePct < 0.02` を明示したときだけ挙動が変わる（緩む）
+
+実効上限が `min(tolerancePct, 0.02)` → `0.02` になるので、**`tolerancePct` を 0.02 未満で
+明示指定した範囲だけ緩む**。スキーマは `min(0) max(0.1)` なので指定自体は可能だが、
+時間軸オートは最小でも 0.03 なので**既定パスには現れない**（896 ケースで 0 / 896）。
+
+`tolerancePct=0.01` を全ケースに明示して測り直すと:
+
+| | before → after |
+|---|---|
+| `data.patterns` が変わったケース | **40 / 896**（合成 32 / 実データ A 0 / 実データ B 8） |
+| パターン合計 | 1,288 → **1,296**（+8。**減少 0**） |
+| うち件数が増えたケース | 8（すべて実データ B の `1hour`。`triple_bottom` `near_completion` が 1 件ずつ追加） |
+| うち confidence だけ変わったケース | 32（合成。**0.96 → 1.00**） |
+
+`tolerancePct=0.02` ちょうどでは **0 / 896**（境界も実測で固定した）。
+
+**「緩む」の中身は 2 つあり、大半は新規検出ではない。**
+
+1. **confidence が上がる（32 ケース）。** 旧実装では strict が弾いた直後に relaxed fallback
+   （`relaxed_triple_x1.25`）が**同じ 3 点を拾い直していた**ので、`data.patterns` には
+   以前から出ていた。変わるのは relaxed の 0.95 倍ペナルティが外れる点だけ。
+   単体で確認すると confidence 0.90 → 0.95 / 0.96 → 1.00。
+2. **新規検出が増える（8 ケース、+8 件）。** relaxed fallback は
+   **strict がその種別を 0 件にしたときにしか走らず、しかも 1 件しか返さない**。
+   strict が既に他の `triple_bottom` を見つけていた実データ B では fallback が発火せず、
+   旧実装ではこの候補が丸ごと落ちていた。
+
+**緩む側に倒すことの是非: 妥当と判断した。** 理由は 3 つ。
+
+- **`tolerancePct` は「同水準判定の許容誤差」であってネックラインの水平度ではない。**
+  スキーマの description も H&S について「ネックライン水平度は本パラメータに依存しない固定閾値」と
+  明言しており、triple だけが strict 経路で暗黙にネックラインへも効いていた。
+  **1 本化はその description に実装を合わせる方向**で、締める側（`min()`）に倒すと
+  「`tolerancePct` を下げるとネックライン要件も道連れで厳しくなる」という記載外の結合が残る。
+- **旧挙動は strict / relaxed の非対称を作っていた。** relaxed 経路のネックライン判定は
+  もともと `NECKLINE_SLOPE_LIMIT` 一本で、`tolerancePct` を掛けていない。
+  strict だけが厳しく、弾いた形を relaxed が confidence を 0.95 倍して拾い直す
+  ——#187 が `MAX_VALLEY_SPREAD` で解消したのと**同じ構図**が残っていた。
+- **単調で、失う検出が無い。** 896 ケース × `tolerancePct=0.01` で**減少 0 / 消えた検出 0**。
+  増える 8 件はいずれも `near_completion`（未ブレイク）で、
+  ブレイク済みの偽シグナルが増える変更ではない。
+
+締めたい場合の代替は `min(tolerancePct, NECKLINE_SLOPE_LIMIT)` への 1 本化だが、
+**既定パスでは現行とまったく同じで、`tolerancePct < 0.02` の範囲だけを逆向きに動かす**。
+上の 3 点から採らなかった。
+
+#### #172 / #174 との関係——**同じ失敗を triple でもやっていた**
+
+| | #172 / #174（H&S） | 本件（triple） |
+|---|---|---|
+| 症状 | 1 つの理由コードが 2 つの conjunct を束ねており、どちらで落ちたか分からない | 同左（`valleys_not_equal` / `neckline_slope_excess`） |
+| 2 つの述語が測る量 | **別の量**（肩の左右差 / その絶対上限） | **同じ量**（同一の式） |
+| 対処 | 接尾辞で 3 分類に分ける（`shoulders_not_near:{both,cap,tolerance}`） | **述語を 1 本にして理由コードを 1 つ消す** |
+
+**片方が他方を含意する 2 つの述語に別々の名前を付けること自体**が診断を壊していた、という点が
+本件の核心で、接尾辞で説明を足しても「間違ったつまみを指す」ことは直らない。
+なお命名規約（strict / relaxed の分離、`:` 区切りの接尾辞）は今回**新しいコードを増やさない**ため
+出番が無かった。triple の `_relaxed` **接尾辞**の idiom は既存のまま維持している。
 
 ### Removed（完成済み `triple_bottom` の `MAX_VALLEY_SPREAD`（1.5%）を削除した。#178 項目 2）
 
