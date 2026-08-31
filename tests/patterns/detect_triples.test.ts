@@ -337,16 +337,48 @@ describe('detectTriples', () => {
 		expect(rejected).toBeDefined();
 	});
 
-	it('谷スプレッド超過 → valley_spread_excess rejected', () => {
-		// v1=100, v2=101, v3=103 → spread=(103-100)/100=3% > 1.5%
-		const { candles, pivots } = buildTripleBottom({ valley: 100, v2Price: 101, v3Price: 103 });
+	// 旧テスト「谷スプレッド超過 → valley_spread_excess rejected」の入力をそのまま引き継ぐ。
+	// `MAX_VALLEY_SPREAD`（1.5%）を削除した（#178 項目 2）ので、同じ入力が strict で受理される。
+	it('谷スプレッド 3%（tolerancePct 内）→ strict で受理される', () => {
+		// v1=100, v2=101, v3=103 → 価格水準基準のばらつきは (103-100)/100 = 3%。
+		// - 段 1（`nearAll`）: tolerancePct = 4% 以内なので通る
+		// - 段 3（`validateLevelSpread`）: 高さ 120-100=20 に対し 3/20 = 0.15 で
+		//   MAX_LEVEL_SPREAD_RATIO（0.5）に遠く通る
+		// 旧 `MAX_VALLEY_SPREAD` だけがこれを弾いていた。
+		const { candles, pivots } = buildTripleBottom({ valley: 100, v2Price: 101, v3Price: 103, withBreakout: true });
 		const ctx = buildCtx({ candles, pivots });
-		detectTriples(ctx);
+		const result = detectTriples(ctx);
 
-		const rejected = ctx.debugCandidates.find(
-			(d) => d.type === 'triple_bottom' && d.accepted === false && d.reason === 'valley_spread_excess',
-		);
-		expect(rejected).toBeDefined();
+		expect(ctx.debugCandidates.filter((d) => d.reason === 'valley_spread_excess')).toHaveLength(0);
+		const accepted = ctx.debugCandidates.find((d) => d.type === 'triple_bottom' && d.accepted === true);
+		expect(accepted).toBeDefined();
+
+		const tb = result.patterns.filter((p) => p.type === 'triple_bottom');
+		expect(tb).toHaveLength(1);
+		expect(tb[0]?.status).toBe('completed');
+		// **strict で拾えていること**を固定する。削除前は strict が弾き relaxed fallback が
+		// 同じパターンを拾い直していた（`_fallback` が付く）。同じ triple_bottom で strict の
+		// ほうが厳しいという非対称は #178 項目 2 で解消済み。
+		expect(tb[0]?._fallback).toBeUndefined();
+	});
+
+	it('3 点のばらつき 3% の受理は top / bottom で対称', () => {
+		// `MAX_VALLEY_SPREAD` は bottom にしか無く、同形の triple_top は常に通っていた
+		// （#138 確認事項 B の非対称）。削除後は両側とも strict で同じ confidence になる。
+		const top = buildTripleTop({ peak: 100, peak2Price: 101, peak3Price: 103, withBreakout: true });
+		const bottom = buildTripleBottom({ valley: 100, v2Price: 101, v3Price: 103, withBreakout: true });
+		const topCtx = buildCtx({ candles: top.candles, pivots: top.pivots });
+		const bottomCtx = buildCtx({ candles: bottom.candles, pivots: bottom.pivots });
+
+		const tt = detectTriples(topCtx).patterns.filter((p) => p.type === 'triple_top');
+		const tb = detectTriples(bottomCtx).patterns.filter((p) => p.type === 'triple_bottom');
+		expect(tt).toHaveLength(1);
+		expect(tb).toHaveLength(1);
+		expect(tb[0]?.confidence).toBe(tt[0]?.confidence);
+		// **両側とも strict 由来**であることを個別に固定する。`toBe` で突き合わせるだけだと
+		// 両方が relaxed に退行したケースも通ってしまい、対称性は満たすが主張が空になる。
+		expect(tt[0]?._fallback).toBeUndefined();
+		expect(tb[0]?._fallback).toBeUndefined();
 	});
 
 	// ── want フィルタ ────────────────────────────────────────
