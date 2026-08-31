@@ -70,8 +70,8 @@ const originalParse = DetectPatternsOutputSchema.parse.bind(DetectPatternsOutput
  * `import` した同じスキーマオブジェクトのメソッドを呼び出し時に解決するので、
  * ここで差し替えた実装がそのまま効く。
  */
-async function runAndCapture(opts: Record<string, unknown> = {}) {
-	const candles = buildNoisyCandles();
+async function runAndCapture(opts: Record<string, unknown> = {}, candlesOverride?: Candle[]) {
+	const candles = candlesOverride ?? buildNoisyCandles();
 	vi.mocked(analyzeIndicators).mockResolvedValueOnce(
 		asMockResult({
 			ok: true,
@@ -177,6 +177,32 @@ describe('detect_patterns: meta に載せたキーが出力スキーマで strip
 			expect(typeof entry.value, `${name}.value`).toBe('number');
 			expect(['auto', 'explicit'], `${name}.source`).toContain(entry.source);
 		}
+	});
+
+	// **`ok()` を返す経路は 2 つある。** 通常経路と、足が 20 本未満のときの
+	// `'insufficient data'` 早期 return（`tools/detect_patterns.ts`）。後者に
+	// `effective_params` を足し忘れると「足が足りるときだけ実効値が出る」という
+	// candle 本数依存の申告漏れになり、content の実効パラメータ行も消える
+	// （#184 決定事項 1「常に出す」の穴）。CodeRabbit の指摘で見つけた。
+	it("'insufficient data' の早期 return でも effective_params を申告する", async () => {
+		// 20 本未満 → 検出器に入る前に早期 return する
+		const few = buildNoisyCandles().slice(0, 15);
+		const { input, output } = await runAndCapture({}, few);
+
+		expect(output.summary).toBe('insufficient data');
+		const eff = metaOf(output).effective_params as Record<string, { value: number; source: string }>;
+		expect(eff, 'insufficient data 経路で effective_params が落ちている').toBeDefined();
+		expect(Object.keys(eff).sort()).toEqual([
+			'headProminencePct',
+			'minBarsBetweenSwings',
+			'swingDepth',
+			'tolerancePct',
+		]);
+		// 1day の時間軸オート値。通常経路と同じ解決結果になる。
+		expect(eff.swingDepth).toEqual({ value: 6, source: 'auto' });
+		expect(eff.tolerancePct).toEqual({ value: 0.04, source: 'auto' });
+		// この経路でも宣言漏れが無いこと
+		expectNoStrippedKeys(metaOf(input), metaOf(output), 'detect_patterns meta（insufficient data）');
 	});
 
 	it('明示指定したパラメータも parse 後に source=explicit で残る', async () => {

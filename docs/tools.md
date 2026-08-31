@@ -375,7 +375,9 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 
 **解決後の実効値は推測しなくていい。** 4 つの view すべて（`debug` を含む）で、ヘッダ直下に 1 行出る。
 
-    実効パラメータ（入力値ではない）: swingDepth=3(auto) / minBarsBetweenSwings=2(auto) / tolerancePct=0.05(auto) / headProminencePct=0.05(auto) ※auto=1hour の時間軸オート値（スキーマ既定値 7/5/0.04 の明示指定も auto）
+```text
+実効パラメータ（入力値ではない）: swingDepth=3(auto) / minBarsBetweenSwings=2(auto) / tolerancePct=0.05(auto) / headProminencePct=0.05(auto) ※auto=1hour の時間軸オート値（スキーマ既定値 7/5/0.04 の明示指定も auto）
+```
 
 | 表記 | 意味 |
 |---|---|

@@ -154,7 +154,8 @@ D により第 1 項は**常に `undefined`**。第 2 項の**生入力値**に�
 
 `.default()` がある限り「未指定」と「既定値を明示指定」は区別できないので、`auto` はその 2 つを畳んでいる
 （本 PR では区別しない——どちらでも実効値は同じで、見せたいのは実効値のほう）。区別が要るなら
-#182 案 B（`.default()` 除去）が前提。`headProminencePct` だけは `.default()` が無いので `auto` = 未指定と同義。
+issue #182 案 B（`.default()` 除去）が前提。`headProminencePct` だけは `.default()` が無いので
+`auto` = 未指定と同義。
 
 **実効値の計算は 1 行も変えていない。** 入れ子三項を `xxxExplicit` の平坦な述語に書き換えたが、
 **パラメータごとの述語は元のまま**にしてある（`swingDepth` / `minBarsBetweenSwings` は `Number.isFinite`、
