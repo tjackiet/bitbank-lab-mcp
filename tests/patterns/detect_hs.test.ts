@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dayjs } from '../../lib/datetime.js';
-import { getSizeThresholdsForTf } from '../../tools/patterns/config.js';
+import { getDefaultToleranceForTf, getSizeThresholdsForTf } from '../../tools/patterns/config.js';
 import { detectHeadAndShoulders } from '../../tools/patterns/detect_hs.js';
 import { linearRegressionWithR2 } from '../../tools/patterns/regression.js';
 import type { Pivot } from '../../tools/patterns/swing.js';
@@ -272,14 +272,15 @@ describe('detectHeadAndShoulders', () => {
 		expect(rejected).toBeDefined();
 	});
 
-	it('両肩が離れすぎ → shoulders_not_near で rejected', () => {
-		// left=100, right=120 → |20|/120=0.167 > 0.04
+	it('両肩が離れすぎ → shoulders_not_near:both で rejected', () => {
+		// left=100, right=120 → |20|/120=0.167 > tolerancePct(0.04) かつ > HS_SHOULDER_MAX_PCT(0.05)
+		// → どちらを緩めても通らないので :both（issue #172）
 		const { candles, pivots } = buildHS({ leftShoulder: 100, rightShoulder: 120 });
 		const ctx = buildCtx({ candles, pivots });
 		detectHeadAndShoulders(ctx);
 
 		const rejected = ctx.debugCandidates.find(
-			(d) => d.type === 'head_and_shoulders' && d.accepted === false && d.reason === 'shoulders_not_near',
+			(d) => d.type === 'head_and_shoulders' && d.accepted === false && d.reason === 'shoulders_not_near:both',
 		);
 		expect(rejected).toBeDefined();
 	});
@@ -370,7 +371,7 @@ describe('detectHeadAndShoulders', () => {
 
 	it('strict 不検出 → relaxed H&S (x1.6) でフォールバック検出', () => {
 		// left=100, right=105 → diff/max=5/105=0.0476
-		//   > strict(0.04)                  → strict は shoulders_not_near で弾かれる
+		//   > strict(0.04)                  → strict は shoulders_not_near:tolerance で弾かれる
 		//   <= relaxed(0.04*1.6=0.064)      → relaxed の肩許容に収まる
 		//   <= HS_SHOULDER_MAX_PCT(0.05)    → relaxed でも効く hard cap を超えない
 		// relaxed の許容幅は hard cap で頭打ちになるため、cap 超えの差（旧 106）では
@@ -382,9 +383,11 @@ describe('detectHeadAndShoulders', () => {
 		const hs = result.patterns.filter((p) => p.type === 'head_and_shoulders');
 		expect(hs.length).toBeGreaterThan(0);
 		expect(hs[0]?._fallback).toMatch(/relaxed_hs/);
-		// strict パスで一度弾かれてから relaxed に落ちたことを確認する
+		// strict パスで一度弾かれてから relaxed に落ちたことを確認する。
+		// **ここは前置一致**——本テストの主題は relaxed フォールバックであって、肩がどちらの
+		// conjunct で落ちたか（#172 の接尾辞）ではない。接尾辞を増やしても壊さない。
 		const strictRejected = ctx.debugCandidates.some(
-			(d) => d.type === 'head_and_shoulders' && d.reason === 'shoulders_not_near',
+			(d) => d.type === 'head_and_shoulders' && (d.reason ?? '').startsWith('shoulders_not_near'),
 		);
 		expect(strictRejected).toBe(true);
 	});
@@ -399,10 +402,128 @@ describe('detectHeadAndShoulders', () => {
 		const ihs = result.patterns.filter((p) => p.type === 'inverse_head_and_shoulders');
 		expect(ihs.length).toBeGreaterThan(0);
 		expect(ihs[0]?._fallback).toMatch(/relaxed_ihs/);
+		// 前置一致の理由は上の H&S 版と同じ（主題は relaxed フォールバック）。
 		const strictRejected = ctx.debugCandidates.some(
-			(d) => d.type === 'inverse_head_and_shoulders' && d.reason === 'shoulders_not_near',
+			(d) => d.type === 'inverse_head_and_shoulders' && (d.reason ?? '').startsWith('shoulders_not_near'),
 		);
 		expect(strictRejected).toBe(true);
+	});
+
+	// ── shoulders_not_near の conjunct 分割（issue #172） ──
+	//
+	// 肩の判定は `near(tolerancePct)` と `isSameLevel(HS_SHOULDER_MAX_PCT)` の AND で、
+	// 実効閾値は `min(tolerancePct, HS_SHOULDER_MAX_PCT)`。棄却理由が 1 種類しか無かったため
+	// `view=debug` を reason で集計するとどちらで落ちたか消えていた（#152 / #167 の誤診の原因）。
+
+	it('H&S: tolerancePct のみ超過 → shoulders_not_near:tolerance', () => {
+		// left=100, right=104.5 → 4.5/104.5 ≈ 0.0431
+		//   > tolerancePct(0.04)          → near() で fail
+		//   <= HS_SHOULDER_MAX_PCT(0.05)  → isSameLevel は通る
+		const { candles, pivots } = buildHS({ leftShoulder: 100, rightShoulder: 104.5, head: 130 });
+		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.04 });
+		detectHeadAndShoulders(ctx);
+
+		const rejected = ctx.debugCandidates.find(
+			(d) => d.type === 'head_and_shoulders' && d.accepted === false && d.reason?.startsWith('shoulders_not_near'),
+		);
+		expect(rejected?.reason).toBe('shoulders_not_near:tolerance');
+		// details は分割前と同じ 3 値を持つ（#172 は reason 文字列だけの変更）
+		const details = rejected?.details as Record<string, unknown> | undefined;
+		expect(details?.tolerancePct).toBe(0.04);
+		expect(details?.shoulderMaxPct).toBe(0.05);
+		expect(details?.shouldersDiffPct).toBeCloseTo(4.5 / 104.5, 6);
+	});
+
+	it('Inverse H&S: tolerancePct のみ超過 → shoulders_not_near:tolerance', () => {
+		const { candles, pivots } = buildInverseHS({ leftShoulder: 100, rightShoulder: 104.5, head: 70 });
+		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.04 });
+		detectHeadAndShoulders(ctx);
+
+		const rejected = ctx.debugCandidates.find(
+			(d) =>
+				d.type === 'inverse_head_and_shoulders' && d.accepted === false && d.reason?.startsWith('shoulders_not_near'),
+		);
+		expect(rejected?.reason).toBe('shoulders_not_near:tolerance');
+	});
+
+	it('H&S: HS_SHOULDER_MAX_PCT のみ超過 → shoulders_not_near:cap（15min の tf-auto 許容）', () => {
+		// `:cap` は `tolerancePct > HS_SHOULDER_MAX_PCT` のときしか成立しない。tf-auto で
+		// そうなるのは 15min / 30min（0.06 > 0.05）だけなので、マジックナンバーではなく
+		// tf-auto 表から引く（1day / 1hour では構造上この理由コードを発火させられない）。
+		const tol15min = getDefaultToleranceForTf('15min');
+		expect(tol15min).toBeGreaterThan(0.05);
+		// left=100, right=105.5 → 5.5/105.5 ≈ 0.0521
+		//   <= tolerancePct(0.06)        → near() は通る
+		//   > HS_SHOULDER_MAX_PCT(0.05)  → isSameLevel で fail
+		const { candles, pivots } = buildHS({ leftShoulder: 100, rightShoulder: 105.5, head: 130 });
+		const ctx = buildCtx({ candles, pivots, tolerancePct: tol15min });
+		detectHeadAndShoulders(ctx);
+
+		const rejected = ctx.debugCandidates.find(
+			(d) => d.type === 'head_and_shoulders' && d.accepted === false && d.reason?.startsWith('shoulders_not_near'),
+		);
+		expect(rejected?.reason).toBe('shoulders_not_near:cap');
+	});
+
+	it('Inverse H&S: HS_SHOULDER_MAX_PCT のみ超過 → shoulders_not_near:cap（30min の tf-auto 許容）', () => {
+		const tol30min = getDefaultToleranceForTf('30min');
+		expect(tol30min).toBeGreaterThan(0.05);
+		const { candles, pivots } = buildInverseHS({ leftShoulder: 100, rightShoulder: 105.5, head: 70 });
+		const ctx = buildCtx({ candles, pivots, tolerancePct: tol30min });
+		detectHeadAndShoulders(ctx);
+
+		const rejected = ctx.debugCandidates.find(
+			(d) =>
+				d.type === 'inverse_head_and_shoulders' && d.accepted === false && d.reason?.startsWith('shoulders_not_near'),
+		);
+		expect(rejected?.reason).toBe('shoulders_not_near:cap');
+	});
+
+	it('H&S: 両方超過 → shoulders_not_near:both（どちらを緩めても通らない）', () => {
+		// left=100, right=112 → 12/112 ≈ 0.1071 → tolerancePct(0.04) も cap(0.05) も超過
+		const { candles, pivots } = buildHS({ leftShoulder: 100, rightShoulder: 112, head: 145 });
+		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.04 });
+		detectHeadAndShoulders(ctx);
+
+		const rejected = ctx.debugCandidates.find(
+			(d) => d.type === 'head_and_shoulders' && d.accepted === false && d.reason?.startsWith('shoulders_not_near'),
+		);
+		expect(rejected?.reason).toBe('shoulders_not_near:both');
+	});
+
+	it('Inverse H&S: 両方超過 → shoulders_not_near:both', () => {
+		const { candles, pivots } = buildInverseHS({ leftShoulder: 100, rightShoulder: 112, head: 60 });
+		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.04 });
+		detectHeadAndShoulders(ctx);
+
+		const rejected = ctx.debugCandidates.find(
+			(d) =>
+				d.type === 'inverse_head_and_shoulders' && d.accepted === false && d.reason?.startsWith('shoulders_not_near'),
+		);
+		expect(rejected?.reason).toBe('shoulders_not_near:both');
+	});
+
+	it('接尾辞なしの shoulders_not_near は積まれない / tolerancePct <= cap では :cap も出ない', () => {
+		// 右肩を掃引して strict 経路の肩棄却を集め、(a) 旧コードが残っていないこと、
+		// (b) `tolerancePct <= HS_SHOULDER_MAX_PCT` では `:cap` が構造上発火しないことを固定する。
+		const seen = new Set<string>();
+		for (const rightShoulder of [100, 102, 104, 104.5, 105, 105.5, 106, 108, 112, 120, 135]) {
+			for (const tolerancePct of [0.03, 0.04, 0.05]) {
+				for (const build of [buildHS, buildInverseHS]) {
+					const isTop = build === buildHS;
+					const { candles, pivots } = build({ leftShoulder: 100, rightShoulder, head: isTop ? 145 : 60 });
+					const ctx = buildCtx({ candles, pivots, tolerancePct });
+					detectHeadAndShoulders(ctx);
+					for (const d of ctx.debugCandidates) {
+						const reason = d.reason ?? '';
+						if (reason.startsWith('shoulders_not_near')) seen.add(reason);
+					}
+				}
+			}
+		}
+		expect(seen.has('shoulders_not_near')).toBe(false);
+		expect(seen.has('shoulders_not_near:cap')).toBe(false);
+		expect([...seen].sort()).toEqual(['shoulders_not_near:both', 'shoulders_not_near:tolerance']);
 	});
 
 	// ── HS_SHOULDER_MAX_PCT hard cap（PR: shoulder cap 配線） ──
@@ -417,8 +538,10 @@ describe('detectHeadAndShoulders', () => {
 		const hs = result.patterns.filter((p) => p.type === 'head_and_shoulders');
 		expect(hs).toHaveLength(0);
 
+		// tolerancePct(0.06) は通り HS_SHOULDER_MAX_PCT(0.05) だけ超えるので :cap。
+		// **本テストの主題が cap 境界そのもの**なので接尾辞まで固定する（issue #172）。
 		const rejected = ctx.debugCandidates.find(
-			(d) => d.type === 'head_and_shoulders' && d.accepted === false && d.reason === 'shoulders_not_near',
+			(d) => d.type === 'head_and_shoulders' && d.accepted === false && d.reason === 'shoulders_not_near:cap',
 		);
 		expect(rejected).toBeDefined();
 		const details = rejected?.details as Record<string, unknown> | undefined;
@@ -434,8 +557,10 @@ describe('detectHeadAndShoulders', () => {
 		const ihs = result.patterns.filter((p) => p.type === 'inverse_head_and_shoulders');
 		expect(ihs).toHaveLength(0);
 
+		// tolerancePct(0.06) は通り HS_SHOULDER_MAX_PCT(0.05) だけ超えるので :cap。
+		// **本テストの主題が cap 境界そのもの**なので接尾辞まで固定する（issue #172）。
 		const rejected = ctx.debugCandidates.find(
-			(d) => d.type === 'inverse_head_and_shoulders' && d.accepted === false && d.reason === 'shoulders_not_near',
+			(d) => d.type === 'inverse_head_and_shoulders' && d.accepted === false && d.reason === 'shoulders_not_near:cap',
 		);
 		expect(rejected).toBeDefined();
 		const details = rejected?.details as Record<string, unknown> | undefined;
