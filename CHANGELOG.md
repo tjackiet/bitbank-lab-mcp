@@ -174,6 +174,11 @@ issue #182 案 B（`.default()` 除去）が前提。`headProminencePct` だけ�
     実効パラメータ（入力値ではない）: swingDepth=3(auto) / minBarsBetweenSwings=2(auto) / tolerancePct=0.05(auto) / headProminencePct=0.05(auto) ※auto=1hour の時間軸オート値（スキーマ既定値 7/5/0.04 の明示指定も auto）
 
 - **常に出す。** 「行が無い = 渡した値がそのまま効いた」を LLM に推論させるのは不確実なため。
+  **足が 20 本未満で `'insufficient data'` に落ちる経路も含む。** `ok()` を返す経路は 2 つあり、
+  当初は早期 return 側に `effective_params` を足しておらず、`meta` の形が candle 本数に依存していた
+  （PR レビューで指摘されて修正。欠陥 A と同じ追随漏れのクラス）。パラメータは早期 return より
+  **前**に解決済みなので、足りなかった側でも実効値は申告できる。構築を `resolveParams` 直後の
+  1 箇所に集約し、両経路で同じオブジェクトを渡すことで足し忘れの余地を消した。
 - **sentinel 置換が可視になる。** `swingDepth=7` を渡して `swingDepth=3(auto)` と出るのがその状態。
   `※` 注記は `auto` が 1 つも無い呼び出し（全パラメータ明示）では出さない——存在しない印の説明はしない。
 - **`debug` にも出す。** 階梯外（出力の置換）なので上位集合規約の対象外だが、診断が目的の view で
