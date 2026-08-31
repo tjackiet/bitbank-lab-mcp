@@ -375,7 +375,10 @@ describe('detectTriples', () => {
 		expect(tt).toHaveLength(1);
 		expect(tb).toHaveLength(1);
 		expect(tb[0]?.confidence).toBe(tt[0]?.confidence);
-		expect(tb[0]?._fallback).toBe(tt[0]?._fallback); // どちらも undefined = strict 由来
+		// **両側とも strict 由来**であることを個別に固定する。`toBe` で突き合わせるだけだと
+		// 両方が relaxed に退行したケースも通ってしまい、対称性は満たすが主張が空になる。
+		expect(tt[0]?._fallback).toBeUndefined();
+		expect(tb[0]?._fallback).toBeUndefined();
 	});
 
 	// ── want フィルタ ────────────────────────────────────────
