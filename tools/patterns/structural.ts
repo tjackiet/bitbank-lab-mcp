@@ -40,6 +40,16 @@ export const DOUBLE_LEVEL_MAX_PCT = 0.03;
  * `tolerancePct` は `config.ts` の `getDefaultToleranceForTf` が時間足ごとに返す
  * （`resolveParams` がスキーマ既定値 0.04 のときだけ tf-auto に差し替える）。
  *
+ * **relaxed の実効閾値の式は `M = max(p0.price, p4.price) >= 1` を前提にしている。**
+ * relaxed のインライン比較だけが分母を `Math.max(1, M)` にクランプしており、
+ * `isSameLevel` は {@link relDiff} なので分母は素の `M`。したがって **`M < 1`
+ * （1 円未満の建値）では 2 つの conjunct が別の分母を見る**——相対差に対する実効閾値は
+ * `min(tolerancePct × factors.shoulder / M, HS_SHOULDER_MAX_PCT)` になる。`1/M > 1` なので
+ * **緩むのは許容誤差側だけで、本定数が律速するという下表の結論は変わらない**（むしろ強まる）。
+ * strict の `near()` にはこのクランプが無いため `min(tolerancePct, HS_SHOULDER_MAX_PCT)` は
+ * `M` によらず厳密。`view=debug` の `details.shouldersDiffPct` は strict / relaxed とも
+ * `Math.max(1, M)` で割った値なので、`M < 1` では {@link relDiff} と一致しない。
+ *
  * ### strict: 既定パスで本定数が律速するのは `15min` / `30min` だけ
  *
  * | 時間足 | `tolerancePct`（tf-auto） | `HS_SHOULDER_MAX_PCT` | 実効値 | 律速側 |
