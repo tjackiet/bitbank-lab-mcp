@@ -338,9 +338,30 @@ export default async function detectPatterns(
 		const acc = relevantCandidates.filter((c) => !!c?.accepted);
 		const rej = relevantCandidates.filter((c) => !c?.accepted);
 		const candidatesTrimmed: CandDebugEntry[] = [...acc, ...rej].slice(0, cap);
+		// --- トリムの申告（#180 案 1） ---
+		// 配列を黙って切り詰めると、呼び出し側は 200 件を受け取っても全件か一部か判別できない。
+		// トリムは accepted を先に並べてから切るので、**押し出しは rejected 側から始まる**。
+		// `view=debug` の目的（なぜ検出されなかったかを理由コードで追う。#144 / #145）は
+		// まさにその rejected の理由コードなので、目的の情報から先に censored される。
+		// cap の値もトリム戦略も変えず、件数だけを申告する。
+		//
+		// **「押し出されたのは全部 rejected」と言い切れるのは `acc.length <= cap` のときだけ。**
+		// `acc.length > cap` なら accepted も押し出される（本リポジトリの標準コーパス 800 ケースでは
+		// accepted の最大が 20 件で一度も起きていないが、**コードが保証しているのは順序だけ**）。
+		// 判別は「返した配列に `accepted: false` が 1 件でも残っているか」でできるので、
+		// 表示側（`formatDebugView`）がそこで文言を分ける。ここでフィールドを増やさない。
+		//
+		// **総数は絞り込み（#124 の `filterCandidatesByWant`）後の `relevantCandidates` を数える。**
+		// トリムされる母集団そのものなので「自分が要求した種別の棄却理由が censored されたか」に
+		// 直接答える。絞り込み前（`debugCandidates.length`）は出さない——絞り込みは cap を守るための
+		// 仕組みで、「`patterns` を広げればもっと見える」は偽（広げるほど押し出しは増える）。
 		const debugTrimmed = {
 			swings: swingsTrimmed,
 			candidates: candidatesTrimmed,
+			candidatesTotal: relevantCandidates.length,
+			candidatesOmitted: Math.max(0, relevantCandidates.length - candidatesTrimmed.length),
+			swingsTotal: Array.isArray(debugSwings) ? debugSwings.length : 0,
+			swingsOmitted: Array.isArray(debugSwings) ? Math.max(0, debugSwings.length - swingsTrimmed.length) : 0,
 		};
 
 		// summary 生成: LLM が content から読み取れるように詳細を含める

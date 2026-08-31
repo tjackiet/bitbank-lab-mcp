@@ -42,6 +42,134 @@
 | 27 | #172 | `shoulders_not_near` を 2 つの conjunct ごとに分け、`HS_SHOULDER_MAX_PCT` の役割を docstring に書いた | **変わらない**（理由コード文字列と docstring のみ） |
 | 28 | #174 | #172 の docstring が relaxed 経路について誤っていたのを訂正し、relaxed の肩落ちを `debug.candidates` に積む | **変わらない**（0 / 800） |
 | 29 | #138 | triple の「同水準」判定に**高さ相対の hard gate**（`MAX_LEVEL_SPREAD_RATIO`）を足し、無音だった 3 点同水準の棄却を可観測化した | 実データで**減る**（−20 / 800。**増加 0**）/ 合成 fixture は変わらない |
+| 30 | #180 | cap で切られた `debug.candidates` / `debug.swings` の総数と省略件数を申告する（cap の値もトリム戦略も変えない） | **変わらない**（0 / 800） |
+
+### Fixed（`view=debug` の `debug.candidates` が cap=200 で黙って切られ、切られたことが出力から分からなかった。#180 案 1）
+
+`debug.candidates` / `debug.swings` は cap=200 で打ち切られるが、**打ち切られたことが出力のどこにも
+現れなかった**（総数も省略件数も無い）。呼び出し側は 200 件を受け取ってもそれが全件か一部か判別できない。
+
+トリムは `[...accepted, ...rejected]` を先頭から cap 件残すので、**押し出しは棄却理由から始まる**。
+`view=debug` の目的（なぜ検出されなかったかを理由コードで追う。#144 / #145）はまさにその棄却理由なので、
+目的の情報から先に選択的に消える。censored な内訳から誤帰属した実例が #152 → #167 / #172 で、
+censored かどうかは出力から分からなかった。
+
+**cap の値もトリム戦略も変えていない。申告だけ**（#180 の案 2〜5 は本 PR の対象外。下の実測を見てから判断する）。
+
+#### 変更点
+
+1. **`meta.debug` に `candidatesTotal` / `candidatesOmitted` / `swingsTotal` / `swingsOmitted`**
+   （`tools/detect_patterns.ts`）。
+2. **出力スキーマ（`src/schema/patterns.ts` の `debug`）に 4 つとも宣言した。**
+   宣言が無いと `DetectPatternsOutputSchema.parse` が**黙って strip する**（#155 / PR #159 の
+   `status`、#160 / PR #161 の `breakoutDirection` で 2 回踏んだ）。回帰は
+   `tests/detect_patterns_debug.test.ts` の「cap トリムの申告（#180）」で固定した。
+3. **`content[0].text` に 1 行**（`formatDebugView`）。**LLM は `structuredContent` を見ない**
+   （`.claude/rules/tools.md`）ので `meta` に足すだけでは目的を達しない。見出しに直付けする:
+
+       【Candidates】 200 / 全 289 件（89 件省略。accepted は全件残っているため省略分はすべて棄却理由）
+       【Swings】 23 / 全 23 件（省略なし）
+
+   **省略 0 でも「省略なし」を明示する。** 「200 件」だけだと飽和しているのか偶然 200 なのか読めない。
+   `swings` は**先頭から**残すので落ちるのは直近側で、`candidates` とは落ちる側が逆になる。文言も分けた。
+   **「省略分はすべて棄却理由」は無条件には書かない。** accepted が cap を超えれば accepted も
+   押し出されるので、**返した配列に `accepted: false` が 1 件でも残っているとき**（＝accepted が
+   全件収まったことが確定するとき）だけそう書き、全件 accepted のときは「accepted も含まれうる」に
+   切り替える。判別は返却済みの配列だけでできるのでフィールドは増やしていない。
+   申告フィールドを持たない meta（ハンドラを直接呼ぶ経路）では**件数行ごと出さない**——件数が分からない
+   のに「省略なし」と書けば、本 issue が直そうとしている嘘をそのまま再導入することになる。
+4. `view` の debug 節（LLM に届く文言）に申告フィールドの存在を明記した。
+
+#### 総数は「絞り込み**後**」を数える
+
+`candidatesTotal` は `filterCandidatesByWant`（#124）で入力 `patterns` に絞った**後**の
+`relevantCandidates.length`。トリムされる母集団そのものなので「自分が要求した種別の棄却理由が
+censored されたか」に直接答える。
+
+**絞り込み前（`debugCandidates.length`）は出さない。** 絞り込みは cap を守るための仕組みなので、
+「`patterns` を広げればもっと見える」は偽（広げるほど押し出しは増える）。混乱を招くだけで行動に繋がらない。
+どちらを数えたかはスキーマの description に書いてある。
+
+#### 実測（合成 704 + 実データ 96 = 800 ケース。`main` = 056ecc2 と比較）
+
+合成 704 = `tests/detect_patterns_fixtures.test.ts` の fixture 22 件 × オプション 8 通り
+（`includeForming` / `includeCompleted` / `includeInvalid`）× 時間足 2 種（`1day` / `1hour`）×
+`swingDepth` 2 種（2 / 3）、実データ 96 = `tests/fixtures/btc_jpy_1day_2026.ts` × 時間足 3 種
+（`1day` / `4hour` / `1hour`）× `swingDepth` 4 種（既定 / 2 / 3 / 6）× オプション 8 通り。
+手順・ケース数とも #131 以降と同じ 800 ケース。
+
+| | before → after |
+|---|---|
+| `data.patterns` | **0 / 800**（全ケース deep-equal。合計 636 件） |
+| `debug.candidates` の配列の中身 | **0 / 800**（JSON 完全一致。総数 45,636 も不変） |
+| `debug.swings` の配列の中身 | **0 / 800** |
+| 新フィールドが出力に届いたケース | 0 / 800 → **800 / 800**（strip なし） |
+
+**申告値がトリムの実挙動と一致することも突き合わせた。** cap を一時的に外して全候補を採取し、
+`candidatesTotal` = 実際の総数、`candidatesOmitted` = 総数 − 200、返っている配列 = 全候補の先頭 200 件、
+が 32 ケースすべてで一致した（不一致 0）。
+
+##### `candidatesTotal` の分布（800 ケース）
+
+| min | p25 | p50 | p75 | p90 | p95 | p99 | max | mean |
+|---|---|---|---|---|---|---|---|---|
+| 4 | 31 | 39 | 56 | 105 | 180 | 259 | **289** | 57.0 |
+
+##### 押し出しの実態
+
+| | 値 |
+|---|---|
+| `candidatesOmitted > 0` のケース | **32 / 800**（合成 **0 / 704** / 実データ **32 / 96**） |
+| 押し出し総数 | **1,588 件**。**全件 `accepted: false`**（＝棄却理由） |
+| 1 ケースあたりの `accepted` 件数 | **最大 20 件**（cap 超過 32 ケースでは 10〜20）。accepted が cap を超えたケースは **0** |
+| `swingsOmitted > 0` のケース | **0 / 800**（`swingsTotal` は min 0 / p50 5 / p95 15 / **max 23**） |
+| ちょうど 200 件（偶然の飽和） | **0 件**（`>= 200` と `> 200` が同数） |
+
+押し出しの理由コード内訳（上位 10。合計 1,588）:
+
+| 件数 | 種別 : 理由コード |
+|---|---|
+| 208 | `triple_bottom` : `peaks_missing_relaxed` |
+| 164 | `triple_bottom` : `neckline_slope_excess_relaxed` |
+| 136 | `triple_top` : `valleys_missing_relaxed` |
+| 116 | `triangle_symmetrical` : `r2_below_threshold` |
+| 112 | `triple_top` : `neckline_slope_excess_relaxed` |
+| 104 | `triple_bottom` : `forming_neckline_not_horizontal` |
+| 80 | `flag` : `insufficient_consolidation_swings` |
+| 80 | `triple_bottom` : `three_valleys_not_level` |
+| 76 | `triple_bottom` : `valley_spread_vs_height_excess` |
+| 72 | `rising_wedge` : `r2_below_threshold` |
+
+種別で畳むと `triple_bottom` 740 / `triple_top` 436 / `flag` 224 / `triangle_symmetrical` 116 /
+`rising_wedge` 72。**偏りは実在する**（#180 の案 4「トリムを賢くする」の判断材料）。
+
+**押し出しは全 32 ケースが実データ側**（`btc_jpy_1day_2026`）で、内訳は `swingDepth: 2` の
+3 時間足 × オプション 8 = 24 と `swingDepth: 3` × `1day` × オプション 8 = 8。
+**合成 704 ケースは 1 件も cap に届いていない**（最大 180）。合成 fixture だけを見て
+「cap は効いていない」と判断すると誤る。
+
+#### **今後の「cap 到達」はこの定義で測る**
+
+**cap 到達ケース = `meta.debug.candidatesOmitted > 0` のケース数。**
+`swings` 側は `meta.debug.swingsOmitted > 0` で**別に**数える（配列が違うので合算しない）。
+`debug.candidates` の**配列長が 200**であることは指標にしない——偶然 200 と飽和 200 を区別できない。
+
+**過去 4 PR の数値とは一致しない。定義が違うため。** #159 が 36、#166 が 5 → 6、#175 が 86、
+そして #176 が 20 → 32 を「cap 到達 / 超過ケース」として記録しているが、#175（86）と #176（20）は
+**同じ標準コーパスで #176 の baseline が #175 を含む `main`** なので、同じ指標なら一致していなければ
+ならなかった。本定義での `main` の実測は **32** で #176 の after と一致する（押し出し 1,588 件も一致）。
+**以後は申告フィールドを読むこと。手で数え直さない。**
+
+#### やらなかったこと（#180 の残り）
+
+- **`cap = 200` の値の変更（案 2）** / **`view` 依存のトリム（案 3）** / **トリム戦略の変更（案 4）**。
+  上の実測を見てから判断する。
+- **`swings` の「先頭 200」問題の修正。** `debugSwings.slice(0, cap)` は古いほうから 200 件を残すので
+  ピボットが 200 を超えると**直近のスイングが落ちる**。**申告で可視化するに留めた**——どちらを残すかを
+  変えるのは `debug.swings` の中身が変わる変更で、「配列の中身は 1 件も変えない」という本 PR の前提と
+  衝突する。本コーパスでは `swingsTotal` の最大が 23 で**一度も cap に届いていない**（issue #180 に報告）。
+- **`meta.omitted: ['field.path']` 形式の採用。** `.claude/rules/tools.md` 規約 2 のあれは「どのフィールドを
+  落としたか」の宣言で、配列の切り詰めとは形が違う。原則（黙って削らない）は同じだが、形は件数が適切。
 
 ### Fixed（triple の「同水準」判定が価格水準基準で、パターン自身の高さと無関係だった。#138）
 

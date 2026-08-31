@@ -23,6 +23,7 @@ vi.mock('../tools/analyze_indicators.js', () => ({
 import { formatDebugView } from '../src/handlers/detectPatternsViewsHandler.js';
 import analyzeIndicators from '../tools/analyze_indicators.js';
 import detectPatterns from '../tools/detect_patterns.js';
+import { buildBtcJpy2026Candles } from './fixtures/btc_jpy_1day_2026.js';
 
 type Candle = { isoTime: string; open: number; high: number; low: number; close: number; volume: number };
 
@@ -485,5 +486,94 @@ describe('detect_patterns: pivot の価格基準（#125）', () => {
 		expect(line).toContain('終値');
 		expect(line).toContain('判定は高値基準');
 		expect(line).toContain('判定は安値基準');
+	});
+});
+
+/**
+ * cap トリムの申告（issue #180 案 1）。
+ *
+ * `debug.swings` / `debug.candidates` は cap=200 で切り詰められるが、切られたことが出力の
+ * どこにも現れなかった。**削られるのは必ず `accepted: false`＝棄却理由**（accepted を優先して
+ * 残すため）なので、`view=debug` の目的そのものが選択的に censored される。
+ *
+ * ここで固定するのは 3 点:
+ * 1. 新フィールドが**出力に届く**こと。`DetectPatternsOutputSchema.parse` は宣言の無いキーを
+ *    黙って落とすので（#155 / PR #159、#160 / PR #161 で 2 回踏んだ）、スキーマ宣言の
+ *    回帰をここで捕まえる
+ * 2. 申告値がトリムの実挙動と一致すること（`total - 配列長 === omitted`）
+ * 3. 省略あり / 省略なしの**両方**で content に出ること。LLM は structuredContent を読まない
+ */
+describe('detect_patterns: cap トリムの申告（#180）', () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	/** cap 未満のケース: 全件返っており、申告も「省略なし」になる。 */
+	it('省略が無いとき candidatesTotal は配列長と一致し content は「省略なし」と出る', async () => {
+		const candles = buildNoisyCandles();
+		const res = await run(candles, { patterns: ['double_bottom'], includeForming: true });
+		assertOk(res);
+		const cands = res.meta.debug?.candidates ?? [];
+		const swings = res.meta.debug?.swings ?? [];
+		// 種別を絞っているので 200 には届かない（届いたら前提が壊れているので気づけるように固定する）
+		expect(cands.length).toBeLessThan(200);
+		expect(res.meta.debug?.candidatesTotal).toBe(cands.length);
+		expect(res.meta.debug?.candidatesOmitted).toBe(0);
+		expect(res.meta.debug?.swingsTotal).toBe(swings.length);
+		expect(res.meta.debug?.swingsOmitted).toBe(0);
+
+		const text = formatDebugView('hdr', res.meta, [], res).content[0].text;
+		// 「200 件」だけだと飽和なのか偶然なのか読めないので、省略 0 でも明示する
+		expect(text).toContain(`【Candidates】 ${cands.length} / 全 ${cands.length} 件（省略なし）`);
+		expect(text).toContain(`【Swings】 ${swings.length} / 全 ${swings.length} 件（省略なし）`);
+		expect(text).not.toContain('件省略');
+	});
+
+	/**
+	 * cap 超過のケース。合成 fixture では 200 に届かない（実測: 合成 704 ケースすべて 200 未満）
+	 * ので、実データ fixture を `swingDepth: 2` で走らせる。
+	 */
+	it('省略があるとき総数と省略件数を申告し content に出す', async () => {
+		const candles = buildBtcJpy2026Candles();
+		mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(indicatorsOk(candles)));
+		const res = await detectPatterns('btc_jpy', '1day', candles.length, { swingDepth: 2, includeForming: true });
+		assertOk(res);
+		const cands = res.meta.debug?.candidates ?? [];
+		const total = res.meta.debug?.candidatesTotal ?? 0;
+		const omitted = res.meta.debug?.candidatesOmitted ?? 0;
+
+		expect(cands.length).toBe(200);
+		expect(total).toBeGreaterThan(200);
+		expect(omitted).toBe(total - cands.length);
+
+		// 「省略分はすべて棄却理由」が成り立つ根拠は accepted 優先のトリム順。
+		// 返る配列が accepted 先頭に分割されていることを固定しておかないと、content の文言が嘘になる。
+		const acceptedFlags = cands.map((c) => !!c.accepted);
+		expect(acceptedFlags).toEqual([...acceptedFlags].sort((a, b) => Number(b) - Number(a)));
+
+		const text = formatDebugView('hdr', res.meta, [], res).content[0].text;
+		expect(text).toContain(`【Candidates】 200 / 全 ${total} 件（${omitted} 件省略`);
+		// このケースは返却分に棄却が残っている（＝accepted は全件収まった）ので、
+		// 「省略分はすべて棄却理由」を言い切ってよい側の文言になる。
+		expect(cands.some((c) => !c.accepted)).toBe(true);
+		expect(text).toContain('accepted は全件残っているため省略分はすべて棄却理由');
+	});
+
+	/**
+	 * `swings` は先頭から cap 件を残すので、落ちるのは**直近側**（`candidates` と逆）。
+	 * 本コーパスでは 200 に届かない（実測: 800 ケースで `swingsTotal` の最大 23）ので、
+	 * 「届いていないこと自体」を申告として観測できることを固定する。どちらを残すかの変更は
+	 * `debug.swings` の中身が変わるので #180 の対象外。
+	 */
+	it('swings 側も総数と省略件数を申告する', async () => {
+		const candles = buildBtcJpy2026Candles();
+		mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(indicatorsOk(candles)));
+		const res = await detectPatterns('btc_jpy', '1day', candles.length, { swingDepth: 2, includeForming: true });
+		assertOk(res);
+		const swings = res.meta.debug?.swings ?? [];
+		expect(res.meta.debug?.swingsTotal).toBe(swings.length);
+		expect(res.meta.debug?.swingsOmitted).toBe(0);
+		const text = formatDebugView('hdr', res.meta, [], res).content[0].text;
+		expect(text).toContain(`【Swings】 ${swings.length} / 全 ${swings.length} 件（省略なし）`);
 	});
 });

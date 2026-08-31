@@ -517,6 +517,34 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 検出器は `patterns` を「分類・出力の時点」でしか見ておらず、走査中の候補は無条件に積まれるため、
 上限 200 件のトリムで**要求した種別の棄却理由が押し出されていた**。
 
+### トリムされたことは申告される（#180）
+
+上限 200 件のトリムが起きたかどうかは `meta.debug` の 4 フィールドで分かる。
+
+| フィールド | 意味 |
+|---|---|
+| `candidatesTotal` | トリム前の候補総数。**入力 `patterns` による絞り込みの後**の件数 |
+| `candidatesOmitted` | cap で押し出された件数（`candidatesTotal - candidates.length`） |
+| `swingsTotal` / `swingsOmitted` | `swings` 側の同じ 2 つ |
+
+`content` にも見出し行として出る（省略が無ければ「省略なし」と明示する）:
+
+```text
+【Candidates】 200 / 全 289 件（89 件省略。accepted は全件残っているため省略分はすべて棄却理由）
+【Swings】 23 / 全 23 件（省略なし）
+```
+
+トリムは `[...accepted, ...rejected]` を先頭から 200 件残すので、**押し出しは棄却理由から始まる**。
+**「押し出されたのは全部棄却理由」と言い切れるのは `candidates` に `accepted: false` が 1 件でも
+残っている場合**で、返った 200 件が全件 `accepted: true` なら accepted 自体が cap を超えており
+accepted も押し出されうる（`content` はこの 2 つを区別して書き分ける）。
+
+いずれにせよ理由コードの内訳を集計する用途では、**`candidatesOmitted` が 0 であることを確認するか
+`patterns` で種別を絞って呼び直す**こと。censored な内訳から集計すると誤った帰属をする
+（実例: #152 → #167）。
+
+`swings` は逆に**先頭から** 200 件を残すので、`swingsOmitted > 0` のとき落ちているのは**直近側**。
+
 照合は入力エイリアスを展開して行う（`triangle` → 3 種、`flag` / `pennant` → 各 2 種）。
 候補ラベル側にも方向・形状の分類前に付く **umbrella ラベル**があり、入力エイリアスとは
 被覆が異なる:
