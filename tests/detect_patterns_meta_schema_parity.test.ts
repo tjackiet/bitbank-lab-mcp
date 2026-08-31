@@ -217,6 +217,13 @@ const KNOWN_DATA_STRIPS = [
 	'patterns[]._method',
 ] as const;
 
+/**
+ * `ok()` の戻り値から `data` を取り出す（`metaOf` の `data` 版）。
+ *
+ * parity の対象は `data` オブジェクト**全体**であって `data.patterns` ではない。
+ * `keyPaths` が配列要素をまたいでキーパスを合算するので、丸ごと渡せば
+ * `patterns[]._fallback` のような**配列要素の中の strip** もそのまま拾える。
+ */
 function dataOf(result: Record<string, unknown>): Record<string, unknown> {
 	const data = result.data;
 	if (!isPlainObject(data)) throw new Error('data がオブジェクトではない');
