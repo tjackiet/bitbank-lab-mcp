@@ -539,9 +539,20 @@ export function finalizeConf(base: number, type: string): number {
  * 同一タイプで期間の重なり率が 50% を超えるパターンを 1 つに統合する（各検出器内で実行）。
  *
  * 勝者選択は statusScore（`patterns/ranking.ts` が単一ソース。issue #133）を最優先し、
- * 同 status 内でのみ「`range.end` が新しいほう＝より新しい形を採る」→ confidence →
- * パターン高さの順で選ぶ。`range.end` は形成中パターンでは常に最新足（lastIdx）なので、
- * status より前に比較すると形成中が完成済み（突破確定足で終わる）を構造的に必ず押し出してしまう。
+ * 同 status 内では confidence →「`range.end` が新しいほう＝より新しい形を採る」→
+ * パターン高さの順で選ぶ。**`globalDedup` と同じ順序**（issue #142）。
+ *
+ * `range.end` は形成中パターンでは常に最新足（lastIdx）なので、status より前に比較すると
+ * 形成中が完成済み（突破確定足で終わる）を構造的に必ず押し出してしまう。これが statusScore を
+ * 最優先に置く理由（#133 / PR #135）で、**`range.end` を confidence より前に置く理由ではない。**
+ *
+ * `range.end` を confidence より先に見ると、重なる候補の中で最も新しく終わる 1 つに絞り込んだ
+ * 時点で confidence が一度も比較されない。広い窓ほど終端が新しくなりやすいので、
+ * **同じ値動きに対して最も当てはまりの悪い解釈が勝つ**（#142。BTC/JPY 日足で
+ * `rising_wedge` 0.95 が 0.82 に、外れ値除去の上限（#141）を外すと
+ * `triangle_symmetrical` 0.91 / 0.87 が 0.82 に負けていた）。
+ * confidence を先に置いても #133 の不変条件には触れない——入れ替えは statusScore の**下**なので、
+ * 形成中が完成済みを押し出す経路は通らない。
  *
  * @param arr - 検出順のパターン配列。`type` / `range` を欠く要素は比較せずそのまま残す
  * @returns 重複を統合した新しい配列（入力は破壊しない）
@@ -582,12 +593,12 @@ export function deduplicatePatterns<T extends DeduplicablePattern>(arr: T[]): T[
 			const maxStatusScore = Math.max(...allCandidates.map(getStatusScore));
 			let best = allCandidates.filter((p) => getStatusScore(p) === maxStatusScore);
 			if (best.length > 1) {
-				const maxEndTime = Math.max(...best.map((p) => Date.parse(p.range?.end ?? '')));
-				best = best.filter((p) => Date.parse(p.range?.end ?? '') === maxEndTime);
-			}
-			if (best.length > 1) {
 				const maxConfidence = Math.max(...best.map((p) => Number(p.confidence ?? 0)));
 				best = best.filter((p) => Number(p.confidence ?? 0) === maxConfidence);
+			}
+			if (best.length > 1) {
+				const maxEndTime = Math.max(...best.map((p) => Date.parse(p.range?.end ?? '')));
+				best = best.filter((p) => Date.parse(p.range?.end ?? '') === maxEndTime);
 			}
 			if (best.length > 1) {
 				const getHeight = (p: DeduplicablePattern) => {
