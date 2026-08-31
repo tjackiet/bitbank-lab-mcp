@@ -553,7 +553,10 @@ describe('detect_patterns: cap トリムの申告（#180）', () => {
 
 		const text = formatDebugView('hdr', res.meta, [], res).content[0].text;
 		expect(text).toContain(`【Candidates】 200 / 全 ${total} 件（${omitted} 件省略`);
-		expect(text).toContain('accepted 優先で残すため省略分はすべて棄却理由');
+		// このケースは返却分に棄却が残っている（＝accepted は全件収まった）ので、
+		// 「省略分はすべて棄却理由」を言い切ってよい側の文言になる。
+		expect(cands.some((c) => !c.accepted)).toBe(true);
+		expect(text).toContain('accepted は全件残っているため省略分はすべて棄却理由');
 	});
 
 	/**

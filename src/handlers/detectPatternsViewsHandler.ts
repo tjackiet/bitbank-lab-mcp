@@ -425,13 +425,23 @@ export function formatDebugView(
 		swings.length,
 		meta?.debug?.swingsTotal,
 		meta?.debug?.swingsOmitted,
+		// `slice(0, cap)` なので落ちるのは必ず末尾側＝新しいほう。条件分岐は要らない。
 		'先頭から残すため省略分はすべて直近側のスイング',
 	);
+	// **「省略分はすべて棄却理由」は無条件には言えない。** トリムは `[...accepted, ...rejected]`
+	// を `slice(0, cap)` するだけなので、accepted が cap を超えれば accepted も押し出される。
+	// ただし**返した配列に `accepted: false` が 1 件でも残っていれば、accepted は全件収まった**
+	// ことが確定する（収まらなければ rejected は 1 件も入らない）。そこで文言を分ける。
+	// 逆側（全件 accepted）では `accepted === cap` ちょうどの場合に実際は rejected しか
+	// 押し出されていないので、「含まれうる」と可能性で書く——**過小申告はするが嘘はつかない**。
+	const keptHasRejected = cands.some((c) => !c.accepted);
 	const candsNote = formatTrimNote(
 		cands.length,
 		meta?.debug?.candidatesTotal,
 		meta?.debug?.candidatesOmitted,
-		'accepted 優先で残すため省略分はすべて棄却理由',
+		keptHasRejected
+			? 'accepted は全件残っているため省略分はすべて棄却理由'
+			: 'accepted が cap を埋めており省略分に accepted も含まれうる',
 	);
 
 	const text = [

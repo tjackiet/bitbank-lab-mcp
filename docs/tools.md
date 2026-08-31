@@ -529,13 +529,19 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 
 `content` にも見出し行として出る（省略が無ければ「省略なし」と明示する）:
 
-    【Candidates】 200 / 全 289 件（89 件省略。accepted 優先で残すため省略分はすべて棄却理由）
-    【Swings】 23 / 全 23 件（省略なし）
+```text
+【Candidates】 200 / 全 289 件（89 件省略。accepted は全件残っているため省略分はすべて棄却理由）
+【Swings】 23 / 全 23 件（省略なし）
+```
 
-**`candidatesOmitted > 0` のとき、押し出されているのはすべて `accepted: false`＝棄却理由**
-（トリムは `accepted` を優先して残すため）。理由コードの内訳を集計する用途では、
-**0 であることを確認するか `patterns` で種別を絞って呼び直す**こと。censored な内訳から集計すると
-誤った帰属をする（実例: #152 → #167）。
+トリムは `[...accepted, ...rejected]` を先頭から 200 件残すので、**押し出しは棄却理由から始まる**。
+**「押し出されたのは全部棄却理由」と言い切れるのは `candidates` に `accepted: false` が 1 件でも
+残っている場合**で、返った 200 件が全件 `accepted: true` なら accepted 自体が cap を超えており
+accepted も押し出されうる（`content` はこの 2 つを区別して書き分ける）。
+
+いずれにせよ理由コードの内訳を集計する用途では、**`candidatesOmitted` が 0 であることを確認するか
+`patterns` で種別を絞って呼び直す**こと。censored な内訳から集計すると誤った帰属をする
+（実例: #152 → #167）。
 
 `swings` は逆に**先頭から** 200 件を残すので、`swingsOmitted > 0` のとき落ちているのは**直近側**。
 

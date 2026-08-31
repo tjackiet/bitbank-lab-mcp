@@ -311,8 +311,36 @@ describe('formatDebugView: cap トリムの申告行（#180）', () => {
 		const text = formatDebugView('hdr', meta, [], makeDebugViewRes()).content[0].text;
 		// candidates は accepted 優先で残すので落ちるのは棄却理由、
 		// swings は先頭から残すので落ちるのは直近側。**逆向き**であることまで出す。
-		expect(text).toContain('【Candidates】 2 / 全 289 件（287 件省略。accepted 優先で残すため省略分はすべて棄却理由）');
+		expect(text).toContain(
+			'【Candidates】 2 / 全 289 件（287 件省略。accepted は全件残っているため省略分はすべて棄却理由）',
+		);
 		expect(text).toContain('【Swings】 1 / 全 5 件（4 件省略。先頭から残すため省略分はすべて直近側のスイング）');
+	});
+
+	/**
+	 * トリムは `[...accepted, ...rejected]` を先頭から cap 件残すだけなので、**accepted が cap を
+	 * 超えれば accepted も押し出される**。返却分が全件 accepted のときがその状態で、
+	 * 「省略分はすべて棄却理由」と言い切ると嘘になる（本 PR が直そうとしている種類の嘘）。
+	 */
+	it('返却分が全件 accepted のときは「棄却理由だけ」と言い切らない', () => {
+		const meta = {
+			debug: {
+				swings: [],
+				candidates: [
+					{ type: 'triple_bottom', accepted: true },
+					{ type: 'triple_top', accepted: true },
+				],
+				candidatesTotal: 300,
+				candidatesOmitted: 298,
+				swingsTotal: 0,
+				swingsOmitted: 0,
+			},
+		};
+		const text = formatDebugView('hdr', meta, [], makeDebugViewRes()).content[0].text;
+		expect(text).toContain(
+			'【Candidates】 2 / 全 300 件（298 件省略。accepted が cap を埋めており省略分に accepted も含まれうる）',
+		);
+		expect(text).not.toContain('すべて棄却理由');
 	});
 
 	it('省略が 0 のとき「省略なし」と明示する', () => {

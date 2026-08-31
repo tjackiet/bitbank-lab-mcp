@@ -134,8 +134,11 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 				'  **cap で押し出しが起きた場合は申告する**（issue #180）。`meta.debug.candidatesTotal` が' +
 				'絞り込み後の総数、`meta.debug.candidatesOmitted` が押し出された件数で、content には' +
 				'`【Candidates】 200 / 全 N 件（M 件省略）` の形で出る（押し出しが無ければ「省略なし」）。' +
-				'**`candidatesOmitted > 0` のとき押し出されているのはすべて `accepted: false`＝棄却理由**' +
-				'（accepted を優先して残すため）なので、理由コードの内訳を数えるなら 0 を確認すること。' +
+				'トリムは accepted を先に並べてから切るので**押し出しは棄却理由から始まる**。' +
+				'`candidates` に `accepted:false` が 1 件でも残っていれば accepted は全件収まっており、' +
+				'押し出されたのはすべて棄却理由（全 200 件が `accepted:true` のときだけ accepted も' +
+				'押し出されうる）。いずれにせよ**理由コードの内訳を数えるなら `candidatesOmitted` が' +
+				'0 であることを確認する**か、`patterns` で種別を絞って呼び直すこと。' +
 				'`swings` 側も同様に `swingsTotal` / `swingsOmitted` を返す（`swings` は先頭から残すので' +
 				'落ちるのは直近側）。\n' +
 				'  `accepted:false` は候補生成の時点での棄却（例: `head_not_higher`。`includeInvalid` では拾えない）で、' +
@@ -593,10 +596,15 @@ export const DetectPatternsOutputSchema = z.union([
 						.int()
 						.optional()
 						.describe(
-							'cap で `candidates` から押し出された件数（`candidatesTotal - candidates.length`）。' +
-								'**0 より大きいとき、押し出されたエントリはすべて `accepted: false`＝棄却理由**' +
-								'（トリムは accepted を優先して残すため）。理由コードの内訳を集計する場合は' +
-								'0 であることを確認するか、`patterns` で種別を絞って呼び直すこと。',
+							'cap で `candidates` から押し出された件数（`candidatesTotal - candidates.length`）。\n' +
+								'トリムは `[...accepted, ...rejected]` を先頭から cap 件残すので、' +
+								'**押し出しは棄却理由（`accepted: false`）から始まる**。\n' +
+								'**「押し出されたのは全部棄却理由」と言い切れるのは `candidates` に `accepted: false` が' +
+								'1 件でも残っている場合**（残っていれば accepted は全件収まったことが確定する）。' +
+								'返った 200 件が全件 `accepted: true` のときは accepted 自体が cap を超えており、' +
+								'押し出しに accepted も含まれうる。\n' +
+								'いずれにせよ理由コードの内訳を集計するなら 0 であることを確認するか、' +
+								'`patterns` で種別を絞って呼び直すこと。',
 						),
 					swingsTotal: z.number().int().optional().describe('トリム前のスイング総数。'),
 					swingsOmitted: z
