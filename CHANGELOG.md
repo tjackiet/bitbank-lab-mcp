@@ -47,6 +47,156 @@
 | 32 | #184 | `meta.effective_params` が**出力スキーマ未宣言で毎回 strip されていた**のを宣言し、実効パラメータ行を全 view の `content` に出した。`headProminencePct` を追加し、壊れていた `autoScaled` を per-parameter の `source` に置換 | **変わらない**（`meta` / `content` のみ） |
 | 33 | #187 | `MAX_VALLEY_SPREAD`（1.5%）を削除した（#178 項目 2）。top / bottom と strict / relaxed の 2 つの非対称が同時に解消し、理由コード `valley_spread_excess` が消える | **変わらない**（0 / 896） |
 | 34 | #186 | strict triple のネックライン水平性が**同じ式を 2 つの名前で 2 回**測っていたのを `NECKLINE_SLOPE_LIMIT` 1 本に畳んだ。理由コード `valleys_not_equal` / `peaks_not_equal` が triple から消える（#172 / #174 の H&S と同じ失敗の横展開） | **変わらない**（0 / 896。既定パス）/ `tolerancePct < 0.02` を明示したときだけ**緩む** |
+| 35 | #189 | relaxed / strict の provenance `patterns[]._fallback` が**出力スキーマ未宣言で毎回 strip され、一度もクライアントに届いていなかった**のを宣言した（#155 / #160 / #184 に続く 4 回目）。あわせて #184 の parity ガードが**フィクスチャ依存で取りこぼしていた**穴を塞いだ | **変わらない**（検出結果は不変。消えていたフィールドが `structuredContent` に残るだけ） |
+
+### Fixed（relaxed の provenance `patterns[]._fallback` が出力スキーマ未宣言で毎回 strip され、**一度もクライアントに届いていなかった**。#189）
+
+`detect_patterns` の relaxed フォールバック経路（許容誤差を `× factor` して拾い直す段）は、
+拾ったパターンに `_fallback: 'relaxed_triple_x1.25'` のような provenance を載せていた。**6 箇所**:
+
+    tools/patterns/detect_doubles.ts:567 / :760   _fallback: `relaxed_double_x${factor}`
+    tools/patterns/detect_triples.ts:747 / :925   _fallback: `relaxed_triple_x${factor}`
+    tools/patterns/detect_hs.ts:1056              _fallback: `relaxed_hs_${factors.tag}`
+    tools/patterns/detect_hs.ts:1254              _fallback: `relaxed_ihs_${factors.tag}`
+
+`DetectedPatternSchema`（`src/schema/patterns.ts`）に宣言が無く passthrough も無いので、
+返す直前の `DetectPatternsOutputSchema.parse()` が**エラーにせず黙って落としていた**。
+#155（`candidates[].status`）/ #160（`breakoutDirection`）/ #184（`meta.effective_params`）に続く
+**4 回目**の同一クラスの欠陥で、今回は**そのために書いた parity テストがあったのにすり抜けた**（後述）。
+
+#### 何が見えなくなっていたか
+
+**strict で拾えたのか relaxed が拾い直したのかを、どのクライアントも判別できなかった。**
+relaxed は「strict がその種別を 1 件も返さなかったとき」だけ走る fallback なので、
+`_fallback` の有無は**そのパターンが本来の許容誤差を満たしていたか**そのものを指す。
+
+これは #187 / #188 と直結する。あの 2 本は strict / relaxed の境界そのものを動かした変更
+（`MAX_VALLEY_SPREAD` の削除、strict のネックライン判定の一本化）だが、
+**効果を出力から検証できなかった**——境界をまたいだパターンが strict から relaxed に移っても、
+出力は「同じ型のパターンが 1 件」としか言わない。
+
+**confidence からの逆算もできない。** relaxed のペナルティ係数が検出器ごとに不揃いだからである:
+
+| 検出器 | 係数 | 定義 |
+|---|---|---|
+| `detect_doubles` | 0.85 | `RELAXED_CONFIDENCE_PENALTY`（`:48`） |
+| `detect_triples` | 0.95 | `:607` / `:790` にインライン |
+| `detect_hs` | 0.95 | `:995` / `:1193` にインライン |
+
+さらに `finalizeConf` の種別別係数（triple は 1.05）と小数 2 桁丸めを通るので、
+**同じ 0.76 が strict 由来にも relaxed 由来にもなりうる。**
+
+#### 採った案: 宣言を足すだけ（案 A）
+
+`DetectedPatternSchema` に `_fallback: z.string().optional()` を追加し、`.describe()` に
+「本フィールドが無い = strict で拾えた」「値は `relaxed_<検出器>_<段の係数>`」
+「confidence から provenance は推測できない」を書いた。**追加なので既存クライアントを壊さない**
+（`.claude/rules/tools.md` §2 の「足す」）。**検出結果は 1 件も動かない**——消えていたフィールドが
+`structuredContent` に残るだけである。
+
+**やらなかったこと**（いずれも本 PR の対象外）:
+
+- **`content` には出さない。** LLM に見せるかは #184 の派生（実効パラメータ行）と同じ論点。
+- **ペナルティ係数（0.85 / 0.95）は変えない。** 不揃いもインラインのマジックナンバーもそのまま。
+- **relaxed 経路の検出ロジック・`_method` の扱いは変えない。**
+
+#### 表記が検出器ごとに揃っていない（`.describe()` に明記した）
+
+`_fallback` の値は 2 系統の作り方が混在している:
+
+| 検出器 | 生成 | 出る値 |
+|---|---|---|
+| double / triple | `` `relaxed_triple_x${factor}` ``（数値の文字列化） | `relaxed_triple_x1.25` / **`relaxed_triple_x2`** |
+| H&S / 逆 H&S | `` `relaxed_hs_${factors.tag}` ``（固定文字列のタグ） | `relaxed_hs_x1.6_0.6` / **`relaxed_hs_x2.0_0.4`** |
+
+**triple の第 2 段は係数 `2.0` だが `x2` として出る**（`${2.0}` は `'2'`）。一方 H&S のタグは
+リテラルなので `.0` が残る。値を**前方一致で判別するのは安全だが、係数の数値比較には使えない。**
+統一は表記の変更＝出力の変更になるため本 PR では行わず、`.describe()` に明記して逃がした。
+
+### Fixed（#184 の parity ガードが**フィクスチャ依存で取りこぼしていた**。#189 第 2 部）
+
+`tests/detect_patterns_meta_schema_parity.test.ts` は #184 でまさにこのクラスの欠陥のために
+書いたテストだが、**`_fallback` の宣言漏れを検出できなかった。**
+
+原因は allowlist（`KNOWN_DATA_STRIPS`）ではなく**フィクスチャ**である。
+`expectNoStrippedKeys` は「**載っているのに消えたキー**」を見るので、
+**そもそも載っていないキーについては何も言わない。** 単一の `buildNoisyCandles` の実測:
+
+    patterns = 6
+    _fallback を持つ = 0        ← relaxed 経路を 1 件も踏んでいない
+    _method   を持つ = 1        ← detect_wedges の forming_relaxed 1 件だけ
+
+    head_and_shoulders[completed] | falling_wedge[completed] m=forming_relaxed
+    | triangle_symmetrical[completed] ×2 | bull_flag[completed] ×2
+
+`buildNoisyCandles` は H&S / wedge / triangle / flag しか出さず、**double / triple が 0 件**。
+relaxed は strict がその種別を 1 件も見つけなかったときだけ走るので、この列はそもそも経路に届かない。
+結果、**`_fallback` は宣言してもしなくてもテストが通る**状態だった。
+
+`tests/_schemaKeyParity.ts` の docstring は「1 回の happy path では meta の全形を踏めない」
+「静的解析でキーを列挙することもできない」を**限界として自分で挙げていた**。
+**これがその限界が実際に穴になった最初の例**である。
+
+#### 塞ぎ方 1: `requiredKeys` — フィクスチャが空振りしていないことを先にアサートする
+
+`meta` 側には既にあった（`effective_params.tolerancePct.value` / `debug.candidates[].type` /
+`debug.swings[].isoTime` の存在と `size > 20`）。`data` 側は `patterns[].confidence` の 1 件だけだった。
+フィクスチャごとに「**踏めていないと検証が成立しないキー**」を宣言し、parity 判定の前に固定する。
+
+#### 塞ぎ方 2: relaxed を踏むフィクスチャを足す（既存には手を入れない）
+
+`buildRelaxedTripleTopCandles()` を**別のケースとして追加**した。既存の `buildNoisyCandles` に
+追記しなかったのは、**2 つの列の要件が衝突する**ためである——あちらは「多数の種別の候補が同時に立つ」
+ことで `debug.candidates` / `debug.swings` を埋める列で、relaxed を踏むには逆に
+**その種別の strict を全滅させる**必要がある（strict が 1 件でも出た瞬間に relaxed は走らない）。
+1 つの列に両方を負わせると、どちらかの意図が壊れたことに気づけなくなる。
+
+設計（1day のオート値 `swingDepth=6` / `minBarsBetweenSwings=4` / `tolerancePct=0.04`）:
+
+| | 値 | 効果 |
+|---|---|---|
+| 3 山 | 1000 / 1000 / 958 | 山1-山3 の相対差 **4.2%** が `tolerancePct`（4%）超・`× 1.25`（5%）以内 |
+| strict | — | 3 ペアすべてに `near` を掛けるので `three_peaks_not_level` で落ちる |
+| relaxed 第 1 段 | factor 1.25 | 隣接 2 ペアしか見ないので拾う → **`relaxed_triple_x1.25`** |
+
+残りのゲート（ネックライン傾き 0 < 2%、高さ 11% > 3%、谷の押し 9% 超 > 5%、
+ばらつき / 高さ 0.38 < 0.5、戻り率 0.69 ∈ [0.2, 0.9]、confidence 0.76 > 0.7）は余裕を持って通る。
+副産物として **`triple_bottom` が第 2 段（`relaxed_triple_x2`）で拾われ**、
+2 段とも 1 つの列で踏めている。
+
+#### 穴が塞がったことの確認（宣言を消して落ちること）
+
+**第 2 部のフィクスチャだけを入れ、第 1 部の宣言を消した状態**で落ちることを実際に確認した:
+
+    × parse の前後で data のキーパス集合も一致する: 'relaxed triple（strict が落ちて relaxed が拾う）'
+      AssertionError: detect_patterns data（relaxed triple…）: 載せているが出力スキーマに宣言が無く、
+      parse で strip されているキー（スキーマに宣言を足すこと）: expected [ 'patterns[]._fallback' ] to deeply equal []
+    × relaxed 経路の provenance（_fallback）が parse 後も残る（#189）
+      AssertionError: parse 後に _fallback を持つパターンが 1 件も無い: expected 0 to be greater than 0
+
+**同じ状態で `noisy` 側のケースは通る**——旧フィクスチャが本当に盲だったことの裏返しである。
+
+#### `_method` の他経路は踏ませていない
+
+allowlist の `patterns[]._method` は `detect_wedges` の `forming_relaxed` 1 件でだけ効いており、
+double / triple / H&S の形成中パス（6 箇所）は踏んでいない。**踏ませていない。**
+`_method` は経路によらず「宣言が無いので strip される」で同じ扱いなので、
+**1 件踏めば allowlist の検証としては足りる**（`expectNoStrippedKeys` は
+「allowlist にあるのに strip されていない」でも落ちるので、腐れば検出される）。
+新フィクスチャも `_method` を 1 件踏んでいるため、`requiredKeys` は両ケースで同じキーを要求している。
+
+### Fixed（`detect_triples` のテスト名が存在しない理由コードを指していた。#189 の相乗り）
+
+`tests/patterns/detect_triples.test.ts` の
+
+    it('3山の等高差が tolerance 超 → peaks_not_equal で通常は不検出', () => {
+
+は実態と合っていない。落ちているのは 3 山の同水準判定 `nearAll` で、理由コードは
+**`three_peaks_not_level`**。**`triple_top` に `peaks_not_equal` は存在したことがない**
+（あちらは `triple_bottom` 側の `valleys_not_equal` の対で、それも #186 / PR #188 で削除済み）。
+#188 以前から名前だけが誤っていた。名前を実態に合わせ、**再び離れないよう理由コードそのものを
+アサートする 1 行を足した**（名前は検証されないが、アサートは検証される）。
+
 
 ### Changed（strict triple のネックライン判定を `NECKLINE_SLOPE_LIMIT` 1 本に畳んだ。#186）
 
