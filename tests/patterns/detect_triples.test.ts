@@ -212,8 +212,10 @@ describe('detectTriples', () => {
 	});
 
 	it('谷のネックライン傾斜が急すぎ → neckline_slope_excess rejected', () => {
-		// valleysNear が true (slope=0.030 ≤ tol=0.04) かつ necklineValid が false (0.030 > 0.02)
-		// v1=80, v2=82.5 → |2.5|/82.5 = 0.030 ∈ (0.02, 0.04]
+		// v1=80, v2=82.5 → |2.5|/82.5 = 0.030 > NECKLINE_SLOPE_LIMIT(0.02)。
+		// #186 以前は同じ式を tolerancePct(0.04) でも測っており（`valleysNear`）、
+		// この入力は「valleysNear=true / necklineValid=false」だったので三項の else 枝に落ちていた。
+		// 判定が 1 本になった今も同じコードが出る（棄却理由は入れ替わらない）。
 		const { candles, pivots } = buildTripleTop({ v1Price: 80, v2Price: 82.5 });
 		const ctx = buildCtx({ candles, pivots });
 		detectTriples(ctx);
@@ -307,8 +309,8 @@ describe('detectTriples', () => {
 	});
 
 	it('山のネックライン傾斜が急すぎ → neckline_slope_excess rejected', () => {
-		// peaksNear が true (slope=0.030 ≤ tol=0.04) かつ necklineValid が false (0.030 > 0.02)
-		// p1=120, p2=123.7 → |3.7|/123.7 ≈ 0.030 ∈ (0.02, 0.04]
+		// p1=120, p2=123.7 → |3.7|/123.7 ≈ 0.030 > NECKLINE_SLOPE_LIMIT(0.02)。
+		// #186 以前の `peaksNear`（tolerancePct=0.04 基準）との関係は top 側の同名テスト参照。
 		const { candles, pivots } = buildTripleBottom({ p1Price: 120, p2Price: 123.7 });
 		const ctx = buildCtx({ candles, pivots });
 		detectTriples(ctx);
@@ -1401,5 +1403,118 @@ describe('detectTriples', () => {
 
 		expect(forming1day.length).toBeGreaterThanOrEqual(1);
 		expect(forming1month).toHaveLength(0);
+	});
+	// ── #186: ネックライン水平性の判定を NECKLINE_SLOPE_LIMIT 1 本に畳んだ ──────────
+
+	/**
+	 * strict は同じ 2 点（top なら 2 谷、bottom なら 2 山）を `tolerancePct` と
+	 * `NECKLINE_SLOPE_LIMIT` の**完全に同一の式**で 2 回測っていた。`tolerancePct` の
+	 * 時間軸オートはすべて 0.03 以上なので既定パスでは常に `NECKLINE_SLOPE_LIMIT`（0.02）が
+	 * 律速し、`valleys_not_equal` / `peaks_not_equal` は「`tolerancePct` を緩めれば通る」と
+	 * 読めるのに実際には通らない——**間違ったつまみを指す理由コード**だった。
+	 *
+	 * 判定を 1 本にしたので、strict 由来の `valleys_not_equal` / `peaks_not_equal` は消える。
+	 * `double_top` / `double_bottom`（`detect_doubles.ts`）と relaxed 経路の
+	 * `*_relaxed` は別のコードなので**対象外**。
+	 */
+	describe('#186 strict のネックライン判定は NECKLINE_SLOPE_LIMIT の 1 本', () => {
+		it('strict の triple_top は valleys_not_equal を返さない（理由コードの削除）', () => {
+			// 傾き 3%（> 0.02）。#186 以前は valleysNear=true 側なので else 枝
+			// （neckline_slope_excess）だったが、tolerancePct を 0.02 未満にすると
+			// 同じ入力が valleys_not_equal に化けていた（＝ラベルだけが変わる）。
+			for (const tol of [0.04, 0.01]) {
+				const { candles, pivots } = buildTripleTop({ v1Price: 80, v2Price: 82.5 });
+				const ctx = buildCtx({ candles, pivots, tolerancePct: tol });
+				detectTriples(ctx);
+
+				expect(
+					ctx.debugCandidates.filter((d) => d.type === 'triple_top' && d.reason === 'valleys_not_equal'),
+				).toHaveLength(0);
+				expect(
+					ctx.debugCandidates.filter((d) => d.type === 'triple_top' && d.reason === 'neckline_slope_excess').length,
+				).toBeGreaterThanOrEqual(1);
+			}
+		});
+
+		it('strict の triple_bottom は peaks_not_equal を返さない（理由コードの削除）', () => {
+			for (const tol of [0.04, 0.01]) {
+				const { candles, pivots } = buildTripleBottom({ p1Price: 120, p2Price: 123.7 });
+				const ctx = buildCtx({ candles, pivots, tolerancePct: tol });
+				detectTriples(ctx);
+
+				expect(
+					ctx.debugCandidates.filter((d) => d.type === 'triple_bottom' && d.reason === 'peaks_not_equal'),
+				).toHaveLength(0);
+				expect(
+					ctx.debugCandidates.filter((d) => d.type === 'triple_bottom' && d.reason === 'neckline_slope_excess').length,
+				).toBeGreaterThanOrEqual(1);
+			}
+		});
+
+		/**
+		 * **判定が緩む唯一の範囲を固定する。**
+		 *
+		 * 旧実装の実効上限は `min(tolerancePct, NECKLINE_SLOPE_LIMIT)`、新実装は
+		 * `NECKLINE_SLOPE_LIMIT` なので、**`tolerancePct < 0.02` を明示したときだけ緩む**。
+		 * スキーマは `min(0)` なので指定自体は可能だが、時間軸オート（最小 0.03）では到達しない。
+		 *
+		 * ここで固定するのは「strict が受理すること」。**tool 表面の `data.patterns` に
+		 * 出るかどうかは変わらない**——旧実装でも strict が弾いた直後に relaxed fallback
+		 * （`relaxed_triple_x1.25`）が同じ 3 点を拾い直していた。変わるのは confidence で、
+		 * relaxed の 0.95 倍のペナルティが外れて上がる。
+		 */
+		it('tolerancePct=0.01（< 0.02）: ネックライン傾き 1.48% の triple_top を strict が受理する', () => {
+			// v1=80, v2=81.2 → |1.2|/81.2 ≈ 0.0148 ∈ (0.01, 0.02]
+			const { candles, pivots } = buildTripleTop({ v1Price: 80, v2Price: 81.2, withBreakout: true });
+			const ctx = buildCtx({ candles, pivots, tolerancePct: 0.01 });
+			const result = detectTriples(ctx);
+
+			// 旧実装ではここが `valleys_not_equal` の棄却だった
+			const accepted = ctx.debugCandidates.find((d) => d.type === 'triple_top' && d.accepted === true);
+			expect(accepted).toBeDefined();
+
+			const tt = result.patterns.filter((p) => p.type === 'triple_top');
+			expect(tt).toHaveLength(1);
+			expect(tt[0]?.status).toBe('completed');
+			// strict 由来なので relaxed fallback のマーカーが付かない
+			expect(tt[0]?._fallback).toBeUndefined();
+		});
+
+		it('tolerancePct=0.01（< 0.02）: ネックライン傾き 1.48% の triple_bottom を strict が受理する', () => {
+			// p1=120, p2=121.8 → |1.8|/121.8 ≈ 0.0148 ∈ (0.01, 0.02]
+			const { candles, pivots } = buildTripleBottom({ p1Price: 120, p2Price: 121.8, withBreakout: true });
+			const ctx = buildCtx({ candles, pivots, tolerancePct: 0.01 });
+			const result = detectTriples(ctx);
+
+			const accepted = ctx.debugCandidates.find((d) => d.type === 'triple_bottom' && d.accepted === true);
+			expect(accepted).toBeDefined();
+
+			const tb = result.patterns.filter((p) => p.type === 'triple_bottom');
+			expect(tb).toHaveLength(1);
+			expect(tb[0]?.status).toBe('completed');
+			expect(tb[0]?._fallback).toBeUndefined();
+		});
+
+		/**
+		 * **`tolerancePct >= 0.02` では何も変わらない**ことの境界固定。
+		 * 旧実装の実効上限 `min(tolerancePct, 0.02)` は `tolerancePct = 0.02` で新実装と一致する。
+		 * 傾き 1.48%（< 0.02）は受理、2.5%（> 0.02）は棄却で、`tolerancePct` を 0.02 から
+		 * 上げても下限は 0.02 のまま動かない。
+		 */
+		it('tolerancePct=0.02 / 0.06: 律速は常に NECKLINE_SLOPE_LIMIT（緩まない・締まらない）', () => {
+			for (const tol of [0.02, 0.06]) {
+				const pass = buildTripleTop({ v1Price: 80, v2Price: 81.2, withBreakout: true });
+				const ctxPass = buildCtx({ candles: pass.candles, pivots: pass.pivots, tolerancePct: tol });
+				detectTriples(ctxPass);
+				expect(ctxPass.debugCandidates.some((d) => d.type === 'triple_top' && d.accepted === true)).toBe(true);
+
+				const fail = buildTripleTop({ v1Price: 80, v2Price: 82.5, withBreakout: true });
+				const ctxFail = buildCtx({ candles: fail.candles, pivots: fail.pivots, tolerancePct: tol });
+				detectTriples(ctxFail);
+				expect(
+					ctxFail.debugCandidates.some((d) => d.type === 'triple_top' && d.reason === 'neckline_slope_excess'),
+				).toBe(true);
+			}
+		});
 	});
 });

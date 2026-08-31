@@ -17,11 +17,20 @@ import { pushCand } from './types.js';
 
 /**
  * ネックライン（triple_top なら 2 谷、triple_bottom なら 2 山）の傾きの上限。
- * **完成済み 4 経路（strict / relaxed × top / bottom）すべてで共通**。
+ * **完成済み 4 経路（strict / relaxed × top / bottom）すべてで共通**、かつ
+ * **ネックライン構成 2 点に掛かる唯一の水平性の閾値**（issue #186）。
  *
- * strict では同じ 2 点に `tolerancePct` の同水準判定（`valleysNear` / `peaksNear`）も掛かるため
- * 実効的な上限は `min(tolerancePct, NECKLINE_SLOPE_LIMIT)`。既定の `tolerancePct`（4%）より
- * 厳しいので通常はこちらが効き、relaxed では本定数だけが掛かる。
+ * #186 以前は strict だけが同じ 2 点を `tolerancePct` でも測っていた（`valleysNear` /
+ * `peaksNear`）。**分子も分母も本定数の判定式と完全に同一**で閾値だけが違ったため、
+ * 実効的な上限は `min(tolerancePct, NECKLINE_SLOPE_LIMIT)`。`tolerancePct` の時間軸オートは
+ * すべて 0.03 以上（`getDefaultToleranceForTf`）で本定数より緩いので、**既定パスでは常に
+ * 本定数が律速**し、`tolerancePct` は棄却理由コードのラベルを分けているだけだった。
+ * 「`valleys_not_equal` なら `tolerancePct` を緩めれば通る」と読めてしまい、実際には通らない
+ * （本定数が先に効くのでコード名が `neckline_slope_excess` に変わるだけ）ため削除した。
+ *
+ * その結果、**`tolerancePct` を 0.02 未満で明示したときだけ判定が緩む**
+ * （旧: `min(tolerancePct, 0.02)` → 新: `0.02`）。スキーマは `min(0)` なので指定自体は可能だが、
+ * 時間軸オートでは到達しない。ガードは `tests/patterns/detect_triples.test.ts`。
  *
  * **完成済みトリプルに残る価格水準基準の固定閾値はこれだけ**（#178 項目 2 で `MAX_VALLEY_SPREAD`
  * を削除した）。主構成点（3 山 / 3 谷）のばらつきは `tolerancePct` と、高さで正規化した
@@ -65,9 +74,11 @@ const FORMING_LEVEL_SPREAD_FACTOR = 1.0; // tripleTolerancePct × 1.0
 // 形成中トリプル: ネックライン構成点（peak3 用の 2 谷 / valley3 用の 2 山）の水平性。
 // tolerancePct × FACTOR。
 //
-// **完成済み側の対応物は 2 段**——`tolerancePct` の同水準判定（`valleysNear` / `peaksNear`）と、
-// 固定値 `NECKLINE_SLOPE_LIMIT`（2%）。forming はそのうち前段だけを掛ける（既定 4%）。
-// 3 点目が現在足で暫定であるぶんノイズが残り、固定 2% まで要求すると形成中に拾えないため。
+// **完成済み側の対応物は固定値 `NECKLINE_SLOPE_LIMIT`（2%）の 1 段だけ**（#186 で
+// `tolerancePct` の同水準判定 `valleysNear` / `peaksNear` を削除した——同じ式を 2 回測って
+// 別の名前を付けていただけだった）。forming はそちらを使わず `tolerancePct` 基準にする
+// （既定 4%）。3 点目が現在足で暫定であるぶんノイズが残り、固定 2% まで要求すると
+// 形成中に拾えないため。
 //
 // #178 項目 2 以前はここに「完成済みは 1.5%（`MAX_VALLEY_SPREAD`）と非常に厳しい」と
 // 書いてあったが、**あの定数が見ていたのはネックラインではなく triple_bottom の 3 谷**で、
@@ -196,14 +207,18 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 			pcand({ type: 'triple_top', accepted: false, reason: 'valleys_missing', idxs: [a.idx, b.idx, c.idx] });
 			continue;
 		}
-		const valleysNear = Math.abs(v1.price - v2.price) / Math.max(1, Math.max(v1.price, v2.price)) <= tolerancePct;
+		// ネックライン（2 谷）の水平性は {@link NECKLINE_SLOPE_LIMIT} の 1 本だけで測る（issue #186）。
+		// #186 以前はここに `tolerancePct` 基準の `valleysNear` が並んでいたが、**判定式が
+		// 分子・分母とも下の `necklineSlope` と完全に同一**で閾値だけが違い、既定の
+		// `tolerancePct`（時間軸オートは最小でも 0.03）は本定数より緩いので常に本定数が律速していた。
+		// 棄却理由 `valleys_not_equal` は「`tolerancePct` を緩めれば通る」と読めるが実際には通らず、
+		// **間違ったつまみを指していた**ため理由コードごと削除した。
 		const necklineSlope = Math.abs(v1.price - v2.price) / Math.max(1, Math.max(v1.price, v2.price));
-		const necklineValid = necklineSlope <= NECKLINE_SLOPE_LIMIT;
-		if (!(valleysNear && necklineValid)) {
+		if (necklineSlope > NECKLINE_SLOPE_LIMIT) {
 			pcand({
 				type: 'triple_top',
 				accepted: false,
-				reason: !valleysNear ? 'valleys_not_equal' : 'neckline_slope_excess',
+				reason: 'neckline_slope_excess',
 				idxs: [a.idx, b.idx, c.idx],
 			});
 			continue;
@@ -383,7 +398,7 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 		const structureEnd = candles[c.idx].isoTime;
 		if (!(start && structureEnd)) continue;
 
-		// Additional strict checks: peaks near and neckline slope limit.
+		// Additional strict checks: neckline slope limit.
 		//
 		// **3 谷の同水準判定はここには無い。** 2 段に分かれて前後にある:
 		// 段 1 = 上の `nearAll`（`tolerancePct` 基準。落ちた候補は `three_valleys_not_level`）、
@@ -396,19 +411,20 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 		// 価格水準基準で、しかも完成済み 4 経路のうち本関数にしか無い閾値だった。外しても
 		// `data.patterns` は 896 ケースで不変——止めていた 21 実体はすべて段 3 / 構造ゲート /
 		// ネックライン傾き / サイズ検査 / 山の同水準のいずれかが受け止める（`accepted` が
-		// 増えた実体は 0 で、棄却理由が入れ替わるだけ）。
+		// 増えた実体は 0 で、棄却理由が入れ替わるだけ）。**#186 以降、この一覧の「山の同水準」
+		// （旧 `peaks_not_equal`）は「ネックライン傾き」に統合された**——両者は同じ式を測っていた。
 		if (!(p1 && p2)) {
 			pcand({ type: 'triple_bottom', accepted: false, reason: 'peaks_missing', idxs: [a.idx, b.idx, c.idx] });
 			continue;
 		}
-		const peaksNear = Math.abs(p1.price - p2.price) / Math.max(1, Math.max(p1.price, p2.price)) <= tolerancePct;
+		// ネックライン（2 山）の水平性は {@link NECKLINE_SLOPE_LIMIT} の 1 本だけで測る（issue #186）。
+		// 削除した `peaksNear` の事情は `findStrictTripleTop` の同じ箇所のコメントと同じ。
 		const necklineSlope = Math.abs(p1.price - p2.price) / Math.max(1, Math.max(p1.price, p2.price));
-		const necklineValid = necklineSlope <= NECKLINE_SLOPE_LIMIT;
-		if (!(peaksNear && necklineValid)) {
+		if (necklineSlope > NECKLINE_SLOPE_LIMIT) {
 			pcand({
 				type: 'triple_bottom',
 				accepted: false,
-				reason: !peaksNear ? 'peaks_not_equal' : 'neckline_slope_excess',
+				reason: 'neckline_slope_excess',
 				idxs: [a.idx, b.idx, c.idx],
 			});
 			continue;
