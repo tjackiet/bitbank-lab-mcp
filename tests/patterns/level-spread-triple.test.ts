@@ -18,7 +18,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dayjs } from '../../lib/datetime.js';
 import { levelSpreadMetrics, MAX_LEVEL_SPREAD_RATIO, validateLevelSpread } from '../../tools/patterns/structural.js';
-import { asMockResult } from '../_assertResult.js';
+import { asMockResult, assertFail } from '../_assertResult.js';
 
 vi.mock('../../tools/analyze_indicators.js', () => ({ default: vi.fn() }));
 
@@ -152,6 +152,40 @@ describe('validateLevelSpread（issue #138）', () => {
 		const m = metricsWithRatio(0.9);
 		expect(validateLevelSpread('top', m)).toBe('peak_spread_vs_height_excess');
 		expect(validateLevelSpread('bottom', m)).toBe('valley_spread_vs_height_excess');
+	});
+});
+
+describe('detect_patterns: 上流 analyze_indicators の失敗', () => {
+	afterEach(() => {
+		vi.clearAllMocks();
+	});
+
+	// 本 PR が足した棄却経路はすべて `analyze_indicators` の成功を前提にしている。
+	// **上流が失敗したときに候補を 1 件も組み立てないこと**を固定しておかないと、
+	// 「棄却理由が 0 件」が「上流が落ちた」なのか「窓が無かった」なのか区別できない。
+	//
+	// `detect_patterns.ts` は `if (!res.ok) return fail(res.summary, 'internal')` で
+	// 即 return するので、`data` は空・`meta.debug` も生えない（`FailResultSchema`）。
+	// この分岐は `analyze_indicators` を mock する既存テスト 13 ファイルのどれも
+	// 踏んでいなかった（すべて成功結果しか返していない）。
+	it('上流がエラーなら fail をそのまま返し、pattern も debug candidate も作らない', async () => {
+		vi.mocked(analyzeIndicators).mockResolvedValueOnce(
+			asMockResult({ ok: false, summary: 'Error: upstream failed', data: {}, meta: { errorType: 'network' } }),
+		);
+
+		const res = await detectPatterns('btc_jpy', '1day', 90, {
+			swingDepth: 2,
+			includeCompleted: true,
+			includeForming: true,
+			view: 'debug',
+		});
+
+		assertFail(res);
+		expect(res.summary).toContain('upstream failed');
+		expect(res.meta.errorType).toBe('internal');
+		// `data` は `fail()` が返す空オブジェクト。patterns も debug も生えない。
+		expect((res.data as { patterns?: unknown[] }).patterns).toBeUndefined();
+		expect((res.meta as { debug?: unknown }).debug).toBeUndefined();
 	});
 });
 
