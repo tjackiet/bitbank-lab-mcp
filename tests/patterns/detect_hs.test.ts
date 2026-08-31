@@ -610,6 +610,157 @@ describe('detectHeadAndShoulders', () => {
 		expect(ihs[0]?._fallback).toBeUndefined();
 	});
 
+	// ── relaxed 経路の肩落ち（issue #174） ──
+	//
+	// relaxed は `near()` を呼ばず `tolerancePct * factors.shoulder` をインラインで比較する。
+	// 実効閾値は `min(tolerancePct * factors.shoulder, HS_SHOULDER_MAX_PCT)` で、
+	// **既定パスではほぼ全時間足で HS_SHOULDER_MAX_PCT が律速する**（strict と逆）。
+	// #173 以前は肩で落ちた窓に何も積んでいなかったため、`view=debug` の集計に relaxed が
+	// 1 件も映らず、`:cap` 実測 0 件（#167）が strict の観測だと分からなくなっていた。
+
+	it('H&S relaxed: HS_SHOULDER_MAX_PCT のみ超過 → relaxed_shoulders_not_near:cap', () => {
+		// left=100, right=106.5 → diff/max = 6.5/106.5 ≈ 0.0610
+		//   <= tolerancePct * 2.0 = 0.08  → relaxed の tolerance は通る
+		//   >  HS_SHOULDER_MAX_PCT = 0.05 → cap だけ超過
+		// **同じ窓の strict は :both**（strict の tolerance は 0.04 なので両方超過）。
+		// 律速側が経路で入れ替わる実例で、混ぜて集計すると消える差そのもの。
+		const { candles, pivots } = buildHS({ leftShoulder: 100, rightShoulder: 106.5, head: 130 });
+		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.04 });
+		const result = detectHeadAndShoulders(ctx);
+
+		expect(result.patterns.filter((p) => p.type === 'head_and_shoulders')).toHaveLength(0);
+		const relaxed = ctx.debugCandidates.filter(
+			(d) => d.type === 'head_and_shoulders' && (d.reason ?? '').startsWith('relaxed_shoulders_not_near'),
+		);
+		expect(relaxed.map((d) => d.reason)).toEqual(['relaxed_shoulders_not_near:cap']);
+		const details = relaxed[0]?.details as Record<string, unknown> | undefined;
+		expect(details?.shoulderMaxPct).toBe(0.05);
+		expect(details?.relaxedShoulderFactor).toBe(2.0);
+		expect(details?.relaxedTolerancePct).toBeCloseTo(0.08, 12);
+		expect(details?.shouldersDiffPct).toBeCloseTo(6.5 / 106.5, 12);
+
+		// strict 由来と混ざらない（受け入れ条件: 理由コードで区別できること）
+		const strict = ctx.debugCandidates.filter(
+			(d) => d.type === 'head_and_shoulders' && (d.reason ?? '').startsWith('shoulders_not_near'),
+		);
+		expect(strict.map((d) => d.reason)).toEqual(['shoulders_not_near:both']);
+	});
+
+	it('Inverse H&S relaxed: HS_SHOULDER_MAX_PCT のみ超過 → relaxed_shoulders_not_near:cap', () => {
+		const { candles, pivots } = buildInverseHS({ leftShoulder: 100, rightShoulder: 106.5, head: 70 });
+		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.04 });
+		const result = detectHeadAndShoulders(ctx);
+
+		expect(result.patterns.filter((p) => p.type === 'inverse_head_and_shoulders')).toHaveLength(0);
+		const relaxed = ctx.debugCandidates.filter(
+			(d) => d.type === 'inverse_head_and_shoulders' && (d.reason ?? '').startsWith('relaxed_shoulders_not_near'),
+		);
+		expect(relaxed.map((d) => d.reason)).toEqual(['relaxed_shoulders_not_near:cap']);
+		const strict = ctx.debugCandidates.filter(
+			(d) => d.type === 'inverse_head_and_shoulders' && (d.reason ?? '').startsWith('shoulders_not_near'),
+		);
+		expect(strict.map((d) => d.reason)).toEqual(['shoulders_not_near:both']);
+	});
+
+	it('H&S relaxed: relaxed tolerance のみ超過 → relaxed_shoulders_not_near:tolerance', () => {
+		// tolerancePct=0.02 → relaxed 末尾の段の tolerance は 0.04。
+		// left=100, right=104.5 → 4.5/104.5 ≈ 0.0431 > 0.04 かつ <= 0.05（cap は通る）
+		const { candles, pivots } = buildHS({ leftShoulder: 100, rightShoulder: 104.5, head: 130 });
+		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.02 });
+		detectHeadAndShoulders(ctx);
+
+		const relaxed = ctx.debugCandidates.filter(
+			(d) => d.type === 'head_and_shoulders' && (d.reason ?? '').startsWith('relaxed_shoulders_not_near'),
+		);
+		expect(relaxed.map((d) => d.reason)).toEqual(['relaxed_shoulders_not_near:tolerance']);
+	});
+
+	it('H&S relaxed: 両方超過 → relaxed_shoulders_not_near:both', () => {
+		// left=100, right=120 → 20/120 ≈ 0.167。0.04*2.0=0.08 も 0.05 も超える
+		const { candles, pivots } = buildHS({ leftShoulder: 100, rightShoulder: 120, head: 150 });
+		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.04 });
+		detectHeadAndShoulders(ctx);
+
+		const relaxed = ctx.debugCandidates.filter(
+			(d) => d.type === 'head_and_shoulders' && (d.reason ?? '').startsWith('relaxed_shoulders_not_near'),
+		);
+		expect(relaxed.map((d) => d.reason)).toEqual(['relaxed_shoulders_not_near:both']);
+	});
+
+	it('relaxed の棄却エントリは同じ窓で 2 回積まれない（段は外・窓が内のループ）', () => {
+		// `RELAXED_FACTORS` は 2 段。素朴に両段で積むと同じ 5 点が 2 件になり cap を倍速で食う。
+		// 末尾の段でだけ積む実装なので、窓ごとにちょうど 1 件。
+		for (const build of [buildHS, buildInverseHS]) {
+			const isTop = build === buildHS;
+			const { candles, pivots } = build({ leftShoulder: 100, rightShoulder: 106.5, head: isTop ? 130 : 70 });
+			const ctx = buildCtx({ candles, pivots, tolerancePct: 0.04 });
+			detectHeadAndShoulders(ctx);
+
+			const perWindow = new Map<string, number>();
+			for (const d of ctx.debugCandidates) {
+				if (!(d.reason ?? '').startsWith('relaxed_')) continue;
+				const key = `${d.type}|${(d.indices ?? []).join(',')}`;
+				perWindow.set(key, (perWindow.get(key) ?? 0) + 1);
+			}
+			expect(perWindow.size).toBe(1);
+			expect([...perWindow.values()]).toEqual([1]);
+		}
+	});
+
+	it('x1.6 段の肩落ちは棄却として積まれない（x2.0 段で通る窓）', () => {
+		// tolerancePct=0.025 → x1.6 段 = 0.04 / x2.0 段 = 0.05。
+		// left=100, right=104.5 → 0.0431 は x1.6 で落ちて x2.0 で通る（cap 0.05 も通る）。
+		// 末尾の段で救われる窓なので、x1.6 の落ちを積むと「棄却」の意味が壊れる。
+		const { candles, pivots } = buildHS({ leftShoulder: 100, rightShoulder: 104.5, head: 130 });
+		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.025 });
+		const result = detectHeadAndShoulders(ctx);
+
+		const hs = result.patterns.filter((p) => p.type === 'head_and_shoulders');
+		expect(hs.length).toBeGreaterThan(0);
+		expect(hs[0]?._fallback).toBe('relaxed_hs_x2.0_0.4');
+		expect(ctx.debugCandidates.filter((d) => (d.reason ?? '').startsWith('relaxed_shoulders_not_near'))).toHaveLength(
+			0,
+		);
+	});
+
+	it('relaxed のネックライン棄却は relaxed_ 接頭辞で strict と分かれる', () => {
+		// 谷1=85 / 谷2=95 → relDiff = 10/95 ≈ 0.105 > HS_NECKLINE_MAX_PCT(0.05)。
+		// 肩と頭は strict / relaxed とも通るので、両経路がネックラインで落ちる。
+		const { candles, pivots } = buildHS({ valley1: 85, valley2: 95, head: 130 });
+		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.04 });
+		detectHeadAndShoulders(ctx);
+
+		const reasons = ctx.debugCandidates
+			.filter((d) => d.type === 'head_and_shoulders' && (d.reason ?? '').includes('neckline_not_horizontal'))
+			.map((d) => d.reason);
+		expect(reasons).toContain('neckline_not_horizontal');
+		expect(reasons).toContain('relaxed_neckline_not_horizontal');
+		// 末尾の段でだけ積むので relaxed 側はちょうど 1 件
+		expect(reasons.filter((r) => r === 'relaxed_neckline_not_horizontal')).toHaveLength(1);
+	});
+
+	it('Inverse H&S relaxed: ネックライン棄却も relaxed_ 接頭辞で積む', () => {
+		const { candles, pivots } = buildInverseHS({ peak1: 115, peak2: 128, head: 70 });
+		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.04 });
+		detectHeadAndShoulders(ctx);
+
+		const reasons = ctx.debugCandidates
+			.filter((d) => d.type === 'inverse_head_and_shoulders' && (d.reason ?? '').includes('neckline_not_horizontal'))
+			.map((d) => d.reason);
+		expect(reasons).toContain('relaxed_neckline_not_horizontal');
+		expect(reasons.filter((r) => r === 'relaxed_neckline_not_horizontal')).toHaveLength(1);
+	});
+
+	it('relaxed は頭で落ちた窓を積まない（#174 の対象外。cap 保護）', () => {
+		// head=101 は headProminencePct=0.04 の x2.0 段（= 0.016）でも突出不足。
+		// 肩は同値で通るので、肩の理由コードもネックラインの理由コードも出ない。
+		const { candles, pivots } = buildHS({ leftShoulder: 100, rightShoulder: 100, head: 101 });
+		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.04 });
+		detectHeadAndShoulders(ctx);
+
+		expect(ctx.debugCandidates.filter((d) => (d.reason ?? '').startsWith('relaxed_'))).toHaveLength(0);
+	});
+
 	// ── 形成中 H&S ───────────────────────────────────────────
 
 	it('includeForming=true + 右肩形成中 → forming H&S 検出', () => {

@@ -40,6 +40,128 @@
 | 25 | #170 | 形成中 double top / bottom のサイズ検査を完成済みと揃えた（#169） | 回帰コーパス（合成 704 + 実データ 96）は**変わらない**（0 / 800）/ 新 fixture では**減る** |
 | 26 | #142 | 検出器内 dedup の勝者選択を `globalDedup` と同じ confidence 優先に揃えた | 実データ・合成とも**変わる**（48 / 800。入れ替え 3 実体 + 追加 1 実体） |
 | 27 | #172 | `shoulders_not_near` を 2 つの conjunct ごとに分け、`HS_SHOULDER_MAX_PCT` の役割を docstring に書いた | **変わらない**（理由コード文字列と docstring のみ） |
+| 28 | #174 | #172 の docstring が relaxed 経路について誤っていたのを訂正し、relaxed の肩落ちを `debug.candidates` に積む | **変わらない**（0 / 800） |
+
+### Fixed（`HS_SHOULDER_MAX_PCT` の docstring の誤りと、relaxed の肩落ちの無音。#174）
+
+**#172 / PR #173 が付けた docstring が relaxed 経路について事実と違っていた。** docstring は
+「`detect_hs.ts` の strict / relaxed 両経路は `near(p0, p4)` と `isSameLevel(p0, p4, HS_SHOULDER_MAX_PCT)`
+の AND で判定する」と書いていたが、**relaxed は `near()` を呼んでいない**（`detect_hs.ts` の
+`findRelaxedHS` / `findRelaxedInverseHS`）:
+
+    const shouldersNearRelaxed =
+      Math.abs(p0.price - p4.price) / Math.max(1, Math.max(p0.price, p4.price)) <= tolerancePct * factors.shoulder &&
+      isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
+
+`RELAXED_FACTORS` は `{ shoulder: 1.6 }` / `{ shoulder: 2.0 }` の 2 段なので、relaxed の実効閾値は
+`min(tolerancePct × factors.shoulder, HS_SHOULDER_MAX_PCT)`。**`×1.6` 段で `1month` 以外の全時間足、
+`×2.0` 段では全時間足で `HS_SHOULDER_MAX_PCT` が律速する**——「既定パスで本定数が律速するのは
+`15min` / `30min` だけ」は **strict 限定でしか成立しない。**
+
+この式は `M = max(p0.price, p4.price) >= 1` を前提にしている（CodeRabbit 指摘）。relaxed の
+インライン比較だけが分母を `Math.max(1, M)` にクランプしており `isSameLevel` は `relDiff`
+（分母は素の `M`）なので、`M < 1`（1 円未満の建値）では相対差に対する実効閾値が
+`min(tolerancePct × factors.shoulder / M, HS_SHOULDER_MAX_PCT)` になる。**緩むのは許容誤差側だけ**
+なので本定数が律速するという結論は変わらない（むしろ強まる）。クランプ自体は本 PR では触っていない。
+
+誤りの向きが悪い。docstring の目的は #152 → #167 の再発防止（＝将来の誤帰属を防ぐこと）なのに、
+そのままだと「この定数は既定パスでほぼ効かないから消せる」という**逆向きの誤帰属**を招く。
+
+#### なぜ #172 の実測で見えなかったか
+
+**relaxed は肩で落ちた窓に何も積まずに `continue` していた。** `debugCandidates.push` していたのは
+「肩と頭は通ってネックラインだけ落ちた」ケースだけ。したがって #172 が導入した
+`shoulders_not_near:{tolerance,cap,both}` は **strict の専有**で、#167 の「`:cap` は全時間足 0 件」
+という観測は **relaxed を 1 件も映していない**。この盲点自体は #172 のクローズ時に
+「#155 と同じクラスの穴」として別件に送っていたが、診断性の問題ではなく **docstring の誤りを生む
+原因**だった。
+
+#### relaxed の肩落ちを積む（#155 / #159、#158 / #166 の先例と同じ形）
+
+| 理由コード | 経路 | 「許容誤差」の実体 |
+|---|---|---|
+| `shoulders_not_near:{tolerance,cap,both}` | strict | `tolerancePct` |
+| `relaxed_shoulders_not_near:{tolerance,cap,both}` | relaxed | `tolerancePct × factors.shoulder` |
+
+- **接頭辞で strict と分ける。** 同じ 5 点が strict でも relaxed でも落ちうるので、混ぜると
+  `view=debug` の集計が二重計上になり **#172 で直したばかりの内訳がまた壊れる**。さらに
+  `:tolerance` が指す閾値の実体が経路ごとに違うため、同じコードに束ねると「`tolerancePct` を
+  緩めれば通る」の意味もズレる。接頭辞は同ファイルの既存 idiom（`forming_`。#158 / PR #166）に揃えた。
+  分類そのものは `shouldersNotNearSuffix` で strict と共有する。
+- **積むのは `RELAXED_FACTORS` の末尾の段だけ。** ループは「段が外・窓が内」で、`×1.6` 段で全窓を
+  走査し何も見つからなければ `×2.0` 段で全窓をもう一度走査する。素朴に両段で積むと (a) エントリが
+  窓あたり最大 2 件になり `cap = 200` を倍速で食う、(b) **`×1.6` 段の肩落ちは最終的な棄却ではない**
+  （同じ窓が `×2.0` 段で通りうる）のに「棄却」として残る、の 2 つの害がある。段は緩くなる順に走り
+  成功で早期 `return` するので、**末尾の段まで到達して落ちた窓**が「relaxed でも救えなかった窓」。
+  実測でも効いている（下記の ablation）。
+  - トレードオフ: relaxed が成功した呼び出しでは末尾の段に到達せず棄却エントリが 1 件も残らない。
+    ただしそのときは `fallback_relaxed` の `accepted: true` が積まれるうえ、**診断が完全になるのは
+    relaxed が何も見つけなかったとき**——理由コードを読みたいのはまさにその場合。
+- **段（`factors.tag`）は理由コードに含めない。** 末尾の段でしか積まないので常に `x2.0_0.4` になり、
+  段ごとの内訳があるかのように読ませてしまう。代わりに `details` に `relaxedShoulderFactor` /
+  `relaxedTolerancePct` を足した（`shouldersDiffPct` / `shoulderMaxPct` / `tolerancePct` は strict と同形）。
+- **頭で落ちた窓は積んでいない**（#174 以前と同じ）。strict の `head_not_higher` / `head_not_lower` と
+  件数が近く、cap を食う割に relaxed 固有の情報が無いため範囲外に置いた。
+- **#155 の制約は踏襲した。** 構成点 5 点が揃った後の分岐にだけ積み、交互列 / `minDist` で落ちる分
+  （構成点が揃う前）には積まない。
+
+#### 既存の `neckline_not_horizontal` も `relaxed_` 接頭辞に揃えた
+
+relaxed は元から `neckline_not_horizontal` を **strict と同じ名前**で積んでおり、
+「`detect_hs.ts` は relaxed も同じ理由コード名を使うので、内訳の行では strict と分離できない」は
+issue #168（#152）のエントリに既知として書いてあった。
+**新コードだけ `relaxed_` を付けるとファイル内で不統一になる**——`relaxed_` 接頭辞を見た読み手が
+「接頭辞なし = strict」と推論するのは自然で、それはネックラインについては偽。この issue が生まれた
+誤帰属と同じクラスなので、同じ PR で揃えて `relaxed_neckline_not_horizontal` にした。
+末尾の段でだけ積む規則も同じく適用したので、**同じ窓で 2 件出ていた重複が解消される**
+（ネックライン水平度は段に依存しないため、`×1.6` で落ちる窓は `×2.0` でも必ず落ちる＝取りこぼしは無い）。
+
+既存テスト（`tests/detect_patterns_fixtures.test.ts` の「IHS: view=debug の data.debug.candidates に
+`neckline_not_horizontal` が記録される」）は **strict 由来のエントリを見ている**ので影響しない。
+
+#### 実測（合成 704 + 実データ 96 = 800 ケース）
+
+合成 704 = 価格列 22 系統（H&S / 逆 H&S の右肩掃引 8 段 × 上下、頭の突出不足 2、疑似乱数 4）
+× オプション 8 × 時間足 2 × `swingDepth` 2、実データ 96 = `btc_jpy_1day_2026` × 時間足 3 ×
+`swingDepth` 4 × オプション 8。
+
+| | before → after |
+|---|---|
+| `data.patterns` | **0 変化**（800 ケースすべて deep-equal。合計 917 件） |
+| candidates 総数 | 82,959 → **83,242**（+283） |
+| 追加されたエントリ | **+291**（**全件 `accepted: false`**。`relaxed_shoulders_not_near:both` 186 / `:cap` 105） |
+| 消えたエントリ | **8**（**全件 `accepted: false`** かつ全件が cap 到達ケース内） |
+| `accepted: true` | 3,297 → **3,297**（変化なし） |
+| cap 到達ケース | 86 → **86**（新規 0・解消 0） |
+
+**`cap = 200` は上げていない**（判断を仰ぐ対象）。押し出された 8 件は
+`triple_bottom / forming_neckline_not_horizontal` 4 と `triple_top / confidence_below_min_relaxed` 4。
+`patterns` で絞れば `candidate-filter` がトリム前に落とすので、該当種別の理由は残る。
+
+**末尾の段に限る対策が効いていること**も同じ corpus で確認した。ゲートを外すと追加が
+**+598**（末尾の段のみなら +291）、押し出しが **20 件**（同 8 件）になる。
+
+**`relaxed_shoulders_not_near:cap` が 105 件出た**のが本 issue の核心の裏付け——strict では
+`tolerancePct <= 0.05` の格子で構造上 0 件になるコードが、relaxed では既定パスで普通に出る。
+
+#### 律速 ≠ 出力への影響力（訂正後の docstring にも書いた）
+
+relaxed は strict が 1 件も検出しなかったときだけ走るフォールバックなので、律速していても出力を
+動かすとは限らない。**本定数だけを振った ablation**（同じ 800 ケース）:
+
+| `HS_SHOULDER_MAX_PCT` | `data.patterns` |
+|---|---|
+| 0.15 / 0.10 に緩める | **917**（現行と同数。`relaxed_shoulders_not_near:cap` が消えるだけ） |
+| **0.05（現行）** | **917** |
+| 0.02 に締める | 902 |
+| 0.01 に締める | 882 |
+
+**緩めても動かない / 締めると動く**という非対称。#167 の「肩を 5.5% まで緩めて増える検出は 0 件」と
+同じ結論で、**「律速している = 重要な定数」と読み替えないこと。**
+issue #174 が引用した別セッションの ablation（1,029 ケース、514 → 514 等）は**再現していない**
+——corpus が違うので件数は比較できないが、非対称の向きは一致した。
+
+**値は変えていない**（`HS_SHOULDER_MAX_PCT` / `RELAXED_FACTORS` / `getDefaultToleranceForTf` とも据え置き）。
 
 ### Fixed（`shoulders_not_near` を conjunct ごとに分けた。#172）
 
