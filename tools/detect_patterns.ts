@@ -112,7 +112,7 @@ export default async function detectPatterns(
 			tolerancePct,
 			minBarsBetweenSwings: minDist,
 			headProminencePct,
-			autoScaled,
+			sources: paramSources,
 		} = resolveParams(type, opts);
 		const strictPivots = opts.strictPivots !== false; // 既定: 厳格
 		// 統合オプション
@@ -558,7 +558,17 @@ export default async function detectPatterns(
 				type,
 				count: patterns.length,
 				...(scan ? { scan } : {}),
-				effective_params: { swingDepth, minBarsBetweenSwings: minDist, tolerancePct, autoScaled },
+				// 解決後の実効パラメータ（**入力値ではない**）。
+				// #184 まで出力スキーマに宣言が無く parse() が黙って strip していたため、
+				// どのクライアントにも届いていなかった。宣言は src/schema/patterns.ts の
+				// EffectiveParamsSchema、キーの網羅は tests/detect_patterns_meta_schema_parity.test.ts。
+				// 4 つ目の headProminencePct は #149 / PR #153 の追随漏れ（#184 欠陥 A）。
+				effective_params: {
+					swingDepth: { value: swingDepth, source: paramSources.swingDepth },
+					minBarsBetweenSwings: { value: minDist, source: paramSources.minBarsBetweenSwings },
+					tolerancePct: { value: tolerancePct, source: paramSources.tolerancePct },
+					headProminencePct: { value: headProminencePct, source: paramSources.headProminencePct },
+				},
 				visualization_hints: {
 					preferred_style: 'line',
 					highlight_patterns: patterns.map((p) => p.type).slice(0, 3),

@@ -61,8 +61,27 @@ interface PatternMeta {
 		swingsTotal?: number;
 		swingsOmitted?: number;
 	};
-	effective_params?: { tolerancePct?: number };
+	effective_params?: EffectiveParams;
 	[key: string]: unknown;
+}
+
+/** 実効パラメータ 1 件（解決後の値 + 由来）。`src/schema/patterns.ts` の EffectiveParamsSchema と対。 */
+interface EffectiveParam {
+	value: number;
+	source: 'auto' | 'explicit';
+}
+
+/**
+ * `meta.effective_params`。**入力値ではなく解決後の実効値**（#182 の sentinel 置換適用済み）。
+ *
+ * 各フィールドが optional なのは、ハンドラを直接呼ぶテスト経路で欠けうるため。
+ * `detect_patterns` の出力では 4 つとも常に埋まる（`tools/detect_patterns.ts`）。
+ */
+interface EffectiveParams {
+	swingDepth?: EffectiveParam;
+	minBarsBetweenSwings?: EffectiveParam;
+	tolerancePct?: EffectiveParam;
+	headProminencePct?: EffectiveParam;
 }
 
 /**
@@ -134,6 +153,49 @@ export function buildTypeSummary(pats: PatternEntry[], _tz: string = 'Asia/Tokyo
 	return Object.entries(byType)
 		.map(([k, v]) => `${k}×${v}`)
 		.join(', ');
+}
+
+/**
+ * `content` の「実効パラメータ:」行のラベル（行頭の識別子）。
+ * `tests/view-content-superset.test.ts` が定型要素の抽出に使うので、変えるなら向こうも直す。
+ */
+export const EFFECTIVE_PARAMS_LABEL = '実効パラメータ（入力値ではない）';
+
+/** 行に出す順番。swing 系 2 つ → 許容誤差系 2 つ。schema / meta の宣言順と揃える。 */
+const EFFECTIVE_PARAM_ORDER = ['swingDepth', 'minBarsBetweenSwings', 'tolerancePct', 'headProminencePct'] as const;
+
+/**
+ * 実効パラメータ行を組み立てる（issue #184 欠陥 C）。
+ *
+ * **なぜ content に出すか**: `meta.effective_params` は `structuredContent` にしか無く、
+ * LLM は `content[0].text` しか読めない（`.claude/rules/tools.md`）。実効値が見えないと
+ * 「`tolerancePct` を 0.04 → 0.05 に緩めて再検出した」（1hour では前後とも実効 0.05 で no-op）
+ * のような誤報告が起きる（#182 の実害）。
+ *
+ * **常に出す。** 「行が無い = 渡した値がそのまま効いた」を LLM に推論させるのは不確実なため。
+ * 全 4 view（`summary` / `detailed` / `full` / `debug`）に同一の文字列を通す
+ * ——`summary` に出さないと上位集合規約（`.claude/rules/tools.md` §3）違反になる。
+ *
+ * `meta.effective_params` を持たない meta（ハンドラ直呼びのテスト等）では**空文字を返す**。
+ * 実効値を持っていないときに入力値で代用すると、まさに #184 欠陥 E の誤表示になる。
+ */
+export function buildEffectiveParamsLine(meta: PatternMeta | undefined, type: string): string {
+	const eff = meta?.effective_params;
+	if (!eff) return '';
+	const parts: string[] = [];
+	let hasAuto = false;
+	for (const key of EFFECTIVE_PARAM_ORDER) {
+		const entry = eff[key];
+		if (!entry || !Number.isFinite(entry.value)) continue;
+		const auto = entry.source !== 'explicit';
+		if (auto) hasAuto = true;
+		parts.push(`${key}=${entry.value}(${auto ? 'auto' : '指定'})`);
+	}
+	if (parts.length === 0) return '';
+	// sentinel 置換が起きたことの明示（#184 決定事項 2）。`auto` が 1 つも無い呼び出しでは
+	// 置換が起きていないので注記ごと落とす（読み手に存在しない印の説明をしない）。
+	const note = hasAuto ? ` ※auto=${type} の時間軸オート値（スキーマ既定値 7/5/0.04 の明示指定も auto）` : '';
+	return `${EFFECTIVE_PARAMS_LABEL}: ${parts.join(' / ')}${note}`;
 }
 
 // ── debug view: candidate details ──
@@ -383,6 +445,10 @@ export function formatDebugView(
 	_pats: PatternEntry[],
 	res: PatternResult,
 	tz: string = 'Asia/Tokyo',
+	// 実効パラメータ行（#184 欠陥 C）。**シグネチャ末尾に足してある**——本 formatter は
+	// positional 呼び出しがテストだけで 30 箇所超あり、先頭寄りに入れると全て黙ってずれるため。
+	// 4 formatter とも同じ規則（新しい表示行は末尾）で揃えてある。
+	effectiveParamsLine: string = '',
 ): McpResponse {
 	const swings: SwingDebug[] = Array.isArray(meta?.debug?.swings) ? meta.debug.swings : [];
 	const cands: CandidateDebug[] = Array.isArray(meta?.debug?.candidates) ? meta.debug.candidates : [];
@@ -446,6 +512,8 @@ export function formatDebugView(
 
 	const text = [
 		hdr,
+		// 階梯外の view だが、診断が目的である以上ここでこそ実効値が要る（#184 決定事項 3）。
+		...(effectiveParamsLine ? [effectiveParamsLine] : []),
 		'',
 		`【Swings】${swingsNote}`,
 		swingLines.length ? swingLines.join('\n') : 'なし',
@@ -851,6 +919,7 @@ export function formatSummaryView(
 	includeForming: boolean | undefined,
 	res: PatternResult,
 	_tz: string = 'Asia/Tokyo',
+	effectiveParamsLine: string = '',
 ): McpResponse {
 	const now = Date.now();
 	const within = (ms: number) =>
@@ -858,7 +927,7 @@ export function formatSummaryView(
 	const in30 = within(30 * 86400000);
 	const in90 = within(90 * 86400000);
 	const formingHint = includeForming ? '' : '\n※形成中は includeForming=true を指定してください。';
-	const text = `${hdr}（${typeSummary || '分類なし'}、直近30日: ${in30}件、直近90日: ${in90}件）\n${periodBlock ? `${periodBlock}\n` : ''}検討パターン: ${patterns?.length ? patterns.join(', ') : '既定セット'}${formingHint}\n詳細は structuredContent.data.patterns を参照。`;
+	const text = `${hdr}（${typeSummary || '分類なし'}、直近30日: ${in30}件、直近90日: ${in90}件）\n${periodBlock ? `${periodBlock}\n` : ''}${effectiveParamsLine ? `${effectiveParamsLine}\n` : ''}検討パターン: ${patterns?.length ? patterns.join(', ') : '既定セット'}${formingHint}\n詳細は structuredContent.data.patterns を参照。`;
 	return { content: [{ type: 'text', text }], structuredContent: toStructured(res) };
 }
 
@@ -872,6 +941,7 @@ export function formatFullView(
 	meta: PatternMeta,
 	res: PatternResult,
 	tz: string = 'Asia/Tokyo',
+	effectiveParamsLine: string = '',
 ): McpResponse {
 	const body = pats.map((p, i) => formatPatternLine(p, i, 'full', meta, tz)).join('\n\n');
 	const overlayNote = res?.data?.overlays
@@ -879,7 +949,7 @@ export function formatFullView(
 		: '';
 	const trustNote =
 		'\n\nパターン整合度について（形状一致度・対称性・期間から算出）:\n  0.8以上 = 理想的な形状（教科書的パターン）\n  0.7-0.8 = 標準的な形状（他指標と併用推奨）\n  0.6-0.7 = やや不明瞭（慎重に判断）\n  0.6未満 = 形状不十分\n  ※ status=forming は最終構成点が未確定のため、整合度に関わらず「参考材料」として扱う';
-	const text = `${hdr}（${typeSummary || '分類なし'}）\n${periodBlock ? `${periodBlock}\n` : ''}\n【検出パターン（全件）】\n${body}${overlayNote}${trustNote}`;
+	const text = `${hdr}（${typeSummary || '分類なし'}）\n${periodBlock ? `${periodBlock}\n` : ''}${effectiveParamsLine ? `${effectiveParamsLine}\n` : ''}\n【検出パターン（全件）】\n${body}${overlayNote}${trustNote}`;
 	return { content: [{ type: 'text', text }], structuredContent: toStructured(res) };
 }
 
@@ -891,10 +961,10 @@ export function formatDetailedView(
 	periodBlock: string,
 	typeSummary: string,
 	meta: PatternMeta,
-	tolerancePct: number | undefined,
 	patterns: string[] | undefined,
 	res: PatternResult,
 	tz: string = 'Asia/Tokyo',
+	effectiveParamsLine: string = '',
 ): McpResponse {
 	const top = pats.slice(0, 5);
 	const body = top.length ? top.map((p, i) => formatPatternLine(p, i, 'detailed', meta, tz)).join('\n\n') : '';
@@ -905,8 +975,20 @@ export function formatDetailedView(
 		if (resSummary === 'insufficient data') {
 			none = `\n${resSummary}`;
 		} else {
-			const effTol = meta?.effective_params?.tolerancePct ?? tolerancePct ?? 'default';
-			none = `\nパターンは検出されませんでした（tolerancePct=${effTol}）。\n・検討パターン: ${patterns?.length ? patterns.join(', ') : '既定セット'}\n・必要に応じて tolerance を 0.03-0.06 に緩和してください`;
+			// **入力値へのフォールバックはしない**（#184 欠陥 E）。旧実装は
+			// `meta.effective_params?.tolerancePct ?? tolerancePct ?? 'default'` と書いており、
+			// `effective_params` が出力スキーマ未宣言で常に strip されていた（欠陥 D）ため
+			// 第 2 項の**生入力値**に落ちていた。1hour・未指定では `tolerancePct=0.04` と表示され
+			// （実効値は 0.05）、その 0.04 を基準に緩和を助言していた——#182 の誤報告の誘発元。
+			// 値そのものはヘッダ直下の実効パラメータ行（`effectiveParamsLine`）に一本化したので、
+			// ここは助言だけを持つ。実効値が無いときは数値を主張しない。
+			const effTol = meta?.effective_params?.tolerancePct?.value;
+			// 緩める / 締めるの基準は**実効値**。旧文言「0.03-0.06 に緩和」は 1hour（実効 0.05）では
+			// 半分が締める方向を指していた。
+			const loosenHint = Number.isFinite(effTol as number)
+				? `・緩めるなら tolerancePct に実効値 ${effTol} より大きい値を指定してください（上限 0.1）。${effTol} 以下は締める方向です（スキーマ既定値 0.04 は sentinel なので時間軸オート値に戻ります）`
+				: '・緩めるなら tolerancePct を実効値より大きい値に上げてください（上限 0.1。実効値は上の実効パラメータ行を参照）。スキーマ既定値 0.04 は sentinel なので時間軸オート値に置換されます';
+			none = `\nパターンは検出されませんでした。\n・検討パターン: ${patterns?.length ? patterns.join(', ') : '既定セット'}\n${loosenHint}`;
 		}
 	}
 
@@ -916,7 +998,7 @@ export function formatDetailedView(
 	const trustNote =
 		'\n\nパターン整合度について（形状一致度・対称性・期間から算出）:\n  0.8以上 = 理想的な形状（教科書的パターン）\n  0.7-0.8 = 標準的な形状（他指標と併用推奨）\n  0.6-0.7 = やや不明瞭（慎重に判断）\n  0.6未満 = 形状不十分\n  ※ status=forming は最終構成点が未確定のため、整合度に関わらず「参考材料」として扱う';
 	const usage = `\n\nusage_example:\n  step1: detect_patterns を実行\n  step2: structuredContent.data.overlays を取得\n  step3: render_chart_svg の overlays に渡す`;
-	const text = `${hdr}（${typeSummary || '分類なし'}）\n${periodBlock ? `${periodBlock}\n` : ''}\n${top.length ? `【検出パターン】\n${body}` : ''}${none}${overlayNote}${trustNote}${usage}`;
+	const text = `${hdr}（${typeSummary || '分類なし'}）\n${periodBlock ? `${periodBlock}\n` : ''}${effectiveParamsLine ? `${effectiveParamsLine}\n` : ''}\n${top.length ? `【検出パターン】\n${body}` : ''}${none}${overlayNote}${trustNote}${usage}`;
 	return {
 		content: [{ type: 'text', text }],
 		structuredContent: {

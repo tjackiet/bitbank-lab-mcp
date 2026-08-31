@@ -34,6 +34,7 @@ vi.mock('../tools/detect_patterns.js', () => ({ default: vi.fn() }));
 
 import { dayjs } from '../lib/datetime.js';
 import { toolDef as detectPatternsTool } from '../src/handlers/detectPatternsHandler.js';
+import { EFFECTIVE_PARAMS_LABEL } from '../src/handlers/detectPatternsViewsHandler.js';
 import { toolDef as volatilityTool } from '../src/handlers/getVolatilityMetricsHandler.js';
 import detectPatterns from '../tools/detect_patterns.js';
 import { toolDef as flowMetricsTool } from '../tools/get_flow_metrics.js';
@@ -80,9 +81,27 @@ function periodLines(text: string): string[] {
 		.filter((line) => /^(?:スキャン範囲|検出パターン分布期間):/u.test(line));
 }
 
-/** view の content から定型要素（注記行 + 期間行 + ヘッダ主要フィールド）を抽出した集合。 */
+/**
+ * 実効パラメータ行（`実効パラメータ（入力値ではない）: …`）。issue #184 欠陥 C で追加した定型 1 行で、
+ * **`content[0].text` が LLM への唯一のチャネルである以上、ここが実効値の唯一の届け先**
+ * （`meta.effective_params` は structuredContent 側で LLM からは見えない）。
+ * `summary` に出さないと規約 3（上位集合）違反になるので、全 view に出続けることをここで固定する。
+ */
+function effectiveParamsLines(text: string): string[] {
+	return text
+		.split('\n')
+		.map((line) => line.trim())
+		.filter((line) => line.startsWith(EFFECTIVE_PARAMS_LABEL));
+}
+
+/** view の content から定型要素（注記行 + 期間行 + 実効パラメータ行 + ヘッダ主要フィールド）を抽出した集合。 */
 function fixedElements(text: string): Set<string> {
-	return new Set([...annotationLines(text), ...periodLines(text), ...headerFields(text)]);
+	return new Set([
+		...annotationLines(text),
+		...periodLines(text),
+		...effectiveParamsLines(text),
+		...headerFields(text),
+	]);
 }
 
 /**
@@ -246,6 +265,14 @@ function patternsFixture(): Awaited<ReturnType<typeof detectPatterns>> {
 			// `スキャン範囲` 行の元データ。bars は runPatterns の limit=180 とわざと食い違わせている
 			// ——ヘッダの `{limit}本から` は要求本数であってスキャン本数ではない、という現状を隠さないため。
 			scan: { start: '2025-07-21T00:00:00.000Z', end: '2026-01-26T00:00:00.000Z', bars: 190 },
+			// 実効パラメータ行の元データ（#184）。1day の時間軸オート値。`swingDepth` だけ
+			// 明示指定にしてあるのは、`auto` / `指定` の両方が 1 行に出る状態を固定するため。
+			effective_params: {
+				swingDepth: { value: 4, source: 'explicit' as const },
+				minBarsBetweenSwings: { value: 4, source: 'auto' as const },
+				tolerancePct: { value: 0.04, source: 'auto' as const },
+				headProminencePct: { value: 0.04, source: 'auto' as const },
+			},
 			visualization_hints: { preferred_style: 'line', highlight_patterns: [] },
 			warning: '取得層: 180本中20本が欠損しています',
 			warnings: ['計算層: スイング検出に必要なバー数が不足しています'],
@@ -424,6 +451,7 @@ describe('階梯上の view の content は下位 view の上位集合（§3-2 �
 		expect([...summaryElements].filter((e) => e.startsWith('⚠️'))).toHaveLength(2);
 		expect(summaryElements).toContain('pair=BTC_JPY');
 		expect(periodLines(summary)).toHaveLength(2);
+		expect(effectiveParamsLines(summary)).toHaveLength(1);
 
 		expectSupersetOf(fixedElements(detailed), fixedElements(summary), 'detailed ⊇ summary');
 		expectSupersetOf(fixedElements(full), fixedElements(detailed), 'full ⊇ detailed');
@@ -440,6 +468,33 @@ describe('階梯上の view の content は下位 view の上位集合（§3-2 �
 			expect(text, `view=${view}`).toContain('検出パターン分布期間: 2026-01-01 ~ 2026-01-26');
 			expect(text, `view=${view}`).not.toContain('検出対象期間');
 		}
+	});
+
+	it('detect_patterns: 実効パラメータ行が summary / detailed / full / debug すべてに同一文言で出る', async () => {
+		// **`debug` も含める。** 階梯外（出力の置換）なので上位集合規約の対象ではないが、
+		// 診断が目的の view でこそ実効値が要る（#184 決定事項 3）。規約は「出してはいけない」とは
+		// 言っていないので、ここは規約 3 ではなく #184 の設計判断としての固定。
+		const byView = await collectContentByView(['summary', 'detailed', 'full', 'debug'] as const, (view) =>
+			runPatterns(view),
+		);
+
+		const lines = new Set<string>();
+		for (const view of ['summary', 'detailed', 'full', 'debug'] as const) {
+			const found = effectiveParamsLines(byView.get(view) as string);
+			expect(found, `view=${view} に実効パラメータ行が無い`).toHaveLength(1);
+			lines.add(found[0]);
+		}
+		// 4 view で文言が割れていない（handler で 1 回だけ組んでいることの回帰）
+		expect(lines.size, 'view ごとに実効パラメータ行の文言が違う').toBe(1);
+
+		const [line] = [...lines];
+		// 4 パラメータすべてが実効値と由来つきで出る（`headProminencePct` は #184 欠陥 A の追加分）
+		expect(line).toContain('swingDepth=4(指定)');
+		expect(line).toContain('minBarsBetweenSwings=4(auto)');
+		expect(line).toContain('tolerancePct=0.04(auto)');
+		expect(line).toContain('headProminencePct=0.04(auto)');
+		// sentinel 置換の明示（#184 決定事項 2）
+		expect(line).toContain('スキーマ既定値 7/5/0.04 の明示指定も auto');
 	});
 
 	it('detect_patterns: パターン行のキー集合が summary ⊆ detailed ⊆ full', async () => {

@@ -260,6 +260,14 @@ describe('view は structuredContent を変えない（§3-2 規約 4）', () =>
 				pair: 'btc_jpy',
 				type: '1day',
 				count: 1,
+				// #184 で出力スキーマに宣言した実効パラメータ。**view で削られないこと**が規約 2 の対象で、
+				// 宣言前は parse で strip されて structuredContent に一度も現れていなかった（欠陥 D）。
+				effective_params: {
+					swingDepth: { value: 6, source: 'auto' },
+					minBarsBetweenSwings: { value: 4, source: 'auto' },
+					tolerancePct: { value: 0.04, source: 'auto' },
+					headProminencePct: { value: 0.04, source: 'auto' },
+				},
 				visualization_hints: { preferred_style: 'line', highlight_patterns: [] },
 				debug: {
 					swings: [{ kind: 'H', idx: 3, price: 100, isoTime: '2026-01-05T00:00:00.000Z' }],

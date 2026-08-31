@@ -9,6 +9,7 @@ import { extractScanWindowWarnings } from '../../tools/patterns/scan-window.js';
 import { DetectPatternsInputSchema, DetectPatternsOutputSchema } from '../schemas.js';
 import type { McpResponse, ToolDefinition } from '../tool-definition.js';
 import {
+	buildEffectiveParamsLine,
 	buildTypeSummary,
 	formatDebugView,
 	formatDetailedView,
@@ -100,6 +101,11 @@ export const toolDef: ToolDefinition = {
 		const count = Number(meta.count ?? pats.length ?? 0);
 		const tfLabel = timeframeLabel(String(type));
 		const hdr = `${String(pair).toUpperCase()} ${tfLabel}（${String(type)}） ${limit ?? count}本から${pats.length}件を検出`;
+		// 実効パラメータ行（#184 欠陥 C）。**4 つの view すべてに同じ文字列を通す。**
+		// `hdr` は各 view で `${hdr}（${typeSummary}…）` と構文的に包まれるため末尾に足せず、
+		// また `summary` に出さないと上位集合規約（`.claude/rules/tools.md` §3）違反になる。
+		// ここで 1 回だけ組むことで、view 間で文言がずれない（= 上位集合テストが意味を持つ）。
+		const effectiveParamsLine = buildEffectiveParamsLine(meta, String(type));
 		// 上流 warning ＋ 検出層 warning（スキャン窓不足）を content 先頭にまとめて出す。
 		const contentWarnings = {
 			warning: meta.warning,
@@ -107,7 +113,10 @@ export const toolDef: ToolDefinition = {
 		};
 
 		if (view === 'debug') {
-			return prependWarningToResponse(formatDebugView(hdr, meta, pats, res, effectiveTz), contentWarnings);
+			return prependWarningToResponse(
+				formatDebugView(hdr, meta, pats, res, effectiveTz, effectiveParamsLine),
+				contentWarnings,
+			);
 		}
 
 		// スキャン範囲（meta.scan = 検出器に渡した足）＋ 検出パターン分布期間の 2 行。
@@ -117,19 +126,29 @@ export const toolDef: ToolDefinition = {
 
 		if ((view || 'detailed') === 'summary') {
 			return prependWarningToResponse(
-				formatSummaryView(hdr, pats, periodBlock, typeSummary, patterns, includeForming, res, effectiveTz),
+				formatSummaryView(
+					hdr,
+					pats,
+					periodBlock,
+					typeSummary,
+					patterns,
+					includeForming,
+					res,
+					effectiveTz,
+					effectiveParamsLine,
+				),
 				contentWarnings,
 			);
 		}
 		if ((view || 'detailed') === 'full') {
 			return prependWarningToResponse(
-				formatFullView(hdr, pats, periodBlock, typeSummary, meta, res, effectiveTz),
+				formatFullView(hdr, pats, periodBlock, typeSummary, meta, res, effectiveTz, effectiveParamsLine),
 				contentWarnings,
 			);
 		}
 		// detailed (default)
 		return prependWarningToResponse(
-			formatDetailedView(hdr, pats, periodBlock, typeSummary, meta, tolerancePct, patterns, res, effectiveTz),
+			formatDetailedView(hdr, pats, periodBlock, typeSummary, meta, patterns, res, effectiveTz, effectiveParamsLine),
 			contentWarnings,
 		);
 	},

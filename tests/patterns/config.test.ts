@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { DetectPatternsInputSchema } from '../../src/schemas.js';
 import {
 	getConvergenceFactorForTf,
 	getDefaultParamsForTf,
@@ -145,7 +146,12 @@ describe('resolveParams', () => {
 		expect(result.tolerancePct).toBe(0.04);
 		expect(result.minBarsBetweenSwings).toBe(4);
 		expect(result.headProminencePct).toBe(0.04);
-		expect(result.autoScaled).toBe(true);
+		expect(result.sources).toEqual({
+			swingDepth: 'auto',
+			tolerancePct: 'auto',
+			minBarsBetweenSwings: 'auto',
+			headProminencePct: 'auto',
+		});
 	});
 
 	it('スキーマデフォルト値(7)は時間軸オートに置換', () => {
@@ -156,7 +162,9 @@ describe('resolveParams', () => {
 	it('スキーマデフォルトでないカスタム値はそのまま使用', () => {
 		const result = resolveParams('1day', { swingDepth: 10 });
 		expect(result.swingDepth).toBe(10);
-		expect(result.autoScaled).toBe(false);
+		// 由来はパラメータごとに割れる（旧 autoScaled は集約フラグだったので表現できなかった）
+		expect(result.sources.swingDepth).toBe('explicit');
+		expect(result.sources.minBarsBetweenSwings).toBe('auto');
 	});
 
 	it('tolerancePct のスキーマデフォルト(0.04)は時間軸オートに置換', () => {
@@ -182,6 +190,37 @@ describe('resolveParams', () => {
 		expect(result.headProminencePct).toBe(0.02);
 	});
 
+	// ── 述語のエッジケース（#184 のリファクタで実効値が動いていないことの固定） ──
+	// `resolveParams` は入れ子三項から `xxxExplicit` の平坦な述語に書き換えたが、
+	// **パラメータごとの述語は元のまま**（`swingDepth` / `minBarsBetweenSwings` は
+	// `Number.isFinite`、`tolerancePct` / `headProminencePct` は `typeof number && !NaN`）。
+	// 揃えると `Infinity` の扱いが変わって実効値が動くため。スキーマは値域を縛るので
+	// MCP 経路では届かないが、直接呼びの経路では届く。
+
+	it('Infinity: swingDepth は時間軸オートに落ち、tolerancePct はそのまま通る（旧実装と同じ）', () => {
+		const result = resolveParams('1day', { swingDepth: Number.POSITIVE_INFINITY });
+		expect(result.swingDepth).toBe(6); // Number.isFinite(Infinity) === false → auto
+		expect(result.sources.swingDepth).toBe('auto');
+
+		const tol = resolveParams('1day', { tolerancePct: Number.POSITIVE_INFINITY });
+		expect(tol.tolerancePct).toBe(Number.POSITIVE_INFINITY); // typeof number && !NaN → explicit
+		expect(tol.sources.tolerancePct).toBe('explicit');
+	});
+
+	it('NaN: 4 パラメータとも時間軸オートに落ちる', () => {
+		const result = resolveParams('1day', {
+			swingDepth: Number.NaN,
+			minBarsBetweenSwings: Number.NaN,
+			tolerancePct: Number.NaN,
+			headProminencePct: Number.NaN,
+		});
+		expect(result.swingDepth).toBe(6);
+		expect(result.minBarsBetweenSwings).toBe(4);
+		expect(result.tolerancePct).toBe(0.04);
+		expect(result.headProminencePct).toBe(0.04);
+		expect(Object.values(result.sources)).toEqual(['auto', 'auto', 'auto', 'auto']);
+	});
+
 	it('tolerancePct を明示的に変えても headProminencePct には影響しない', () => {
 		// issue #149: 旧実装は同じ値を共有していたため、tolerancePct を下げると
 		// 意図とは逆に頭の判定が厳しくなった。分離後は tolerancePct を動かしても
@@ -189,6 +228,97 @@ describe('resolveParams', () => {
 		const result = resolveParams('1hour', { tolerancePct: 0.01 });
 		expect(result.tolerancePct).toBe(0.01);
 		expect(result.headProminencePct).toBe(0.05); // 1hour のオート値のまま
+	});
+});
+
+/**
+ * **MCP 経路（`DetectPatternsInputSchema.parse()` を通した値）での由来判定**（issue #184 欠陥 B）。
+ *
+ * 上の `describe('resolveParams')` は `resolveParams` を**直接**呼んでおり、
+ * `.default()` が埋まらないので `opts.swingDepth === undefined` の経路を通る。
+ * ところが MCP 経路では `.default()` が必ず値を埋めるため、**その経路は実在しない**。
+ * 旧 `autoScaled` は「`swingDepth` / `minBarsBetweenSwings` がどちらも未指定」で判定していたので、
+ * MCP 経路では**常に `false`** を返していた——`{"pair":"btc_jpy","type":"1hour"}` のように
+ * 何も指定していない（＝解決値が完全に時間軸オートの 3 / 2 / 0.05 になる）呼び出しでもだ。
+ *
+ * 直接呼びのテストしか無かったことがこの欠陥を見逃した原因なので、
+ * **入力スキーマを通した値で**固定する。
+ */
+describe('resolveParams: MCP 入力経路（DetectPatternsInputSchema.parse を通す）', () => {
+	/** MCP サーバと同じ順序で解決する: 入力スキーマ parse → resolveParams。 */
+	function resolveViaSchema(input: Record<string, unknown>) {
+		const parsed = DetectPatternsInputSchema.parse(input);
+		return { parsed, resolved: resolveParams(parsed.type, parsed) };
+	}
+
+	it('.default() が sentinel 値を埋める（未指定が resolveParams に届かない）', () => {
+		const { parsed } = resolveViaSchema({ pair: 'btc_jpy', type: '1hour' });
+		// ここが崩れたら #182 案 B（`.default()` 除去）が入ったということ。
+		// そのときは「未指定」と「既定値の明示指定」が区別できるようになるので、
+		// 下の auto 判定の意味づけも見直すこと。
+		expect(parsed.swingDepth).toBe(SCHEMA_DEFAULTS.swingDepth);
+		expect(parsed.minBarsBetweenSwings).toBe(SCHEMA_DEFAULTS.minBarsBetweenSwings);
+		expect(parsed.tolerancePct).toBe(SCHEMA_DEFAULTS.tolerancePct);
+		// headProminencePct だけは `.default()` が無いので undefined のまま届く（#149 / PR #153）
+		expect(parsed.headProminencePct).toBeUndefined();
+	});
+
+	it('パラメータ未指定 → 実効値は時間軸オートで、4 つとも source=auto', () => {
+		// **旧 autoScaled が false を返していたケース。** 実効値は完全にオート（3 / 2 / 0.05）。
+		const { resolved } = resolveViaSchema({ pair: 'btc_jpy', type: '1hour' });
+		expect(resolved.swingDepth).toBe(3);
+		expect(resolved.minBarsBetweenSwings).toBe(2);
+		expect(resolved.tolerancePct).toBe(0.05);
+		expect(resolved.headProminencePct).toBe(0.05);
+		expect(resolved.sources).toEqual({
+			swingDepth: 'auto',
+			minBarsBetweenSwings: 'auto',
+			tolerancePct: 'auto',
+			headProminencePct: 'auto',
+		});
+	});
+
+	it('swingDepth だけ明示 → そのパラメータだけ explicit（集約フラグでは表現できなかった）', () => {
+		const { resolved } = resolveViaSchema({ pair: 'btc_jpy', type: '1hour', swingDepth: 4 });
+		expect(resolved.swingDepth).toBe(4);
+		expect(resolved.sources.swingDepth).toBe('explicit');
+		expect(resolved.sources.minBarsBetweenSwings).toBe('auto');
+		expect(resolved.sources.tolerancePct).toBe('auto');
+	});
+
+	it('sentinel 値を明示指定 → 実効値もオートで source も auto（未指定と区別できない）', () => {
+		// `.default()` がある限りこの 2 者は resolveParams に同じ値で届く。
+		// **本 PR では区別しない**（どちらでも実効値は同じで、見せたいのは実効値のほう）。
+		const { resolved } = resolveViaSchema({
+			pair: 'btc_jpy',
+			type: '1hour',
+			swingDepth: SCHEMA_DEFAULTS.swingDepth,
+			minBarsBetweenSwings: SCHEMA_DEFAULTS.minBarsBetweenSwings,
+			tolerancePct: SCHEMA_DEFAULTS.tolerancePct,
+		});
+		expect(resolved.swingDepth).toBe(3);
+		expect(resolved.minBarsBetweenSwings).toBe(2);
+		expect(resolved.tolerancePct).toBe(0.05);
+		expect(resolved.sources.swingDepth).toBe('auto');
+		expect(resolved.sources.minBarsBetweenSwings).toBe('auto');
+		expect(resolved.sources.tolerancePct).toBe('auto');
+	});
+
+	it('1hour で tolerancePct=0.05 を明示 → 実効値はオートと同じだが source は explicit', () => {
+		// #182 の no-op ケース（0.04 → 0.05 に「緩めた」つもりが前後とも 0.05）。
+		// 実効値が動いていないことは値そのもので分かるが、由来が割れることも固定しておく。
+		const { resolved } = resolveViaSchema({ pair: 'btc_jpy', type: '1hour', tolerancePct: 0.05 });
+		expect(resolved.tolerancePct).toBe(0.05);
+		expect(resolved.sources.tolerancePct).toBe('explicit');
+	});
+
+	it('headProminencePct は明示すれば必ず explicit（sentinel が無い）', () => {
+		const auto = resolveViaSchema({ pair: 'btc_jpy', type: '1hour' });
+		expect(auto.resolved.sources.headProminencePct).toBe('auto');
+		// tolerancePct のオート値と同値（0.05）を渡しても、こちらは sentinel 扱いにならない
+		const explicit = resolveViaSchema({ pair: 'btc_jpy', type: '1hour', headProminencePct: 0.05 });
+		expect(explicit.resolved.headProminencePct).toBe(0.05);
+		expect(explicit.resolved.sources.headProminencePct).toBe('explicit');
 	});
 });
 

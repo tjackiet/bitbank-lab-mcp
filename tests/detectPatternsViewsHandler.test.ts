@@ -33,9 +33,16 @@ function makePattern(overrides: Partial<PatternEntry> = {}): PatternEntry {
 	};
 }
 
+// `effective_params` は #184 で per-parameter の `{ value, source }` になった
+// （旧: `{ tolerancePct: 0.04 }`）。**入力値ではなく解決後の実効値**を持つ。
 const emptyMeta = {
 	debug: { swings: [], candidates: [] },
-	effective_params: { tolerancePct: 0.04 },
+	effective_params: {
+		swingDepth: { value: 6, source: 'auto' as const },
+		minBarsBetweenSwings: { value: 4, source: 'auto' as const },
+		tolerancePct: { value: 0.04, source: 'auto' as const },
+		headProminencePct: { value: 0.04, source: 'auto' as const },
+	},
 };
 
 const emptyRes = {
@@ -985,39 +992,62 @@ describe('formatFullView', () => {
 describe('formatDetailedView', () => {
 	it('パターンあり → body を出力する', () => {
 		const pats = [makePattern()];
-		const res = formatDetailedView('H', pats, '', 'double_top×1', emptyMeta, 0.04, undefined, emptyRes);
+		const res = formatDetailedView('H', pats, '', 'double_top×1', emptyMeta, undefined, emptyRes);
 		expect(res.content[0].text).toContain('double_top');
 	});
 
 	it('パターン 0 件 + summary="insufficient data" → insufficient data メッセージ', () => {
-		const res = formatDetailedView('H', [], '', '', emptyMeta, 0.04, undefined, {
+		const res = formatDetailedView('H', [], '', '', emptyMeta, undefined, {
 			...emptyRes,
 			summary: 'insufficient data',
 		});
 		expect(res.content[0].text).toContain('insufficient data');
-		expect(res.content[0].text).not.toContain('tolerancePct=');
+		expect(res.content[0].text).not.toContain('緩めるなら');
 	});
 
-	it('パターン 0 件 + 通常 summary → tolerance メッセージ', () => {
-		const res = formatDetailedView('H', [], '', '', emptyMeta, 0.04, ['double_top'], emptyRes);
-		expect(res.content[0].text).toContain('tolerancePct=0.04');
-		expect(res.content[0].text).toContain('double_top');
+	// ── 0 件メッセージ（#184 欠陥 E） ──
+	// 旧実装は `（tolerancePct=${effTol}）` を自前で出しており、`effective_params` が
+	// 出力スキーマ未宣言（欠陥 D）で常に strip されていたため**生入力値**に落ちていた。
+	// 値の表示は実効パラメータ行に一本化したので、ここは値を主張しない。
+
+	it('パターン 0 件 → 実効値を基準にした緩和の助言を出す（生入力値は出さない）', () => {
+		const res = formatDetailedView('H', [], '', '', emptyMeta, ['double_top'], emptyRes);
+		const text = res.content[0].text;
+		expect(text).toContain('パターンは検出されませんでした。');
+		expect(text).toContain('double_top');
+		// 実効値（emptyMeta は 0.04）を基準に「より大きい値」を助言する。
+		expect(text).toContain('実効値 0.04 より大きい値');
+		// 旧文言（実効値と無関係な固定レンジ）は残っていない。1hour では半分が締める方向だった。
+		expect(text).not.toContain('0.03-0.06');
+		// 0 件メッセージ自体は値のラベルを持たない（実効パラメータ行に一本化した）。
+		expect(text).not.toContain('（tolerancePct=');
 	});
 
-	it('パターン 0 件 + tolerancePct=undefined → effective_params から取得', () => {
-		const meta = { ...emptyMeta, effective_params: { tolerancePct: 0.05 } };
-		const res = formatDetailedView('H', [], '', '', meta, undefined, undefined, emptyRes);
-		expect(res.content[0].text).toContain('tolerancePct=0.05');
+	it('パターン 0 件 + effective_params が 0.05 → 助言の基準値も 0.05 になる', () => {
+		const meta = {
+			...emptyMeta,
+			effective_params: { ...emptyMeta.effective_params, tolerancePct: { value: 0.05, source: 'auto' as const } },
+		};
+		const res = formatDetailedView('H', [], '', '', meta, undefined, emptyRes);
+		expect(res.content[0].text).toContain('実効値 0.05 より大きい値');
+		expect(res.content[0].text).not.toContain('実効値 0.04');
 	});
 
-	it('パターン 0 件 + 両方 undefined → "default"', () => {
+	// **これが #184 欠陥 E の回帰テスト。** `effective_params` を持たない meta では、
+	// 実効値を知らないのだから数値を主張してはいけない（旧実装は生入力値で埋めていた）。
+	it('パターン 0 件 + effective_params 無し → 数値を主張せず実効パラメータ行を参照させる', () => {
 		const metaNoTol = { debug: { swings: [], candidates: [] } };
-		const res = formatDetailedView('H', [], '', '', metaNoTol, undefined, undefined, emptyRes);
-		expect(res.content[0].text).toContain('tolerancePct=default');
+		const res = formatDetailedView('H', [], '', '', metaNoTol, undefined, emptyRes);
+		const text = res.content[0].text;
+		expect(text).toContain('パターンは検出されませんでした。');
+		expect(text).toContain('実効値は上の実効パラメータ行を参照');
+		// 数値を含む「実効値 X」の主張をしていない
+		expect(text).not.toMatch(/実効値 [\d.]/u);
+		expect(text).not.toContain('tolerancePct=');
 	});
 
 	it('overlays ありのとき overlay note を含む', () => {
-		const res = formatDetailedView('H', [makePattern()], '', '', emptyMeta, 0.04, undefined, {
+		const res = formatDetailedView('H', [makePattern()], '', '', emptyMeta, undefined, {
 			...emptyRes,
 			data: { patterns: [], overlays: { ranges: [] } },
 		});
@@ -1025,20 +1055,20 @@ describe('formatDetailedView', () => {
 	});
 
 	it('overlays なしのとき overlay note なし', () => {
-		const res = formatDetailedView('H', [makePattern()], '', '', emptyMeta, 0.04, undefined, emptyRes);
+		const res = formatDetailedView('H', [makePattern()], '', '', emptyMeta, undefined, emptyRes);
 		expect(res.content[0].text).not.toContain('チャート連携');
 	});
 
 	it('5 件超のパターンは top5 のみ出力する', () => {
 		const pats = Array.from({ length: 7 }, (_, i) => makePattern({ confidence: 0.7 + i * 0.01 }));
-		const res = formatDetailedView('H', pats, '', '', emptyMeta, 0.04, undefined, emptyRes);
+		const res = formatDetailedView('H', pats, '', '', emptyMeta, undefined, emptyRes);
 		// 6番目、7番目は含まれない（全てconfidence違いだが型は同じなので出現数で確認）
 		const matches = res.content[0].text.match(/double_top/g) ?? [];
 		expect(matches.length).toBeLessThanOrEqual(5);
 	});
 
 	it('usage_example を structuredContent に含む', () => {
-		const res = formatDetailedView('H', [], '', '', emptyMeta, 0.04, undefined, emptyRes);
+		const res = formatDetailedView('H', [], '', '', emptyMeta, undefined, emptyRes);
 		const sc = res.structuredContent as Record<string, unknown>;
 		expect(sc['usage_example']).toBeDefined();
 	});

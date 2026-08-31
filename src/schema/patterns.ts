@@ -168,7 +168,11 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 		.default('detailed')
 		.describe(
 			`${VIEW_CONTRACT_NOTE}\n` +
-				'summary / detailed / full では、ヘッダ直下に 2 行が出る（**別の量なので混同しないこと**）:\n' +
+				'**`実効パラメータ` 行は 4 view すべて（`debug` を含む）でヘッダ直下に出る。** ' +
+				'解決後の実効値と由来（`(auto)` / `(指定)`）で、構造化データは meta.effective_params。' +
+				'`swingDepth` / `minBarsBetweenSwings` / `tolerancePct` はスキーマ既定値が sentinel なので、' +
+				'**渡した値と行の値が食い違うことがある**（#182 / #184）。\n' +
+				'summary / detailed / full では、さらにヘッダ直下に 2 行が出る（**別の量なので混同しないこと**）:\n' +
 				'  - `スキャン範囲: <先頭足> ~ <末尾足>（N本）` — 検出器に実際に渡した足のレンジ。' +
 				'1day 未満の時間足では時刻まで表示する。構造化データは meta.scan。\n' +
 				'  - `検出パターン分布期間: <最古 range.start> ~ <最新 range.end>（N日間）` — ' +
@@ -176,7 +180,9 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 				'- summary: ヘッダ ＋ 分類内訳 ＋ 直近30日/90日件数 ＋ 上記 2 行 ＋ 検討パターン。個々のパターンの詳細は content に出ない。\n' +
 				'- detailed（既定）: 上位 5 件の詳細。6 件目以降は content に出ない。structuredContent に usage_example を**足す**。\n' +
 				'- full: 全件の詳細（double_top / double_bottom では山谷 3 点の pivot 行も出る）。本ツールの最重量。\n' +
-				'- debug（**階梯外**）: swings / candidates のみ。**検出パターンも上記 2 行も content に出ない**——出力を置換する view なので full の上位集合ではない。structuredContent に data.candidates を**足す**。\n' +
+				'- debug（**階梯外**）: swings / candidates のみ。**検出パターンもスキャン範囲 / 検出パターン分布期間の 2 行も content に出ない**' +
+				'（実効パラメータ行だけは出る——診断に要るため）。出力を置換する view なので full の上位集合ではない。' +
+				'structuredContent に data.candidates を**足す**。\n' +
 				'  candidates は `patterns` で要求した種別（エイリアスは展開して照合）に**絞って**返す。' +
 				'`patterns` 未指定なら全種別。絞らないと cap（200件）を要求外の種別が食い潰し、' +
 				'要求した種別の棄却理由が押し出される。\n' +
@@ -229,6 +235,81 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 				'空文字も Asia/Tokyo にフォールバック。',
 		),
 });
+
+/**
+ * `meta.effective_params` の 1 パラメータ分。**解決後の実効値と、その由来**の組。
+ *
+ * `source`:
+ * - `explicit` — 呼び出し側が渡した値がそのまま効いた
+ * - `auto` — 時間軸オート表から解決した。**「未指定」と「スキーマ既定値の明示指定」を畳んでいる**
+ *   （`swingDepth` / `minBarsBetweenSwings` / `tolerancePct` は `.default()` があるため、
+ *   `resolveParams` に届いた時点で両者が同一値になり区別できない。#182 / #184）。
+ *   `headProminencePct` だけは `.default()` が無いので `auto` = 未指定と同義。
+ */
+function effectiveParam<T extends z.ZodTypeAny>(valueSchema: T, note: string) {
+	return z
+		.object({
+			value: valueSchema.describe(`実効値。${note}`),
+			source: z
+				.enum(['auto', 'explicit'])
+				.describe(
+					'`explicit` = 渡した値がそのまま効いた / `auto` = 時間軸オート表から解決した' +
+						'（未指定とスキーマ既定値の明示指定を畳んだ値）。',
+				),
+		})
+		.describe(note);
+}
+
+/**
+ * `detect_patterns` の**解決後の実効パラメータ**。
+ *
+ * **入力値ではない。** `resolveParams`（`tools/patterns/config.ts`）が時間軸オート表と
+ * スキーマ既定値の sentinel 置換を適用したあとの値で、**入力値と一致しないことがある**（#182）:
+ * `swingDepth=7` / `minBarsBetweenSwings=5` / `tolerancePct=0.04` はスキーマ既定値（= sentinel）
+ * なので、明示的に渡しても時間軸オート値に置換される（`1hour` なら 3 / 2 / 0.05）。
+ * 「渡した値が効いたか」は `source` で判別する。
+ *
+ * **`optional()` だが `ok` の出力では常に埋まる。** optional なのは本フィールドを持たない
+ * 古い経路（ハンドラを直接叩くテスト等）を通すためで、欠損は「オートで走った」ではなく
+ * 「申告前の実装」を意味する。
+ *
+ * ⚠️ **#184 まで本フィールドは出力スキーマに宣言されておらず、`parse()` が黙って strip していた**
+ * ——`tools/detect_patterns.ts` は #114 以前から `meta.effective_params` を載せていたが、
+ * どのクライアントにも届いていなかった（#155 の `status` / #160 の `breakoutDirection` に続く 3 回目）。
+ * キーの網羅は `tests/detect_patterns_meta_schema_parity.test.ts` が parse 後の実出力で固定する。
+ *
+ * 旧 `autoScaled: boolean` は #184 で廃止した（MCP 経路では `.default()` により常に `false` を
+ * 返しており、完全オートの呼び出しでも `false` だった）。per-parameter の `source` が後継。
+ */
+const EffectiveParamsSchema = z
+	.object({
+		swingDepth: effectiveParam(
+			z.number().int(),
+			'スイング検出の窓の深さ。スキーマ既定値 7 は sentinel で、時間軸オート値に置換される。',
+		),
+		minBarsBetweenSwings: effectiveParam(
+			z.number().int(),
+			'ピボット間の最小バー数。スキーマ既定値 5 は sentinel で、時間軸オート値に置換される。',
+		),
+		tolerancePct: effectiveParam(
+			z.number(),
+			'同水準判定の許容誤差。スキーマ既定値 0.04 は sentinel で、時間軸オート値に置換される。',
+		),
+		headProminencePct: effectiveParam(
+			z.number(),
+			'H&S / 逆 H&S の頭の最小突出率（#149）。`.default()` が無いので明示値はそのまま通る。',
+		),
+	})
+	.optional()
+	.describe(
+		'**解決後の実効パラメータ。入力値ではない。** 時間軸オートとスキーマ既定値の sentinel 置換' +
+			'（#182）を適用したあとの値なので、**入力値と一致しないことがある**' +
+			'（`swingDepth=7` / `minBarsBetweenSwings=5` / `tolerancePct=0.04` は sentinel。' +
+			'`1hour` ではそれぞれ 3 / 2 / 0.05 として実行される）。' +
+			'各パラメータの `source` が `explicit` なら渡した値がそのまま効いており、' +
+			'`auto` なら時間軸オート表から解決している（`auto` は未指定と既定値の明示指定を畳んだ値）。' +
+			'content には「実効パラメータ:」行として全 view に出る。',
+	);
 
 /**
  * 出力に現れるローソク足インデックス（`pivots[].idx` / `breakoutBarIndex` /
@@ -576,6 +657,7 @@ export const DetectPatternsOutputSchema = z.union([
 						'機械クライアントが「どこまで見たか」を検証できるようにするためのフィールドで、' +
 						'content には「スキャン範囲」行として出る。isoTime が欠けている足しか無い場合は省略される。',
 				),
+			effective_params: EffectiveParamsSchema,
 			visualization_hints: z
 				.object({
 					preferred_style: z.enum(['candles', 'line']).optional(),
