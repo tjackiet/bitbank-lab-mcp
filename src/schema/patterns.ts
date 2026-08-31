@@ -131,6 +131,13 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 				'  candidates は `patterns` で要求した種別（エイリアスは展開して照合）に**絞って**返す。' +
 				'`patterns` 未指定なら全種別。絞らないと cap（200件）を要求外の種別が食い潰し、' +
 				'要求した種別の棄却理由が押し出される。\n' +
+				'  **cap で押し出しが起きた場合は申告する**（issue #180）。`meta.debug.candidatesTotal` が' +
+				'絞り込み後の総数、`meta.debug.candidatesOmitted` が押し出された件数で、content には' +
+				'`【Candidates】 200 / 全 N 件（M 件省略）` の形で出る（押し出しが無ければ「省略なし」）。' +
+				'**`candidatesOmitted > 0` のとき押し出されているのはすべて `accepted: false`＝棄却理由**' +
+				'（accepted を優先して残すため）なので、理由コードの内訳を数えるなら 0 を確認すること。' +
+				'`swings` 側も同様に `swingsTotal` / `swingsOmitted` を返す（`swings` は先頭から残すので' +
+				'落ちるのは直近側）。\n' +
 				'  `accepted:false` は候補生成の時点での棄却（例: `head_not_higher`。`includeInvalid` では拾えない）で、' +
 				'`status` を持たない。`accepted:true` は**検出器が候補を組み立てた**ことを示すだけで、' +
 				'`data.patterns` に残ったことは意味しない（形成中パスの成功エントリは `globalDedup` より前に積むため、' +
@@ -566,6 +573,41 @@ export const DetectPatternsOutputSchema = z.union([
 							}),
 						)
 						.optional(),
+					// --- トリムの申告（issue #180 案 1） ---
+					// `swings` / `candidates` は cap=200 で切り詰められる。件数を返さないと
+					// 受け取った 200 件が全件なのか一部なのか判別できず、**棄却理由の内訳を
+					// censored なまま集計する**ことになる（#152 → #167 / #172 の誤帰属と同じクラス）。
+					// **`optional()` だが出力では常に埋まる。** optional なのは旧クライアントとの
+					// 互換のためで、欠損は「トリムが無かった」ではなく「申告前の実装」を意味する。
+					candidatesTotal: z
+						.number()
+						.int()
+						.optional()
+						.describe(
+							'トリム前の候補総数。**入力 `patterns` による絞り込み（#124）の後**の件数で、' +
+								'走査中に積まれた全種別の候補数ではない。`candidates.length` と等しければ全件、' +
+								'大きければ `candidatesOmitted` 件が cap で押し出されている。',
+						),
+					candidatesOmitted: z
+						.number()
+						.int()
+						.optional()
+						.describe(
+							'cap で `candidates` から押し出された件数（`candidatesTotal - candidates.length`）。' +
+								'**0 より大きいとき、押し出されたエントリはすべて `accepted: false`＝棄却理由**' +
+								'（トリムは accepted を優先して残すため）。理由コードの内訳を集計する場合は' +
+								'0 であることを確認するか、`patterns` で種別を絞って呼び直すこと。',
+						),
+					swingsTotal: z.number().int().optional().describe('トリム前のスイング総数。'),
+					swingsOmitted: z
+						.number()
+						.int()
+						.optional()
+						.describe(
+							'cap で `swings` から落ちた件数。**`swings` は先頭から cap 件を残す**ので、' +
+								'0 より大きいとき落ちているのは**新しいほうのスイング**（＝直近）。' +
+								'`candidates` と違って優先順の設計が入っていない（issue #180 で申告のみ実施）。',
+						),
 				})
 				.optional(),
 			warning: z.string().optional(),

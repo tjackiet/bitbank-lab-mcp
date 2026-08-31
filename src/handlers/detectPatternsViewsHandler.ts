@@ -50,6 +50,16 @@ interface PatternMeta {
 	debug?: {
 		swings?: SwingDebug[];
 		candidates?: CandidateDebug[];
+		/**
+		 * cap トリムの申告（issue #180）。**`detect_patterns` の出力では常に埋まる**が、
+		 * ハンドラを直接呼ぶ経路（テスト等）では欠けうるので optional。
+		 * 欠損は「トリムが無かった」ではなく「件数が分からない」なので、表示側では
+		 * 「省略なし」と書かずに行ごと落とす。
+		 */
+		candidatesTotal?: number;
+		candidatesOmitted?: number;
+		swingsTotal?: number;
+		swingsOmitted?: number;
 	};
 	effective_params?: { tolerancePct?: number };
 	[key: string]: unknown;
@@ -343,6 +353,30 @@ function breakDirectionFromDetails(details?: Record<string, unknown>): string | 
 	return undefined;
 }
 
+/**
+ * cap トリムの申告行（issue #180）。`【Swings】` / `【Candidates】` の見出しに連結する。
+ *
+ * 配列を黙って切り詰めると、受け取った 200 件が全件なのか一部なのか呼び出し側から判別できない。
+ * **LLM は `structuredContent` を読まない**（`.claude/rules/tools.md`）ので、`meta.debug` に
+ * 件数を足すだけでは目的を達しない。ここが唯一のチャネル。
+ *
+ * - `total` が数値でないとき（申告前の実装 / 手組みの meta）は**行ごと出さない**。
+ *   件数が分からない状態で「省略なし」と書くと、まさに本 issue の嘘を再導入することになる。
+ * - 省略 0 でも `省略なし` を明示する。`200 件` だけだと飽和しているのか偶然 200 なのか読めない。
+ *
+ * @param kept 実際に配列に入っている件数
+ * @param total トリム前の総数（`meta.debug.*Total`）
+ * @param omitted 申告された省略件数（`meta.debug.*Omitted`）。欠けていれば `total - kept` で補う
+ * @param omittedNote 省略が起きているときだけ添える注記（何が落ちたのかの説明）
+ */
+function formatTrimNote(kept: number, total?: number, omitted?: number, omittedNote?: string): string {
+	if (typeof total !== 'number' || !Number.isFinite(total)) return '';
+	const dropped =
+		typeof omitted === 'number' && Number.isFinite(omitted) ? Math.max(0, omitted) : Math.max(0, total - kept);
+	const tail = dropped > 0 ? `${formatInt(dropped)} 件省略${omittedNote ? `。${omittedNote}` : ''}` : '省略なし';
+	return ` ${formatInt(kept)} / 全 ${formatInt(total)} 件（${tail}）`;
+}
+
 export function formatDebugView(
 	hdr: string,
 	meta: PatternMeta,
@@ -384,13 +418,29 @@ export function formatDebugView(
 		return `${i + 1}. ${tag} ${c.type}${reason}${statusStr}${dirStr}${indices}${pts ? `\n   ${pts}` : ''}${detailsStr}`;
 	});
 
+	// cap トリムの申告（#180）。見出しに直付けするのは、凡例の下に置くと候補行との間に
+	// 埋もれるため。**`swings` は先頭から残す**ので落ちるのは直近側で、`candidates` とは
+	// 落ちる側が逆になる（どちらを残すかの変更は #180 の対象外）。
+	const swingsNote = formatTrimNote(
+		swings.length,
+		meta?.debug?.swingsTotal,
+		meta?.debug?.swingsOmitted,
+		'先頭から残すため省略分はすべて直近側のスイング',
+	);
+	const candsNote = formatTrimNote(
+		cands.length,
+		meta?.debug?.candidatesTotal,
+		meta?.debug?.candidatesOmitted,
+		'accepted 優先で残すため省略分はすべて棄却理由',
+	);
+
 	const text = [
 		hdr,
 		'',
-		'【Swings】',
+		`【Swings】${swingsNote}`,
 		swingLines.length ? swingLines.join('\n') : 'なし',
 		'',
-		'【Candidates】',
+		`【Candidates】${candsNote}`,
 		// ❌ は候補生成の時点での棄却で、status を持たないため includeInvalid では拾えない
 		// （issue #149）。一度パターンとして成立してから無効化されたものは data.patterns 側で
 		// status=invalid/expired として別に出る。

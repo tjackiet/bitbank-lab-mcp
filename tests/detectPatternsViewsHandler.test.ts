@@ -289,6 +289,63 @@ describe('formatDebugView / formatCandidateDetails', () => {
 	});
 });
 
+// ── cap トリムの申告行（issue #180） ──
+
+describe('formatDebugView: cap トリムの申告行（#180）', () => {
+	const cands = [
+		{ type: 'triple_bottom', accepted: true },
+		{ type: 'triple_bottom', accepted: false, reason: 'peaks_missing_relaxed' },
+	];
+
+	it('省略があるとき「N / 全 M 件（K 件省略）」と落ちた側の説明を出す', () => {
+		const meta = {
+			debug: {
+				swings: [{ kind: 'peak', idx: 3, price: 100000, isoTime: '2026-01-03T00:00:00.000Z' }],
+				candidates: cands,
+				candidatesTotal: 289,
+				candidatesOmitted: 287,
+				swingsTotal: 5,
+				swingsOmitted: 4,
+			},
+		};
+		const text = formatDebugView('hdr', meta, [], makeDebugViewRes()).content[0].text;
+		// candidates は accepted 優先で残すので落ちるのは棄却理由、
+		// swings は先頭から残すので落ちるのは直近側。**逆向き**であることまで出す。
+		expect(text).toContain('【Candidates】 2 / 全 289 件（287 件省略。accepted 優先で残すため省略分はすべて棄却理由）');
+		expect(text).toContain('【Swings】 1 / 全 5 件（4 件省略。先頭から残すため省略分はすべて直近側のスイング）');
+	});
+
+	it('省略が 0 のとき「省略なし」と明示する', () => {
+		const meta = {
+			debug: {
+				swings: [],
+				candidates: cands,
+				candidatesTotal: 2,
+				candidatesOmitted: 0,
+				swingsTotal: 0,
+				swingsOmitted: 0,
+			},
+		};
+		const text = formatDebugView('hdr', meta, [], makeDebugViewRes()).content[0].text;
+		expect(text).toContain('【Candidates】 2 / 全 2 件（省略なし）');
+		expect(text).toContain('【Swings】 0 / 全 0 件（省略なし）');
+	});
+
+	/**
+	 * 件数が分からないときに「省略なし」と書くと、本 issue が直そうとしている嘘
+	 * （切られたのに切られたと分からない）をそのまま再導入することになる。
+	 * 申告フィールドが無い meta では**行ごと出さない**。
+	 */
+	it('申告フィールドが無い meta では件数行を出さない', () => {
+		const meta = makeMeta(cands);
+		const text = formatDebugView('hdr', meta, [], makeDebugViewRes()).content[0].text;
+		expect(text).toContain('【Candidates】\n');
+		expect(text).toContain('【Swings】\n');
+		expect(text).not.toContain('省略なし');
+		expect(text).not.toContain('件省略');
+	});
+});
+
 // ── formatPatternLine ──
 
 describe('formatPatternLine', () => {
