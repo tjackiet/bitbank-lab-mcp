@@ -246,7 +246,11 @@ describe('detectTriples', () => {
 		expect(rejected).toBeDefined();
 	});
 
-	it('3山の等高差が tolerance 超 → peaks_not_equal で通常は不検出', () => {
+	// 旧名は「peaks_not_equal で通常は不検出」だったが、**`triple_top` に `peaks_not_equal` は
+	// 存在したことがない**（#189 の相乗り修正）。落ちているのは 3 山の同水準判定 `nearAll` で、
+	// 理由コードは `three_peaks_not_level`。`peaks_not_equal` と紛らわしい `valleys_not_equal`
+	// （ネックライン側）も #186 / PR #188 で削除済み。名前だけが実態から離れていた。
+	it('3山の等高差が tolerance 超 → strict は three_peaks_not_level で不検出（relaxed 由来は除外）', () => {
 		// peak1=100, peak2=100, peak3=115 → nearAll fails (15/115=0.13 > 0.04)
 		const { candles, pivots } = buildTripleTop({ peak: 100, peak2Price: 100, peak3Price: 115 });
 		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.04 });
@@ -254,6 +258,8 @@ describe('detectTriples', () => {
 
 		const tt = result.patterns.filter((p) => p.type === 'triple_top' && !p._fallback);
 		expect(tt).toHaveLength(0);
+		// 実際に落ちた理由コードを固定する（テスト名が再び実態から離れないように）。
+		expect(ctx.debugCandidates.some((d) => d.type === 'triple_top' && d.reason === 'three_peaks_not_level')).toBe(true);
 	});
 
 	// ── Triple Bottom（完成済み）────────────────────────────

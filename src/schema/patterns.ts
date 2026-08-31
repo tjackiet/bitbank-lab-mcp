@@ -328,6 +328,28 @@ const PATTERN_INDEX_NOTE =
 export const DetectedPatternSchema = z.object({
 	type: PatternTypeEnum,
 	confidence: z.number().min(0).max(1),
+	/**
+	 * **relaxed フォールバック経路で拾い直したことを示す provenance**（issue #189）。
+	 * 宣言が無かったため `DetectPatternsOutputSchema.parse()` に strip され、
+	 * **一度もクライアントに届いていなかった**（#155 / #160 / #184 に続く 4 回目）。
+	 */
+	_fallback: z
+		.string()
+		.optional()
+		.describe(
+			'**strict 経路が拾えず、許容誤差を緩めた relaxed フォールバックが拾い直したパターン**であることを示す。' +
+				'**本フィールドが無ければ strict で拾えた**（relaxed は strict がその種別を 1 件も返さなかったときだけ走る）。' +
+				'値は `relaxed_<検出器>_<段の係数>` で、どの検出器のどの緩和段が拾ったかが入る: ' +
+				'`relaxed_double_x1.3`（単段）/ `relaxed_triple_x1.25` `relaxed_triple_x2`（2 段）/ ' +
+				'`relaxed_hs_x1.6_0.6` `relaxed_hs_x2.0_0.4` / `relaxed_ihs_x1.6_0.6` `relaxed_ihs_x2.0_0.4`' +
+				'（H&S は肩と頭で別係数を持つため 2 つ並ぶ）。' +
+				'**表記は検出器ごとに揃っていない**——triple は数値を文字列化するので 2.0 が `x2` になり、' +
+				'H&S は固定文字列のタグなので `x2.0_0.4` のまま `.0` が残る。前方一致（`relaxed_triple_x`）で判別し、' +
+				'係数の数値比較に使わないこと。' +
+				'**confidence から provenance は推測できない。** relaxed のペナルティ係数が検出器ごとに違い' +
+				'（double 0.85 / triple 0.95 / H&S 0.95）、さらに `finalizeConf` の種別別係数と小数 2 桁丸めを通るので逆算も保証されない。' +
+				'**本フィールドは structuredContent にのみ載る**（content テキストには出さない）。',
+		),
 	/** 検出に使用した時間足（例: '1day', '4hour', '1week'） */
 	timeframe: CandleTypeEnum.optional(),
 	/** 人間可読な時間足ラベル（例: '日足', '4時間足', '週足'） */

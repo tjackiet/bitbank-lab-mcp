@@ -194,6 +194,40 @@ describe('DetectedPatternSchema', () => {
 		expect(result.precedingTrend?.direction).toBe('insufficient_data');
 	});
 
+	// #189: 宣言が無かったため `parse()` が黙って落としていたフィールド。
+	// parity テスト（`tests/detect_patterns_meta_schema_parity.test.ts`）は
+	// **ツールを 1 回走らせて出たキー**で見ているので、フィクスチャが relaxed 経路を
+	// 踏まなくなると検証ごと消える。スキーマ単体でも生存を固定しておく。
+	it('_fallback（relaxed 経路の provenance）を受け入れ、parse 後も残す', () => {
+		const result = DetectedPatternSchema.parse({
+			type: 'triple_top',
+			confidence: 0.76,
+			range: { start: '2024-01-01', end: '2024-01-30' },
+			_fallback: 'relaxed_triple_x1.25',
+		});
+		expect(result._fallback).toBe('relaxed_triple_x1.25');
+	});
+
+	it('_fallback は省略できる（= strict 経路で拾えた）', () => {
+		const result = DetectedPatternSchema.parse({
+			type: 'triple_top',
+			confidence: 0.8,
+			range: { start: '2024-01-01', end: '2024-01-30' },
+		});
+		expect(result._fallback).toBeUndefined();
+	});
+
+	it('_fallback が文字列でない場合は拒否する', () => {
+		expect(() =>
+			DetectedPatternSchema.parse({
+				type: 'triple_top',
+				confidence: 0.8,
+				range: { start: '2024-01-01', end: '2024-01-30' },
+				_fallback: 1.25,
+			}),
+		).toThrow();
+	});
+
 	it('confirmation.type が未知の値は拒否する', () => {
 		expect(() =>
 			DetectedPatternSchema.parse({
