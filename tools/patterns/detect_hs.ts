@@ -59,6 +59,29 @@ const RELAXED_FACTORS = [
 	{ shoulder: 2.0, head: 0.4, tag: 'x2.0_0.4' },
 ] as const;
 
+/**
+ * `RELAXED_FACTORS` の末尾の段か。**relaxed の棄却エントリはここでだけ積む**（issue #174）。
+ *
+ * `findRelaxedHS` / `findRelaxedInverseHS` のループは「段が外・窓が内」なので、
+ * **同じ窓が最大 2 回評価される**（`x1.6_0.6` で全窓 → 見つからなければ `x2.0_0.4` で全窓）。
+ * 両段で積むと 2 つの害がある:
+ *
+ * - `detect_patterns.ts` の `cap = 200` を窓あたり最大 2 件で食い潰す
+ * - **`x1.6_0.6` 段の肩落ちは最終的な棄却ではない**（同じ窓が `x2.0_0.4` で通りうる）のに
+ *   「棄却」として残り、`view=debug` の読み手を誤らせる
+ *
+ * 段は緩くなる順に走り成功で早期 `return` するので、**末尾の段まで到達して落ちた窓**が
+ * 「relaxed でも救えなかった窓」になる。逆に relaxed が成功した呼び出しでは末尾の段に
+ * 到達せず棄却エントリが 1 件も残らないが、そのときは `fallback_relaxed` の
+ * `accepted: true` が積まれるので「なぜ何も出ないのか」を追う用途には影響しない。
+ *
+ * ネックライン水平性は段に依存しない（`validateHorizontalNeckline` に factors が入らない）ため、
+ * 落ちる窓の集合は末尾の段が上位集合になる。よって末尾の段に寄せても取りこぼしは無い。
+ */
+function isFinalRelaxedStage(factors: (typeof RELAXED_FACTORS)[number]): boolean {
+	return factors === RELAXED_FACTORS[RELAXED_FACTORS.length - 1];
+}
+
 const FORMING_RIGHT_TOLERANCE_PCT = 0.08;
 /**
  * 形成中 H&S / 逆 H&S の形成期間の上限の日数由来。**実効値はバー数**で、
@@ -324,10 +347,49 @@ function outerShoulderOk(
  * `:cap` は `tolerancePct > HS_SHOULDER_MAX_PCT` のときしか発火しない。tf-auto でそう
  * なるのは `15min` / `30min`（0.06 > 0.05）だけで、他の時間足では呼び出し側が
  * `tolerancePct` を 0.05 超で明示したときに限る（{@link HS_SHOULDER_MAX_PCT} の docstring）。
+ *
+ * **strict 経路専用。** relaxed 経路は閾値が `tolerancePct × factors.shoulder` なので
+ * {@link relaxedShouldersNotNearReason} を使う（issue #174）。分類そのものは
+ * {@link shouldersNotNearSuffix} で共有する。
  */
 function shouldersNotNearReason(withinTolerance: boolean, withinCap: boolean): string {
-	if (!withinTolerance && !withinCap) return 'shoulders_not_near:both';
-	return withinTolerance ? 'shoulders_not_near:cap' : 'shoulders_not_near:tolerance';
+	return `shoulders_not_near:${shouldersNotNearSuffix(withinTolerance, withinCap)}`;
+}
+
+/**
+ * {@link shouldersNotNearReason} / {@link relaxedShouldersNotNearReason} が共有する分類。
+ *
+ * 「どちらのゲートで落ちたか」は strict / relaxed で同じ 3 分類だが、**`tolerance` が指す
+ * 閾値の実体が経路ごとに違う**（strict は `tolerancePct`、relaxed は
+ * `tolerancePct × factors.shoulder`）。だからコード文字列は接頭辞で分け、分類だけを共有する。
+ */
+function shouldersNotNearSuffix(withinTolerance: boolean, withinCap: boolean): 'both' | 'cap' | 'tolerance' {
+	if (!withinTolerance && !withinCap) return 'both';
+	return withinTolerance ? 'cap' : 'tolerance';
+}
+
+/**
+ * relaxed 経路で肩が同水準でないときの棄却理由コード（issue #174）。
+ *
+ * ## なぜ strict と別の接頭辞にするか
+ *
+ * **同じ 5 点が strict でも relaxed でも落ちうる。** 混ぜると `view=debug` を `reason` で
+ * 集計したときに二重計上になり、#172 で直したばかりの内訳がまた壊れる。さらに閾値の実体が
+ * 違うので、`:tolerance` を同じコードで束ねると「`tolerancePct` を緩めれば通る」の意味も
+ * 経路ごとにズレる。接頭辞は同ファイルの既存 idiom（`forming_` #158 / PR #166）に合わせた。
+ *
+ * | コード | 意味 | 緩めれば通るか |
+ * |---|---|---|
+ * | `relaxed_shoulders_not_near:tolerance` | `tolerancePct × factors.shoulder` のみ超過 | `tolerancePct` を緩めれば通る |
+ * | `relaxed_shoulders_not_near:cap` | {@link HS_SHOULDER_MAX_PCT} のみ超過 | 定数を緩めれば通る |
+ * | `relaxed_shoulders_not_near:both` | 両方超過 | **どちらを緩めても通らない** |
+ *
+ * relaxed の実効閾値は `min(tolerancePct × factors.shoulder, HS_SHOULDER_MAX_PCT)` で、
+ * **既定パスではほぼ全時間足で `HS_SHOULDER_MAX_PCT` が律速する**（{@link HS_SHOULDER_MAX_PCT}
+ * の docstring の表）。したがって strict と違い `:cap` は既定パスでも普通に出る。
+ */
+function relaxedShouldersNotNearReason(withinTolerance: boolean, withinCap: boolean): string {
+	return `relaxed_shoulders_not_near:${shouldersNotNearSuffix(withinTolerance, withinCap)}`;
 }
 
 /**
@@ -817,21 +879,39 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 				p4.idx - p3.idx < minDist
 			)
 				continue;
-			const shouldersNearRelaxed =
-				Math.abs(p0.price - p4.price) / Math.max(1, Math.max(p0.price, p4.price)) <= tolerancePct * factors.shoulder &&
-				isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
+			// relaxed の肩判定は `near()`（= tolerancePct 単体）ではなく段の係数を掛けた閾値で見る。
+			// 実効閾値は `min(tolerancePct * factors.shoulder, HS_SHOULDER_MAX_PCT)`（#174）。
+			const relaxedTolerancePct = tolerancePct * factors.shoulder;
+			const shouldersWithinRelaxedTolerance =
+				Math.abs(p0.price - p4.price) / Math.max(1, Math.max(p0.price, p4.price)) <= relaxedTolerancePct;
+			const shouldersWithinCap = isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
+			const shouldersNearRelaxed = shouldersWithinRelaxedTolerance && shouldersWithinCap;
 			const headHigherRelaxed = p2.price > Math.max(p0.price, p4.price) * (1 + headProminencePct * factors.head);
 			const necklineCheck = validateHorizontalNeckline(p1.price, p3.price, HS_NECKLINE_MAX_PCT);
 			if (!shouldersNearRelaxed || !headHigherRelaxed || !necklineCheck.ok) {
-				if (shouldersNearRelaxed && headHigherRelaxed && !necklineCheck.ok) {
+				// 頭で落ちた窓は積まない（#174 以前と同じ）。strict の `head_not_higher` と件数が近く、
+				// cap を食う割に relaxed 固有の情報が無いため、本 issue の範囲外に置いた。
+				const reason = !shouldersNearRelaxed
+					? relaxedShouldersNotNearReason(shouldersWithinRelaxedTolerance, shouldersWithinCap)
+					: headHigherRelaxed && !necklineCheck.ok
+						? 'relaxed_neckline_not_horizontal'
+						: null;
+				if (reason && isFinalRelaxedStage(factors)) {
 					debugCandidates.push({
 						type: 'head_and_shoulders',
 						accepted: false,
-						reason: 'neckline_not_horizontal',
+						reason,
 						details: {
 							leftShoulder: p0.price,
 							rightShoulder: p4.price,
+							shouldersDiff: Math.abs(p0.price - p4.price),
+							shouldersDiffPct: Math.abs(p0.price - p4.price) / Math.max(1, Math.max(p0.price, p4.price)),
+							shoulderMaxPct: HS_SHOULDER_MAX_PCT,
+							tolerancePct,
+							relaxedShoulderFactor: factors.shoulder,
+							relaxedTolerancePct,
 							head: p2.price,
+							headProminencePct,
 							necklineP1: p1.price,
 							necklineP3: p3.price,
 							necklineDiffPct: necklineCheck.diffPct,
@@ -997,21 +1077,39 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 				p4.idx - p3.idx < minDist
 			)
 				continue;
-			const shouldersNearRelaxed =
-				Math.abs(p0.price - p4.price) / Math.max(1, Math.max(p0.price, p4.price)) <= tolerancePct * factors.shoulder &&
-				isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
+			// relaxed の肩判定は `near()`（= tolerancePct 単体）ではなく段の係数を掛けた閾値で見る。
+			// 実効閾値は `min(tolerancePct * factors.shoulder, HS_SHOULDER_MAX_PCT)`（#174）。
+			const relaxedTolerancePct = tolerancePct * factors.shoulder;
+			const shouldersWithinRelaxedTolerance =
+				Math.abs(p0.price - p4.price) / Math.max(1, Math.max(p0.price, p4.price)) <= relaxedTolerancePct;
+			const shouldersWithinCap = isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
+			const shouldersNearRelaxed = shouldersWithinRelaxedTolerance && shouldersWithinCap;
 			const headLowerRelaxed = p2.price < Math.min(p0.price, p4.price) * (1 - headProminencePct * factors.head);
 			const necklineCheck = validateHorizontalNeckline(p1.price, p3.price, HS_NECKLINE_MAX_PCT);
 			if (!(shouldersNearRelaxed && headLowerRelaxed && necklineCheck.ok)) {
-				if (shouldersNearRelaxed && headLowerRelaxed && !necklineCheck.ok) {
+				// 頭で落ちた窓は積まない（#174 以前と同じ）。strict の `head_not_lower` と件数が近く、
+				// cap を食う割に relaxed 固有の情報が無いため、本 issue の範囲外に置いた。
+				const reason = !shouldersNearRelaxed
+					? relaxedShouldersNotNearReason(shouldersWithinRelaxedTolerance, shouldersWithinCap)
+					: headLowerRelaxed && !necklineCheck.ok
+						? 'relaxed_neckline_not_horizontal'
+						: null;
+				if (reason && isFinalRelaxedStage(factors)) {
 					debugCandidates.push({
 						type: 'inverse_head_and_shoulders',
 						accepted: false,
-						reason: 'neckline_not_horizontal',
+						reason,
 						details: {
 							leftShoulder: p0.price,
 							rightShoulder: p4.price,
+							shouldersDiff: Math.abs(p0.price - p4.price),
+							shouldersDiffPct: Math.abs(p0.price - p4.price) / Math.max(1, Math.max(p0.price, p4.price)),
+							shoulderMaxPct: HS_SHOULDER_MAX_PCT,
+							tolerancePct,
+							relaxedShoulderFactor: factors.shoulder,
+							relaxedTolerancePct,
 							head: p2.price,
+							headProminencePct,
 							necklineP1: p1.price,
 							necklineP3: p3.price,
 							necklineDiffPct: necklineCheck.diffPct,
