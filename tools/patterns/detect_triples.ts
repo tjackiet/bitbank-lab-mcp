@@ -15,8 +15,19 @@ import { pushCand } from './types.js';
 
 // ── 定数 ──
 
+/**
+ * ネックライン（triple_top なら 2 谷、triple_bottom なら 2 山）の傾きの上限。
+ * **完成済み 4 経路（strict / relaxed × top / bottom）すべてで共通**。
+ *
+ * strict では同じ 2 点に `tolerancePct` の同水準判定（`valleysNear` / `peaksNear`）も掛かるため
+ * 実効的な上限は `min(tolerancePct, NECKLINE_SLOPE_LIMIT)`。既定の `tolerancePct`（4%）より
+ * 厳しいので通常はこちらが効き、relaxed では本定数だけが掛かる。
+ *
+ * **完成済みトリプルに残る価格水準基準の固定閾値はこれだけ**（#178 項目 2 で `MAX_VALLEY_SPREAD`
+ * を削除した）。主構成点（3 山 / 3 谷）のばらつきは `tolerancePct` と、高さで正規化した
+ * `MAX_LEVEL_SPREAD_RATIO`（`patterns/structural.ts`）が受け持つ。
+ */
 const NECKLINE_SLOPE_LIMIT = 0.02;
-const MAX_VALLEY_SPREAD = 0.015;
 /**
  * 形成中トリプルトップ / ボトムの形成期間の日数由来。**実効値はバー数**で、
  * `getTripleFormingBarParams` が `patterns/bar-thresholds.ts` の換算を通して決める。
@@ -51,9 +62,17 @@ const FORMING_MAX_CONFIDENCE = 0.59;
 // tripleTolerancePct（既定 4.8% = 0.04 × 1.2）と揃え、階段状の切り上がり/切り下がりを弾く。
 // 完成済みは 3 山すべてに near() が掛かるため、forming でも同等の制約を入れる。
 const FORMING_LEVEL_SPREAD_FACTOR = 1.0; // tripleTolerancePct × 1.0
-// 形成中トリプル: 谷（peak3 用）/ 山（valley3 用）の水平性。tolerancePct × FACTOR。
-// 完成済みは 1.5%（MAX_VALLEY_SPREAD）と非常に厳しいが、forming はノイズが残るため
-// tolerancePct（既定 4%）に緩和する。
+// 形成中トリプル: ネックライン構成点（peak3 用の 2 谷 / valley3 用の 2 山）の水平性。
+// tolerancePct × FACTOR。
+//
+// **完成済み側の対応物は 2 段**——`tolerancePct` の同水準判定（`valleysNear` / `peaksNear`）と、
+// 固定値 `NECKLINE_SLOPE_LIMIT`（2%）。forming はそのうち前段だけを掛ける（既定 4%）。
+// 3 点目が現在足で暫定であるぶんノイズが残り、固定 2% まで要求すると形成中に拾えないため。
+//
+// #178 項目 2 以前はここに「完成済みは 1.5%（`MAX_VALLEY_SPREAD`）と非常に厳しい」と
+// 書いてあったが、**あの定数が見ていたのはネックラインではなく triple_bottom の 3 谷**で、
+// 本 FACTOR の対応物ではなかった。3 点側の対応物は `FORMING_LEVEL_SPREAD_FACTOR` で、
+// 完成済み側は `tolerancePct` の `nearAll` と高さ相対の `validateLevelSpread` の 2 段。
 const FORMING_NECKLINE_SPREAD_FACTOR = 1.0; // tolerancePct × 1.0
 // 形成中トリプル: 完全に単調な切り上がり / 切り下がり（peak1 < peak2 < current 等）
 // は triple ではなく上昇継続 / 下降継続として扱うため、累積ステップがこれを超えると弾く。
@@ -364,16 +383,20 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 		const structureEnd = candles[c.idx].isoTime;
 		if (!(start && structureEnd)) continue;
 
-		// Additional strict checks: 3 valleys spread limit, peaks near and neckline slope limit.
+		// Additional strict checks: peaks near and neckline slope limit.
 		//
-		// **3 谷の同水準判定（`nearAll`）はここには無い。** 以前は `valleyNearStrict` として
-		// 同じ式をもう一度評価していたが、上の `nearAll` で `continue` 済みなので常に `true` で、
-		// 下の `'valleys_not_equal'` は**到達不能**だった（issue #138 の確認事項 C）。
-		// 3 谷が同水準でない候補は上の `three_valleys_not_level` が受け持つ。
-		const valleyPrices = [a.price, b.price, c.price];
-		const valleyMin = Math.min(...valleyPrices);
-		const valleyMax = Math.max(...valleyPrices);
-		const valleySpreadValid = (valleyMax - valleyMin) / Math.max(1, valleyMin) <= MAX_VALLEY_SPREAD;
+		// **3 谷の同水準判定はここには無い。** 2 段に分かれて前後にある:
+		// 段 1 = 上の `nearAll`（`tolerancePct` 基準。落ちた候補は `three_valleys_not_level`）、
+		// 段 3 = 下の `validateLevelSpread`（パターン高さで正規化した hard gate。issue #138）。
+		// ここで三たび評価しても段 1 で `continue` 済みなので常に `true` にしかならず、
+		// 到達不能な理由コードが増えるだけになる（`valleyNearStrict` がまさにそれで、
+		// `'valleys_not_equal'` は一度も出なかった。issue #138 の確認事項 C）。
+		//
+		// 段 1 と段 3 のあいだには `MAX_VALLEY_SPREAD`（1.5%）があったが #178 項目 2 で削除した。
+		// 価格水準基準で、しかも完成済み 4 経路のうち本関数にしか無い閾値だった。外しても
+		// `data.patterns` は 896 ケースで不変——止めていた 21 実体はすべて段 3 / 構造ゲート /
+		// ネックライン傾き / サイズ検査 / 山の同水準のいずれかが受け止める（`accepted` が
+		// 増えた実体は 0 で、棄却理由が入れ替わるだけ）。
 		if (!(p1 && p2)) {
 			pcand({ type: 'triple_bottom', accepted: false, reason: 'peaks_missing', idxs: [a.idx, b.idx, c.idx] });
 			continue;
@@ -381,11 +404,11 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 		const peaksNear = Math.abs(p1.price - p2.price) / Math.max(1, Math.max(p1.price, p2.price)) <= tolerancePct;
 		const necklineSlope = Math.abs(p1.price - p2.price) / Math.max(1, Math.max(p1.price, p2.price));
 		const necklineValid = necklineSlope <= NECKLINE_SLOPE_LIMIT;
-		if (!(valleySpreadValid && peaksNear && necklineValid)) {
+		if (!(peaksNear && necklineValid)) {
 			pcand({
 				type: 'triple_bottom',
 				accepted: false,
-				reason: !valleySpreadValid ? 'valley_spread_excess' : !peaksNear ? 'peaks_not_equal' : 'neckline_slope_excess',
+				reason: !peaksNear ? 'peaks_not_equal' : 'neckline_slope_excess',
 				idxs: [a.idx, b.idx, c.idx],
 			});
 			continue;
@@ -435,8 +458,9 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 		if (!gate) continue;
 
 		// 高さ相対の同水準検査（issue #138）。配置の理由は `findStrictTripleTop` の同じ箇所を参照。
-		// **top と対称**（既存の `MAX_VALLEY_SPREAD` は bottom にしか無いという #138 確認事項 B の
-		// 非対称を、本ゲートでは持ち込まない）。
+		// **top と対称。** 導入時は「`MAX_VALLEY_SPREAD` は bottom にしか無い」という非対称
+		// （#138 確認事項 B）が併存していて本ゲートだけが対称だったが、#178 項目 2 でその定数を
+		// 削除したので、現在は完成済み triple の水準ばらつき判定そのものが top / bottom 対称。
 		const bottomSpread = levelSpreadMetrics([a, b, c], [a, p1, b, p2, c]);
 		const bottomSpreadReason = validateLevelSpread('bottom', bottomSpread);
 		if (bottomSpreadReason) {

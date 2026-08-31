@@ -45,6 +45,114 @@
 | 30 | #180 | cap で切られた `debug.candidates` / `debug.swings` の総数と省略件数を申告する（cap の値もトリム戦略も変えない） | **変わらない**（0 / 800） |
 | 31 | #182 | `swingDepth` / `tolerancePct` / `minBarsBetweenSwings` の description に**時間軸オートとスキーマ既定値の sentinel 置換**を明記した（`resolveParams` も `.default()` も触っていない） | **変わらない**（description のみ） |
 | 32 | #184 | `meta.effective_params` が**出力スキーマ未宣言で毎回 strip されていた**のを宣言し、実効パラメータ行を全 view の `content` に出した。`headProminencePct` を追加し、壊れていた `autoScaled` を per-parameter の `source` に置換 | **変わらない**（`meta` / `content` のみ） |
+| 33 | #187 | `MAX_VALLEY_SPREAD`（1.5%）を削除した（#178 項目 2）。top / bottom と strict / relaxed の 2 つの非対称が同時に解消し、理由コード `valley_spread_excess` が消える | **変わらない**（0 / 896） |
+
+### Removed（完成済み `triple_bottom` の `MAX_VALLEY_SPREAD`（1.5%）を削除した。#178 項目 2）
+
+`findStrictTripleBottom` にあった 3 谷の価格水準基準のばらつき上限
+
+    valleySpreadValid = (valleyMax - valleyMin) / max(1, valleyMin) <= 0.015
+
+を削除した。判定は削除後も 2 段残る:
+
+| 段 | 実装 | 基準 | 棄却理由コード |
+|---|---|---|---|
+| 段 1 | `nearAll`（3 点の `near()`） | `tolerancePct`（価格水準の %。既定 4%） | `three_valleys_not_level` |
+| ~~段 2~~ | ~~`MAX_VALLEY_SPREAD`~~ | ~~1.5%（価格水準の %）~~ | ~~`valley_spread_excess`~~ |
+| 段 3 | `validateLevelSpread`（#138） | `MAX_LEVEL_SPREAD_RATIO`（パターン高さ比 0.5） | `valley_spread_vs_height_excess` |
+
+削除後の三項は `!peaksNear ? 'peaks_not_equal' : 'neckline_slope_excess'` になり、
+`findStrictTripleTop` の同じ位置とまったく同じ形になる（**この 2 箇所の枝の取り違えは #186 の担当**。
+本 PR では 2 箇所を揃えるところまでで、条件と理由コードの対応は触っていない）。
+
+#### 削除しても `data.patterns` は変わらない
+
+| | before → after |
+|---|---|
+| `data.patterns` | **0 / 896**（全ケース JSON deep-equal。合計 1,388 件で不変） |
+| `debug.candidates` の配列の中身 | 96 / 896 で変化（合成 16 / 実データ A 80。**全件が `accepted: false` の `reason` 文字列の入れ替わりで、配列長・並び・`accepted` は不変**） |
+| `debug.swings` | **0 / 896** |
+| `accepted: true` の候補 | 5,160 → **5,160** |
+
+2 系列 896 ケース = 標準コーパス 800（合成 704 = `tests/detect_patterns_fixtures.test.ts` の
+fixture 22 件 × オプション 8 × 時間足 2 × `swingDepth` 2、実データ A 96 =
+`tests/fixtures/btc_jpy_1day_2026.ts` × 時間足 3 × `swingDepth` 4 × オプション 8）
+＋ **実データ B 96** = `tests/fixtures/btc_jpy_1hour_2026_08.ts` × 時間足 3 × `swingDepth` 4 × オプション 8。
+
+#### 2 つの非対称が同時に解消する
+
+- **top / bottom。** #138 確認事項 B に記録済みの非対称。同形の 3 点ばらつきに対する実効上限が
+  `triple_bottom` 1.5% / `triple_top` `tolerancePct`（既定 4%）だった。
+- **strict / relaxed（未記録。今回判明）。** `MAX_VALLEY_SPREAD` は完成済み 4 経路
+  （`findStrictTripleTop` / `findStrictTripleBottom` / relaxed top / relaxed bottom）のうち
+  **`findStrictTripleBottom` にしか無かった**。同じ `triple_bottom` でも strict のほうが厳しく、
+  strict が弾いた形を relaxed fallback が拾い直して**同じパターンを検出していた**
+  （`_fallback: 'relaxed_triple_x1.25'` が付くだけで `data.patterns` は同じ。`_fallback` は
+  出力スキーマ未宣言で `parse()` に落とされるため、外からは区別できなかった）。
+
+**`MAX_PEAK_SPREAD` を新設して対称化する案は採らない**（価格水準基準の閾値を増やすのは #138 が
+問題にしている方向そのもの）。**relaxed 側に段 2 を足して strict に揃える案も採らない**（締める方向の別変更）。
+
+#### 消える理由コード: `valley_spread_excess`（`view=debug` の契約変更）
+
+`view=debug` の `data.debug.candidates[].reason` から `valley_spread_excess` が消える。
+`data.patterns` は変わらないので、影響を受けるのは棄却理由を読んでいる利用側だけ。
+
+#### 段 2 が止めていた 21 実体は、すべて既存の他の検査が受け止める
+
+段 2 が発火した候補を **(価格系列, 3 谷の `indices`) で畳んだ実体**は 21（時間足 / `swingDepth` /
+オプションの重複を除いた数。合成 2 / 実データ A 6 / 実データ B 13）。**そのすべてが段 2 以外の
+検査でも棄却される**——段 2 だけが止めていた実体は **0 件**:
+
+| 受け止める検査 | 実体数（21 中） |
+|---|---|
+| 構造ゲート（`neckline_above_pre_decline_high` / `retracement_out_of_band`） | 15（71%） |
+| **段 3**（`valley_spread_vs_height_excess`） | **10（48%）** |
+| ネックライン傾き（`NECKLINE_SLOPE_LIMIT`） | 8（38%） |
+| サイズ検査（`peak_too_shallow` / `pattern_too_small`） | 5（24%） |
+| 山の同水準（`peaks_not_equal`） | 3（14%） |
+| **どれにも掛からない** | **0** |
+
+1 実体が複数の検査に掛かるため合計は 21 を超える。段 3 が受け止めるのが約半分で、
+残りはサイズ検査・構造ゲート・ネックライン傾きが引き受ける。
+
+**実データ B の 13 実体は `view=debug` の出力には現れない。** あちらは候補が cap（200）を超える
+ケースが多く、該当エントリはトリムで押し出されている（`debug.candidates` が変化した 96 ケースに
+実データ B が 1 件も入らないのはそのため）。実体の数え上げは検出器内で採取した。
+
+#### 棄却理由は 1:1 で置き換わる（＝ cap 統計は原理的に不変）
+
+`debug.candidates` に積まれる**エントリの位置・件数・`accepted` は一切変わらず**、`reason` の
+文字列だけが入れ替わる。896 ケースの実測（トリム後）:
+
+| 理由コード | before → after |
+|---|---|
+| `triple_bottom:valley_spread_excess` | 192 → **0**（−192） |
+| `triple_bottom:neckline_slope_excess` | 80 → **188**（+108） |
+| `triple_bottom:peaks_not_equal` | 40 → **80**（+40） |
+| `triple_bottom:retracement_out_of_band` | 112 → **144**（+32） |
+| `triple_bottom:valley_spread_vs_height_excess` | 12 → **24**（+12） |
+| 棄却候補の合計 | 58,088 → **58,088** |
+
+`+108 + 40 + 32 + 12 = 192` で差し引き 0。トリムは「先頭 `cap` 件を残す」だけなので、
+**件数が変わらない以上 cap 統計は原理的に不変**。実測でも変化 0:
+
+| | before → after |
+|---|---|
+| `candidatesTotal` / `candidatesOmitted` / `swingsTotal` / `swingsOmitted` が変わったケース | **0 / 896** |
+| `candidatesTotal` の合計 | 231,488 → **231,488** |
+| `candidatesOmitted > 0`（標準コーパス） | 32 / 800（合成 0 / 704・実データ A 32 / 96）で不変 |
+| `candidatesTotal` の分布（標準コーパス） | min 4 / p50 39 / p95 185 / max 289 / mean 57.0 で不変 |
+| 押し出し総数（標準コーパス） | 1,588 件で不変 |
+
+#### テストの追随
+
+`tests/patterns/detect_triples.test.ts` の「谷スプレッド超過 → `valley_spread_excess` rejected」は
+**入力を引き継いで受理側のテストに書き換えた**。v1=100 / v2=101 / v3=103 のばらつき 3% は
+段 1（`tolerancePct` 4%）も段 3（高さ 20 に対し 3 / 20 = 0.15）も通るので、削除後は strict が受理する。
+**削除前もこの入力は `data.patterns` に出ていた**（strict が弾いて relaxed fallback が拾い直していた）
+ので、tool 表面の挙動は変わらず、strict / relaxed の非対称だけが消える。
+top / bottom の対称性（同形の `triple_top` と同じ confidence・同じ経路で出ること）も併せて固定した。
 
 ### Fixed（`meta.effective_params` が出力スキーマ未宣言で毎回 strip され、**どのクライアントにも届いていなかった**。#184）
 
@@ -426,6 +534,12 @@ censored されたか」に直接答える。
   が緩む方向に動き、「下限を足すだけなので単調に減るか不変」という本 PR の前提が壊れる。
   `MAX_PEAK_SPREAD` を新設して対称化する案も採らない（価格水準基準の閾値を増やすのは #138 が
   問題にしている方向そのもの）。
+
+  > **追記（#178 項目 2 / PR #187）**: この「外すと `triple_bottom` が緩む方向に動く」という前提は
+  > 実測で否定された。`MAX_VALLEY_SPREAD` を削除しても 2 系列 896 ケースで `data.patterns` の変化は
+  > **0 件**（`accepted` 候補も 5,160 で不変）。段 2 が止めていた 21 実体はすべて段 3 / サイズ検査 /
+  > 構造ゲート / ネックライン傾きが受け止めており、棄却理由が 1:1 で入れ替わるだけだった。
+  > **削除済み**（`MAX_PEAK_SPREAD` を新設しない、という上の判断はそのまま維持している）。
 - 配置は `validatePatternSize` の docstring の規約に従い、**既存の棄却検査をすべて通過した後**
   （構造ゲート `validateReversalStructure` よりも後）。前に置くと固有の理由コードを持つ候補の
   `reason` を横取りする。
