@@ -49,6 +49,101 @@
 | 34 | #186 | strict triple のネックライン水平性が**同じ式を 2 つの名前で 2 回**測っていたのを `NECKLINE_SLOPE_LIMIT` 1 本に畳んだ。理由コード `valleys_not_equal` / `peaks_not_equal` が triple から消える（#172 / #174 の H&S と同じ失敗の横展開） | **変わらない**（0 / 896。既定パス）/ `tolerancePct < 0.02` を明示したときだけ**緩む** |
 | 35 | #189 | relaxed / strict の provenance `patterns[]._fallback` が**出力スキーマ未宣言で毎回 strip され、一度もクライアントに届いていなかった**のを宣言した（#155 / #160 / #184 に続く 4 回目）。あわせて #184 の parity ガードが**フィクスチャ依存で取りこぼしていた**穴を塞いだ | **変わらない**（検出結果は不変。消えていたフィールドが `structuredContent` に残るだけ） |
 | 36 | #191 | `view=debug` に**棄却理由の集計ブロック**を出し（LLM の手集計が実測で外れていた）、`_fallback` の provenance を `content` に届け（#189 の残り半分）、`view` description の並び順の食い違いを実装に合わせた | **変わらない**（表示層と description のみ） |
+| 37 | #193 | #191 / PR #192 が `view` description に持ち込んだ**実在しない理由コードの例 2 箇所**を実装に合わせ、集計ブロックに **reason 単独の横断合計行**を足した（横断合計で LLM が実測 2 回外していた） | **変わらない**（表示層と description のみ） |
+
+### Fixed / Added（集計ブロックの description の例を実在するコードに直し、reason 単独の横断合計行を足した。#193）
+
+**#191 / PR #192 の残余。** `detect_patterns` の表示層と `.describe()` だけの変更で、
+**`data.patterns` は 1 件も動かない**（検出ロジックには触れていない）。
+
+#### A. `view` description の例が、実在しない理由コードだった（PR #192 が持ち込んだ食い違い）
+
+PR #192 は `view` description の並び順の食い違いを実装に合わせる項（C）を含んでいた。
+**その同じ PR が、同じクラスの食い違いを 2 箇所持ち込んでいた**——集計ブロックの説明に付けた
+例の理由コードが、実装のどこからも出ない組み合わせだった。
+
+| 箇所 | 直す前 | 直した後 | 実在の根拠 |
+|---|---|---|---|
+| A-1 | `triple_top 40 件: peaks_not_equal 21 / …` | `triple_top 40 件: three_peaks_not_level 21 / …` | `peaks_not_equal` は **#186 / PR #188 が triple から削除済み**（現存は doubles のみ。`tools/patterns/detect_doubles.ts:1282`）。`three_peaks_not_level` はその役割を引き継いだコードで `tools/patterns/detect_triples.ts:195` が `triple_top` に出す |
+| A-2 | `triple_bottom:valleys_missing` と `double_bottom:valleys_missing` | `rising_wedge:slopes_not_same_direction` と `falling_wedge:slopes_not_same_direction` | `triple_bottom` が出すのは `peaks_missing`（`detect_triples.ts:417`）、doubles が出すのは `valleys_not_equal`（`detect_doubles.ts:1462`）で、**挙げた 2 つはどちらの type にも存在しなかった**。差し替え先は `detect_wedges.ts:949` の 1 箇所が `rising_wedge` / `falling_wedge` の**両方**に出す実在のコード |
+
+**A-2 は「2 軸で数える」という主張の根拠が架空だった**という形の欠陥である。主張自体は正しい
+（`reason` だけに畳むと帰属が読めなくなる）ので、直したのは例だけ。しかも差し替え後の例は
+**主張がより強くなる**——`slopes_not_same_direction` は rising / falling で意味が違うので、
+同じ行に潰してはいけない理由が例そのものから読める。
+
+同じ架空の例が `formatRejectionSummary` の docstring
+（`src/handlers/detectPatternsViewsHandler.ts`）と本 CHANGELOG の #191 エントリにも入っていたので、
+**同じ差し替えを横展開した**（#191 エントリは `[Unreleased]` 内かつ理由コードのみの訂正で、
+判断根拠の文章は削っていない）。A-3 として起票側が照合済みだった箇所
+（`全 69 件 = accepted 7 + rejected 62` / `表示 200 件 = … 全 289 件のうち 89 件` / `head_not_higher`）
+は実在・整合とも確認済み。**新しい実測値は 1 つも作っていない**——A-1 は PR #192 が実測から書いた
+件数（21 / 12 / 7）をそのまま残してコード名だけ差し替え、description に足した `triple_bottom` 行
+（`peak_too_shallow 15 / peaks_missing 7`）も PR #192 が本 CHANGELOG に記録した同じ実行の値を移しただけである。
+結果として集計ブロックの説明は**算術的に閉じた**: 69 = 7 + 62、62 = 40 + 22、40 = 21 + 12 + 7、22 = 15 + 7。
+B で足した横断合計行の例（21 / 15 / 12 / 7 / 7）もこの 62 に一致する。理由コードの生成元は
+`three_peaks_not_level` = `detect_triples.ts:195`、`valleys_missing` = 同 `:207`、
+`peaks_missing` = 同 `:417`、`valley_too_shallow` / `peak_too_shallow` = 同 `:245` / `:451` が呼ぶ
+`validatePatternSize`（`tools/patterns/structural.ts:687`）。
+
+#### B. reason 単独の横断合計行を足した（B-1 を採用）
+
+**採用理由はライブ実測。** btc_jpy 1時間足（`view=debug`、`patterns` **無指定** → cap 飽和 200 /
+全 2,058 件）で「棄却理由を多い順に 3 つ」を問うたところ、**LLM が 2 回外した**:
+
+1. **type 別の数値を横断合計として提示した**（`slopes_not_same_direction 58` は falling_wedge の分だけ、
+   `weaker_slope_ratio_low 28` は rising_wedge の分だけ）
+2. 続く一文で `no_convergence(41) > slopes_not_same_direction(66) > weaker_slope_ratio_low(47)` と、
+   **不等号が成立していない**式を書いた（41 > 66 は偽）
+3. 直後に正しい表（66 / 47 / 41）へ自己修正した
+
+**失敗条件は特定できている。** 同じ日の `patterns=["triple_top","triple_bottom"]`（62 件）では
+横断集計に成功している。差は reason と type の対応関係で、
+
+| 実行 | reason と type の関係 | 結果 |
+|---|---|---|
+| 絞り込みあり（62 件） | ほぼ 1 対 1（跨るのは `neckline_slope_excess` のみ） | 合計 62 が一致 |
+| 絞り込みなし（162 件） | **全 reason が両ウェッジに跨る** | 2 回外した |
+
+つまり「LLM が弱い」ではなく **`reason` が `type` を跨ぐほど再集計が難しくなる**条件付きの現象。
+**B-2（現状維持 + description に「横断合計は出していない」と明記）は採らなかった。**
+description に書いても LLM は聞かれれば計算しようとし、そして外す——#191 A が
+「集計を出さなければ手集計され、手集計は外れる」を根拠に集計ブロックを入れたのと同じ論理が、
+そのまま横断合計にも当てはまる。B-2 の懸念（`slopes_not_same_direction` は rising / falling で
+意味が違うので横断合計は解釈に注意が要る）は正当なので、**行を足したうえで
+「帰属は type 別行で見る」を同じ行に書く**ことで受けた。
+
+`▼ 棄却理由の内訳` の type 別行の**下**に 1 行足す（**置き換えではない**。2 軸集計はそのまま）:
+
+```text
+▼ 棄却理由の内訳（type 別 → reason 別。合計は上の rejected 162 件と一致する。**全 2058 件の内訳ではない**）
+   - falling_wedge 102 件: slopes_not_same_direction 58 / no_convergence 25 / weaker_slope_ratio_low 19
+   - rising_wedge 52 件: weaker_slope_ratio_low 28 / no_convergence 16 / slopes_not_same_direction 8
+   - triple_top 8 件: valleys_missing 8
+▼ reason 横断合計（type を跨いで reason だけで合算。同じ reason でも type ごとに意味が違いうるので帰属は上の type 別行で見る。合計は上の rejected 162 件と一致する。**全 2058 件の内訳ではない**）
+   - slopes_not_same_direction 66 / weaker_slope_ratio_low 47 / no_convergence 41 / valleys_missing 8
+```
+
+**この 66 / 47 / 41 が、上の実測で LLM が外した答えの正解そのもの**である。
+
+- **合計は rejected と一致する**（type 別行と同じ不変条件・同じ分母）。横断合計は `byType` から
+  拾い直すのではなく**全 rejected から独立に**数えるので、type 行が上限 20 で残余に畳まれても
+  合計は崩れない。
+- **cap 飽和時は type 別行と同じ censored 警告が付く**（`**全 N 件の内訳ではない**`）。
+  横断合計行だけを読んだ人が母集団の内訳と誤読しないため。#152 → #167 / #172 で実際に起きた誤帰属。
+- **打ち切りの残余は件数で残す**（`他 3 種 6`）。上限は type 行と同じ 10 種で、
+  畳み方も `formatReasonParts` に一本化した——**畳み方が 2 通りあるとどちらかだけ合計が合わなくなる**。
+- **type が 1 種別のときは出さない。** その場合 type 行がそのまま横断合計で、跨ぎも起こりえず、
+  同じ数字を 2 度書くだけになる（`patterns` で絞った呼び出しがこれに当たる）。
+
+**content の増分**: 見出し 1 行 + 内訳 1 行の **+233 文字**（cap 飽和・reason 4 種の実測相当）/
+**+250 文字**（cap 未達・reason 6 種）。`view=debug` のみで、`content` 全体に対しては 2% 前後
+（候補が `details` を持つ実運用の出力ではさらに小さい）。type が 1 種別の呼び出しでは 0 文字。
+
+`tests/detectPatternsViewsHandler.test.ts` に横断合計の describe を足し、
+**cap 飽和時の文言・合計の一致・残余の畳み込み・1 種別での抑止**を固定した。
+`tests/view-content-superset.test.ts` は横断合計行を `▼ 候補の内訳` / `▼ 棄却理由の内訳` と
+同格の定型要素として抽出するようにした（階梯外 view の要素なので `fixedElements` には入れない）。
 
 ### Added / Fixed（`view=debug` の棄却理由を集計して出し、relaxed provenance を `content` に届け、`view` description を実装に合わせた。#191）
 
@@ -77,7 +172,7 @@
 【Candidates】 69 / 全 69 件（省略なし）
 ▼ 候補の内訳: 全 69 件 = accepted 7 件 + rejected 62 件（cap 省略なし＝全候補の内訳）
 ▼ 棄却理由の内訳（type 別 → reason 別。合計は上の rejected 62 件と一致する）
-   - triple_top 40 件: peaks_not_equal 21 / valleys_missing 12 / valley_too_shallow 7
+   - triple_top 40 件: three_peaks_not_level 21 / valleys_missing 12 / valley_too_shallow 7
    - triple_bottom 22 件: peak_too_shallow 15 / peaks_missing 7
 ```
 
@@ -86,8 +181,8 @@
 - **分母は 3 つとも書く**（総数 / accepted / rejected）。今回の混乱は「69 件中 7 件が accepted」から
   62 を自分で引き算したところで起きているので、引き算をさせない。
 - **`type` と `reason` の 2 軸で数える**（`reason` だけに畳まない）。`patterns` で絞らない実行では
-  13 種別が混ざり、`triple_bottom:valleys_missing` と `double_bottom:valleys_missing` が同じ行に
-  潰れると帰属が読めない。type ごとに 1 行へまとめたので、**type 別の合計と reason 別の内訳の
+  13 種別が混ざり、`rising_wedge:slopes_not_same_direction` と
+  `falling_wedge:slopes_not_same_direction` が同じ行に潰れると帰属が読めない。type ごとに 1 行へまとめたので、**type 別の合計と reason 別の内訳の
   どちらも引き算なしで読める**（行数は type 数で頭打ち）。
 - **合計は必ず一致する。** type 行の合計 = 上の rejected 件数、行内の reason の合計 = その type の件数。
   type 20 種 / 行内 reason 10 種を超えたら残余に畳むが、**畳んだ分も件数で残す**

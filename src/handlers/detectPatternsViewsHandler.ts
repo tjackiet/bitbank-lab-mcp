@@ -514,10 +514,19 @@ function resolveTrimCounts(kept: number, total?: number, omitted?: number): { to
  */
 export const CANDIDATE_BREAKDOWN_LABEL = '▼ 候補の内訳';
 export const REJECTION_SUMMARY_LABEL = '▼ 棄却理由の内訳';
+/**
+ * reason 単独（type 横断）の合計行の見出し（issue #193 B-1）。**`REJECTION_SUMMARY_LABEL` の
+ * 接頭辞と重ならない語にしてある**——テスト側が `startsWith` で 2 つの見出しを抽出しており、
+ * 同じ接頭辞にすると type 別ブロックと区別できなくなる。
+ */
+export const REJECTION_CROSS_TOTAL_LABEL = '▼ reason 横断合計';
 
 /** 集計ブロックに並べる type 行の上限。超過分は残余行 1 本に畳む（**合計は必ず一致させる**）。 */
 const REJECTION_SUMMARY_MAX_TYPES = 20;
-/** 1 つの type 行に並べる reason の上限。超過分は行内の残余に畳む（同上）。 */
+/**
+ * 1 行に並べる reason の上限。超過分は行内の残余に畳む（同上）。
+ * **type 行と横断合計行の両方に同じ上限を掛ける**（畳み方の形も揃える）。
+ */
 const REJECTION_SUMMARY_MAX_REASONS = 10;
 
 /**
@@ -537,9 +546,19 @@ const REJECTION_SUMMARY_MAX_REASONS = 10;
  * 3. **見出し行（`formatTrimNote`）と数字が食い違わない。** 申告値は `resolveTrimCounts` で共有する。
  *
  * **`type:reason` の 2 軸で数える**（`reason` だけに畳まない）。`patterns` で絞らない実行では
- * 13 種別が混ざり、`triple_bottom:valleys_missing` と `double_bottom:valleys_not_equal` が
+ * 13 種別が混ざり、`rising_wedge:slopes_not_same_direction` と
+ * `falling_wedge:slopes_not_same_direction`（`detect_wedges.ts:949` が両 type に出す同じコード）が
  * 同じ行に潰れると帰属が読めなくなる。type ごとに 1 行へまとめることで、
  * type 別の合計と reason 別の内訳の**どちらも引き算なしで読める**（行数は type 数で頭打ち）。
+ *
+ * **その上で reason 単独の横断合計を 1 行足す**（issue #193 B-1）。2 軸で出しても LLM は
+ * 「棄却理由を多い順に」と問われれば横断で合算しようとし、実測で 2 回外している——
+ * ライブの btc_jpy 1hour（`patterns` 無指定 / cap 飽和 200 件）で
+ * (1) type 別の数値（`slopes_not_same_direction 58` = falling_wedge の分だけ）を横断合計として提示し、
+ * (2) `no_convergence(41) > slopes_not_same_direction(66)` という**不等号が成立しない**式を書いた。
+ * 同じ日の `patterns` を絞った実行（62 件。reason と type がほぼ 1 対 1）では成功しているので、
+ * これは「LLM が弱い」ではなく **`reason` が `type` を跨ぐほど再集計が難しくなる**条件付きの現象。
+ * 出さなければ手集計され、手集計は外れる。**足す**のであって type 別を置き換えるのではない。
  *
  * @param cands `meta.debug.candidates`（cap トリム後に**実際に返した**配列）
  * @param total トリム前の総数（`meta.debug.candidatesTotal`）。欠けていれば分母を「受け取った N 件」と書く
@@ -575,6 +594,9 @@ function formatRejectionSummary(cands: CandidateDebug[], total?: number, omitted
 	}
 
 	const byType = new Map<string, { count: number; reasons: Map<string, number> }>();
+	// type を畳んだ reason 単独の集計（#193 B-1）。type 行とは**独立に全 rejected から数える**ので、
+	// type 行が上限で残余に畳まれていても横断合計は rejected と一致し続ける。
+	const byReason = new Map<string, number>();
 	for (const c of cands) {
 		if (c.accepted) continue;
 		const type = String(c.type || 'unknown');
@@ -584,6 +606,7 @@ function formatRejectionSummary(cands: CandidateDebug[], total?: number, omitted
 		entry.count += 1;
 		entry.reasons.set(reason, (entry.reasons.get(reason) ?? 0) + 1);
 		byType.set(type, entry);
+		byReason.set(reason, (byReason.get(reason) ?? 0) + 1);
 	}
 	const sortedTypes = [...byType.entries()].sort((a, b) => b[1].count - a[1].count || byKeyAsc(a[0], b[0]));
 	const shownTypes = sortedTypes.slice(0, REJECTION_SUMMARY_MAX_TYPES);
@@ -595,22 +618,42 @@ function formatRejectionSummary(cands: CandidateDebug[], total?: number, omitted
 		}）`,
 	);
 	for (const [type, entry] of shownTypes) {
-		const reasons = [...entry.reasons.entries()].sort((a, b) => b[1] - a[1] || byKeyAsc(a[0], b[0]));
-		const shownReasons = reasons.slice(0, REJECTION_SUMMARY_MAX_REASONS);
-		const restReasons = reasons.slice(REJECTION_SUMMARY_MAX_REASONS);
-		const parts = shownReasons.map(([reason, n]) => `${reason} ${formatInt(n)}`);
-		// 畳んだ分も件数で残す。落とすと行内の合計が type の件数と合わなくなる。
-		if (restReasons.length > 0) {
-			const restCount = restReasons.reduce((sum, [, n]) => sum + n, 0);
-			parts.push(`他 ${formatInt(restReasons.length)} 種 ${formatInt(restCount)}`);
-		}
-		lines.push(`   - ${type} ${formatInt(entry.count)} 件: ${parts.join(' / ')}`);
+		lines.push(`   - ${type} ${formatInt(entry.count)} 件: ${formatReasonParts(entry.reasons)}`);
 	}
 	if (restTypes.length > 0) {
 		const restCount = restTypes.reduce((sum, [, entry]) => sum + entry.count, 0);
 		lines.push(`   - （他 ${formatInt(restTypes.length)} 種別）${formatInt(restCount)} 件`);
 	}
+
+	// reason 単独の横断合計（#193 B-1）。**type が 1 種別しかないときは出さない**——
+	// その場合 type 行がそのまま横断合計で、同じ数字を 2 度書くだけになる（跨ぎも起こりえない）。
+	if (byType.size > 1) {
+		lines.push(
+			`${REJECTION_CROSS_TOTAL_LABEL}（type を跨いで reason だけで合算。同じ reason でも type ごとに意味が違いうるので帰属は上の type 別行で見る。合計は上の rejected ${formatInt(
+				rejected,
+			)} 件と一致する${censored ? `。**全 ${formatInt(trim.total)} 件の内訳ではない**` : ''}）`,
+		);
+		lines.push(`   - ${formatReasonParts(byReason)}`);
+	}
 	return lines;
+}
+
+/**
+ * reason → 件数の Map を `a 21 / b 12 / 他 3 種 6` の 1 行に畳む。type 行と横断合計行で共有する
+ * （**畳み方が 2 通りあると、どちらかだけ合計が合わなくなる**）。
+ *
+ * 並びは件数降順 → reason 名昇順。上限超過分は種類数と件数の両方を残す——落とすと
+ * 「行の合計 = 上に書いた件数」という本ブロック唯一の不変条件が崩れる。
+ */
+function formatReasonParts(reasons: ReadonlyMap<string, number>): string {
+	const sorted = [...reasons.entries()].sort((a, b) => b[1] - a[1] || byKeyAsc(a[0], b[0]));
+	const parts = sorted.slice(0, REJECTION_SUMMARY_MAX_REASONS).map(([reason, n]) => `${reason} ${formatInt(n)}`);
+	const rest = sorted.slice(REJECTION_SUMMARY_MAX_REASONS);
+	if (rest.length > 0) {
+		const restCount = rest.reduce((sum, [, n]) => sum + n, 0);
+		parts.push(`他 ${formatInt(rest.length)} 種 ${formatInt(restCount)}`);
+	}
+	return parts.join(' / ');
 }
 
 export function formatDebugView(

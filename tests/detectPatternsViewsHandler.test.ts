@@ -11,6 +11,7 @@ import {
 	formatFullView,
 	formatPatternLine,
 	formatSummaryView,
+	REJECTION_CROSS_TOTAL_LABEL,
 } from '../src/handlers/detectPatternsViewsHandler.js';
 import type { PatternEntry } from '../tools/patterns/types.js';
 
@@ -409,6 +410,23 @@ function parseRestRow(text: string): { types: number; count: number } | null {
 	return m ? { types: Number(m[1]), count: Number(m[2]) } : null;
 }
 
+/**
+ * reason 単独の横断合計行（`▼ reason 横断合計（…）` の次行）を読み戻す（#193 B-1）。
+ * type 行と同じく**文言ではなく数字の整合**を見る parser。行が無ければ `null`
+ * （「出していない」と「合計が 0」を呼び出し側で区別できるようにする）。
+ */
+function parseCrossTotalRow(text: string): Array<[string, number]> | null {
+	const lines = text.split('\n');
+	const i = lines.findIndex((line) => line.startsWith(REJECTION_CROSS_TOTAL_LABEL));
+	if (i < 0) return null;
+	const m = lines[i + 1]?.match(/^\s+- (.+)$/u);
+	if (!m) return null;
+	return m[1].split(' / ').map((part) => {
+		const r = part.match(/^(.+) (\d+)$/u);
+		return [r ? r[1] : part, r ? Number(r[2]) : Number.NaN] as [string, number];
+	});
+}
+
 const rejects = (type: string, reason: string | undefined, n: number) =>
 	Array.from({ length: n }, () => ({ type, accepted: false, ...(reason === undefined ? {} : { reason }) }));
 
@@ -559,7 +577,155 @@ describe('formatDebugView: 棄却理由の集計ブロック（#191 A）', () =>
 		const text = formatDebugView('hdr', meta, [], makeDebugViewRes()).content[0].text;
 		expect(text).not.toContain('▼ 候補の内訳');
 		expect(text).not.toContain('▼ 棄却理由の内訳');
+		expect(text).not.toContain(REJECTION_CROSS_TOTAL_LABEL);
 		expect(text).toContain('なし（この窓では要求種別の候補が 1 つも組まれていない');
+	});
+});
+
+// ── reason 単独の横断合計（issue #193 B-1） ──
+
+/**
+ * **起票根拠はライブ実測**（btc_jpy 1hour / `view=debug` / `patterns` 無指定 / cap 飽和 200 件）。
+ * 「棄却理由を多い順に 3 つ」を問うたところ LLM が 2 回外している:
+ *
+ * 1. type 別の数値を横断合計として提示した（`slopes_not_same_direction 58` は falling_wedge の分だけ、
+ *    `weaker_slope_ratio_low 28` は rising_wedge の分だけ）
+ * 2. 続けて `no_convergence(41) > slopes_not_same_direction(66)` と、**不等号が成立しない**式を書いた
+ *
+ * 同じ日の `patterns=["triple_top","triple_bottom"]`（62 件。reason と type がほぼ 1 対 1）では
+ * 横断集計に成功している。**失敗条件は「reason が type を跨ぐこと」**なので、跨ぎが起きうる
+ * ときだけ横断合計を出す。以下のフィクスチャは (1) の実測値をそのまま使い、
+ * ツールが出す横断合計が 66 / 47 / 41 になる（= LLM が外した答えの正解）ことを固定する。
+ */
+describe('formatDebugView: reason 単独の横断合計（#193 B-1）', () => {
+	/** ライブ実測（cap 飽和 200 / 全 2,058）に寄せた候補列。両ウェッジに 3 reason が跨る。 */
+	const liveLikeCandidates = [
+		...Array.from({ length: 38 }, () => ({ type: 'rising_wedge', accepted: true })),
+		...rejects('falling_wedge', 'slopes_not_same_direction', 58),
+		...rejects('rising_wedge', 'slopes_not_same_direction', 8),
+		...rejects('rising_wedge', 'weaker_slope_ratio_low', 28),
+		...rejects('falling_wedge', 'weaker_slope_ratio_low', 19),
+		...rejects('falling_wedge', 'no_convergence', 25),
+		...rejects('rising_wedge', 'no_convergence', 16),
+		...rejects('triple_top', 'valleys_missing', 8),
+	];
+
+	it('type を跨ぐ reason を合算し、合計が rejected と一致する（LLM が外した 66 / 47 / 41 を出す）', () => {
+		const meta = makeMeta(liveLikeCandidates);
+		const text = formatDebugView('hdr', meta, [], makeDebugViewRes()).content[0].text;
+
+		// type 別行は**残したまま**（B-1 は「足す」であって「置き換える」ではない）
+		expect(text).toContain(
+			'   - falling_wedge 102 件: slopes_not_same_direction 58 / no_convergence 25 / weaker_slope_ratio_low 19',
+		);
+		expect(text).toContain(
+			'   - rising_wedge 52 件: weaker_slope_ratio_low 28 / no_convergence 16 / slopes_not_same_direction 8',
+		);
+
+		const cross = parseCrossTotalRow(text);
+		// 件数降順。**58 でも 28 でもなく 66 / 47**（LLM は type 別の数値をそのまま横断合計として出した）
+		expect(cross).toEqual([
+			['slopes_not_same_direction', 66],
+			['weaker_slope_ratio_low', 47],
+			['no_convergence', 41],
+			['valleys_missing', 8],
+		]);
+		// 不変条件: 横断合計の合計 = rejected 件数（type 別行と同じ分母）
+		expect(cross?.reduce((sum, [, n]) => sum + n, 0)).toBe(162);
+		expect(text).toContain('rejected 162 件');
+
+		// 帰属は type 別行で見る、を content 側に書く（同じ reason が rising / falling で意味が違うため）
+		expect(text).toContain('同じ reason でも type ごとに意味が違いうるので帰属は上の type 別行で見る');
+		// 位置は type 別行の**後**（「上の type 別行」が指す先が実際に上にある）
+		expect(text.indexOf(REJECTION_CROSS_TOTAL_LABEL)).toBeGreaterThan(text.indexOf('▼ 棄却理由の内訳'));
+		expect(text.indexOf(REJECTION_CROSS_TOTAL_LABEL)).toBeLessThan(text.indexOf('❌ = 候補段階の棄却'));
+	});
+
+	/**
+	 * cap 飽和時（#193 B-1 要件 2）。**横断合計行だけを読んだ人に「母集団の内訳」と誤読させない。**
+	 * censored な内訳からの誤帰属は #152 → #167 / #172 で実際に起きているので、
+	 * type 別行と**同じ** censored 警告を横断合計行にも付ける。
+	 */
+	it('cap 飽和: 横断合計行にも「**全 N 件の内訳ではない**」が付く', () => {
+		const meta = {
+			debug: {
+				swings: [],
+				candidates: liveLikeCandidates,
+				candidatesTotal: 2058,
+				candidatesOmitted: 2058 - liveLikeCandidates.length,
+			},
+		};
+		const text = formatDebugView('hdr', meta, [], makeDebugViewRes()).content[0].text;
+
+		expect(text).toContain(
+			`${REJECTION_CROSS_TOTAL_LABEL}（type を跨いで reason だけで合算。同じ reason でも type ごとに意味が違いうるので帰属は上の type 別行で見る。合計は上の rejected 162 件と一致する。**全 2058 件の内訳ではない**）`,
+		);
+		// 合計は表示分（162）であって母集団（2,058）ではない
+		expect(parseCrossTotalRow(text)?.reduce((sum, [, n]) => sum + n, 0)).toBe(162);
+	});
+
+	/**
+	 * 跨ぎが起こりえない実行（type 1 種別）では出さない。type 行がそのまま横断合計になるので、
+	 * 出しても同じ数字を 2 度書くだけで content が太るだけ（#193 要件 4）。
+	 */
+	it('type が 1 種別のときは出さない（type 行がそのまま横断合計）', () => {
+		const meta = makeMeta([
+			...rejects('triple_top', 'three_peaks_not_level', 21),
+			...rejects('triple_top', 'valleys_missing', 12),
+		]);
+		const text = formatDebugView('hdr', meta, [], makeDebugViewRes()).content[0].text;
+		expect(text).toContain('   - triple_top 33 件: three_peaks_not_level 21 / valleys_missing 12');
+		expect(text).not.toContain(REJECTION_CROSS_TOTAL_LABEL);
+	});
+
+	it('rejected が 0 件のときは出さない（「なし（rejected 0 件）」だけ出す）', () => {
+		const meta = makeMeta([
+			{ type: 'triple_top', accepted: true },
+			{ type: 'double_bottom', accepted: true },
+		]);
+		const text = formatDebugView('hdr', meta, [], makeDebugViewRes()).content[0].text;
+		expect(text).toContain('▼ 棄却理由の内訳: なし（rejected 0 件）');
+		expect(text).not.toContain(REJECTION_CROSS_TOTAL_LABEL);
+	});
+
+	it('reason が上限（10）を超えたら `他 N 種 M` に畳み、合計は rejected と一致し続ける', () => {
+		// 13 種の reason を 2 type に散らす（どの reason も両 type に跨る = 横断合計が意味を持つ形）
+		const candidates = Array.from({ length: 13 }, (_, i) => [
+			...rejects('rising_wedge', `reason_${String(i).padStart(2, '0')}`, 13 - i),
+			...rejects('falling_wedge', `reason_${String(i).padStart(2, '0')}`, 1),
+		]).flat();
+		const text = formatDebugView('hdr', makeMeta(candidates), [], makeDebugViewRes()).content[0].text;
+
+		const cross = parseCrossTotalRow(text);
+		expect(cross).toHaveLength(11); // 10 種 + 残余 1
+		expect(cross?.at(-1)?.[0]).toBe('他 3 種');
+		// 畳んだ分を落とすと合計が rejected と合わなくなる（#193 要件 3）
+		expect(cross?.reduce((sum, [, n]) => sum + n, 0)).toBe(candidates.length);
+	});
+
+	/**
+	 * 横断合計は `byType` ではなく**全 rejected から独立に**数える。type 行が上限 20 で残余に
+	 * 畳まれても、横断合計の合計は rejected と一致し続けなければならない
+	 * （type 行の残余から reason を拾い直す実装にすると、ここが黙って合わなくなる）。
+	 */
+	it('type 行が残余に畳まれても横断合計は rejected と一致する', () => {
+		// 25 種別 × 共通の reason 'r'（type 行は 20 + 残余 1 に畳まれる）
+		const candidates = Array.from({ length: 25 }, (_, i) =>
+			rejects(`type_${String(i).padStart(2, '0')}`, 'r', 25 - i),
+		).flat();
+		const text = formatDebugView('hdr', makeMeta(candidates), [], makeDebugViewRes()).content[0].text;
+
+		expect(parseRestRow(text)?.types).toBe(5); // type 行は畳まれている
+		expect(parseCrossTotalRow(text)).toEqual([['r', candidates.length]]);
+	});
+
+	it('reason を持たない棄却も (reason なし) として横断合計に入れる', () => {
+		const meta = makeMeta([...rejects('triple_top', undefined, 2), ...rejects('double_bottom', 'no_breakout', 1)]);
+		const text = formatDebugView('hdr', meta, [], makeDebugViewRes()).content[0].text;
+		expect(parseCrossTotalRow(text)).toEqual([
+			['(reason なし)', 2],
+			['no_breakout', 1],
+		]);
 	});
 });
 
