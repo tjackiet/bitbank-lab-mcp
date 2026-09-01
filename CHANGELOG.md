@@ -53,7 +53,8 @@
 ### Added / Fixed（`view=debug` の棄却理由を集計して出し、relaxed provenance を `content` に届け、`view` description を実装に合わせた。#191）
 
 `detect_patterns` の `content` 出力 3 点の修正。**`data.patterns` は 1 件も動かない**——
-触ったのは表示層（`src/handlers/detectPatternsViewsHandler.ts`）とスキーマの `.describe()` だけである。
+検出ロジックには触れておらず、変更したのは表示層（`src/handlers/detectPatternsViewsHandler.ts`）、
+スキーマの `.describe()`、および `PatternEntry._fallback` の型宣言（`tools/patterns/types.ts`。B で後述）である。
 
 #### A. `view=debug` に棄却理由の集計を出す（本命）
 

@@ -272,26 +272,34 @@ const PATTERN_COUNT = 7;
 /** `debug` view が `【Swings】` に描画するスイング（1 本だけ入れて行の有無を検証可能にする）。 */
 const DEBUG_SWING = { kind: 'H', idx: 3, price: 100, isoTime: '2026-01-05T00:00:00.000Z' } as const;
 
+type PatternsFixture = Awaited<ReturnType<typeof detectPatterns>>;
+/**
+ * `meta.debug.candidates` の 1 件。**production の出力型から導出する**（手書きの shape に落とさない）。
+ * `meta` は ok / fail の union なので、`pair` を持つ ok 側だけを取り出してから辿る。
+ */
+type OkPatternMeta = Extract<PatternsFixture['meta'], { pair: string }>;
+type DebugCandidate = NonNullable<NonNullable<OkPatternMeta['debug']>['candidates']>[number];
+
 /**
  * `debug` の集計ブロック（#191 A）を描画させるための候補。**accepted / rejected の両方**を入れる
  * ——片方だけだと分母の書き分け（accepted N 件 + rejected M 件）を検証できない。
  */
-const DEBUG_CANDIDATES = [
+const DEBUG_CANDIDATES: DebugCandidate[] = [
 	{ type: 'double_top', accepted: true },
 	{ type: 'double_top', accepted: false, reason: 'peaks_not_equal' },
 	{ type: 'double_top', accepted: false, reason: 'peaks_not_equal' },
 	{ type: 'triple_bottom', accepted: false, reason: 'valleys_missing' },
-] as const;
+];
 
 /** relaxed フォールバック由来の provenance（#191 B）。既定フィクスチャの 7 件のうち先頭 2 件に付ける。 */
 const RELAXED_TAG = 'relaxed_double_x1.3';
 
 // 戻り値を上流ツールの出力型で縛る。手書きフィクスチャが production の shape から
 // 黙って drift すると、この層（ツール横断の契約検証）の assert が全て素通りするため。
-function patternsFixture(
-	opts: { relaxed?: number; candidates?: unknown[] } = {},
-): Awaited<ReturnType<typeof detectPatterns>> {
+function patternsFixture(opts: { relaxed?: number; candidates?: DebugCandidate[] } = {}): PatternsFixture {
 	const relaxed = opts.relaxed ?? 0;
+	const candidates = opts.candidates ?? [];
+	const swings = [{ ...DEBUG_SWING }];
 	return {
 		ok: true,
 		summary: 'ok',
@@ -330,12 +338,22 @@ function patternsFixture(
 			visualization_hints: { preferred_style: 'line', highlight_patterns: [] },
 			warning: '取得層: 180本中20本が欠損しています',
 			warnings: ['計算層: スイング検出に必要なバー数が不足しています'],
-			debug: { swings: [{ ...DEBUG_SWING }], candidates: (opts.candidates ?? []) as never[] },
+			// **cap トリムの申告 4 つは production（`tools/detect_patterns.ts`）が常に埋める。**
+			// ここで省くと「総数の申告が無い」という production では起きない分岐を
+			// ツール層のテストが固定してしまう（その分岐は formatter の単体テスト側で見る）。
+			debug: {
+				swings,
+				candidates,
+				candidatesTotal: candidates.length,
+				candidatesOmitted: 0,
+				swingsTotal: swings.length,
+				swingsOmitted: 0,
+			},
 		},
 	};
 }
 
-const runPatterns = (view: string, opts: { relaxed?: number; candidates?: unknown[] } = {}) => {
+const runPatterns = (view: string, opts: { relaxed?: number; candidates?: DebugCandidate[] } = {}) => {
 	vi.mocked(detectPatterns).mockResolvedValue(patternsFixture(opts));
 	return detectPatternsTool.handler({ pair: 'btc_jpy', type: '1day', limit: 180, view });
 };
@@ -653,9 +671,12 @@ describe('階梯上の view の content は下位 view の上位集合（§3-2 �
 		const text = byView.get('debug') as string;
 		const lines = rejectionSummaryLines(text);
 
+		// 申告 4 つが埋まっている production 相当の入力なので、分母は `全 N 件`。
+		// 見出しの申告値（#180）と数字が食い違っていないことも同時に見る。
+		expect(text).toContain('【Candidates】 4 / 全 4 件（省略なし）');
 		expect(lines).toHaveLength(2);
 		expect(lines[0]).toBe(
-			`${CANDIDATE_BREAKDOWN_LABEL}: 受け取った 4 件 = accepted 1 件 + rejected 3 件（総数の申告が無いため cap 省略の有無は不明。この集計は受け取った分のみ）`,
+			`${CANDIDATE_BREAKDOWN_LABEL}: 全 4 件 = accepted 1 件 + rejected 3 件（cap 省略なし＝全候補の内訳）`,
 		);
 		expect(lines[1]).toBe(`${REJECTION_SUMMARY_LABEL}（type 別 → reason 別。合計は上の rejected 3 件と一致する）`);
 		expect(text).toContain('   - double_top 2 件: peaks_not_equal 2');
