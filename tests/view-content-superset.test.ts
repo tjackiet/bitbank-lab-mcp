@@ -38,6 +38,7 @@ import {
 	CANDIDATE_BREAKDOWN_LABEL,
 	DETECTION_ROUTE_LABEL,
 	EFFECTIVE_PARAMS_LABEL,
+	REJECTION_CROSS_TOTAL_LABEL,
 	REJECTION_SUMMARY_LABEL,
 } from '../src/handlers/detectPatternsViewsHandler.js';
 import { toolDef as volatilityTool } from '../src/handlers/getVolatilityMetricsHandler.js';
@@ -115,15 +116,23 @@ function detectionRouteLines(text: string): string[] {
 }
 
 /**
- * `debug` の棄却理由の集計ブロック（issue #191 A）の見出し 2 行。
+ * `debug` の棄却理由の集計ブロック（issue #191 A / #193 B-1）の見出し 3 行。
  * **階梯外の view の要素なので `fixedElements` には入れない**（上位集合の対象ではない。§3-2 規約 3）。
  * 抽出関数だけ他の定型要素と同じ形で置き、`debug` 側の固定に使う。
+ *
+ * `▼ reason 横断合計`（#193 B-1）も同じ定型要素として数える。**この行が消えると LLM は
+ * 横断合計を手で足し、実測で外す**ので、`▼ 候補の内訳` / `▼ 棄却理由の内訳` と同格に扱う。
  */
 function rejectionSummaryLines(text: string): string[] {
 	return text
 		.split('\n')
 		.map((line) => line.trim())
-		.filter((line) => line.startsWith(CANDIDATE_BREAKDOWN_LABEL) || line.startsWith(REJECTION_SUMMARY_LABEL));
+		.filter(
+			(line) =>
+				line.startsWith(CANDIDATE_BREAKDOWN_LABEL) ||
+				line.startsWith(REJECTION_SUMMARY_LABEL) ||
+				line.startsWith(REJECTION_CROSS_TOTAL_LABEL),
+		);
 }
 
 /**
@@ -662,7 +671,7 @@ describe('階梯上の view の content は下位 view の上位集合（§3-2 �
 		expect(text).toMatch(new RegExp(`${DEBUG_SWING.kind}\\b`, 'u'));
 	});
 
-	it('detect_patterns: debug の棄却理由の集計ブロックは分母を書き切る（#191 A。階梯外なので包含の対象外）', async () => {
+	it('detect_patterns: debug の棄却理由の集計ブロックは分母を書き切る（#191 A / #193 B-1。階梯外なので包含の対象外）', async () => {
 		// 階梯外の view なので上位集合規約の対象ではないが、`【Candidates】` の申告値（#180）と
 		// 集計の数字が食い違わないことは content の唯一のチャネル上の契約なのでここで固定する。
 		const byView = await collectContentByView(['debug'] as const, (view) =>
@@ -674,13 +683,20 @@ describe('階梯上の view の content は下位 view の上位集合（§3-2 �
 		// 申告 4 つが埋まっている production 相当の入力なので、分母は `全 N 件`。
 		// 見出しの申告値（#180）と数字が食い違っていないことも同時に見る。
 		expect(text).toContain('【Candidates】 4 / 全 4 件（省略なし）');
-		expect(lines).toHaveLength(2);
+		expect(lines).toHaveLength(3);
 		expect(lines[0]).toBe(
 			`${CANDIDATE_BREAKDOWN_LABEL}: 全 4 件 = accepted 1 件 + rejected 3 件（cap 省略なし＝全候補の内訳）`,
 		);
 		expect(lines[1]).toBe(`${REJECTION_SUMMARY_LABEL}（type 別 → reason 別。合計は上の rejected 3 件と一致する）`);
 		expect(text).toContain('   - double_top 2 件: peaks_not_equal 2');
 		expect(text).toContain('   - triple_bottom 1 件: valleys_missing 1');
+
+		// reason 単独の横断合計（#193 B-1）。type 別行の**下**に出て、合計は同じ rejected 件数と一致する。
+		expect(lines[2]).toBe(
+			`${REJECTION_CROSS_TOTAL_LABEL}（type を跨いで reason だけで合算。同じ reason でも type ごとに意味が違いうるので帰属は上の type 別行で見る。合計は上の rejected 3 件と一致する）`,
+		);
+		expect(text).toContain('   - peaks_not_equal 2 / valleys_missing 1');
+		expect(text.indexOf(REJECTION_CROSS_TOTAL_LABEL)).toBeGreaterThan(text.indexOf(REJECTION_SUMMARY_LABEL));
 
 		// 検出経路行は debug には出さない（パターンを列挙しない view なので帰属の対象が出ない）
 		expect(detectionRouteLines(text)).toEqual([]);

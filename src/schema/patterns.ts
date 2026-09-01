@@ -210,13 +210,26 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 				'`swings` 側も同様に `swingsTotal` / `swingsOmitted` を返す（`swings` は先頭から残すので' +
 				'落ちるのは直近側）。\n' +
 				'  **棄却理由の集計は content 側で済ませてある（数え直さないこと。issue #191）。** ' +
-				'`【Candidates】` の見出しの直後・候補の列挙より前に 2 段の集計ブロックが出る:\n' +
+				'`【Candidates】` の見出しの直後・候補の列挙より前に 3 段の集計ブロックが出る:\n' +
 				'    `▼ 候補の内訳: 全 69 件 = accepted 7 件 + rejected 62 件（cap 省略なし＝全候補の内訳）`\n' +
 				'    `▼ 棄却理由の内訳（type 別 → reason 別。合計は上の rejected 62 件と一致する）`\n' +
-				'    `   - triple_top 40 件: peaks_not_equal 21 / valleys_missing 12 / …`\n' +
-				'  内訳は **type と reason の 2 軸**で数える（`triple_bottom:valleys_missing` と ' +
-				'`double_bottom:valleys_missing` を同じ行に潰さないため）。type 行の合計は上の rejected 件数と、' +
+				'    `   - triple_top 40 件: three_peaks_not_level 21 / valleys_missing 12 / valley_too_shallow 7`\n' +
+				'    `   - triple_bottom 22 件: peak_too_shallow 15 / peaks_missing 7`\n' +
+				'  内訳は **type と reason の 2 軸**で数える（`rising_wedge:slopes_not_same_direction` と ' +
+				'`falling_wedge:slopes_not_same_direction` を同じ行に潰さないため——' +
+				'同じ reason でも type が違えば意味が違う）。type 行の合計は上の rejected 件数と、' +
 				'行内の reason の合計はその type の件数と必ず一致する（多すぎる場合は残余に畳むが、畳んだ分も件数で残す）。\n' +
+				'  **その下に `▼ reason 横断合計` が 1 行出る**（type を畳んで reason だけで合算したもの。issue #193）:\n' +
+				'    `▼ reason 横断合計（type を跨いで reason だけで合算。…。合計は上の rejected 62 件と一致する）`\n' +
+				'    `   - three_peaks_not_level 21 / peak_too_shallow 15 / valleys_missing 12 / valley_too_shallow 7 / peaks_missing 7`\n' +
+				'  **横断合計を自分で足さないこと。** 「棄却理由を多い順に」を type 別行から手集計すると外れる' +
+				'（別のライブ実測: type 別の数値をそのまま横断合計として提示し、続いて' +
+				'`no_convergence(41) > slopes_not_same_direction(66)` という不等号が成立しない式を出力した）。' +
+				'`reason` が `type` を跨ぐ実行ほど外れやすいので、跨ぎが起きうる **type が 2 種別以上のときだけ**出す' +
+				'（1 種別なら type 行がそのまま横断合計なので出さない）。type 別の内訳を**置き換えるものではない**——' +
+				'同じ reason でも type ごとに意味が違いうる（`slopes_not_same_direction` は rising / falling で別の話）ので、' +
+				'**帰属は必ず type 別行で見る。** 上限（10 種）を超えた分は type 行と同じ `他 N 種 M` に畳み、' +
+				'cap 飽和時は type 別行と同じ `**全 N 件の内訳ではない**` が付く。\n' +
 				'  **cap で押し出しが起きているときは分母が「表示分」に変わる**: ' +
 				'`▼ 候補の内訳: 表示 200 件 = accepted 7 件 + rejected 193 件（全 289 件のうち 89 件は cap で省略されており、' +
 				'**この集計に入っていない**）` となり、内訳の見出しにも「**全 289 件の内訳ではない**」が付く。' +
