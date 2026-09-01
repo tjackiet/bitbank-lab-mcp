@@ -23,8 +23,9 @@ import type { Pivot } from './swing.js';
  * `tolerancePct` の `near` と**同じ量**（{@link relDiff}）を見ているので、完成済み double の
  * 同水準の実効上限は `min(tolerancePct, 本定数) × 価格水準`。これに加えて #178 項目 4 以降は
  * **高さ相対の {@link validateLevelDiff}（`MAX_LEVEL_SPREAD_RATIO` × パターン高さ）が
- * 独立した AND 条件**として掛かる。本定数を触るときは向こうの到達可能域も動くことに注意
- * （`validateLevelDiff` の docstring に幾何の上界を書いてある）。
+ * 独立した AND 条件**として掛かる。本定数は `spreadRatio` の実効上界
+ * （`min(tolerancePct, 本定数) / depthPct`）の分子でもあるので、触ると向こうの到達可能域も
+ * 動く（`validateLevelDiff` の docstring）。
  */
 export const DOUBLE_LEVEL_MAX_PCT = 0.03;
 
@@ -672,12 +673,28 @@ export type PatternLevelDiffRejectReason =
  * ## 閾値は triple と同じ {@link MAX_LEVEL_SPREAD_RATIO}（0.5）
  *
  * `spreadRatio` は無次元なので時間足別テーブルを持たない、という
- * {@link MAX_LEVEL_SPREAD_RATIO} の理由が double にもそのまま当てはまる。double では
- * さらに強い根拠がある——**主構成点が全構成点に含まれる**ので
- * `spreadAbs <= heightAbs` が構造上成立し、`spreadRatio` の上界は**時間足に依らず 1.0**。
- * 「`DOUBLE_LEVEL_MAX_PCT`（固定 3%）÷ `getSizeThresholdsForTf().heightPct`（時間足別）」で
- * 出る比（`1hour` で 4.8）は**到達不能**で、時間足別化の根拠にならない
- * （#178 項目 4 の実測: サイズ検査を通過した 191 構造で `spreadRatio > 1` は 0 件、max 0.951）。
+ * {@link MAX_LEVEL_SPREAD_RATIO} の理由が double にもそのまま当てはまる。
+ *
+ * ## `spreadRatio` に「1.0 が上界」のような構造上の天井は無い（PR #195 レビューでの訂正）
+ *
+ * 主構成点は全構成点に含まれるが、**分子と分母で読む価格フィールドが違う**——
+ * 分子は `Pivot.price`（終値）、分母は `Pivot.extremePrice`（高安）。したがって
+ * `spreadAbs <= heightAbs` は**成立しない**。低いほうの山に上ヒゲが付くと、高安で測る
+ * 高さを増やさずに終値の差だけが広がる（実測可能な例: 山1 が高値 100 で引け、山2 が
+ * 高値 100 / 終値 97、谷の安値 98.96 → `spreadRatio` 2.88。**この形は既存のゲートを
+ * すべて通過して `accepted` になっていた**）。
+ *
+ * 実効上界を決めるのは**サイズ検査の深さ条件**（`heightPct` 側ではない）。山 2 つの
+ * 極値が等しいとき `heightAbs >= depthPct × 価格水準` なので:
+ *
+ * ```
+ * spreadRatio <= min(tolerancePct, DOUBLE_LEVEL_MAX_PCT) / getSizeThresholdsForTf(tf).depthPct
+ * ```
+ *
+ * 既定パラメータなら `1hour` で 2.88 / `4hour` で 1.47 / `1day` 以上で 0.60。
+ * **`1day` でも 0.5 を超えるので、本ゲートは短い時間足専用の装置ではない。**
+ * 閾値 0.5 の根拠は幾何ではなく**実測の分布**（#178 項目 4。896 ケースで accept 側の
+ * `spreadRatio` は max 0.360 で 0.069 との間が空。サイズ検査通過の 191 構造で max 0.951）。
  *
  * ## 呼び出し位置
  *
