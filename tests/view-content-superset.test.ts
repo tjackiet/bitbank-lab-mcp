@@ -34,7 +34,12 @@ vi.mock('../tools/detect_patterns.js', () => ({ default: vi.fn() }));
 
 import { dayjs } from '../lib/datetime.js';
 import { toolDef as detectPatternsTool } from '../src/handlers/detectPatternsHandler.js';
-import { EFFECTIVE_PARAMS_LABEL } from '../src/handlers/detectPatternsViewsHandler.js';
+import {
+	CANDIDATE_BREAKDOWN_LABEL,
+	DETECTION_ROUTE_LABEL,
+	EFFECTIVE_PARAMS_LABEL,
+	REJECTION_SUMMARY_LABEL,
+} from '../src/handlers/detectPatternsViewsHandler.js';
 import { toolDef as volatilityTool } from '../src/handlers/getVolatilityMetricsHandler.js';
 import detectPatterns from '../tools/detect_patterns.js';
 import { toolDef as flowMetricsTool } from '../tools/get_flow_metrics.js';
@@ -94,12 +99,43 @@ function effectiveParamsLines(text: string): string[] {
 		.filter((line) => line.startsWith(EFFECTIVE_PARAMS_LABEL));
 }
 
-/** view の content から定型要素（注記行 + 期間行 + 実効パラメータ行 + ヘッダ主要フィールド）を抽出した集合。 */
+/**
+ * 検出経路行（`検出経路: strict N 件 / relaxed フォールバック由来 M 件（…）`）。issue #191 B の定型 1 行。
+ *
+ * relaxed フォールバック由来かどうかの provenance（`data.patterns[]._fallback`）は
+ * structuredContent 側にしか無く LLM からは見えない。**`summary` は個々のパターン行を出さない view**
+ * なので、この集計行が summary における唯一の provenance のチャネルになる。
+ * `detailed` / `full` だけに出すと規約 3（上位集合）違反になるため、全 view に出続けることをここで固定する。
+ */
+function detectionRouteLines(text: string): string[] {
+	return text
+		.split('\n')
+		.map((line) => line.trim())
+		.filter((line) => line.startsWith(`${DETECTION_ROUTE_LABEL}:`));
+}
+
+/**
+ * `debug` の棄却理由の集計ブロック（issue #191 A）の見出し 2 行。
+ * **階梯外の view の要素なので `fixedElements` には入れない**（上位集合の対象ではない。§3-2 規約 3）。
+ * 抽出関数だけ他の定型要素と同じ形で置き、`debug` 側の固定に使う。
+ */
+function rejectionSummaryLines(text: string): string[] {
+	return text
+		.split('\n')
+		.map((line) => line.trim())
+		.filter((line) => line.startsWith(CANDIDATE_BREAKDOWN_LABEL) || line.startsWith(REJECTION_SUMMARY_LABEL));
+}
+
+/**
+ * view の content から定型要素（注記行 + 期間行 + 実効パラメータ行 + 検出経路行 + ヘッダ主要フィールド）を
+ * 抽出した集合。
+ */
 function fixedElements(text: string): Set<string> {
 	return new Set([
 		...annotationLines(text),
 		...periodLines(text),
 		...effectiveParamsLines(text),
+		...detectionRouteLines(text),
 		...headerFields(text),
 	]);
 }
@@ -236,9 +272,34 @@ const PATTERN_COUNT = 7;
 /** `debug` view が `【Swings】` に描画するスイング（1 本だけ入れて行の有無を検証可能にする）。 */
 const DEBUG_SWING = { kind: 'H', idx: 3, price: 100, isoTime: '2026-01-05T00:00:00.000Z' } as const;
 
+type PatternsFixture = Awaited<ReturnType<typeof detectPatterns>>;
+/**
+ * `meta.debug.candidates` の 1 件。**production の出力型から導出する**（手書きの shape に落とさない）。
+ * `meta` は ok / fail の union なので、`pair` を持つ ok 側だけを取り出してから辿る。
+ */
+type OkPatternMeta = Extract<PatternsFixture['meta'], { pair: string }>;
+type DebugCandidate = NonNullable<NonNullable<OkPatternMeta['debug']>['candidates']>[number];
+
+/**
+ * `debug` の集計ブロック（#191 A）を描画させるための候補。**accepted / rejected の両方**を入れる
+ * ——片方だけだと分母の書き分け（accepted N 件 + rejected M 件）を検証できない。
+ */
+const DEBUG_CANDIDATES: DebugCandidate[] = [
+	{ type: 'double_top', accepted: true },
+	{ type: 'double_top', accepted: false, reason: 'peaks_not_equal' },
+	{ type: 'double_top', accepted: false, reason: 'peaks_not_equal' },
+	{ type: 'triple_bottom', accepted: false, reason: 'valleys_missing' },
+];
+
+/** relaxed フォールバック由来の provenance（#191 B）。既定フィクスチャの 7 件のうち先頭 2 件に付ける。 */
+const RELAXED_TAG = 'relaxed_double_x1.3';
+
 // 戻り値を上流ツールの出力型で縛る。手書きフィクスチャが production の shape から
 // 黙って drift すると、この層（ツール横断の契約検証）の assert が全て素通りするため。
-function patternsFixture(): Awaited<ReturnType<typeof detectPatterns>> {
+function patternsFixture(opts: { relaxed?: number; candidates?: DebugCandidate[] } = {}): PatternsFixture {
+	const relaxed = opts.relaxed ?? 0;
+	const candidates = opts.candidates ?? [];
+	const swings = [{ ...DEBUG_SWING }];
 	return {
 		ok: true,
 		summary: 'ok',
@@ -253,6 +314,7 @@ function patternsFixture(): Awaited<ReturnType<typeof detectPatterns>> {
 					end: dayjs.utc('2026-01-20T00:00:00Z').add(i, 'day').toISOString(),
 				},
 				status: 'completed',
+				...(i < relaxed ? { _fallback: RELAXED_TAG } : {}),
 			})),
 			overlays: { ranges: [] },
 			warnings: [],
@@ -276,13 +338,23 @@ function patternsFixture(): Awaited<ReturnType<typeof detectPatterns>> {
 			visualization_hints: { preferred_style: 'line', highlight_patterns: [] },
 			warning: '取得層: 180本中20本が欠損しています',
 			warnings: ['計算層: スイング検出に必要なバー数が不足しています'],
-			debug: { swings: [{ ...DEBUG_SWING }], candidates: [] },
+			// **cap トリムの申告 4 つは production（`tools/detect_patterns.ts`）が常に埋める。**
+			// ここで省くと「総数の申告が無い」という production では起きない分岐を
+			// ツール層のテストが固定してしまう（その分岐は formatter の単体テスト側で見る）。
+			debug: {
+				swings,
+				candidates,
+				candidatesTotal: candidates.length,
+				candidatesOmitted: 0,
+				swingsTotal: swings.length,
+				swingsOmitted: 0,
+			},
 		},
 	};
 }
 
-const runPatterns = (view: string) => {
-	vi.mocked(detectPatterns).mockResolvedValue(patternsFixture());
+const runPatterns = (view: string, opts: { relaxed?: number; candidates?: DebugCandidate[] } = {}) => {
+	vi.mocked(detectPatterns).mockResolvedValue(patternsFixture(opts));
 	return detectPatternsTool.handler({ pair: 'btc_jpy', type: '1day', limit: 180, view });
 };
 
@@ -497,6 +569,55 @@ describe('階梯上の view の content は下位 view の上位集合（§3-2 �
 		expect(line).toContain('スキーマ既定値 7/5/0.04 の明示指定も auto');
 	});
 
+	it('detect_patterns: 検出経路行が summary / detailed / full すべてに同一文言で出る（#191 B）', async () => {
+		// **`summary` に出さないと規約 3 違反。** provenance（`data.patterns[]._fallback`）は
+		// structuredContent 側にしかなく、summary は個々のパターン行を出さないので、
+		// この集計行が summary における唯一の届け先になる。
+		const byView = await collectContentByView(['summary', 'detailed', 'full'] as const, (view) =>
+			runPatterns(view, { relaxed: 2 }),
+		);
+
+		const lines = new Set<string>();
+		for (const view of ['summary', 'detailed', 'full'] as const) {
+			const found = detectionRouteLines(byView.get(view) as string);
+			expect(found, `view=${view} に検出経路行が無い`).toHaveLength(1);
+			lines.add(found[0]);
+		}
+		// 3 view で文言が割れていない（同じ関数から組んでいることの回帰）
+		expect(lines.size, 'view ごとに検出経路行の文言が違う').toBe(1);
+		const [line] = [...lines];
+		expect(line).toContain('strict 5 件 / relaxed フォールバック由来 2 件');
+		expect(line).toContain(`${RELAXED_TAG}×2`);
+	});
+
+	it('detect_patterns: relaxed が 0 件でも検出経路行を出す（「行が無い = relaxed なし」を推論させない）', async () => {
+		const byView = await collectContentByView(['summary', 'detailed', 'full'] as const, (view) => runPatterns(view));
+		for (const view of ['summary', 'detailed', 'full'] as const) {
+			const [line] = detectionRouteLines(byView.get(view) as string);
+			expect(line, `view=${view}`).toBe(
+				`${DETECTION_ROUTE_LABEL}: 全 7 件とも strict（relaxed フォールバック由来は 0 件）`,
+			);
+		}
+	});
+
+	it('detect_patterns: パターン単位の provenance は detailed / full への追加で、summary の定型要素は保たれる（#191 B）', async () => {
+		// 「足す」は規約 §2 で許容、「削る」は禁止。summary に無い印を上位 view が足すのは規約内。
+		const byView = await collectContentByView(['summary', 'detailed', 'full'] as const, (view) =>
+			runPatterns(view, { relaxed: 2 }),
+		);
+		const summary = byView.get('summary') as string;
+		expect(summary).not.toContain(`[${RELAXED_TAG}]`);
+		for (const view of ['detailed', 'full'] as const) {
+			const text = byView.get(view) as string;
+			// 先頭 2 件が relaxed 由来（フィクスチャ）。見出し行の末尾に同じ値が付く
+			expect(text, `view=${view}`).toContain(`1. double_top (パターン整合度: 0.90) [${RELAXED_TAG}]`);
+			expect(text, `view=${view}`).toContain(`2. double_bottom (パターン整合度: 0.88) [${RELAXED_TAG}]`);
+			// strict 由来には付かない
+			expect(text, `view=${view}`).toContain('3. double_top (パターン整合度: 0.86)\n');
+			expectSupersetOf(fixedElements(text), fixedElements(summary), `${view} ⊇ summary（定型要素）`);
+		}
+	});
+
 	it('detect_patterns: パターン行のキー集合が summary ⊆ detailed ⊆ full', async () => {
 		const byView = await collectContentByView(['summary', 'detailed', 'full'] as const, (view) => runPatterns(view));
 		const keys = {
@@ -539,6 +660,30 @@ describe('階梯上の view の content は下位 view の上位集合（§3-2 �
 		expect(text).toContain('【Swings】');
 		expect(text).toContain(String(DEBUG_SWING.price));
 		expect(text).toMatch(new RegExp(`${DEBUG_SWING.kind}\\b`, 'u'));
+	});
+
+	it('detect_patterns: debug の棄却理由の集計ブロックは分母を書き切る（#191 A。階梯外なので包含の対象外）', async () => {
+		// 階梯外の view なので上位集合規約の対象ではないが、`【Candidates】` の申告値（#180）と
+		// 集計の数字が食い違わないことは content の唯一のチャネル上の契約なのでここで固定する。
+		const byView = await collectContentByView(['debug'] as const, (view) =>
+			runPatterns(view, { candidates: [...DEBUG_CANDIDATES] }),
+		);
+		const text = byView.get('debug') as string;
+		const lines = rejectionSummaryLines(text);
+
+		// 申告 4 つが埋まっている production 相当の入力なので、分母は `全 N 件`。
+		// 見出しの申告値（#180）と数字が食い違っていないことも同時に見る。
+		expect(text).toContain('【Candidates】 4 / 全 4 件（省略なし）');
+		expect(lines).toHaveLength(2);
+		expect(lines[0]).toBe(
+			`${CANDIDATE_BREAKDOWN_LABEL}: 全 4 件 = accepted 1 件 + rejected 3 件（cap 省略なし＝全候補の内訳）`,
+		);
+		expect(lines[1]).toBe(`${REJECTION_SUMMARY_LABEL}（type 別 → reason 別。合計は上の rejected 3 件と一致する）`);
+		expect(text).toContain('   - double_top 2 件: peaks_not_equal 2');
+		expect(text).toContain('   - triple_bottom 1 件: valleys_missing 1');
+
+		// 検出経路行は debug には出さない（パターンを列挙しない view なので帰属の対象が出ない）
+		expect(detectionRouteLines(text)).toEqual([]);
 	});
 
 	describe('最新足が形成中（provisional）の場合', () => {

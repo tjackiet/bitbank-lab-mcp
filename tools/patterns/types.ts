@@ -230,6 +230,16 @@ export interface PatternPrecedingTrend {
 /** パターンエントリ（検出結果の1件）— 共通フィールド＋任意拡張 */
 export interface PatternEntry extends DeduplicablePattern {
 	confidence?: number;
+	/**
+	 * relaxed フォールバック経路で拾い直したことを示す provenance（issue #189 / #191 B）。
+	 * 値は `relaxed_<検出器>_<段の係数>`（`relaxed_triple_x1.25` / `relaxed_hs_x2.0_0.4` 等。
+	 * **表記は検出器ごとに揃っていない**——判別は前方一致で行う。詳細は `src/schema/patterns.ts` の
+	 * `DetectedPatternSchema._fallback`）。**無ければ strict 経路で拾えた**の意。
+	 *
+	 * 親の `DeduplicablePattern` が `[key: string]: unknown` を持つのでアクセス自体は前からできたが、
+	 * 型が `unknown` のままでは表示層でキャストが要る。PR #190 がスキーマ側でやったことの型側の対応物。
+	 */
+	_fallback?: string;
 	timeframe?: string;
 	timeframeLabel?: string;
 	neckline?: Array<{ x?: number; y: number }>;

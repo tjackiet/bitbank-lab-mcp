@@ -168,21 +168,35 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 		.default('detailed')
 		.describe(
 			`${VIEW_CONTRACT_NOTE}\n` +
-				'**`実効パラメータ` 行は 4 view すべて（`debug` を含む）でヘッダ直下に出る。** ' +
+				'**`実効パラメータ（入力値ではない）:` 行は 4 view すべて（`debug` を含む）に出る。** ' +
 				'解決後の実効値と由来（`(auto)` / `(指定)`）で、構造化データは meta.effective_params。' +
 				'`swingDepth` / `minBarsBetweenSwings` / `tolerancePct` はスキーマ既定値が sentinel なので、' +
-				'**渡した値と行の値が食い違うことがある**（#182 / #184）。\n' +
-				'summary / detailed / full では、さらにヘッダ直下に 2 行が出る（**別の量なので混同しないこと**）:\n' +
+				'**渡した値と行の値が食い違うことがある**（#182 / #184）。' +
+				'**位置は view で違う**（行頭ラベルが一意なので機械的な抽出には影響しない）: ' +
+				'`debug` はヘッダの直下、summary / detailed / full は次の 2 行の**下**（＝ヘッダから 4 行目）。\n' +
+				'summary / detailed / full では、ヘッダ直下に 2 行が出る（**別の量なので混同しないこと**）:\n' +
 				'  - `スキャン範囲: <先頭足> ~ <末尾足>（N本）` — 検出器に実際に渡した足のレンジ。' +
 				'1day 未満の時間足では時刻まで表示する。構造化データは meta.scan。\n' +
 				'  - `検出パターン分布期間: <最古 range.start> ~ <最新 range.end>（N日間）` — ' +
 				'**検出されたパターンの分布**であってスキャン窓ではない（旧ラベル「検出対象期間」）。\n' +
-				'- summary: ヘッダ ＋ 分類内訳 ＋ 直近30日/90日件数 ＋ 上記 2 行 ＋ 検討パターン。個々のパターンの詳細は content に出ない。\n' +
-				'- detailed（既定）: 上位 5 件の詳細。6 件目以降は content に出ない。structuredContent に usage_example を**足す**。\n' +
-				'- full: 全件の詳細（double_top / double_bottom では山谷 3 点の pivot 行も出る）。本ツールの最重量。\n' +
-				'- debug（**階梯外**）: swings / candidates のみ。**検出パターンもスキャン範囲 / 検出パターン分布期間の 2 行も content に出ない**' +
-				'（実効パラメータ行だけは出る——診断に要るため）。出力を置換する view なので full の上位集合ではない。' +
-				'structuredContent に data.candidates を**足す**。\n' +
+				'さらに summary / detailed / full には `検出経路:` 行が 1 行出る' +
+				'（実効パラメータ行の次。**パターン 0 件のときは出ない**。`debug` はパターンを列挙しない view なので出さない）。' +
+				'`strict N 件 / relaxed フォールバック由来 M 件（relaxed_triple_x1.25×1, …）` の形で、' +
+				'relaxed 経路が拾い直した件数と段の内訳を申告する。**relaxed が 0 件でも ' +
+				'`全 N 件とも strict（relaxed フォールバック由来は 0 件）` と明示する**' +
+				'——行が無いことを「relaxed なし」と読ませないため（値が無いのか content に出していないのかを' +
+				'呼び出し側が区別できない状態が #189 / #191 の直した欠陥）。構造化データは data.patterns[]._fallback。\n' +
+				'- summary: ヘッダ ＋ 分類内訳 ＋ 直近30日/90日件数 ＋ 上記 2 行 ＋ 実効パラメータ行 ＋ 検出経路行 ＋ 検討パターン。' +
+				'個々のパターンの詳細は content に出ない（**どのパターンが relaxed 由来かも出ない**——届くのは検出経路行の件数だけ）。\n' +
+				'- detailed（既定）: 上位 5 件の詳細。6 件目以降は content に出ない。' +
+				'relaxed 由来のパターンは見出し行の末尾に `[relaxed_triple_x1.25]` が付く' +
+				'（`data.patterns[]._fallback` と同じ値。印が無ければ strict 経路で拾えた）。' +
+				'structuredContent に usage_example を**足す**。\n' +
+				'- full: 全件の詳細（double_top / double_bottom では山谷 3 点の pivot 行も出る）。' +
+				'relaxed 由来の印は detailed と同じ。本ツールの最重量。\n' +
+				'- debug（**階梯外**）: swings / candidates のみ。**検出パターンもスキャン範囲 / 検出パターン分布期間の 2 行も' +
+				'検出経路行も content に出ない**（実効パラメータ行だけは出る——診断に要るため）。' +
+				'出力を置換する view なので full の上位集合ではない。structuredContent に data.candidates を**足す**。\n' +
 				'  candidates は `patterns` で要求した種別（エイリアスは展開して照合）に**絞って**返す。' +
 				'`patterns` 未指定なら全種別。絞らないと cap（200件）を要求外の種別が食い潰し、' +
 				'要求した種別の棄却理由が押し出される。\n' +
@@ -192,10 +206,24 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 				'トリムは accepted を先に並べてから切るので**押し出しは棄却理由から始まる**。' +
 				'`candidates` に `accepted:false` が 1 件でも残っていれば accepted は全件収まっており、' +
 				'押し出されたのはすべて棄却理由（全 200 件が `accepted:true` のときだけ accepted も' +
-				'押し出されうる）。いずれにせよ**理由コードの内訳を数えるなら `candidatesOmitted` が' +
-				'0 であることを確認する**か、`patterns` で種別を絞って呼び直すこと。' +
+				'押し出されうる）。' +
 				'`swings` 側も同様に `swingsTotal` / `swingsOmitted` を返す（`swings` は先頭から残すので' +
 				'落ちるのは直近側）。\n' +
+				'  **棄却理由の集計は content 側で済ませてある（数え直さないこと。issue #191）。** ' +
+				'`【Candidates】` の見出しの直後・候補の列挙より前に 2 段の集計ブロックが出る:\n' +
+				'    `▼ 候補の内訳: 全 69 件 = accepted 7 件 + rejected 62 件（cap 省略なし＝全候補の内訳）`\n' +
+				'    `▼ 棄却理由の内訳（type 別 → reason 別。合計は上の rejected 62 件と一致する）`\n' +
+				'    `   - triple_top 40 件: peaks_not_equal 21 / valleys_missing 12 / …`\n' +
+				'  内訳は **type と reason の 2 軸**で数える（`triple_bottom:valleys_missing` と ' +
+				'`double_bottom:valleys_missing` を同じ行に潰さないため）。type 行の合計は上の rejected 件数と、' +
+				'行内の reason の合計はその type の件数と必ず一致する（多すぎる場合は残余に畳むが、畳んだ分も件数で残す）。\n' +
+				'  **cap で押し出しが起きているときは分母が「表示分」に変わる**: ' +
+				'`▼ 候補の内訳: 表示 200 件 = accepted 7 件 + rejected 193 件（全 289 件のうち 89 件は cap で省略されており、' +
+				'**この集計に入っていない**）` となり、内訳の見出しにも「**全 289 件の内訳ではない**」が付く。' +
+				'この状態の内訳から母集団（全 289 件）の傾向を語らないこと——censored な内訳からの誤帰属は' +
+				'実際に起きている（#152 → #167）。全体の内訳が要るなら `patterns` で種別を絞って呼び直す。' +
+				'`meta.debug.candidatesTotal` の申告が無い呼び出しでは分母が `受け取った N 件` になり、' +
+				'省略の有無は不明として扱う。\n' +
 				'  `accepted:false` は候補生成の時点での棄却（例: `head_not_higher`。`includeInvalid` では拾えない）で、' +
 				'`status` を持たない。`accepted:true` は**検出器が候補を組み立てた**ことを示すだけで、' +
 				'`data.patterns` に残ったことは意味しない（形成中パスの成功エントリは `globalDedup` より前に積むため、' +
@@ -348,7 +376,9 @@ export const DetectedPatternSchema = z.object({
 				'係数の数値比較に使わないこと。' +
 				'**confidence から provenance は推測できない。** relaxed のペナルティ係数が検出器ごとに違い' +
 				'（double 0.85 / triple 0.95 / H&S 0.95）、さらに `finalizeConf` の種別別係数と小数 2 桁丸めを通るので逆算も保証されない。' +
-				'**本フィールドは structuredContent にのみ載る**（content テキストには出さない）。',
+				'**content にも出る**（issue #191 B）: summary / detailed / full の `検出経路:` 行が件数と段の内訳を申告し、' +
+				'detailed / full ではパターン見出し行の末尾に `[relaxed_triple_x1.25]` として同じ値が付く' +
+				'（`view` の説明を参照）。',
 		),
 	/** 検出に使用した時間足（例: '1day', '4hour', '1week'） */
 	timeframe: CandleTypeEnum.optional(),
