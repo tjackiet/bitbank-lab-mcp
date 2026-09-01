@@ -186,7 +186,13 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 				'`全 N 件とも strict（relaxed フォールバック由来は 0 件）` と明示する**' +
 				'——行が無いことを「relaxed なし」と読ませないため（値が無いのか content に出していないのかを' +
 				'呼び出し側が区別できない状態が #189 / #191 の直した欠陥）。構造化データは data.patterns[]._fallback。\n' +
-				'- summary: ヘッダ ＋ 分類内訳 ＋ 直近30日/90日件数 ＋ 上記 2 行 ＋ 実効パラメータ行 ＋ 検出経路行 ＋ 検討パターン。' +
+				'**`検出内訳:` 行は 4 view すべて（`debug` を含む）に出る**（issue #200）。' +
+				'`検出 N件 → 重複統合 -M → [現在時点フィルタ -K →] ライフサイクル除外 -L → 出力 P件` の形で、' +
+				'globalDedup / requireCurrentInPattern（既定 false）/ ライフサイクル絞り込み（includeForming 等）の' +
+				'3 段でどれだけ減ったかを申告する。`現在時点フィルタ` は 0 のとき区間ごと省くが、' +
+				'`重複統合` / `ライフサイクル除外` は 0 でも省かない。構造化データは meta.reduction' +
+				'（`detected` = `dedupMerged + currentFiltered + lifecycleExcluded + output`）。\n' +
+				'- summary: ヘッダ ＋ 分類内訳 ＋ 直近30日/90日件数 ＋ 上記 2 行 ＋ 実効パラメータ行 ＋ 検出経路行 ＋ 検出内訳行 ＋ 検討パターン。' +
 				'個々のパターンの詳細は content に出ない（**どのパターンが relaxed 由来かも出ない**——届くのは検出経路行の件数だけ）。\n' +
 				'- detailed（既定）: 上位 5 件の詳細。6 件目以降は content に出ない。' +
 				'検出件数が 5 件以上のときは見出し `【検出パターン】` に `N / 全 M 件（K 件省略。全件は view=full）` の' +
@@ -199,7 +205,8 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 				'- full: 全件の詳細（double_top / double_bottom では山谷 3 点の pivot 行も出る）。' +
 				'relaxed 由来の印は detailed と同じ。本ツールの最重量。\n' +
 				'- debug（**階梯外**）: swings / candidates のみ。**検出パターンもスキャン範囲 / 検出パターン分布期間の 2 行も' +
-				'検出経路行も content に出ない**（実効パラメータ行だけは出る——診断に要るため）。' +
+				'検出経路行も content に出ない**（実効パラメータ行と検出内訳行だけは出る——' +
+				'`accepted N件 → data.patterns M件` のような疑問が最も生じやすい view なので診断に要る）。' +
 				'出力を置換する view なので full の上位集合ではない。structuredContent に data.candidates を**足す**。\n' +
 				'  candidates は `patterns` で要求した種別（エイリアスは展開して照合）に**絞って**返す。' +
 				'`patterns` 未指定なら全種別。絞らないと cap（200件）を要求外の種別が食い潰し、' +
@@ -275,7 +282,9 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 		.default('Asia/Tokyo')
 		.describe(
 			'表示日時のタイムゾーン（既定: Asia/Tokyo）。get_candles の tz と揃える。' +
-				'pattern の表示日時（期間 / 形成期間 / 文脈期間 / ブレイク確認 / 先行トレンド / pivot / スキャン範囲 / 検出パターン分布期間 等）に適用される。' +
+				'pattern の表示日時（期間 / 形成期間 / 文脈期間 / ブレイク確認 / 先行トレンド / pivot / スキャン範囲 / 検出パターン分布期間 / 構造図 等）に適用される。' +
+				'intraday（1day 未満の時間足）では日付だけでなく時刻（HH:mm）まで表示する' +
+				'（issue #200。24 本が同じ日付ラベルに潰れてどの足か特定できない問題への対応）。日足以上は暦日のみ。' +
 				'構造化データ（data.patterns[*].range.start/end 等）は後方互換のため UTC ISO 文字列のまま不変。' +
 				'空文字も Asia/Tokyo にフォールバック。',
 		),
@@ -354,6 +363,45 @@ const EffectiveParamsSchema = z
 			'各パラメータの `source` が `explicit` なら渡した値がそのまま効いており、' +
 			'`auto` なら時間軸オート表から解決している（`auto` は未指定と既定値の明示指定を畳んだ値）。' +
 			'content には「実効パラメータ:」行として全 view に出る。',
+	);
+
+/**
+ * `detect_patterns` の**縮小段の件数申告**（issue #200 要件 E）。
+ *
+ * 検出結果は `tools/detect_patterns.ts` 内で 3 段を経て縮小する:
+ * 1. `globalDedup`（同一 type / 同カテゴリで期間 70% 重複を統合）
+ * 2. `requireCurrentInPattern`（既定 false。古いパターンを除外）
+ * 3. ライフサイクル絞り込み（`includeForming` / `includeCompleted` / `includeInvalid`）
+ *
+ * どこで何件減ったかを申告しないと、「1hour の H&S で accepted 76 件 → data.patterns 2 件」
+ * のような縮小が「理由不明」に見える（減ること自体は正常な挙動）。件数は `tools/detect_patterns.ts`
+ * が単一箇所で数える（`resolveTrimCounts` と同じ理由——2 箇所で計算すると見出しと集計が食い違う）。
+ *
+ * `detected = dedupMerged + currentFiltered + lifecycleExcluded + output` が常に成り立つ
+ * （waterfall。`tests/detect_patterns_meta_schema_parity.test.ts` が実データで固定する）。
+ *
+ * **`optional()` だが `detect_patterns` の出力では常に埋まる**（`effective_params` と同じ理由。
+ * ハンドラを直接叩くテスト等の古い経路を通すため）。
+ */
+const ReductionSchema = z
+	.object({
+		detected: z.number().int().describe('globalDedup 前の検出件数（全検出器の合計、重複排除前）。'),
+		dedupMerged: z.number().int().describe('globalDedup で統合されて減った件数。'),
+		currentFiltered: z
+			.number()
+			.int()
+			.describe('requireCurrentInPattern（既定 false）で除外された件数。フィルタ無効時は 0。'),
+		lifecycleExcluded: z
+			.number()
+			.int()
+			.describe('includeForming / includeCompleted / includeInvalid のライフサイクル絞り込みで除外された件数。'),
+		output: z.number().int().describe('最終的に data.patterns へ残った件数（meta.count と同値）。'),
+	})
+	.optional()
+	.describe(
+		'検出結果が縮小する 3 段（globalDedup → requireCurrentInPattern → ライフサイクル絞り込み）の' +
+			'件数内訳。**入力フィルタの結果を変えるものではなく、既存の縮小を可視化するだけ**。' +
+			'content には「検出内訳:」行として summary / detailed / full / debug に出る。',
 	);
 
 /**
@@ -818,6 +866,7 @@ export const DetectPatternsOutputSchema = z.union([
 						),
 				})
 				.optional(),
+			reduction: ReductionSchema,
 			warning: z.string().optional(),
 			warnings: z.array(z.string()).optional(),
 		}),

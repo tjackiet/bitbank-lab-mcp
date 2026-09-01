@@ -7,9 +7,10 @@
  * - 構造化データ（PatternEntry.range / structureRange / precedingTrend / confirmation.date 等）は
  *   後方互換のため UTC ISO 文字列のまま不変。
  */
-import { formatDateInTz } from '../../lib/datetime.js';
+import { formatDateInTz, resolveTz, toIsoWithTz } from '../../lib/datetime.js';
 import { formatFixed, formatInt, formatPctFromRatio, formatRounded } from '../../lib/formatter.js';
 import { toStructured } from '../../lib/result.js';
+import { isIntradayType } from '../../tools/patterns/period.js';
 import type { Pivot } from '../../tools/patterns/swing.js';
 import type { PatternEntry } from '../../tools/patterns/types.js';
 import type { McpResponse } from '../tool-definition.js';
@@ -62,7 +63,23 @@ interface PatternMeta {
 		swingsOmitted?: number;
 	};
 	effective_params?: EffectiveParams;
+	reduction?: ReductionCounts;
 	[key: string]: unknown;
+}
+
+/**
+ * `meta.reduction`（issue #200 要件 E）。`src/schema/patterns.ts` の `ReductionSchema` と対。
+ * `PatternMeta.reduction` 自体が optional なのは、ハンドラを直接呼ぶテスト経路で欠けうるため
+ * （`effective_params` 等と同じ事情）。存在するときは 5 つとも `tools/detect_patterns.ts` が
+ * 1 箇所でまとめて設定するので、フィールド単位では optional にしない
+ * （一部だけ欠けた不完全な reduction を型で許容しない）。
+ */
+interface ReductionCounts {
+	detected: number;
+	dedupMerged: number;
+	currentFiltered: number;
+	lifecycleExcluded: number;
+	output: number;
 }
 
 /** 実効パラメータ 1 件（解決後の値 + 由来）。`src/schema/patterns.ts` の EffectiveParamsSchema と対。 */
@@ -248,6 +265,46 @@ export function buildDetectionRouteLine(pats: PatternEntry[]): string {
 		`${DETECTION_ROUTE_LABEL}: strict ${formatInt(pats.length - relaxed)} 件 / relaxed フォールバック由来 ${formatInt(relaxed)} 件` +
 		`（${breakdown}）※該当パターンは見出し行の末尾に同じ値が [ ] 付きで出る（summary はパターン行を出さないので件数のみ）`
 	);
+}
+
+/**
+ * `content` の「検出内訳:」行のラベル（行頭の識別子）。
+ * `tests/view-content-superset.test.ts` が定型要素の抽出に使うので、変えるなら向こうも直す。
+ */
+export const REDUCTION_LABEL = '検出内訳';
+
+/**
+ * 縮小段の件数申告行（issue #200 要件 E）。
+ *
+ * **なぜ content に出すか**: 1hour の H&S で accepted 76 件 → data.patterns 2 件のように、
+ * `detect_patterns` は複数の段（globalDedup / requireCurrentInPattern / ライフサイクル絞り込み）を
+ * 経て最終件数まで縮小するが、どこで何件減ったかは `content[0].text` のどこにも出ておらず、
+ * LLM は「74 件がどこで消えたか」を説明できなかった。減ること自体は正常な挙動で、
+ * **理由（内訳）が見えないことが不具合**。
+ *
+ * **件数はここで再集計しない。** `tools/detect_patterns.ts` が単一箇所で数えて
+ * `meta.reduction` に載せたものをそのまま文字列化するだけ——`resolveTrimCounts`
+ * （#180）と同じ理由で、2 箇所で計算すると見出しと集計が食い違う事故になる。
+ *
+ * **`currentFiltered`（requireCurrentInPattern。既定 false）は 0 のとき区間ごと省く。**
+ * `dedupMerged` / `lifecycleExcluded` と違い、このフィルタは無効時でも必ず評価されて
+ * 確定的に 0 を返す（`buildDetectionRouteLine` の relaxed 0 件のような「試したかどうか
+ * 分からない」曖昧さが無い）ため、省いても `検出 - 重複統合 - ライフサイクル除外 = 出力` の
+ * 対応は崩れない。一方 `dedupMerged` / `lifecycleExcluded` は 0 でも省かない——
+ * 本 issue の主眼（2 段でどれだけ減ったか）を呼び出しごとに揺らさず答えるため
+ * （`buildDetectionRouteLine` の「relaxed 0 件でも明示する」と同じ方針）。
+ *
+ * @param meta `meta.reduction` を持たない meta（ハンドラ直呼びのテスト等）では空文字を返す。
+ */
+export function buildReductionLine(meta: PatternMeta | undefined): string {
+	const r = meta?.reduction;
+	if (!r) return '';
+	const { detected, dedupMerged, currentFiltered, lifecycleExcluded, output } = r;
+	if (![detected, dedupMerged, currentFiltered, lifecycleExcluded, output].every(Number.isFinite)) return '';
+	const parts = [`検出 ${formatInt(detected)}件`, `重複統合 -${formatInt(dedupMerged)}`];
+	if (currentFiltered > 0) parts.push(`現在時点フィルタ -${formatInt(currentFiltered)}`);
+	parts.push(`ライフサイクル除外 -${formatInt(lifecycleExcluded)}`, `出力 ${formatInt(output)}件`);
+	return `${REDUCTION_LABEL}: ${parts.join(' → ')}`;
 }
 
 // ── debug view: candidate details ──
@@ -666,13 +723,17 @@ export function formatDebugView(
 	// positional 呼び出しがテストだけで 30 箇所超あり、先頭寄りに入れると全て黙ってずれるため。
 	// 4 formatter とも同じ規則（新しい表示行は末尾）で揃えてある。
 	effectiveParamsLine: string = '',
+	// 時刻表示（issue #200 要件 F-1）。同上の理由で末尾に足す。
+	type: string = '1day',
 ): McpResponse {
 	const swings: SwingDebug[] = Array.isArray(meta?.debug?.swings) ? meta.debug.swings : [];
 	const cands: CandidateDebug[] = Array.isArray(meta?.debug?.candidates) ? meta.debug.candidates : [];
+	const reductionLine = buildReductionLine(meta);
 
 	const swingLines = swings.map((s) => {
-		// swing は日付のみで十分（任意の足の高安特定が用途）。時刻表示が必要なら toIsoWithTz に変更する。
-		const dateStr = s.isoTime ? (formatDateInTz(Date.parse(s.isoTime), tz) ?? 'n/a') : 'n/a';
+		// intraday では時刻まで出す（issue #200）。1hour 等は 24 本が同じ日付ラベルに潰れて
+		// 任意の足の高安を特定できなかった。日足以上は暦日のみで足りる。
+		const dateStr = s.isoTime ? toDateOrTime(s.isoTime, tz, type) : 'n/a';
 		return `- ${s.kind} idx=${s.idx} price=${Math.round(Number(s.price)).toLocaleString('ja-JP')} (${dateStr})`;
 	});
 
@@ -731,6 +792,9 @@ export function formatDebugView(
 		hdr,
 		// 階梯外の view だが、診断が目的である以上ここでこそ実効値が要る（#184 決定事項 3）。
 		...(effectiveParamsLine ? [effectiveParamsLine] : []),
+		// 縮小段の内訳（issue #200 要件 E）。debug は「accepted 76 件 → data.patterns 2 件」の
+		// ような疑問が最も生じやすい view なので、実効パラメータ行と同じく階梯外でも出す。
+		...(reductionLine ? [reductionLine] : []),
 		'',
 		`【Swings】${swingsNote}`,
 		swingLines.length ? swingLines.join('\n') : 'なし',
@@ -789,13 +853,21 @@ function buildIdxToIso(meta: PatternMeta): Record<number, string> {
 }
 
 /**
- * UTC ISO 文字列を、指定 tz の暦日 YYYY-MM-DD として整形する。
+ * UTC ISO 文字列を、指定 tz の暦日 YYYY-MM-DD（日足以上）または分単位 YYYY-MM-DD HH:mm
+ * （intraday）として整形する（issue #200 要件 F-1）。
+ *
+ * 旧実装は時間足に関わらず暦日のみだったため、1hour 等では 24 本が同じ日付ラベルに潰れて
+ * どの足かを特定できなかった（`tools/patterns/period.ts` の `buildScanRangeLine` が
+ * スキャン範囲の 2 点で既に同じ判定をしており、こちらはパターン詳細側への横展開）。
  * 値が空 / parse 失敗時は 'n/a' を返す。
  */
-function toDateOnly(iso: string | undefined, tz: string): string {
+function toDateOrTime(iso: string | undefined, tz: string, type: string): string {
 	if (!iso) return 'n/a';
 	const ms = Date.parse(iso);
-	return formatDateInTz(ms, tz) ?? 'n/a';
+	if (!Number.isFinite(ms)) return 'n/a';
+	if (!isIntradayType(type)) return formatDateInTz(ms, tz) ?? 'n/a';
+	const withTz = toIsoWithTz(ms, resolveTz(tz)); // 'YYYY-MM-DDTHH:mm:ss'
+	return withTz ? `${withTz.slice(0, 10)} ${withTz.slice(11, 16)}` : 'n/a';
 }
 
 /**
@@ -803,7 +875,7 @@ function toDateOnly(iso: string | undefined, tz: string): string {
  * 文脈期間 / 形成期間 / ブレイク確認 / 先行トレンド の行を組み立てる。
  * いずれも未設定の場合は legacy「期間」行をフォールバックとして返す。
  */
-function buildPeriodLines(p: PatternEntry, legacyRange: string, tz: string): string[] {
+function buildPeriodLines(p: PatternEntry, legacyRange: string, tz: string, type: string): string[] {
 	const hasNew = !!(p?.structureRange || p?.confirmation || p?.precedingTrend);
 	if (!hasNew) return [`   - 期間: ${legacyRange}`];
 
@@ -818,12 +890,12 @@ function buildPeriodLines(p: PatternEntry, legacyRange: string, tz: string): str
 			: p.precedingTrend
 				? '（先行トレンド〜構成終了）'
 				: '';
-		lines.push(`   - 文脈期間: ${toDateOnly(ctxStart, tz)} ~ ${toDateOnly(ctxEnd, tz)}${suffix}`);
+		lines.push(`   - 文脈期間: ${toDateOrTime(ctxStart, tz, type)} ~ ${toDateOrTime(ctxEnd, tz, type)}${suffix}`);
 	}
 
 	if (p.structureRange) {
 		lines.push(
-			`   - 形成期間: ${toDateOnly(p.structureRange.start, tz)} ~ ${toDateOnly(p.structureRange.end, tz)}（構成点）`,
+			`   - 形成期間: ${toDateOrTime(p.structureRange.start, tz, type)} ~ ${toDateOrTime(p.structureRange.end, tz, type)}（構成点）`,
 		);
 	}
 
@@ -831,7 +903,7 @@ function buildPeriodLines(p: PatternEntry, legacyRange: string, tz: string): str
 		const priceStr = Number.isFinite(p.confirmation.price)
 			? `${Math.round(p.confirmation.price).toLocaleString('ja-JP')}円`
 			: 'n/a';
-		lines.push(`   - ブレイク確認: ${toDateOnly(p.confirmation.date, tz)}（${priceStr}）`);
+		lines.push(`   - ブレイク確認: ${toDateOrTime(p.confirmation.date, tz, type)}（${priceStr}）`);
 	} else if (p.confirmation?.type === 'not_confirmed') {
 		lines.push('   - ブレイク確認: なし（検出器ではネックライン突破を確認していません）');
 	}
@@ -846,7 +918,7 @@ function buildPeriodLines(p: PatternEntry, legacyRange: string, tz: string): str
 		const t = p.precedingTrend;
 		const sign = t.returnPct > 0 ? '+' : '';
 		lines.push(
-			`   - 先行トレンド: ${toDateOnly(t.start, tz)} ~ ${toDateOnly(t.end, tz)}（${dirJa[t.direction] || t.direction}、${sign}${t.returnPct}%、lookback=${t.lookbackBars}本）`,
+			`   - 先行トレンド: ${toDateOrTime(t.start, tz, type)} ~ ${toDateOrTime(t.end, tz, type)}（${dirJa[t.direction] || t.direction}、${sign}${t.returnPct}%、lookback=${t.lookbackBars}本）`,
 		);
 	}
 
@@ -878,12 +950,16 @@ export function formatPatternLine(
 	view: string,
 	meta: PatternMeta,
 	tz: string = 'Asia/Tokyo',
+	// 時刻表示（issue #200 要件 F-1）。**シグネチャ末尾に足してある**——`effectiveParamsLine` と
+	// 同じ理由（本 formatter は positional 呼び出しがテストだけで 30 箇所超あり、
+	// 先頭寄りに入れると全て黙ってずれるため）。
+	type: string = '1day',
 ): string {
 	const name = String(p?.type || 'unknown');
 	const conf = p?.confidence != null ? Number(p.confidence).toFixed(2) : 'n/a';
 	// range.start/end は UTC ISO のまま構造化データに残す。表示のみ tz で整形する。
-	const range = p?.range ? `${toDateOnly(p.range.start, tz)} ~ ${toDateOnly(p.range.end, tz)}` : 'n/a';
-	const periodLines = buildPeriodLines(p, range, tz);
+	const range = p?.range ? `${toDateOrTime(p.range.start, tz, type)} ~ ${toDateOrTime(p.range.end, tz, type)}` : 'n/a';
+	const periodLines = buildPeriodLines(p, range, tz, type);
 
 	// 低 confidence の警告ラベル。confidence < 0.6 は形状不十分、< 0.3 は除外候補レベル。
 	// 「重要」「強いシグナル」「参考材料」扱いを防ぐため明示的に警告する。
@@ -931,7 +1007,7 @@ export function formatPatternLine(
 				const pv = pivs[i];
 				if (!pv) continue;
 				const d = idxToIso[Number(pv.idx)] || '';
-				const date = toDateOnly(d || undefined, tz);
+				const date = toDateOrTime(d || undefined, tz, type);
 				pivotLines.push(`   - ${roleLabels[i]}: ${date} ${formatPivotPrices(pv)}`);
 			}
 		}
@@ -944,7 +1020,7 @@ export function formatPatternLine(
 			const bidx = Number(p.breakout.idx);
 			const bpx = Number(p.breakout.price);
 			const bIso = idxToIso[bidx];
-			const bdate = bIso ? toDateOnly(String(bIso), tz) : 'n/a';
+			const bdate = bIso ? toDateOrTime(String(bIso), tz, type) : 'n/a';
 			const bprice = Number.isFinite(bpx) ? Math.round(bpx).toLocaleString('ja-JP') : 'n/a';
 			breakoutLine = `   - ブレイク: ${bdate} (${bprice}円)`;
 		}
@@ -1040,8 +1116,8 @@ export function formatPatternLine(
 			// pole の検証情報（bull/bear flag/pennant 用の新規フィールド）
 			const pAny = p as PatternEntry & FlagFamilyViewFields;
 			if (pAny.poleStartDate && pAny.poleEndDate && pAny.poleChangePct != null) {
-				const psd = toDateOnly(pAny.poleStartDate, tz);
-				const ped = toDateOnly(pAny.poleEndDate, tz);
+				const psd = toDateOrTime(pAny.poleStartDate, tz, type);
+				const ped = toDateOrTime(pAny.poleEndDate, tz, type);
 				const sign = pAny.poleChangePct >= 0 ? '+' : '';
 				const pctStr = `${sign}${(pAny.poleChangePct * 100).toFixed(1)}%`;
 				const barsStr = pAny.poleBars ? `, ${pAny.poleBars}本` : '';
@@ -1155,7 +1231,11 @@ export function formatSummaryView(
 	const formingHint = includeForming ? '' : '\n※形成中は includeForming=true を指定してください。';
 	// 検出経路行（#191 B）。**3 view で同じ関数から組む**ので文言がずれない（= 上位集合テストが意味を持つ）。
 	const routeLine = buildDetectionRouteLine(pats);
-	const text = `${hdr}（${typeSummary || '分類なし'}、直近30日: ${in30}件、直近90日: ${in90}件）\n${periodBlock ? `${periodBlock}\n` : ''}${effectiveParamsLine ? `${effectiveParamsLine}\n` : ''}${routeLine ? `${routeLine}\n` : ''}検討パターン: ${patterns?.length ? patterns.join(', ') : '既定セット'}${formingHint}\n詳細は structuredContent.data.patterns を参照。`;
+	// 縮小段の内訳（issue #200 要件 E）。他 3 view と同じく `buildReductionLine` から組む
+	// （routeLine と同じパターンで、view 間の文言ずれを防ぐ）。本 formatter は `meta` を
+	// 引数に取らないため `res.meta` から読む（`res` は常に渡ってくる）。
+	const reductionLine = buildReductionLine(res?.meta as PatternMeta | undefined);
+	const text = `${hdr}（${typeSummary || '分類なし'}、直近30日: ${in30}件、直近90日: ${in90}件）\n${periodBlock ? `${periodBlock}\n` : ''}${effectiveParamsLine ? `${effectiveParamsLine}\n` : ''}${routeLine ? `${routeLine}\n` : ''}${reductionLine ? `${reductionLine}\n` : ''}検討パターン: ${patterns?.length ? patterns.join(', ') : '既定セット'}${formingHint}\n詳細は structuredContent.data.patterns を参照。`;
 	return { content: [{ type: 'text', text }], structuredContent: toStructured(res) };
 }
 
@@ -1170,15 +1250,18 @@ export function formatFullView(
 	res: PatternResult,
 	tz: string = 'Asia/Tokyo',
 	effectiveParamsLine: string = '',
+	// 時刻表示（issue #200 要件 F-1）。同上の理由で末尾に足す。
+	type: string = '1day',
 ): McpResponse {
-	const body = pats.map((p, i) => formatPatternLine(p, i, 'full', meta, tz)).join('\n\n');
+	const body = pats.map((p, i) => formatPatternLine(p, i, 'full', meta, tz, type)).join('\n\n');
 	const overlayNote = res?.data?.overlays
 		? '\n\nチャート連携: structuredContent.data.overlays を render_chart_svg.overlays に渡すと注釈/範囲を描画できます。'
 		: '';
 	const trustNote =
 		'\n\nパターン整合度について（形状一致度・対称性・期間から算出）:\n  0.8以上 = 理想的な形状（教科書的パターン）\n  0.7-0.8 = 標準的な形状（他指標と併用推奨）\n  0.6-0.7 = やや不明瞭（慎重に判断）\n  0.6未満 = 形状不十分\n  ※ status=forming は最終構成点が未確定のため、整合度に関わらず「参考材料」として扱う';
 	const routeLine = buildDetectionRouteLine(pats);
-	const text = `${hdr}（${typeSummary || '分類なし'}）\n${periodBlock ? `${periodBlock}\n` : ''}${effectiveParamsLine ? `${effectiveParamsLine}\n` : ''}${routeLine ? `${routeLine}\n` : ''}\n【検出パターン（全件）】\n${body}${overlayNote}${trustNote}`;
+	const reductionLine = buildReductionLine(meta);
+	const text = `${hdr}（${typeSummary || '分類なし'}）\n${periodBlock ? `${periodBlock}\n` : ''}${effectiveParamsLine ? `${effectiveParamsLine}\n` : ''}${routeLine ? `${routeLine}\n` : ''}${reductionLine ? `${reductionLine}\n` : ''}\n【検出パターン（全件）】\n${body}${overlayNote}${trustNote}`;
 	return { content: [{ type: 'text', text }], structuredContent: toStructured(res) };
 }
 
@@ -1201,9 +1284,11 @@ export function formatDetailedView(
 	res: PatternResult,
 	tz: string = 'Asia/Tokyo',
 	effectiveParamsLine: string = '',
+	// 時刻表示（issue #200 要件 F-1）。同上の理由で末尾に足す。
+	type: string = '1day',
 ): McpResponse {
 	const top = pats.slice(0, DETAILED_VIEW_PATTERN_LIMIT);
-	const body = top.length ? top.map((p, i) => formatPatternLine(p, i, 'detailed', meta, tz)).join('\n\n') : '';
+	const body = top.length ? top.map((p, i) => formatPatternLine(p, i, 'detailed', meta, tz, type)).join('\n\n') : '';
 	// cap トリムの申告（issue #196）。`pats` は cap 前の data.patterns そのもの（不変）なので、
 	// swings/candidates と違い meta 側の総数は要らず pats.length がそのまま total になる。
 	// **`pats.length < 上限` のときは行ごと出さない**（`slice` が構造的に全件を返すため省略が
@@ -1245,7 +1330,8 @@ export function formatDetailedView(
 		'\n\nパターン整合度について（形状一致度・対称性・期間から算出）:\n  0.8以上 = 理想的な形状（教科書的パターン）\n  0.7-0.8 = 標準的な形状（他指標と併用推奨）\n  0.6-0.7 = やや不明瞭（慎重に判断）\n  0.6未満 = 形状不十分\n  ※ status=forming は最終構成点が未確定のため、整合度に関わらず「参考材料」として扱う';
 	const usage = `\n\nusage_example:\n  step1: detect_patterns を実行\n  step2: structuredContent.data.overlays を取得\n  step3: render_chart_svg の overlays に渡す`;
 	const routeLine = buildDetectionRouteLine(pats);
-	const text = `${hdr}（${typeSummary || '分類なし'}）\n${periodBlock ? `${periodBlock}\n` : ''}${effectiveParamsLine ? `${effectiveParamsLine}\n` : ''}${routeLine ? `${routeLine}\n` : ''}\n${top.length ? `【検出パターン】${patternsNote}\n${body}` : ''}${none}${overlayNote}${trustNote}${usage}`;
+	const reductionLine = buildReductionLine(meta);
+	const text = `${hdr}（${typeSummary || '分類なし'}）\n${periodBlock ? `${periodBlock}\n` : ''}${effectiveParamsLine ? `${effectiveParamsLine}\n` : ''}${routeLine ? `${routeLine}\n` : ''}${reductionLine ? `${reductionLine}\n` : ''}\n${top.length ? `【検出パターン】${patternsNote}\n${body}` : ''}${none}${overlayNote}${trustNote}${usage}`;
 	return {
 		content: [{ type: 'text', text }],
 		structuredContent: {

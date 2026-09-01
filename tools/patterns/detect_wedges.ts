@@ -433,6 +433,7 @@ function buildRegressionEntry(
 	v: RegressionValidation,
 	useSmoothed: boolean,
 	debugCandidates: CandDebugEntry[],
+	tz: string | undefined,
 ): DeduplicablePattern | null {
 	const start = candles[startIdx]?.isoTime;
 	const theoreticalEnd = candles[endIdx]?.isoTime;
@@ -491,7 +492,7 @@ function buildRegressionEntry(
 	}));
 	let diagram: PatternDiagramData | undefined;
 	try {
-		diagram = generatePatternDiagram(wedgeType, pivForDiagram, { price: 0 }, { start, end });
+		diagram = generatePatternDiagram(wedgeType, pivForDiagram, { price: 0 }, { start, end }, { tz });
 	} catch {
 		/* noop */
 	}
@@ -775,6 +776,7 @@ function detectRegressionWedges(
 			v,
 			useSmoothed,
 			debugCandidates,
+			ctx.tz,
 		);
 		if (entry) patterns.push(entry);
 	}

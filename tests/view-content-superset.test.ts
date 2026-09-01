@@ -38,6 +38,7 @@ import {
 	CANDIDATE_BREAKDOWN_LABEL,
 	DETECTION_ROUTE_LABEL,
 	EFFECTIVE_PARAMS_LABEL,
+	REDUCTION_LABEL,
 	REJECTION_CROSS_TOTAL_LABEL,
 	REJECTION_SUMMARY_LABEL,
 } from '../src/handlers/detectPatternsViewsHandler.js';
@@ -116,6 +117,20 @@ function detectionRouteLines(text: string): string[] {
 }
 
 /**
+ * 縮小段の内訳行（`検出内訳: 検出 N 件 → 重複統合 -M → …`）。issue #200 要件 E の定型 1 行。
+ *
+ * `meta.reduction` は structuredContent 側にしかなく LLM からは見えない。`summary` は
+ * 個々のパターン行を出さない view なので、この集計行が summary における唯一の届け先になる。
+ * `detailed` / `full` だけに出すと規約 3（上位集合）違反になるため、全 view に出続けることを固定する。
+ */
+function reductionLines(text: string): string[] {
+	return text
+		.split('\n')
+		.map((line) => line.trim())
+		.filter((line) => line.startsWith(`${REDUCTION_LABEL}:`));
+}
+
+/**
  * `debug` の棄却理由の集計ブロック（issue #191 A / #193 B-1）の見出し 3 行。
  * **階梯外の view の要素なので `fixedElements` には入れない**（上位集合の対象ではない。§3-2 規約 3）。
  * 抽出関数だけ他の定型要素と同じ形で置き、`debug` 側の固定に使う。
@@ -145,6 +160,7 @@ function fixedElements(text: string): Set<string> {
 		...periodLines(text),
 		...effectiveParamsLines(text),
 		...detectionRouteLines(text),
+		...reductionLines(text),
 		...headerFields(text),
 	]);
 }
@@ -345,6 +361,10 @@ function patternsFixture(opts: { relaxed?: number; candidates?: DebugCandidate[]
 				headProminencePct: { value: 0.04, source: 'auto' as const },
 			},
 			visualization_hints: { preferred_style: 'line', highlight_patterns: [] },
+			// 縮小段の内訳行の元データ（issue #200 要件 E）。10 detected → -2 dedup → -1 current
+			// → -0 lifecycle → 7 output（PATTERN_COUNT と一致）。`currentFiltered` を 0 超にして
+			// 「0 のとき省く」分岐と両方を 1 フィクスチャで確認できるようにしてある。
+			reduction: { detected: 10, dedupMerged: 2, currentFiltered: 1, lifecycleExcluded: 0, output: PATTERN_COUNT },
 			warning: '取得層: 180本中20本が欠損しています',
 			warnings: ['計算層: スイング検出に必要なバー数が不足しています'],
 			// **cap トリムの申告 4 つは production（`tools/detect_patterns.ts`）が常に埋める。**
@@ -533,6 +553,7 @@ describe('階梯上の view の content は下位 view の上位集合（§3-2 �
 		expect(summaryElements).toContain('pair=BTC_JPY');
 		expect(periodLines(summary)).toHaveLength(2);
 		expect(effectiveParamsLines(summary)).toHaveLength(1);
+		expect(reductionLines(summary)).toHaveLength(1);
 
 		expectSupersetOf(fixedElements(detailed), fixedElements(summary), 'detailed ⊇ summary');
 		expectSupersetOf(fixedElements(full), fixedElements(detailed), 'full ⊇ detailed');
@@ -576,6 +597,47 @@ describe('階梯上の view の content は下位 view の上位集合（§3-2 �
 		expect(line).toContain('headProminencePct=0.04(auto)');
 		// sentinel 置換の明示（#184 決定事項 2）
 		expect(line).toContain('スキーマ既定値 7/5/0.04 の明示指定も auto');
+	});
+
+	it('detect_patterns: 検出内訳行が summary / detailed / full / debug すべてに同一文言で出る（issue #200 要件 E）', async () => {
+		// 実効パラメータ行と同じ理由で debug も含める。「accepted 76 件 → data.patterns 2 件」の
+		// ような疑問が最も生じやすいのが debug なので、階梯外でも出す設計判断（#184 決定事項 3 と同種）。
+		const byView = await collectContentByView(['summary', 'detailed', 'full', 'debug'] as const, (view) =>
+			runPatterns(view),
+		);
+
+		const lines = new Set<string>();
+		for (const view of ['summary', 'detailed', 'full', 'debug'] as const) {
+			const found = reductionLines(byView.get(view) as string);
+			expect(found, `view=${view} に検出内訳行が無い`).toHaveLength(1);
+			lines.add(found[0]);
+		}
+		// 4 view で文言が割れていない（各 formatter が同じ meta.reduction から組んでいることの回帰）
+		expect(lines.size, 'view ごとに検出内訳行の文言が違う').toBe(1);
+
+		const [line] = [...lines];
+		// フィクスチャ: 10 detected → -2 dedup → -1 current（>0 なので出る）→ -0 lifecycle（0 でも出る）→ 7 output
+		expect(line).toBe(
+			`${REDUCTION_LABEL}: 検出 10件 → 重複統合 -2 → 現在時点フィルタ -1 → ライフサイクル除外 -0 → 出力 7件`,
+		);
+	});
+
+	it('detect_patterns: 検出内訳行は currentFiltered=0 のとき区間を省く（issue #200）', async () => {
+		// `patternsFixture()` は常に ok:true 側を返す（関数定義参照）。union のまま spread すると
+		// TS が meta の形を fail 側と unify できず型エラーになるため、ok 側と分かるよう明示する。
+		const fx = patternsFixture() as Extract<PatternsFixture, { ok: true }>;
+		vi.mocked(detectPatterns).mockResolvedValue({
+			...fx,
+			meta: {
+				...fx.meta,
+				reduction: { detected: 9, dedupMerged: 2, currentFiltered: 0, lifecycleExcluded: 0, output: PATTERN_COUNT },
+			},
+		});
+		const res = await detectPatternsTool.handler({ pair: 'btc_jpy', type: '1day', limit: 180, view: 'summary' });
+		const text = (res as { content: Array<{ text: string }> }).content[0].text;
+		const [line] = reductionLines(text);
+		expect(line).toBe(`${REDUCTION_LABEL}: 検出 9件 → 重複統合 -2 → ライフサイクル除外 -0 → 出力 7件`);
+		expect(line).not.toContain('現在時点フィルタ');
 	});
 
 	it('detect_patterns: 検出経路行が summary / detailed / full すべてに同一文言で出る（#191 B）', async () => {

@@ -586,6 +586,7 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 					],
 					{ price: nlAvg },
 					{ start, end: rangeEnd },
+					{ tz: ctx.tz },
 				);
 				// ターゲットはブレイク日（または右肩日）時点のネックライン値を基準に算出する。
 				const targetAnchorIdx = breakoutIdx >= 0 ? breakoutIdx : p4.idx;
@@ -772,6 +773,7 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 					],
 					{ price: nlAvg },
 					{ start, end: rangeEnd },
+					{ tz: ctx.tz },
 				);
 				// ターゲットはブレイク日（または右肩日）時点のネックライン値を基準に算出する。
 				const targetAnchorIdx = breakoutIdx >= 0 ? breakoutIdx : p4.idx;
@@ -1010,6 +1012,7 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 				],
 				{ price: nlAvg },
 				{ start, end: rangeEnd },
+				{ tz: ctx.tz },
 			);
 			// nlY は水平ネックラインの y。breakout 時点でも同値なので nlY を直接使う。
 			// TODO: relaxed H&S も strict と同じく 谷1→谷2 の傾きつきネックラインを使うべき。
@@ -1208,6 +1211,7 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 				],
 				{ price: nlAvg },
 				{ start, end: rangeEnd },
+				{ tz: ctx.tz },
 			);
 			// nlY は水平ネックラインの y。breakout 時点でも同値なので nlY を直接使う。
 			// TODO: relaxed Inverse H&S も strict と同じく 山1→山2 の傾きつきネックラインを使うべき。

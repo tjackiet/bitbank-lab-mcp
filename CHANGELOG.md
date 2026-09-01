@@ -51,6 +51,51 @@
 | 36 | #191 | `view=debug` に**棄却理由の集計ブロック**を出し（LLM の手集計が実測で外れていた）、`_fallback` の provenance を `content` に届け（#189 の残り半分）、`view` description の並び順の食い違いを実装に合わせた | **変わらない**（表示層と description のみ） |
 | 37 | #193 | #191 / PR #192 が `view` description に持ち込んだ**実在しない理由コードの例 2 箇所**を実装に合わせ、集計ブロックに **reason 単独の横断合計行**を足した（横断合計で LLM が実測 2 回外していた） | **変わらない**（表示層と description のみ） |
 | 38 | #178 | double の「同水準」判定に**高さ相対の hard gate** を足した（項目 4）。閾値は triple と同じ `MAX_LEVEL_SPREAD_RATIO`（0.5）で、理由コードは新設（`peaks_diff_vs_height_excess` / `valleys_diff_vs_height_excess`） | **変わらない**（0 / 896。現行コーパスでは 1 件も発火しない**潜在ガード**） |
+| 39 | #200 | 縮小段（globalDedup / requireCurrentInPattern / ライフサイクル絞り込み）の件数内訳を `meta.reduction` と content 行に申告。パターン詳細の時刻表示（intraday）と構造図の UTC/JST 不一致を修正 | **変わらない**（表示層のみ。`structureDiagram.svg` / `.artifact.title` を除き完全一致を回帰テストで固定） |
+
+### Added / Fixed（縮小段の件数申告、パターン詳細の時刻表示、構造図の UTC/JST 不一致を修正。#200）
+
+1hour の H&S で accepted 76 件 → `data.patterns` 2 件のように、`detect_patterns` は
+globalDedup → requireCurrentInPattern → ライフサイクル絞り込みの 3 段を経て縮小するが、
+どこで何件減ったかは `content[0].text` のどこにも出ておらず、「74 件がどこで消えたか」を
+説明できなかった。減ること自体は正常な挙動で、**理由が見えないことが不具合**。
+
+#### Added: 縮小段の件数申告（要件 E）
+
+- `tools/detect_patterns.ts` が 3 段の直前直後で `.length` を数え、`meta.reduction`
+  （`detected` / `dedupMerged` / `currentFiltered` / `lifecycleExcluded` / `output`）に載せる。
+  `detected = dedupMerged + currentFiltered + lifecycleExcluded + output` が常に成り立つ
+  （`tests/detect_patterns_meta_schema_parity.test.ts` が実データで固定）。
+  出力スキーマ（`ReductionSchema`）に宣言済み——#155 / #160 / #184 / #189 と同じ
+  「meta に足したが宣言し忘れて strip される」クラスの事故を初回から回避する。
+- content には `検出内訳: 検出 N件 → 重複統合 -M → [現在時点フィルタ -K →] ライフサイクル除外 -L → 出力 P件`
+  を 1 行で出す（`buildReductionLine`）。summary / detailed / full / debug の全 view に同一文言で出る
+  （`実効パラメータ:` 行と同じ「常に出す」方針）。`currentFiltered` は 0 のとき区間を省くが
+  （requireCurrentInPattern は常に評価され確定的に 0 を返すため曖昧さが無い）、
+  `dedupMerged` / `lifecycleExcluded` は 0 でも省かない。
+
+#### Fixed: パターン詳細の時刻表示（要件 F-1）
+
+`detectPatternsViewsHandler.ts` の日付整形が時間足に関わらず暦日のみだったため、1hour 等の
+intraday では 24 本が同じ日付ラベルに潰れ、どの足のパターンかを特定できなかった。文脈期間 /
+形成期間 / ブレイク確認 / 先行トレンド / pivot 行 / pole 日付 / debug のスイング一覧を
+`toDateOrTime`（`isIntradayType` で判定）に統一し、intraday では時刻（`HH:mm`）まで表示する。
+日足以上は従来どおり暦日のみ。
+
+#### Fixed: 構造図の UTC/JST 不一致（要件 F-2）
+
+`lib/pattern-diagrams.ts` の `formatDateShort` が `.utc()` 固定だったため、JST 09:00 より前の
+ピボット（UTC で見ると前日）が構造図とスイング一覧で 1 日ずれていた（例: 1hour の 8/28 00:00 JST
+が構造図では 8/27）。`generatePatternDiagram` に `options.tz` を追加し、検出層
+（`DetectContext.tz`）経由で呼び出し側 tz（既定 Asia/Tokyo）を通す方式を採用した——`PatternDiagramData`
+のスキーマ形を変えずに直せるため（もう一案の「図側に生 ISO を持たせ、整形をハンドラ側に寄せる」は
+SVG 生成そのものを検出時から表示時に移す作り替えが要り、影響範囲が大きい）。
+**`artifact.identifier` は tz を通さない**（表示ではなく成果物 ID。触っていない）。
+
+`data.patterns` は本 PR で 1 件も変わらない（`tests/detect_patterns_data_patterns_regression.test.ts`
+が 1hour 実データ fixture で回帰を固定）。唯一の例外は `structureDiagram.svg` / `.artifact.title` の
+文字列——F-2 が修正する対象そのものなので、この 2 フィールドだけ比較から除外している
+（`.artifact.identifier` は除外せず完全一致を要求する）。
 
 ### Added（double の「同水準」判定に**高さ相対の hard gate** を足した。#178 項目 4）
 

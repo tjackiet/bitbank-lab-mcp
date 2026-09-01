@@ -455,6 +455,7 @@ function findRelaxedDoubleTop(
 	minDist: number,
 	pcand: Pcand,
 	sizeThresholds: SizeThresholds,
+	tz: string | undefined,
 ): PatternEntry | null {
 	const tolRelax = tolerancePct * factor;
 	const nearRelaxed = (x: number, y: number) => Math.abs(x - y) <= Math.max(x, y) * tolRelax;
@@ -593,6 +594,7 @@ function findRelaxedDoubleTop(
 			],
 			{ price: necklinePrice },
 			{ start, end },
+			{ tz },
 		);
 		const dtRelTarget = Math.round(necklinePrice - (dtRelAvgPeak - necklinePrice));
 		const dtRelReach = Number.isFinite(dtRelBp)
@@ -649,6 +651,7 @@ function findRelaxedDoubleBottom(
 	minDist: number,
 	pcand: Pcand,
 	sizeThresholds: SizeThresholds,
+	tz: string | undefined,
 ): PatternEntry | null {
 	const tolRelax = tolerancePct * factor;
 	const nearRelaxed = (x: number, y: number) => Math.abs(x - y) <= Math.max(x, y) * tolRelax;
@@ -788,6 +791,7 @@ function findRelaxedDoubleBottom(
 			],
 			{ price: necklinePrice },
 			{ start, end },
+			{ tz },
 		);
 		const dbRelTarget = Math.round(necklinePrice + (necklinePrice - dbRelAvgValley));
 		const dbRelReach = Number.isFinite(dbRelBp)
@@ -1469,6 +1473,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					],
 					{ price: necklinePrice },
 					{ start, end },
+					{ tz: ctx.tz },
 				);
 				const dtTarget = Math.round(necklinePrice - (dtAvgPeak - necklinePrice));
 				const dtReach = Number.isFinite(dtBp)
@@ -1650,6 +1655,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					],
 					{ price: necklinePrice },
 					{ start, end },
+					{ tz: ctx.tz },
 				);
 				const dbTarget = Math.round(necklinePrice + (necklinePrice - dbAvgValley));
 				const dbReach = Number.isFinite(dbBp)
@@ -1705,14 +1711,32 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 		// relaxed fallback for double top/bottom: single-stage factor 1.3
 		for (const f of [RELAXED_TOLERANCE_FACTOR]) {
 			if (!foundDoubleTop && (want.size === 0 || want.has('double_top'))) {
-				const result = findRelaxedDoubleTop(pivots, candles, tolerancePct, f, minDist, pcand, ctx.sizeThresholds);
+				const result = findRelaxedDoubleTop(
+					pivots,
+					candles,
+					tolerancePct,
+					f,
+					minDist,
+					pcand,
+					ctx.sizeThresholds,
+					ctx.tz,
+				);
 				if (result) {
 					push(patterns, result);
 					foundDoubleTop = true;
 				}
 			}
 			if (!foundDoubleBottom && (want.size === 0 || want.has('double_bottom'))) {
-				const result = findRelaxedDoubleBottom(pivots, candles, tolerancePct, f, minDist, pcand, ctx.sizeThresholds);
+				const result = findRelaxedDoubleBottom(
+					pivots,
+					candles,
+					tolerancePct,
+					f,
+					minDist,
+					pcand,
+					ctx.sizeThresholds,
+					ctx.tz,
+				);
 				if (result) {
 					push(patterns, result);
 					foundDoubleBottom = true;
