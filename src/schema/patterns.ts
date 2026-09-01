@@ -189,6 +189,10 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 				'- summary: ヘッダ ＋ 分類内訳 ＋ 直近30日/90日件数 ＋ 上記 2 行 ＋ 実効パラメータ行 ＋ 検出経路行 ＋ 検討パターン。' +
 				'個々のパターンの詳細は content に出ない（**どのパターンが relaxed 由来かも出ない**——届くのは検出経路行の件数だけ）。\n' +
 				'- detailed（既定）: 上位 5 件の詳細。6 件目以降は content に出ない。' +
+				'検出件数が 5 件以上のときは見出し `【検出パターン】` に `N / 全 M 件（K 件省略。全件は view=full）` の' +
+				'形で件数を申告する（並び順は confidence 単独ではなく status → confirmation → confidence → ' +
+				'直近性の優先順。ちょうど 5 件なら `省略なし` になる）。5 件未満では省略が構造的に起こり得ないため' +
+				'申告行自体を出さない。\n' +
 				'relaxed 由来のパターンは見出し行の末尾に `[relaxed_triple_x1.25]` が付く' +
 				'（`data.patterns[]._fallback` と同じ値。印が無ければ strict 経路で拾えた）。' +
 				'structuredContent に usage_example を**足す**。\n' +

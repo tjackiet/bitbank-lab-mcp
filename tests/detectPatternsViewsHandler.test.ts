@@ -1490,6 +1490,35 @@ describe('formatDetailedView', () => {
 		expect(matches.length).toBeLessThanOrEqual(5);
 	});
 
+	// ── cap トリムの申告（issue #196） ──
+	// `【検出パターン】` の見出しは 6 件以上のときだけ「N / 全 M 件（K 件省略。全件は view=full）」を、
+	// ちょうど 5 件のときは境界の曖昧さ（cap で切られたのか偶然 5 件なのか）を消すために
+	// 「省略なし」を出す。5 件未満は slice が構造的に全件を返す＝省略が起こり得ないので、
+	// 申告行自体を出さない（毎回「省略なし」を出すと明細の前が定型文で埋まる）。
+
+	it('6 件以上検出時は【検出パターン】見出しにトリム件数を申告する（issue #196）', () => {
+		const pats = Array.from({ length: 7 }, () => makePattern());
+		const res = formatDetailedView('H', pats, '', '', emptyMeta, undefined, emptyRes);
+		expect(res.content[0].text).toContain('【検出パターン】 5 / 全 7 件（2 件省略。全件は view=full）');
+	});
+
+	it('ちょうど 5 件検出時は【検出パターン】見出しで省略なしと明示する（issue #196）', () => {
+		const pats = Array.from({ length: 5 }, () => makePattern());
+		const res = formatDetailedView('H', pats, '', '', emptyMeta, undefined, emptyRes);
+		expect(res.content[0].text).toContain('【検出パターン】 5 / 全 5 件（省略なし）');
+	});
+
+	it('5 件未満検出時は【検出パターン】見出しにトリム申告を出さない（issue #196）', () => {
+		const pats = Array.from({ length: 3 }, () => makePattern());
+		const res = formatDetailedView('H', pats, '', '', emptyMeta, undefined, emptyRes);
+		const text = res.content[0].text;
+		// 見出し直後が改行＝申告テキストが挟まっていないことの直接確認。
+		// 「全 3 件」は検出経路行（`検出経路: 全 3 件とも strict…`）にも正当に出現するため
+		// 存在チェックには使えない——見出し行そのものを固定して確認する。
+		expect(text).toContain('【検出パターン】\n');
+		expect(text).not.toContain('省略');
+	});
+
 	it('usage_example を structuredContent に含む', () => {
 		const res = formatDetailedView('H', [], '', '', emptyMeta, undefined, emptyRes);
 		const sc = res.structuredContent as Record<string, unknown>;
