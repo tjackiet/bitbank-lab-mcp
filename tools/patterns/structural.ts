@@ -17,7 +17,16 @@ import type { Pivot } from './swing.js';
 
 // ---------- 定数 ----------
 
-/** double_top / double_bottom の2点（山-山、谷-谷）同水準の構造上限 */
+/**
+ * double_top / double_bottom の2点（山-山、谷-谷）同水準の構造上限。**価格水準基準。**
+ *
+ * `tolerancePct` の `near` と**同じ量**（{@link relDiff}）を見ているので、完成済み double の
+ * 同水準の実効上限は `min(tolerancePct, 本定数) × 価格水準`。これに加えて #178 項目 4 以降は
+ * **高さ相対の {@link validateLevelDiff}（`MAX_LEVEL_SPREAD_RATIO` × パターン高さ）が
+ * 独立した AND 条件**として掛かる。本定数は `spreadRatio` の実効上界
+ * （`min(tolerancePct, 本定数) / depthPct`）の分子でもあるので、触ると向こうの到達可能域も
+ * 動く（`validateLevelDiff` の docstring）。
+ */
 export const DOUBLE_LEVEL_MAX_PCT = 0.03;
 
 /**
@@ -585,6 +594,10 @@ export function levelSpreadMetrics(
  *
  * ## 0.5 の意味
  *
+ * **本定数は triple と double が共有する**（double は #178 項目 4。同じ量を同じ意味で測るので
+ * 検出器ごとに別の値を持たない。理由コードの語彙だけ {@link validateLevelDiff} が分けている）。
+ * 以下は導入時の triple の説明だが、`3 山` を `2 山` に読み替えれば double にもそのまま当たる。
+ *
  * `spreadRatio = 主構成点のばらつき / パターン高さ`。top なら
  * `高さ = 最高の山 - 最安の谷 = ばらつき + 最低の山からネックラインまでの押し` なので、
  * **`spreadRatio > 0.5` は「山の水準帯が、その山から谷までの押しより厚い」**を意味する。
@@ -632,9 +645,106 @@ export function validateLevelSpread(
 	metrics: LevelSpreadMetrics,
 	maxRatio: number = MAX_LEVEL_SPREAD_RATIO,
 ): PatternLevelSpreadRejectReason | null {
-	if (metrics.spreadRatio === null || !Number.isFinite(metrics.spreadRatio)) return null;
-	if (metrics.spreadRatio <= maxRatio) return null;
+	if (!exceedsLevelSpread(metrics, maxRatio)) return null;
 	return side === 'top' ? 'peak_spread_vs_height_excess' : 'valley_spread_vs_height_excess';
+}
+
+/**
+ * 主構成点**2 点**の水準の差がパターン高さに対して過大な場合の理由コード（issue #178 項目 4）。
+ *
+ * **{@link PatternLevelSpreadRejectReason} と語彙を分けてある。** 測っている量は同じ
+ * `spreadRatio` だが、`view=debug` の集計が **`▼ reason 横断合計`（type を畳んで reason だけで
+ * 合算する行。issue #193 / PR #194）** を出すため、流用すると **triple の「3 点のばらつき」と
+ * double の「2 点の差」が横断合計行で 1 つの数字に潰れる**。type 別行では区別できるが、
+ * 横断合計では区別できない。名前も `spread`（ばらつき）と `diff`（差）で対比させてある。
+ */
+export type PatternLevelDiffRejectReason =
+	/** top: 2 山（主構成点）の差が {@link MAX_LEVEL_SPREAD_RATIO} × パターン高さを超える */
+	| 'peaks_diff_vs_height_excess'
+	/** bottom: 2 谷（主構成点）の差が同上 */
+	| 'valleys_diff_vs_height_excess';
+
+/**
+ * 高さ相対の同水準検査の、**主構成点が 2 点の検出器（double）向け**（issue #178 項目 4）。
+ *
+ * 判定式は {@link validateLevelSpread} と同一（{@link exceedsLevelSpread}）で、返す理由コードの
+ * 語彙だけが違う。分けた理由は {@link PatternLevelDiffRejectReason} の docstring を参照。
+ *
+ * ## 閾値は triple と同じ {@link MAX_LEVEL_SPREAD_RATIO}（0.5）
+ *
+ * `spreadRatio` は無次元なので時間足別テーブルを持たない、という
+ * {@link MAX_LEVEL_SPREAD_RATIO} の理由が double にもそのまま当てはまる。
+ *
+ * ## `spreadRatio` に「1.0 が上界」のような構造上の天井は無い（PR #195 レビューでの訂正）
+ *
+ * 主構成点は全構成点に含まれるが、**分子と分母で読む価格フィールドが違う**——
+ * 分子は `Pivot.price`（終値）、分母は `Pivot.extremePrice`（高安）。したがって
+ * `spreadAbs <= heightAbs` は**成立しない**。低いほうの山に上ヒゲが付くと、高安で測る
+ * 高さを増やさずに終値の差だけが広がる（実測可能な例: 山1 が高値 100 で引け、山2 が
+ * 高値 100 / 終値 97、谷の安値 98.96 → `spreadRatio` 2.88。**この形は既存のゲートを
+ * すべて通過して `accepted` になっていた**）。
+ *
+ * 実効上界を決めるのは**サイズ検査の深さ条件**（`heightPct` 側ではない）。山 2 つの
+ * 極値が等しいとき `heightAbs >= depthPct × 価格水準` なので:
+ *
+ * ```
+ * spreadRatio <= min(tolerancePct, DOUBLE_LEVEL_MAX_PCT) / getSizeThresholdsForTf(tf).depthPct
+ * ```
+ *
+ * 既定パラメータなら `1hour` で 2.88 / `4hour` で 1.47 / `1day` 以上で 0.60。
+ * **`1day` でも 0.5 を超えるので、本ゲートは短い時間足専用の装置ではない。**
+ * 閾値 0.5 の根拠は幾何ではなく**実測の分布**（#178 項目 4。896 ケースで accept 側の
+ * `spreadRatio` は max 0.360 で 0.069 との間が空。サイズ検査通過の 191 構造で max 0.951）。
+ *
+ * ## 呼び出し位置
+ *
+ * {@link validateLevelSpread} と同じ——「既存の棄却検査をすべて通過した後」。double では
+ * 構造ゲート（`applyStructuralGate`）**と triple 再分類判定（`checkPostPivotInvalidation`）の
+ * 両方より後**に置く。前に置くと `reclassified_as_triple_top` を横取りする。
+ */
+export function validateLevelDiff(
+	side: ReversalSide,
+	metrics: LevelSpreadMetrics,
+	maxRatio: number = MAX_LEVEL_SPREAD_RATIO,
+): PatternLevelDiffRejectReason | null {
+	if (!exceedsLevelSpread(metrics, maxRatio)) return null;
+	return side === 'top' ? 'peaks_diff_vs_height_excess' : 'valleys_diff_vs_height_excess';
+}
+
+/**
+ * {@link validateLevelSpread} / {@link validateLevelDiff} が共有する判定。
+ *
+ * **`metrics.spreadRatio` が `null`（高さを測れない / 高さ 0）のときは `false` を返す**——
+ * 判定材料が無い候補を落とすと、この検査が意図していない理由で検出が減る。
+ */
+function exceedsLevelSpread(metrics: LevelSpreadMetrics, maxRatio: number): boolean {
+	if (metrics.spreadRatio === null || !Number.isFinite(metrics.spreadRatio)) return false;
+	return metrics.spreadRatio > maxRatio;
+}
+
+/**
+ * 同水準判定で落ちた候補の診断値（issue #138）。`view=debug` の `details` に載せる。
+ *
+ * `spreadPct` は価格水準基準（= `near` / `tolerancePct` が見ている量）、`heightPct` は
+ * パターン高さの価格水準比、`spreadRatio` が**両者の比**——「主構成点のばらつきがパターン自身の
+ * 高さの何割か」を読むための値で、issue #138 の実例では 0.68 だった。
+ *
+ * `levelTolerancePct` は **その経路の同水準判定が実際に使った許容誤差**（複数のゲートが同じ量を
+ * 見ている経路ではその `min`）。生のパラメータ値をエコーするフィールドではないので、名前を
+ * `tolerancePct` にしない。
+ *
+ * `allPoints` に構成点が欠けている（`null`）候補では高さを測れないので
+ * `heightAbs` / `heightPct` / `spreadRatio` は `null` になり、content にも出ない。
+ */
+export function levelSpreadDetailsFrom(m: LevelSpreadMetrics, levelTolerancePct: number): Record<string, unknown> {
+	return {
+		spreadAbs: m.spreadAbs,
+		spreadPct: m.spreadPct,
+		heightAbs: m.heightAbs,
+		heightPct: m.heightPct,
+		spreadRatio: m.spreadRatio,
+		levelTolerancePct,
+	};
 }
 
 /**

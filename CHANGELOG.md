@@ -50,6 +50,207 @@
 | 35 | #189 | relaxed / strict の provenance `patterns[]._fallback` が**出力スキーマ未宣言で毎回 strip され、一度もクライアントに届いていなかった**のを宣言した（#155 / #160 / #184 に続く 4 回目）。あわせて #184 の parity ガードが**フィクスチャ依存で取りこぼしていた**穴を塞いだ | **変わらない**（検出結果は不変。消えていたフィールドが `structuredContent` に残るだけ） |
 | 36 | #191 | `view=debug` に**棄却理由の集計ブロック**を出し（LLM の手集計が実測で外れていた）、`_fallback` の provenance を `content` に届け（#189 の残り半分）、`view` description の並び順の食い違いを実装に合わせた | **変わらない**（表示層と description のみ） |
 | 37 | #193 | #191 / PR #192 が `view` description に持ち込んだ**実在しない理由コードの例 2 箇所**を実装に合わせ、集計ブロックに **reason 単独の横断合計行**を足した（横断合計で LLM が実測 2 回外していた） | **変わらない**（表示層と description のみ） |
+| 38 | #178 | double の「同水準」判定に**高さ相対の hard gate** を足した（項目 4）。閾値は triple と同じ `MAX_LEVEL_SPREAD_RATIO`（0.5）で、理由コードは新設（`peaks_diff_vs_height_excess` / `valleys_diff_vs_height_excess`） | **変わらない**（0 / 896。現行コーパスでは 1 件も発火しない**潜在ガード**） |
+
+### Added（double の「同水準」判定に**高さ相対の hard gate** を足した。#178 項目 4）
+
+完成済み double の同水準判定は `near`（`tolerancePct`）と `isSameLevel`（`DOUBLE_LEVEL_MAX_PCT = 3%`）の
+2 段で、**どちらも分母が価格水準**——パターン自身の高さと無関係だった。#138 が triple で問題にした
+転倒（PR #176 で `MAX_LEVEL_SPREAD_RATIO` を入れて解消）が、**完成済みの主要検出器では double だけに
+残っていた**（H&S は #178 項目 3 で「不要」と決着済み）。
+
+**現行の回帰コーパスでは 1 件も発火しない。** 入れた理由は下の「実測」と「なぜ効果 0 でも入れるのか」を参照。
+
+#### double では指標が意味を持つ（H&S で入れなかった理由の裏返し）
+
+| | `mainPoints`（分子） | `allPoints`（分母の帯） | 分子の端点は分母の端点か |
+|---|---|---|---|
+| triple | 3 山 | 山-谷-山-谷-山 | **なる**（#138 / PR #176 で導入） |
+| **double** | **2 山** | **山-谷-山** | **なる**（本変更） |
+| H&S | 左肩 / 右肩 | 左肩-谷-頭-谷-右肩 | **ならない**（`hi` は頭・`lo` は谷）→ #178 項目 3 で不要と判定 |
+
+double は `heightAbs = max(山1, 山2) − 谷` なので、`spreadRatio` は「2 山の差がパターンの深さの
+何割か」という自己完結した命題になる。H&S の肩は `hi` にも `lo` にもならないので、同じ比が
+「肩の非対称 ÷ 頭の高さ」という独立な 2 量の比にしかならず、指標として意味が薄かった。
+
+#### 変更
+
+- `structural.ts` に `validateLevelDiff` / `PatternLevelDiffRejectReason` を追加。判定式は
+  `validateLevelSpread`（triple）と**完全に同一**で、共有述語 `exceedsLevelSpread` に畳んである。
+  違うのは返す理由コードの語彙だけ。**閾値も `MAX_LEVEL_SPREAD_RATIO`（0.5）をそのまま使い、
+  double 専用の定数は作らない。**
+- 完成済み 4 経路（strict top / strict bottom / relaxed top / relaxed bottom）に配線。
+  **relaxed にも掛けるのは必須**——strict が落とすと `detectDoubles` は relaxed fallback へ回り、
+  同じ 3 点を拾い直す。strict だけだと `_fallback: 'relaxed_double_x1.3'` が付いた同じパターンが
+  出てしまう（#176 の triple とまったく同じ構造）。
+- 棄却エントリの `details` に `spreadAbs` / `spreadPct` / `heightAbs` / `heightPct` / `spreadRatio` /
+  `levelTolerancePct` を載せる。`levelSpreadDetailsFrom` は `detect_triples.ts` の private 関数だったが、
+  同じ形を 2 か所に持たないよう `structural.ts` へ移して両者で共有する（triple 側の出力は不変）。
+- **`DOUBLE_LEVEL_MAX_PCT` / `MAX_LEVEL_SPREAD_RATIO` / サイズ検査の閾値は変更なし。**
+  形成中 double 2 経路（#178 項目 1 の領域）と、`checkPostPivotInvalidation` 内の
+  「同水準の 3 つ目のピボットを**探す**」述語には配線していない（後者は棄却理由を持たない探索述語で、
+  高さ相対を持ち込むと探索の意味が変わる）。
+
+#### 理由コードを triple から流用せず新設した理由
+
+`▼ reason 横断合計`（#193 / PR #194）が **type を畳んで reason だけで合算する**ため。流用すると
+triple の「3 山の**ばらつき**」と double の「2 山の**差**」が横断合計行で 1 つの数字に潰れる。
+type 別行では区別できるが、横断合計では区別できない。#194 を入れた直後にそれを壊すのは筋が悪い。
+
+命名も `spread`（ばらつき）と `diff`（差）で対比させてある:
+
+| 検出器 | top | bottom |
+|---|---|---|
+| triple（#138 / PR #176） | `peak_spread_vs_height_excess` | `valley_spread_vs_height_excess` |
+| **double（本変更）** | **`peaks_diff_vs_height_excess`** | **`valleys_diff_vs_height_excess`** |
+
+**`_relaxed` 接尾辞は付けない。** 本ファイルの `_relaxed` は**閾値が違う検査**に付いているもので
+（`peaks_not_equal` は `tolerancePct`、`peaks_not_equal_relaxed` は `tolerancePct × 1.3`）、
+本ゲートは strict / relaxed とも同じ 0.5。`reclassified_as_triple_top` / `prior_trend_mismatch:` が
+既に両経路で無印なのと同じ扱い。
+
+#### 呼び出し位置
+
+**既存の棄却検査をすべて通過した後**——`applyStructuralGate` と `checkPostPivotInvalidation` の
+**両方より後**。前に置くと `neckline_above_pre_decline_high` / `reclassified_as_triple_top` を持つ
+候補の `reason` を横取りする。最後に置けば「これまで `accepted` だった候補だけを落とす」ことが
+位置から保証される（`validatePatternSize` / `validateLevelSpread` の docstring と同じ根拠）。
+ガードは `tests/patterns/level-diff-double.test.ts` の「呼び出し位置」2 本。
+
+#### 閾値の決め方（896 ケースの実測）
+
+コーパスは **標準 800（合成 704 + 実データ A 96）+ 実データ B 96 = 896**（#187 と同じ組み方）。
+3 つの母集団で `spreadRatio` を測った:
+
+| 母集団 | 構造数 | p50 | max |
+|---|---|---|---|
+| サイズ検査を通過（3% 上限より前） | 191 | 0.203 | **0.951** |
+| `DOUBLE_LEVEL_MAX_PCT` の 3% も通過（＝本ゲートに到達しうる） | 117 | 0.132 | **0.613** |
+| **`accepted`（完成済み 4 経路の accept 点）** | **11** | **0.069** | **0.360** |
+
+**`accepted` 側の値は 5 種類しかなく、0.069 と 0.360 の間、および 0.360 より上が完全に空。**
+したがって **(0.36, 1.0] のどの閾値も同じ結果（＝何も落ちない）**になる。その中で 0.5 を選んだのは:
+
+1. **triple と同値であること。** 同じ量（`spreadAbs / heightAbs`）を同じ意味で測っているので、
+   検出器ごとに違う値を持つ理由が無い。新しい定数を作らない。
+2. **時間足別化に根拠が無いこと**（下記）。`MAX_LEVEL_SPREAD_RATIO` を**そのまま**使えるという形で
+   この結論が効く。
+
+`accepted` 側の唯一の外れ値（0.3599。実データ A の `4hour` / `1hour`、strict `double_top`、
+confidence 0.79、2026-06-15 → 06-24）は**誤検出と言えない**——2 山は高値どうしで 2.0% しか離れて
+おらず、間の押しは 7.2%。2 山目が低いだけの、教科書的な「切り下がるダブルトップ」で、#138 の実例
+（3 山が高さの 68% ばらついて単調に切り下がる）とは形が違う。**これを落とす閾値（0.36 未満）は採らない。**
+
+#### `spreadRatio` の実効上界（#178 項目 4 の前提の訂正。**PR #195 レビューで再訂正**）
+
+issue の起票時の見立ては、`DOUBLE_LEVEL_MAX_PCT`（固定 3%）を
+`getSizeThresholdsForTf().heightPct`（時間足別。`1hour` で 0.62%）で割って `spreadRatio` の上界を
+4.8 と見積もっていた。**割る相手が違う。** 律速するのは `heightPct` の下限ではなく
+**サイズ検査の深さ条件**で、山 2 つの極値が等しいとき `heightAbs >= depthPct × 価格水準` なので:
+
+```text
+spreadRatio <= min(tolerancePct, DOUBLE_LEVEL_MAX_PCT) / getSizeThresholdsForTf(tf).depthPct
+```
+
+| tf | `depthPct` | 到達可能な `spreadRatio` の上限 | 本ゲート（0.5）に届くか |
+|---|---|---|---|
+| `1hour` | 1.04% | **2.88** | 届く |
+| `4hour` | 2.04% | 1.47 | 届く |
+| `8hour` | 2.89% | 1.04 | 届く |
+| `12hour` | 3.54% | 0.85 | 届く |
+| `1day` 以上 | 5.00% | **0.60** | **届く** |
+
+**どの時間足でも 0.5 に届く。本ゲートは短い足専用の装置ではない。**
+
+##### 「主構成点が全構成点に含まれるので `spreadRatio <= 1`」は誤り（初版の記述の撤回）
+
+本エントリの初版と `validateLevelDiff` の docstring 初版には「分子の端点が分母の端点なので
+`spreadAbs <= heightAbs`、よって上界は時間足に依らず 1.0」「したがって `1day`（`depthPct` 5%）では
+本ゲートは幾何的に発火しえない（到達上限 0.467）」と書いていた。**どちらも成立しない。**
+
+**同じ構成点を使うだけで、読む価格フィールドが違う**——分子 `spreadAbs` は `Pivot.price`（終値）、
+分母 `heightAbs` は `Pivot.extremePrice`（高安）。**低いほうの山に上ヒゲが付くと、高安で測る高さを
+増やさずに終値の差だけが広がる。** サイズ検査は高安で測るので、この形を止めない。実証:
+
+| 系列 | 構成 | `spreadPct` | `heightPct` | `spreadRatio` |
+|---|---|---|---|---|
+| `1day` | 山1 終値=高値 100 / 谷 終値 95.5・安値 94.9 / 山2 **高値 100・終値 97.05** | 2.95% | 5.10% | **0.578** |
+| `1hour` | 山1 終値=高値 100 / 谷 安値 98.96 / 山2 **高値 100・終値 97** | 3.00% | 1.04% | **2.885** |
+
+`1hour` の例は上界 2.88 ちょうどで、**`spreadRatio` は 1.0 を超える**。しかもこの候補は
+**サイズ検査・同水準 2 段・ブレイクアウト・先行トレンド・構造ゲートをすべて通過して
+`accepted: true` になっていた**——本ゲートだけが止める形が実在する。2 例とも
+`tests/patterns/level-diff-double.test.ts` に回帰として固定した（上の式も
+`validatePatternSize` + `getSizeThresholdsForTf` の実装から機械的に再導出して突き合わせている）。
+
+実測で `spreadRatio > 1` が 0 件（サイズ検査通過 191 構造で max 0.951）だったのは
+**現行コーパスの性質であって上界ではない。**
+
+##### 時間足別テーブルを増やさない判断は変わらない
+
+根拠は `MAX_LEVEL_SPREAD_RATIO` の元々のもの——**比が無次元**で、ボラティリティの水準に依らない。
+上表のとおり実効上界は時間足で動くが、それは**サイズ検査の側が既に時間足別だから**であって、
+比の閾値を分ける理由にはならない。むしろ訂正後は `1day` を含む全時間足でゲートが効くので、
+時間足別化の動機は初版より弱い。
+
+#### なぜ効果 0 でも入れるのか
+
+**0.5〜0.61 帯の 14 構造が実データ B（実 1時間足 365 本）に実在する。** 合成の心配ではない。
+それらが `accepted` に届いていないのは高さ相対の判断ではなく:
+
+| 止めている検査 | 件数（14 中） |
+|---|---|
+| `no_breakout`（ネックライン未突破。1.5% バッファ） | 10 |
+| `neckline_above_pre_decline_high`（構造ゲート） | 4 |
+
+`no_breakout` は**原理的な防壁ではない**——凍結窓に突破が無かっただけで、突破した瞬間に
+完成済みとして通る。**14 構造は全件が実データ B（`1hour` / `4hour`）**で、実データ A（`1day`）の
+到達可能 max は 0.204、合成は 0.188。ただしこれは**このコーパスの観測**であって、`1day` で
+出ないことの説明ではない（上表のとおり `1day` の実効上界は 0.60）。
+
+さらに強い根拠が PR #195 のレビューで出た。上の `1hour` の反例（`spreadRatio` 2.885）は
+**サイズ検査・同水準 2 段・ブレイクアウト・先行トレンド・構造ゲートをすべて通過して
+`accepted: true` になる**——`no_breakout` にすら掛からず、**本ゲートだけが止める**。
+「他の検査が実質的に受け止めている」とは言えない形が存在する。
+
+誤りの検出可能性が非対称なのも根拠になる。**入れて誤って弾けば `view=debug` の理由コードと
+集計（#191 / #193）に必ず出る**が、**入れずに #138 の転倒が double で再発しても無音**。
+
+#### 実測（896 ケース。`main` = 5a578c9 と比較）
+
+| | before → after |
+|---|---|
+| `data.patterns` | **0 / 896**（全ケース JSON deep-equal。合計 1,388 件で不変） |
+| `debug.candidates` の配列の中身 | **0 / 896**（トリム後合計 63,248・`accepted` 5,160 とも不変） |
+| 新理由コードの出現 | **0 件**（現行コーパスでは 1 件も発火しない） |
+| `candidatesTotal` / `candidatesOmitted` / `swingsTotal` / `swingsOmitted` | **0 / 896** |
+
+**cap への影響はゼロ**——ゲートが 1 度も発火しないので候補が 1 件も増えず、
+`candidatesTotal` の合計（231,488）も押し出し（168,240）も一致する。標準 800 の
+`candidatesOmitted > 0` は **32 / 800** で不変、`candidatesTotal` は min 4 / p50 39 / max 289 で不変。
+
+**増える方向の変化は原理的に無い**（棄却を足すだけなので単調に減るか不変）。実測でも減少 0 / 増加 0。
+
+#### 現行コーパスの限界（記録）
+
+- **実データ B は完成済み double を 1 件も生まない**（96 ケース全滅）。実 1時間足は accept 点では
+  この問いに判断材料を供給していない。減る実例は
+  `tests/patterns/level-diff-double.test.ts` の専用 fixture が担保する（`1hour`、ヒゲ 0、
+  2 山の差 2.5 / パターン高さ 4 = `spreadRatio` 0.625。**ゲートを外すと confidence 0.67 で検出される**）。
+- **実データ B は `view=debug` が常に飽和している**（96/96 で `candidatesOmitted > 0`、
+  `candidatesTotal` は最大 2,914 に対し cap 200）。新しい理由コードが発火しても実データ B の
+  `debug.candidates` には現れない。検証は検出器内での採取が必要（#187 が triple で記録した制約と同じ）。
+
+#### やらなかったこと
+
+- **形成中 double 2 経路（`tryFormingDoubleTop` / `tryFormingDoubleBottom`）への配線。**
+  #178 項目 1 の領域。ただし**実データ B の形成中 double は `spreadRatio` 0.31〜0.34 に達しており**
+  （`status: 'expired'` で `data.patterns` に 8 行）、完成済みの accept 側 max（`1day` で 0.069）より
+  明確に高い。項目 1 に着手する際は完成済みと同じ測定をやる価値がある。
+- **`DOUBLE_LEVEL_MAX_PCT`（3%）の値の変更 / 時間足別化。** 上記のとおり根拠が無い。既存のゲートは
+  そのまま残し、AND 条件を 1 つ足しただけ。実効的な同水準の上限は
+  `min(tolerancePct × 価格水準, DOUBLE_LEVEL_MAX_PCT × 価格水準, MAX_LEVEL_SPREAD_RATIO × パターン高さ)`。
+- **H&S の肩への横展開。** #178 項目 3 で「指標が意味を持たない」として決着済み（上表）。
 
 ### Fixed / Added（集計ブロックの description の例を実在するコードに直し、reason 単独の横断合計行を足した。#193）
 

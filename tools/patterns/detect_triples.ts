@@ -8,7 +8,7 @@ import { patternBarRange } from './bar-thresholds.js';
 import { finalizeConf, periodScoreDays } from './helpers.js';
 import { clamp01, relDev } from './regression.js';
 import { applyReversalGate, buildStructureGate } from './reversal-gate.js';
-import { type LevelSpreadMetrics, levelSpreadMetrics, validateLevelSpread, validatePatternSize } from './structural.js';
+import { levelSpreadDetailsFrom, levelSpreadMetrics, validateLevelSpread, validatePatternSize } from './structural.js';
 import type { Pivot } from './swing.js';
 import type { CandleData, DeduplicablePattern, DetectContext, DetectResult } from './types.js';
 import { pushCand } from './types.js';
@@ -108,14 +108,11 @@ export function getTripleFormingBarParams(tf: string): { minBars: number; maxBar
 type Pcand = (arg: Parameters<typeof pushCand>[1]) => void;
 
 /**
- * 同水準判定で落ちた候補の診断値（issue #138）。
+ * 同水準判定で落ちた候補の診断値（issue #138）。計測値の整形は
+ * {@link levelSpreadDetailsFrom}（`structural.ts`。double と共有）。
  *
- * `spreadPct` は価格水準基準（= `near` / `tolerancePct` が見ている量）、`heightPct` は
- * パターン高さの価格水準比、`spreadRatio` が**両者の比**——「同水準の許容幅がパターン自身の
- * 高さの何倍か」を読むための値で、issue #138 の実例では 0.68 だった。
- *
- * `allPoints` にネックライン構成点が欠けている（`null`）候補では高さを測れないので
- * `heightAbs` / `heightPct` / `spreadRatio` は `null` になり、content にも出ない。
+ * 本ラッパは計測前の呼び出し側用で、triple の `levelTolerancePct` は strict では
+ * `tolerancePct`、relaxed では `tolerancePct × factor`。
  */
 function levelSpreadDetails(
 	mainPoints: ReadonlyArray<Pivot>,
@@ -123,24 +120,6 @@ function levelSpreadDetails(
 	levelTolerancePct: number,
 ): Record<string, unknown> {
 	return levelSpreadDetailsFrom(levelSpreadMetrics(mainPoints, allPoints), levelTolerancePct);
-}
-
-/**
- * {@link levelSpreadDetails} の、計測値を既に持っている呼び出し側用。
- *
- * `levelTolerancePct` は **その経路の同水準判定が実際に使った許容誤差**で、strict では
- * `tolerancePct`、relaxed では `tolerancePct × factor`。生のパラメータ値をエコーする
- * フィールドではないので、名前を `tolerancePct` にしない。
- */
-function levelSpreadDetailsFrom(m: LevelSpreadMetrics, levelTolerancePct: number): Record<string, unknown> {
-	return {
-		spreadAbs: m.spreadAbs,
-		spreadPct: m.spreadPct,
-		heightAbs: m.heightAbs,
-		heightPct: m.heightPct,
-		spreadRatio: m.spreadRatio,
-		levelTolerancePct,
-	};
 }
 
 // ── Helper: ネックラインブレイクインデックスを検出 ──
