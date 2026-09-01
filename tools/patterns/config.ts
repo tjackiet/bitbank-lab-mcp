@@ -162,7 +162,7 @@ export function getSizeThresholdsForTf(tf: string): SizeThresholds {
  * （`globalDedup` は同じ頭を持つ近傍の窓から 1 件を代表として残すため、最終出力の 5 点が
  * 起票者の読みと byte-for-byte 一致するとは限らない）。`1day` は 0 件変化（アンカー不変を確認）。
  *
- * **`4hour` 以下は実測していない。** 実データが 365 本（約 15.2 日）の 1hour fixture 1 本しか
+ * **`4hour` / `8hour` / `12hour` は実測していない。** 実データが 365 本（約 15.2 日）の 1hour fixture 1 本しか
  * なく、これを 4h/8h/12h に再集計しても 91/45/30 本では H&S を構成できる期間を張れない
  * （再集計データでの実測は 0 件）。{@link getSizeThresholdsForTf} と同じ ATR 比を機械的に
  * 適用した推定値であり、実測の裏付けは無い——この限界は {@link getSizeThresholdsForTf} 自身の

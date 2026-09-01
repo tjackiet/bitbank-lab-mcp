@@ -85,7 +85,7 @@ ATR 比カーブに乗せてあるが、`headProminencePct` だけがこのカ�
 新規関数 `getHeadProminenceForTf` は、#152 が既に測定 / 推定済みの ATR 比テーブル
 （`getSizeThresholdsForTf` の docstring）を、アンカー 0.04（`tolerancePct` の 1day 既定値。
 旧実装が事実上使っていた値）に掛けただけで、ATR を新たに測り直してはいない。
-#152 の 3 つの設計上の約束（実行時に ATR へ連動させない・1day をアンカーに据え置く・
+`#152` の 3 つの設計上の約束（実行時に ATR へ連動させない・1day をアンカーに据え置く・
 種別ごとに分けない）をそのまま踏襲する。
 
 | 時間足 | `headProminencePct`（新） | 旧値（`tolerancePct` の表を誤って流用） |
@@ -100,7 +100,7 @@ ATR 比カーブに乗せてあるが、`headProminencePct` だけがこのカ�
 | `12hour` | 0.0283 | 0.045 |
 | `1day` / `1week` / `1month` | 0.04（アンカー・据え置き） | 0.04 / 0.035 / 0.03 |
 
-`1hour` 以外の 1hour 未満（`4hour` 以下）は #152 の `getSizeThresholdsForTf` 同様、実測の
+`4hour` / `8hour` / `12hour` は `#152` の `getSizeThresholdsForTf` 同様、実測の
 裏付けが無い√t 推定値。365 本（約 15.2 日）の 1hour fixture しか実データが無く、これを
 4h/8h/12h に再集計しても 91/45/30 本では H&S を構成できる期間を張れない（実測 0 件）。
 
