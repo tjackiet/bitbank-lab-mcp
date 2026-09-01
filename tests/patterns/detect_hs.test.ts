@@ -1459,8 +1459,11 @@ describe('detectHeadAndShoulders', () => {
 				kind,
 				extremePrice: kind === 'H' ? price + 8000 : price - 8000,
 			}));
-			// 1hour の既定（patterns/config.ts）: tolerancePct=0.05 / headProminencePct=0.05（未指定時は
-			// tolerancePct と同じ時間軸オート値。issue #149）/ minBarsBetweenSwings=2
+			// 0.05 は両パラメータの相互独立性（issue #149）を確認するための固定リファレンス値であって、
+			// どちらの時間軸オート値でもない——tolerancePct の 1hour オートは 0.05 だが、
+			// headProminencePct の 1hour オートは 0.0083（`getHeadProminenceForTf`。issue #198。
+			// 両者は別表で、#198 以前は誤って同じ表を共有していた）。ここでは両方を明示的に渡して
+			// いるので auto 表の値には依存しない。minBarsBetweenSwings=2 は 1hour の時間軸オート。
 			const ctx = buildCtx({
 				candles,
 				pivots,

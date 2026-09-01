@@ -4,6 +4,7 @@ import {
 	getConvergenceFactorForTf,
 	getDefaultParamsForTf,
 	getDefaultToleranceForTf,
+	getHeadProminenceForTf,
 	getMinFitForTf,
 	getSizeThresholdsForTf,
 	getTriangleCoeffForTf,
@@ -179,10 +180,11 @@ describe('resolveParams', () => {
 
 	// ── headProminencePct（issue #149） ──
 
-	it('headProminencePct 未指定時は tolerancePct と同じ時間軸オート値を使う', () => {
+	it('headProminencePct 未指定時は getHeadProminenceForTf の時間軸オート値を使う（tolerancePct とは別表。issue #198）', () => {
 		const result = resolveParams('1hour', {});
-		expect(result.headProminencePct).toBe(0.05); // 1hour のデフォルト（tolAuto と同値）
-		expect(result.tolerancePct).toBe(0.05);
+		expect(result.headProminencePct).toBe(0.0083); // 1hour 専用テーブル（getHeadProminenceForTf）
+		expect(result.tolerancePct).toBe(0.05); // tolerancePct は別表のまま
+		expect(result.headProminencePct).not.toBe(result.tolerancePct); // #198 以前は誤って同値だった
 	});
 
 	it('カスタム headProminencePct はそのまま使用', () => {
@@ -224,10 +226,11 @@ describe('resolveParams', () => {
 	it('tolerancePct を明示的に変えても headProminencePct には影響しない', () => {
 		// issue #149: 旧実装は同じ値を共有していたため、tolerancePct を下げると
 		// 意図とは逆に頭の判定が厳しくなった。分離後は tolerancePct を動かしても
-		// headProminencePct（未指定なら時間軸オート値のまま）は変わらない。
+		// headProminencePct（未指定なら getHeadProminenceForTf の時間軸オート値のまま。issue #198）
+		// は変わらない。
 		const result = resolveParams('1hour', { tolerancePct: 0.01 });
 		expect(result.tolerancePct).toBe(0.01);
-		expect(result.headProminencePct).toBe(0.05); // 1hour のオート値のまま
+		expect(result.headProminencePct).toBe(0.0083); // 1hour のオート値のまま（getHeadProminenceForTf）
 	});
 });
 
@@ -269,7 +272,7 @@ describe('resolveParams: MCP 入力経路（DetectPatternsInputSchema.parse を�
 		expect(resolved.swingDepth).toBe(3);
 		expect(resolved.minBarsBetweenSwings).toBe(2);
 		expect(resolved.tolerancePct).toBe(0.05);
-		expect(resolved.headProminencePct).toBe(0.05);
+		expect(resolved.headProminencePct).toBe(0.0083); // getHeadProminenceForTf('1hour')。tolerancePct とは別表（issue #198）
 		expect(resolved.sources).toEqual({
 			swingDepth: 'auto',
 			minBarsBetweenSwings: 'auto',
@@ -375,5 +378,63 @@ describe('getSizeThresholdsForTf', () => {
 			// 0.0001 刻みに丸めた表なので、比の一致は丸め誤差の範囲で見る
 			expect(Math.abs(heightRatio - depthRatio)).toBeLessThan(0.02);
 		}
+	});
+});
+
+describe('getHeadProminenceForTf', () => {
+	const ANCHOR = 0.04; // tolerancePct の 1day 既定値と同値（旧実装が事実上使っていた値）
+
+	it('1day はアンカーで 0.04（tolerancePct の旧既定値と同値）', () => {
+		expect(getHeadProminenceForTf('1day')).toBe(ANCHOR);
+	});
+
+	it('1week / 1month / 未知の時間足も 1day と同値（緩める方向のみという前提。#152 と同じ扱い）', () => {
+		for (const tf of ['1week', '1month', 'unknown']) {
+			expect(getHeadProminenceForTf(tf)).toBe(ANCHOR);
+		}
+	});
+
+	it('1hour は実測 ATR 比（0.57% / 2.75% = 0.2073）から導いた値（issue #198 Phase 1 実測の起点）', () => {
+		expect(getHeadProminenceForTf('1hour')).toBe(0.0083);
+	});
+
+	it('4hour は √t 推定値（4hour の ATR は未実測。getSizeThresholdsForTf と同じ限界）', () => {
+		expect(getHeadProminenceForTf('4hour')).toBe(0.0163);
+	});
+
+	/**
+	 * **これが本テーブルの不変条件。** `headProminencePct` は大きいほど厳しい（`tolerancePct` とは
+	 * 向きが逆）ので、「下位時間足だけ緩める」は値を**小さく**することを意味する
+	 * （{@link getSizeThresholdsForTf} と数値の向きは同じだが、下限 vs 最小要求率で「緩い」の
+	 * 意味が違う点に注意）。1day を上回る値が 1 つでもあると #198 が直そうとした逆転
+	 * （1hour が 1day より厳しい）が形を変えて残る。
+	 */
+	it('短い時間足ほど緩く（値が小さく）、1day を上回る値は無い（単調性）', () => {
+		const order = ['1min', '5min', '15min', '30min', '1hour', '4hour', '8hour', '12hour', '1day'];
+		const values = order.map((tf) => getHeadProminenceForTf(tf));
+		for (let i = 1; i < values.length; i++) {
+			expect(values[i]).toBeGreaterThan(values[i - 1]);
+		}
+		for (const tf of [...order, '1week', '1month']) {
+			expect(getHeadProminenceForTf(tf)).toBeLessThanOrEqual(ANCHOR);
+		}
+	});
+
+	/**
+	 * 導出は {@link getSizeThresholdsForTf} と同じ ATR 比テーブルをアンカー 0.04 に掛けただけ
+	 * （新たに ATR を測り直していない）。比が一致していなければ、どちらかの表が個別に
+	 * 手直しされて #152 の ATR 比テーブルから乖離したということ。
+	 */
+	it('getSizeThresholdsForTf と同じ ATR 比から導出されている', () => {
+		for (const tf of ['1min', '5min', '15min', '30min', '1hour', '4hour', '8hour', '12hour']) {
+			const headRatio = getHeadProminenceForTf(tf) / ANCHOR;
+			const sizeRatio = getSizeThresholdsForTf(tf).heightPct / MIN_PATTERN_HEIGHT_PCT;
+			// 0.0001 刻みに丸めた表なので、比の一致は丸め誤差の範囲で見る
+			expect(Math.abs(headRatio - sizeRatio)).toBeLessThan(0.02);
+		}
+	});
+
+	it('tolerancePct の時間軸オート表とは独立している（1hour で値が異なる。issue #198）', () => {
+		expect(getHeadProminenceForTf('1hour')).not.toBe(getDefaultToleranceForTf('1hour'));
 	});
 });
