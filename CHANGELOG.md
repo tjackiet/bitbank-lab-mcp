@@ -148,7 +148,7 @@ issue の起票時の見立ては、`DOUBLE_LEVEL_MAX_PCT`（固定 3%）を
 4.8 と見積もっていた。**割る相手が違う。** 律速するのは `heightPct` の下限ではなく
 **サイズ検査の深さ条件**で、山 2 つの極値が等しいとき `heightAbs >= depthPct × 価格水準` なので:
 
-```
+```text
 spreadRatio <= min(tolerancePct, DOUBLE_LEVEL_MAX_PCT) / getSizeThresholdsForTf(tf).depthPct
 ```
 
