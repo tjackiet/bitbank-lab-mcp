@@ -278,6 +278,10 @@ describe('detect_patterns: meta に載せたキーが出力スキーマで strip
 		expect(before.has('effective_params.tolerancePct.value')).toBe(true);
 		expect(before.has('debug.candidates[].type')).toBe(true);
 		expect(before.has('debug.swings[].isoTime')).toBe(true);
+		// 縮小段の申告（issue #200 要件 E）。#155 / #160 / #184 / #189 と同じ「meta に足したが
+		// 宣言し忘れて strip される」クラスの事故を、宣言直後にここで固定する。
+		expect(before.has('reduction.detected')).toBe(true);
+		expect(before.has('reduction.output')).toBe(true);
 		expect(before.size).toBeGreaterThan(20);
 
 		expectNoStrippedKeys(metaOf(input), metaOf(output), 'detect_patterns meta');
@@ -341,12 +345,37 @@ describe('detect_patterns: meta に載せたキーが出力スキーマで strip
 		}
 	});
 
+	it('reduction の 5 フィールドが parse 後も残り、waterfall が実データで成立する（issue #200）', async () => {
+		const { output } = await runAndCapture();
+		const reduction = metaOf(output).reduction as Record<string, number>;
+		expect(reduction).toBeDefined();
+		expect(Object.keys(reduction).sort()).toEqual([
+			'currentFiltered',
+			'dedupMerged',
+			'detected',
+			'lifecycleExcluded',
+			'output',
+		]);
+		for (const [name, value] of Object.entries(reduction)) {
+			expect(typeof value, name).toBe('number');
+		}
+		// detected = dedupMerged + currentFiltered + lifecycleExcluded + output が常に成り立つ
+		// （tools/detect_patterns.ts の docstring が明示する不変条件。#180 の resolveTrimCounts と
+		// 同じ「見出しと集計が食い違わない」ことを、実際の検出パイプラインの出力で固定する）。
+		expect(reduction.dedupMerged + reduction.currentFiltered + reduction.lifecycleExcluded + reduction.output).toBe(
+			reduction.detected,
+		);
+		// meta.count（= 最終的な data.patterns 件数）と output は同値のはず。
+		expect(reduction.output).toBe(metaOf(output).count);
+	});
+
 	// **`ok()` を返す経路は 2 つある。** 通常経路と、足が 20 本未満のときの
 	// `'insufficient data'` 早期 return（`tools/detect_patterns.ts`）。後者に
 	// `effective_params` を足し忘れると「足が足りるときだけ実効値が出る」という
 	// candle 本数依存の申告漏れになり、content の実効パラメータ行も消える
 	// （#184 決定事項 1「常に出す」の穴）。CodeRabbit の指摘で見つけた。
-	it("'insufficient data' の早期 return でも effective_params を申告する", async () => {
+	// `reduction`（#200）も同じ穴を踏みうるので、この経路でも一緒に固定する。
+	it("'insufficient data' の早期 return でも effective_params / reduction を申告する", async () => {
 		// 20 本未満 → 検出器に入る前に早期 return する
 		const few = buildNoisyCandles().slice(0, 15);
 		const { input, output } = await runAndCapture({}, few);
@@ -363,6 +392,10 @@ describe('detect_patterns: meta に載せたキーが出力スキーマで strip
 		// 1day の時間軸オート値。通常経路と同じ解決結果になる。
 		expect(eff.swingDepth).toEqual({ value: 6, source: 'auto' });
 		expect(eff.tolerancePct).toEqual({ value: 0.04, source: 'auto' });
+		// 検出器を一切呼ばない経路なので全段 0（waterfall は 0 = 0 + 0 + 0 + 0 で自明に成立する）。
+		const reduction = metaOf(output).reduction as Record<string, number>;
+		expect(reduction, 'insufficient data 経路で reduction が落ちている').toBeDefined();
+		expect(reduction).toEqual({ detected: 0, dedupMerged: 0, currentFiltered: 0, lifecycleExcluded: 0, output: 0 });
 		// この経路でも宣言漏れが無いこと
 		expectNoStrippedKeys(metaOf(input), metaOf(output), 'detect_patterns meta（insufficient data）');
 	});

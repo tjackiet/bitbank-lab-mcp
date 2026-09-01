@@ -183,7 +183,15 @@ export default async function detectPatterns(
 					{ patterns: [] },
 					// パラメータは既に解決済みなので、足りなかった側の応答でも実効値は申告できる。
 					// 落とすと candle 本数によって meta の形が変わる（#184 決定事項 1「常に出す」の穴）。
-					{ pair, type, count: 0, ...(scan ? { scan } : {}), effective_params: effectiveParams },
+					// reduction も同じ理由で常に出す（#200）。この経路は検出器を一切呼ばないので全段 0。
+					{
+						pair,
+						type,
+						count: 0,
+						...(scan ? { scan } : {}),
+						effective_params: effectiveParams,
+						reduction: { detected: 0, dedupMerged: 0, currentFiltered: 0, lifecycleExcluded: 0, output: 0 },
+					},
 				),
 			);
 		}
@@ -220,6 +228,9 @@ export default async function detectPatterns(
 			near: (a: number, b: number) => nearFn(a, b, tolerancePct),
 			pct: pctFn,
 			lrWithR2: linearRegressionWithR2,
+			// 構造図（generatePatternDiagram）の日付整形専用（issue #200 要件 F-2）。
+			// 検出ロジックは tz を一切参照しない——表示専用の値をここで通すだけ。
+			tz,
 		};
 
 		// --- 各パターン検出を実行 ---
@@ -249,10 +260,21 @@ export default async function detectPatterns(
 		const triples = detectTriples(ctx);
 		patterns.push(...triples.patterns);
 
+		// --- 縮小段の件数申告（issue #200 要件 E） ---
+		// 検出結果は 3 段で縮小するが、旧実装はどの段で何件減ったかを一切申告していなかった
+		// （1hour の H&S で accepted 76 件 → data.patterns 2 件のような縮小が「理由不明」に見えた）。
+		// 件数は各段の直前直後で `.length` を取るだけで、フィルタの判定ロジック自体は変えない
+		// （本 PR は検出結果 data.patterns を 1 件も変えないことが受け入れ条件）。
+		// 集計は必ずここ 1 箇所で行う——2 箇所で別々に数えると見出しと実体が食い違う事故が
+		// 過去に起きている（#180 の `resolveTrimCounts` docstring）。
+		const reductionDetected = patterns.length;
+
 		// グローバル重複排除: 全パターン種別横断で期間が70%以上重複する同一タイプを統合
 		patterns = globalDedup(patterns);
+		const reductionDedupMerged = reductionDetected - patterns.length;
 
 		// Optional filter: only patterns whose end is within N days from now (current relevance)
+		const reductionBeforeCurrentFilter = patterns.length;
 		{
 			const requireCurrent = !!opts.requireCurrentInPattern;
 			const defaultDaysByType = (tf: string): number => {
@@ -274,6 +296,7 @@ export default async function detectPatterns(
 				patterns = patterns.filter((p) => inDays(p?.range?.end) <= maxAgeDays);
 			}
 		}
+		const reductionCurrentFiltered = reductionBeforeCurrentFilter - patterns.length;
 
 		// status を 3 つの排他バケットに分け、対応する include* が立っているものだけ残す。
 		//
@@ -291,7 +314,17 @@ export default async function detectPatterns(
 			const isCompleted = p.status === 'completed' || !p.status;
 			return (includeForming && isForming) || (includeCompleted && isCompleted) || (includeInvalid && isInvalid);
 		});
+		const reductionLifecycleExcluded = patterns.length - filteredPatterns.length;
 		patterns = filteredPatterns;
+		// detected = dedupMerged + currentFiltered + lifecycleExcluded + output（waterfall の不変条件）。
+		// tests/detect_patterns_meta_schema_parity.test.ts が実データでこの等式を固定する。
+		const reduction = {
+			detected: reductionDetected,
+			dedupMerged: reductionDedupMerged,
+			currentFiltered: reductionCurrentFiltered,
+			lifecycleExcluded: reductionLifecycleExcluded,
+			output: patterns.length,
+		};
 
 		// statistics と data.patterns の対象集合を一致させるため、フィルタ後の patterns に対して実行する。
 		const { statistics } = buildStatistics(patterns, candles);
@@ -585,6 +618,7 @@ export default async function detectPatterns(
 					highlight_patterns: patterns.map((p) => p.type).slice(0, 3),
 				},
 				debug: debugTrimmed,
+				reduction,
 				...(upstream.warning ? { warning: upstream.warning } : {}),
 				...(upstream.warnings && upstream.warnings.length > 0 ? { warnings: upstream.warnings } : {}),
 			},

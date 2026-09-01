@@ -165,6 +165,68 @@ describe('generatePatternDiagram', () => {
 		expect(result.artifact.title).toContain('ダブルボトム構造図');
 	});
 
+	// ── tz（issue #200 要件 F-2: UTC/JST 不一致の修正） ────
+
+	describe('tz オプション', () => {
+		// 2026-08-27T15:00:00Z は JST（+9h）で 2026-08-28T00:00:00+09:00 になる、
+		// ちょうど暦日が変わる境界のピボット。旧実装（.utc() 固定）はここを 8/27 と表示していた
+		// （issue #200 の具体例: 「1hour の 8/28 00:00 JST が構造図では 8/27」）。
+		const boundaryRange = { start: '2026-08-27T15:00:00Z', end: '2026-08-28T15:00:00Z' };
+		const boundaryPivots = [
+			pivot(0, 100, 'L', '2026-08-27T15:00:00Z'),
+			pivot(5, 130, 'H', '2026-08-28T02:00:00Z'),
+			pivot(10, 102, 'L', '2026-08-28T15:00:00Z'),
+		];
+
+		it('tz=Asia/Tokyo を渡すと JST 暦日で表示される（UTC 前日 → JST 当日）', () => {
+			const result = generatePatternDiagram('double_bottom', boundaryPivots, { price: 130 }, boundaryRange, {
+				tz: 'Asia/Tokyo',
+			});
+			// タイトル: start は JST で 8/28、end は JST で 8/29
+			expect(result.artifact.title).toContain('(8/28-8/29)');
+			expect(result.svg).toContain('谷: 8/28');
+			expect(result.svg).toContain('山: 8/28');
+		});
+
+		it('tz 未指定でも Asia/Tokyo 相当になる（呼び出し側 tz の既定値と同じ。#200）', () => {
+			const withDefault = generatePatternDiagram('double_bottom', boundaryPivots, { price: 130 }, boundaryRange);
+			const withExplicitJst = generatePatternDiagram('double_bottom', boundaryPivots, { price: 130 }, boundaryRange, {
+				tz: 'Asia/Tokyo',
+			});
+			expect(withDefault.svg).toBe(withExplicitJst.svg);
+			expect(withDefault.artifact.title).toBe(withExplicitJst.artifact.title);
+		});
+
+		it('tz=UTC を渡すと UTC 暦日のまま表示される（修正前の旧挙動と同じ結果を選べる）', () => {
+			const result = generatePatternDiagram('double_bottom', boundaryPivots, { price: 130 }, boundaryRange, {
+				tz: 'UTC',
+			});
+			expect(result.artifact.title).toContain('(8/27-8/28)');
+			expect(result.svg).toContain('谷: 8/27');
+		});
+
+		it('artifact.identifier は tz を通さない（表示ではなく成果物 ID。issue #200: 触らないこと）', () => {
+			const jst = generatePatternDiagram('double_bottom', boundaryPivots, { price: 130 }, boundaryRange, {
+				tz: 'Asia/Tokyo',
+			});
+			const utc = generatePatternDiagram('double_bottom', boundaryPivots, { price: 130 }, boundaryRange, {
+				tz: 'UTC',
+			});
+			// identifier は range.start の生 ISO を素通しした日付（8/27）のまま、tz で変わらない。
+			expect(jst.artifact.identifier).toBe('double_bottom-diagram-2026-08-27');
+			expect(utc.artifact.identifier).toBe('double_bottom-diagram-2026-08-27');
+		});
+
+		it('isForming と tz は独立して効く（tz を渡しても stroke-dasharray は変わらない）', () => {
+			const result = generatePatternDiagram('double_bottom', boundaryPivots, { price: 130 }, boundaryRange, {
+				isForming: true,
+				tz: 'Asia/Tokyo',
+			});
+			expect(result.svg).toContain('stroke-dasharray="5,5"');
+			expect(result.svg).toContain('谷: 8/28');
+		});
+	});
+
 	// ── 日付なしピボット ─────────────────────────────────
 
 	it('date が undefined のピボットでもクラッシュしない', () => {

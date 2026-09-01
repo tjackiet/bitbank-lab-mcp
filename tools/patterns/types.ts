@@ -168,6 +168,16 @@ export interface DetectContext {
 		r2: number;
 		valueAt: (x: number) => number;
 	};
+	/**
+	 * 構造図（`lib/pattern-diagrams.ts` の `generatePatternDiagram`）の日付表示に使う tz
+	 * （issue #200 要件 F-2）。検出ロジックはこの値を判定に使わない——表示専用。
+	 *
+	 * `optional`: `tools/detect_patterns.ts` は常に渡すが、`DetectContext` を手組みする
+	 * テスト（`tests/patterns/*.test.ts`）まで全部直すのはこの issue のスコープ外
+	 * （検出ロジック自体は 1 行も変えていない）。未指定時は `generatePatternDiagram` 側の
+	 * `resolveTz(undefined)` が `Asia/Tokyo` にフォールバックする。
+	 */
+	tz?: string;
 }
 
 /** 各パターン検出関数の戻り値 */

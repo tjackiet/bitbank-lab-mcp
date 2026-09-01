@@ -114,7 +114,7 @@ export const toolDef: ToolDefinition = {
 
 		if (view === 'debug') {
 			return prependWarningToResponse(
-				formatDebugView(hdr, meta, pats, res, effectiveTz, effectiveParamsLine),
+				formatDebugView(hdr, meta, pats, res, effectiveTz, effectiveParamsLine, String(type)),
 				contentWarnings,
 			);
 		}
@@ -142,13 +142,24 @@ export const toolDef: ToolDefinition = {
 		}
 		if ((view || 'detailed') === 'full') {
 			return prependWarningToResponse(
-				formatFullView(hdr, pats, periodBlock, typeSummary, meta, res, effectiveTz, effectiveParamsLine),
+				formatFullView(hdr, pats, periodBlock, typeSummary, meta, res, effectiveTz, effectiveParamsLine, String(type)),
 				contentWarnings,
 			);
 		}
 		// detailed (default)
 		return prependWarningToResponse(
-			formatDetailedView(hdr, pats, periodBlock, typeSummary, meta, patterns, res, effectiveTz, effectiveParamsLine),
+			formatDetailedView(
+				hdr,
+				pats,
+				periodBlock,
+				typeSummary,
+				meta,
+				patterns,
+				res,
+				effectiveTz,
+				effectiveParamsLine,
+				String(type),
+			),
 			contentWarnings,
 		);
 	},
