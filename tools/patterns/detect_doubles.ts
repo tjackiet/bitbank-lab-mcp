@@ -11,6 +11,8 @@ import {
 	DOUBLE_LEVEL_MAX_PCT,
 	detectTroughZoneReentry,
 	isSameLevel,
+	levelSpreadDetailsFrom,
+	levelSpreadMetrics,
 	type PatternSizeRejectReason,
 	type PriorTrendResult,
 	RETRACEMENT_MAX,
@@ -18,6 +20,7 @@ import {
 	type ReversalSide,
 	type ReversalStructureResult,
 	type SizeThresholds,
+	validateLevelDiff,
 	validatePriorTrend,
 	validateReversalStructure,
 } from './structural.js';
@@ -205,6 +208,70 @@ function validateBottomSize(
 	const peakHeightPct = (b.extremePrice - valleyAvg) / Math.max(1, valleyAvg);
 	if (peakHeightPct < thresholds.depthPct) return 'peak_too_shallow';
 	return null;
+}
+
+/**
+ * 高さ相対の同水準検査（issue #178 項目 4）。棄却したら debug candidate を積んで `true` を返す
+ * （呼び出し側は `continue`）。
+ *
+ * ## なぜ double にも要るのか
+ *
+ * 既存の同水準判定は `near`（`tolerancePct`）と `isSameLevel`（{@link DOUBLE_LEVEL_MAX_PCT}）の
+ * 2 段で、**どちらも分母が価格水準**——パターン自身の高さと無関係。#138 が triple で問題にした
+ * 転倒がそのまま当てはまる形で、`levelSpreadMetrics` の分子（2 山 / 2 谷）は分母（全構成点の
+ * 全振幅）の端点でもあるため、**比が「2 山の差がパターンの深さの何割か」という自己完結した
+ * 命題になる**（H&S の肩は分母の端点にならないので同じ指標が意味を持たず、#178 項目 3 は
+ * 「不要」で決着している）。
+ *
+ * ## 呼び出し位置
+ *
+ * **既存の棄却検査をすべて通過した後**——{@link applyStructuralGate} と
+ * {@link checkPostPivotInvalidation} の**両方より後**。前に置くと
+ * `neckline_above_pre_decline_high` / `reclassified_as_triple_top` を持つ候補の `reason` を
+ * 横取りする（`validatePatternSize` / `validateLevelSpread` の docstring と同じ理由）。
+ * 最後に置けば **「これまで accepted だった候補だけを落とす」ことが位置から保証される**。
+ *
+ * ## 理由コードに `_relaxed` 接尾辞を付けない
+ *
+ * 本ファイルの `_relaxed` 接尾辞は**閾値が違う検査**に付いている（`peaks_not_equal` は
+ * `tolerancePct`、`peaks_not_equal_relaxed` は `tolerancePct × RELAXED_TOLERANCE_FACTOR`）。
+ * 本ゲートは strict / relaxed とも同じ `MAX_LEVEL_SPREAD_RATIO` を使うので分けない
+ * ——`reclassified_as_triple_top` / `prior_trend_mismatch:` が既に両経路で無印なのと同じ。
+ *
+ * ## `levelTolerancePct`
+ *
+ * `details` に載せるのは**その経路の同水準判定の実効値**。double は `near`（または
+ * `nearRelaxed`）と `isSameLevel` が**同じ量（`relDiff`）を見ている**ので、実効値は
+ * 2 つの `min`。`HS_SHOULDER_MAX_PCT` の docstring が H&S の肩について書いているのと同じ構造で、
+ * 現行の既定パラメータでは全時間足で {@link DOUBLE_LEVEL_MAX_PCT} 側が律速する。
+ */
+function rejectByLevelDiff(
+	side: ReversalSide,
+	type: 'double_top' | 'double_bottom',
+	a: Pivot,
+	b: Pivot,
+	c: Pivot,
+	levelTolerancePct: number,
+	pcand: Pcand,
+): boolean {
+	const metrics = levelSpreadMetrics([a, c], [a, b, c]);
+	const reason = validateLevelDiff(side, metrics);
+	if (!reason) return false;
+	const outerRole = side === 'top' ? 'peak' : 'valley';
+	const midRole = side === 'top' ? 'valley' : 'peak';
+	pcand({
+		type,
+		accepted: false,
+		reason,
+		idxs: [a.idx, b.idx, c.idx],
+		pts: [
+			{ role: `${outerRole}1`, idx: a.idx, price: a.price },
+			{ role: midRole, idx: b.idx, price: b.price },
+			{ role: `${outerRole}2`, idx: c.idx, price: c.price },
+		],
+		details: levelSpreadDetailsFrom(metrics, levelTolerancePct),
+	});
+	return true;
 }
 
 /**
@@ -492,6 +559,7 @@ function findRelaxedDoubleTop(
 			});
 			continue;
 		}
+		if (rejectByLevelDiff('top', 'double_top', a, b, c, Math.min(tolRelax, DOUBLE_LEVEL_MAX_PCT), pcand)) continue;
 
 		const start = candles[a.idx].isoTime,
 			end = candles[breakoutIdx].isoTime;
@@ -685,6 +753,8 @@ function findRelaxedDoubleBottom(
 			});
 			continue;
 		}
+		if (rejectByLevelDiff('bottom', 'double_bottom', a, b, c, Math.min(tolRelax, DOUBLE_LEVEL_MAX_PCT), pcand))
+			continue;
 
 		const start = candles[a.idx].isoTime,
 			end = candles[breakoutIdx].isoTime;
@@ -1252,6 +1322,11 @@ function tryFormingDoubleBottom(ctx: DetectContext): PatternEntry | null {
 export function detectDoubles(ctx: DetectContext): DetectResult {
 	const { candles, pivots, tolerancePct, want, includeForming, near, minDist } = ctx;
 	const pcand: Pcand = (arg) => pushCand(ctx, arg);
+	// strict 経路の同水準判定の実効値。`near`（tolerancePct）と `isSameLevel`
+	// （DOUBLE_LEVEL_MAX_PCT）が同じ量を見るので min が実効閾値になる
+	// （`rejectByLevelDiff` の docstring）。`details.levelTolerancePct` に載せるだけで、
+	// 判定そのものには使わない。
+	const levelTolerancePct = Math.min(tolerancePct, DOUBLE_LEVEL_MAX_PCT);
 	const push = (arr: PatternEntry[], item: PatternEntry) => {
 		arr.push(item);
 	};
@@ -1362,6 +1437,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					});
 					continue;
 				}
+				if (rejectByLevelDiff('top', 'double_top', a, b, c, levelTolerancePct, pcand)) continue;
 				const start = candles[a.idx].isoTime;
 				const end = candles[breakoutIdx].isoTime;
 				if (!start || !end) continue;
@@ -1542,6 +1618,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					});
 					continue;
 				}
+				if (rejectByLevelDiff('bottom', 'double_bottom', a, b, c, levelTolerancePct, pcand)) continue;
 				const start = candles[a.idx].isoTime;
 				const end = candles[breakoutIdx].isoTime;
 				if (!start || !end) continue;
