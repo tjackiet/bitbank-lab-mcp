@@ -1184,6 +1184,13 @@ export function formatFullView(
 
 // ── detailed view (default) ──
 
+/**
+ * detailed view で明細を表示する上限件数（issue #196）。`top = pats.slice(0, …)` と
+ * トリム申告行の閾値判定の両方がこの値を参照する——同じ値を 2 箇所に書くと、片方だけ変えた
+ * ときに申告行の数字が実際の表示件数とずれる。
+ */
+const DETAILED_VIEW_PATTERN_LIMIT = 5;
+
 export function formatDetailedView(
 	hdr: string,
 	pats: PatternEntry[],
@@ -1195,8 +1202,18 @@ export function formatDetailedView(
 	tz: string = 'Asia/Tokyo',
 	effectiveParamsLine: string = '',
 ): McpResponse {
-	const top = pats.slice(0, 5);
+	const top = pats.slice(0, DETAILED_VIEW_PATTERN_LIMIT);
 	const body = top.length ? top.map((p, i) => formatPatternLine(p, i, 'detailed', meta, tz)).join('\n\n') : '';
+	// cap トリムの申告（issue #196）。`pats` は cap 前の data.patterns そのもの（不変）なので、
+	// swings/candidates と違い meta 側の総数は要らず pats.length がそのまま total になる。
+	// **`pats.length < 上限` のときは行ごと出さない**（`slice` が構造的に全件を返すため省略が
+	// 起こり得ず、`formatTrimNote` の「省略なし」を毎回出すと明細の前に定型文が積み重なるだけの
+	// ノイズになる）。ちょうど上限件数のときだけ「たまたま上限と同じ件数」と「cap で切られた」の
+	// 区別がつかない（swings/candidates の 200 件と同じ曖昧さ）ので、その境界でだけ明示する。
+	const patternsNote =
+		pats.length >= DETAILED_VIEW_PATTERN_LIMIT
+			? formatTrimNote(top.length, pats.length, undefined, '全件は view=full')
+			: '';
 
 	let none = '';
 	if (!top.length) {
@@ -1228,7 +1245,7 @@ export function formatDetailedView(
 		'\n\nパターン整合度について（形状一致度・対称性・期間から算出）:\n  0.8以上 = 理想的な形状（教科書的パターン）\n  0.7-0.8 = 標準的な形状（他指標と併用推奨）\n  0.6-0.7 = やや不明瞭（慎重に判断）\n  0.6未満 = 形状不十分\n  ※ status=forming は最終構成点が未確定のため、整合度に関わらず「参考材料」として扱う';
 	const usage = `\n\nusage_example:\n  step1: detect_patterns を実行\n  step2: structuredContent.data.overlays を取得\n  step3: render_chart_svg の overlays に渡す`;
 	const routeLine = buildDetectionRouteLine(pats);
-	const text = `${hdr}（${typeSummary || '分類なし'}）\n${periodBlock ? `${periodBlock}\n` : ''}${effectiveParamsLine ? `${effectiveParamsLine}\n` : ''}${routeLine ? `${routeLine}\n` : ''}\n${top.length ? `【検出パターン】\n${body}` : ''}${none}${overlayNote}${trustNote}${usage}`;
+	const text = `${hdr}（${typeSummary || '分類なし'}）\n${periodBlock ? `${periodBlock}\n` : ''}${effectiveParamsLine ? `${effectiveParamsLine}\n` : ''}${routeLine ? `${routeLine}\n` : ''}\n${top.length ? `【検出パターン】${patternsNote}\n${body}` : ''}${none}${overlayNote}${trustNote}${usage}`;
 	return {
 		content: [{ type: 'text', text }],
 		structuredContent: {
