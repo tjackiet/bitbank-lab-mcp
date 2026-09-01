@@ -12,7 +12,7 @@
    109 サンプル全件で検算し、誤差は浮動小数の丸めも含めて **0**（完全一致）。実測レンジは
    **0.9752〜0.9997**（中央値 0.9935）で、issue が立てた仮説「常に 0.98〜0.99」をやや上回る幅で
    支持する。時間足別に見ても 1hour で 0.9752〜0.9956、4hour で 0.9752〜0.9915 と、
-   どの時間足でも上位 1% 未満の帯に収まる。
+   どの時間足でも 0.975〜1.000（幅 2.5pt）という狭いレンジに収まる。
 2. **per は 100% が 0.6。** 1hour だけでなく、実測できた 1min〜4hour の全時間足（109/109 行）で
    `periodScoreDays` が 0.6 以外の値を一度も返さなかった。「1hour だけの現象」という仮説は誤りで、
    **4hour 以下すべてで固定**という、issue の仮説よりさらに強い結果になった。
@@ -21,14 +21,14 @@
    「高 confidence = 良い形」という読みが成立しない、という issue の裏付けをより強く支持する。
    3 変数のうち **tolMargin だけが実質的にレンジを持つ**（0.586〜0.996）。symmetry・per が
    ほぼ定数である以上、confidence の起伏はほぼ全て tolMargin 由来になっている。
-4. **（副次 C）spreadRatio の基準混在は実際に判定を動かす規模。** 実測できた重複排除後 26 件の
-   完成済み triple のうち **15 件（57.7%）** が、終値基準に統一すると
-   `MAX_LEVEL_SPREAD_RATIO = 0.5` の通過 / 棄却が反転する（現行は全件通過 → 統一後は過半数が棄却）。
-   影響は 1 件（issue 記載のケース）に留まらない。
-5. **（副次 A）完成済み triple の単調階段は珍しくない。** 重複排除後 26 件中 **5 件（19.2%）** が
+4. **（副次 C）spreadRatio の基準混在は実際に判定を動かす規模。** 実測できた重複排除後 26 件
+   （`status`: completed 4 / near_completion 22）の triple のうち **15 件（57.7%）** が、
+   終値基準に統一すると `MAX_LEVEL_SPREAD_RATIO = 0.5` の通過 / 棄却が反転する
+   （現行は全件通過 → 統一後は過半数が棄却）。影響は 1 件（issue 記載のケース）に留まらない。
+5. **（副次 A）単調階段は珍しくない。** 重複排除後 26 件中 **5 件（19.2%）** が
    3 点単調（切り上がり / 切り下がり）で、`totalStep` は **0.43%〜0.87%**。forming ゲートの
-   `FORMING_STAIR_STEP_LIMIT = 2%` を全件で大きく下回っており、仮に完成済み経路にも同じゲートを
-   入れた場合、単調階段だけでは弾けない候補が残る。
+   `FORMING_STAIR_STEP_LIMIT = 2%` を全件で大きく下回っており、仮に completed / near_completion
+   経路にも同じゲートを入れた場合、単調階段だけでは弾けない候補が残る。
 
 ## 計測条件
 
@@ -40,7 +40,8 @@
 | 実データ B | `tests/fixtures/btc_jpy_1hour_2026_08.ts`（BTC/JPY 1hour、365 本、2026-08-12T20:00Z〜2026-08-28T00:00Z） |
 | 実データ A | `tests/fixtures/btc_jpy_1day_2026.ts`（BTC/JPY 1day、90 本）。**参考として実行したが triple 候補は 0 件**（90 本では 3 点構成に届く swing が形成されない） |
 | パラメータ | `resolveParams(tf, {})` による時間軸オート値（`swingDepth` / `tolerancePct` / `minBarsBetweenSwings`）。`tf` ∈ 全 11 時間軸、各 `tf` で `swingDepth` ∈ {オート, 2, 3} の 2〜3 通りを追加スイープ |
-| view | `detectTriples()` を直接呼ぶため MCP の `view` パラメータは経由しない。`patterns` 配列は `view=full` 相当（対象種別の完成済み＋`near_completion`を全件、間引きなし） |
+| view | `detectTriples()` を直接呼ぶため MCP の `view` パラメータは経由しない。`patterns` 配列は `view=full` 相当（対象種別を全件、間引きなし） |
+| 対象 status | `status ∈ {completed, near_completion}`。**この 2 つを「完成済み」と一括りにしない**——内訳は生 109 行中 completed **20** / near_completion **89**、重複排除後 26 件中 completed **4** / near_completion **22**。両者は confidence 式が同一（`(tolMargin+symmetry+per)/3` ベース）なので合算して集計している |
 | 除外 | `status==='forming'`（3 点目が現在足の暫定値。confidence 式が `(1-currentDiff/tol)×0.8` で別式のため対象外） |
 
 ### 手法メモ
@@ -145,7 +146,7 @@ confidence のヒストグラム（生 109 行、0.01 刻み）:
 | 件数 | 2 | 3 | 2 | 4 | 7 | 5 | 8 | 19 | 19 | 13 | 17 | 10 |
 
 0.70 台前半（理論下限 0.70 付近）の実例は無く、分布は 0.86〜0.90 に集中している
-（この 4 バケットだけで 109 件中 58 件 = 53%）。
+（この 5 バケットだけで 109 件中 76 件 = 69.7%）。
 
 ## 計測 4（副次 C）: spreadRatio の基準混在
 
@@ -185,18 +186,19 @@ confidence のヒストグラム（生 109 行、0.01 刻み）:
 issue 記載のケース 1（終値統一で 85,371 / 164,006 ≈ 0.5205）は本計測の
 `2026-08-21T08:00Z〜2026-08-21T23:00Z`（現行 0.283 → 統一後 0.969）付近の構造に対応する
 （`swingDepth` の違いで絶対値は一致しないが、同じ時間帯・同方向の反転）。
-**影響は issue 記載の 1 件に留まらず、実測できた完成済み構造の過半数に及ぶ。**
+**影響は issue 記載の 1 件に留まらず、実測できた対象構造（completed + near_completion）の
+過半数に及ぶ。**
 
-## 計測 5（副次 A）: 完成済み経路の単調な階段
+## 計測 5（副次 A）: completed / near_completion 経路の単調な階段
 
-完成済み / near_completion の triple のうち、3 主要点が単調（`triple_top` なら
+completed / near_completion の triple のうち、3 主要点が単調（`triple_top` なら
 `peak1<peak2<peak3`、`triple_bottom` なら `valley1>valley2>valley3`）になっているものを数えた。
 
 | | 件数 |
 |---|---:|
-| 完成済み・重複排除後（全体） | 26 |
+| 対象（重複排除後。completed 4 + near_completion 22） | 26 |
 | うち単調 | **5（19.2%）** |
-| 完成済み・生 109 行（全体） | 109 |
+| 対象（生 109 行。completed 20 + near_completion 89） | 109 |
 | うち単調 | **22（20.2%）** |
 
 単調 5 件（重複排除後）の `totalStep`（forming 側と同じ定義: `\|last-first\|/first`）:
@@ -211,7 +213,7 @@ issue 記載のケース 1（終値統一で 85,371 / 164,006 ≈ 0.5205）は�
 
 `totalStep` は **全件 1% 未満**で、`FORMING_STAIR_STEP_LIMIT = 2%`（`detect_triples.ts:90`。
 形成中経路にのみ存在）を大きく下回る。issue 記載のケース 1（0.669%）と同オーダー。
-**完成済み経路に forming と同じ単調ゲートを入れても、この 5 件は 1 件も弾けない**
+**completed / near_completion 経路に forming と同じ単調ゲートを入れても、この 5 件は 1 件も弾けない**
 ——issue の「A は優先度が低い」という判断を支持する。
 
 ## Phase 2 への含意（本 Phase では決定しない）
@@ -219,7 +221,8 @@ issue 記載のケース 1（終値統一で 85,371 / 164,006 ≈ 0.5205）は�
 - symmetry・per はいずれも実測レンジがほぼゼロ幅で、confidence の弁別力にほとんど寄与していない。
   「symmetry を実際に対称性を測る量に置き換える」「per をバー数基準にする」は、
   この実測が示す非寄与の裏付けを踏まえた候補として妥当に見える。
-- spreadRatio の基準統一は、issue 記載の 1 件に限らず実測できた完成済み構造の過半数
-  （15/26）に影響する規模。統一の要否・方向（終値統一 / 高安統一 / 現状維持）は Phase 2 で判断する。
-- 完成済み経路への単調ゲート追加は、実測 5 件全てが `totalStep < 1%` で forming の 2% 上限にも
+- spreadRatio の基準統一は、issue 記載の 1 件に限らず実測できた対象構造（completed +
+  near_completion）の過半数（15/26）に影響する規模。統一の要否・方向
+  （終値統一 / 高安統一 / 現状維持）は Phase 2 で判断する。
+- completed / near_completion 経路への単調ゲート追加は、実測 5 件全てが `totalStep < 1%` で forming の 2% 上限にも
   掛からないため、**この実データの範囲では有効な追加ゲートにならない**。優先度は低いままでよい。
