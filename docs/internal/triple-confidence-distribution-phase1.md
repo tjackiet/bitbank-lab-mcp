@@ -1,0 +1,228 @@
+# トリプル confidence 分布計測（issue #199 Phase 1・実測ログ）
+
+`detect_triples.ts` の `confidence = (tolMargin + symmetry + per) / 3 × adj` について、
+[issue #199](https://github.com/tjackiet/bitbank-lab-mcp/issues/199) Phase 1 として
+「symmetry と per が実質定数になっているのでは」という疑いを実測で検証する。
+
+**本ログは計測のみで、コードは 1 行も変更していない。** 閾値・式の変更は Phase 2 以降で判断する。
+
+## 結論（断定）
+
+1. **symmetry は恒等式どおり、かつ実質的に定数。** `symmetry = 1 - relDev(min(3点), max(3点))` を
+   109 サンプル全件で検算し、誤差は浮動小数の丸めも含めて **0**（完全一致）。実測レンジは
+   **0.9752〜0.9997**（中央値 0.9935）で、issue が立てた仮説「常に 0.98〜0.99」をやや上回る幅で
+   支持する。時間足別に見ても 1hour で 0.9752〜0.9956、4hour で 0.9752〜0.9915 と、
+   どの時間足でも 0.975〜1.000（幅 2.5pt）という狭いレンジに収まる。
+2. **per は 100% が 0.6。** 1hour だけでなく、実測できた 1min〜4hour の全時間足（109/109 行）で
+   `periodScoreDays` が 0.6 以外の値を一度も返さなかった。「1hour だけの現象」という仮説は誤りで、
+   **4hour 以下すべてで固定**という、issue の仮説よりさらに強い結果になった。
+3. **通過 confidence の実測レンジは 0.76〜0.91**（中央値 0.88）。理論帯として issue が計算した
+   0.70〜0.91 の**内側、かつさらに狭い**。理論下限 0.70 に触れる実例は 1 件も無く、
+   「高 confidence = 良い形」という読みが成立しない、という issue の裏付けをより強く支持する。
+   3 変数のうち **tolMargin だけが実質的にレンジを持つ**（0.586〜0.996）。symmetry・per が
+   ほぼ定数である以上、confidence の起伏はほぼ全て tolMargin 由来になっている。
+4. **（副次 C）spreadRatio の基準混在は実際に判定を動かす規模。** 実測できた重複排除後 26 件
+   （`status`: completed 4 / near_completion 22）の triple のうち **15 件（57.7%）** が、
+   終値基準に統一すると `MAX_LEVEL_SPREAD_RATIO = 0.5` の通過 / 棄却が反転する
+   （現行は全件通過 → 統一後は過半数が棄却）。影響は 1 件（issue 記載のケース）に留まらない。
+5. **（副次 A）単調階段は珍しくない。** 重複排除後 26 件中 **5 件（19.2%）** が
+   3 点単調（切り上がり / 切り下がり）で、`totalStep` は **0.43%〜0.87%**。forming ゲートの
+   `FORMING_STAIR_STEP_LIMIT = 2%` を全件で大きく下回っており、仮に completed / near_completion
+   経路にも同じゲートを入れた場合、単調階段だけでは弾けない候補が残る。
+
+## 計測条件
+
+| 項目 | 値 |
+|---|---|
+| 計測日 | 2026-09-01 |
+| 対象コミット | `22fa77f`（#198 マージ後の `main`。`detect_triples.ts` 最終変更は `0cc7c15` #186） |
+| 対象関数 | `detectTriples()`（`tools/patterns/detect_triples.ts`）を直接呼び出し、`detect_patterns.ts` の `globalDedup` は経由しない（同一構造の重複を含む "生" のサンプルを見るため） |
+| 実データ B | `tests/fixtures/btc_jpy_1hour_2026_08.ts`（BTC/JPY 1hour、365 本、2026-08-12T20:00Z〜2026-08-28T00:00Z） |
+| 実データ A | `tests/fixtures/btc_jpy_1day_2026.ts`（BTC/JPY 1day、90 本）。**参考として実行したが triple 候補は 0 件**（90 本では 3 点構成に届く swing が形成されない） |
+| パラメータ | `resolveParams(tf, {})` による時間軸オート値（`swingDepth` / `tolerancePct` / `minBarsBetweenSwings`）。`tf` ∈ 全 11 時間軸、各 `tf` で `swingDepth` ∈ {オート, 2, 3} の 2〜3 通りを追加スイープ |
+| view | `detectTriples()` を直接呼ぶため MCP の `view` パラメータは経由しない。`patterns` 配列は `view=full` 相当（対象種別を全件、間引きなし） |
+| 対象 status | `status ∈ {completed, near_completion}`。**この 2 つを「完成済み」と一括りにしない**——内訳は生 109 行中 completed **20** / near_completion **89**、重複排除後 26 件中 completed **4** / near_completion **22**。両者は confidence 式が同一（`(tolMargin+symmetry+per)/3` ベース）なので合算して集計している |
+| 除外 | `status==='forming'`（3 点目が現在足の暫定値。confidence 式が `(1-currentDiff/tol)×0.8` で別式のため対象外） |
+
+### 手法メモ
+
+- `tolMargin` / `symmetry` / `per` は `detect_triples.ts` が使っているのと同じ関数
+  （`relDev` / `clamp01` / `periodScoreDays`、いずれも `tools/patterns/regression.ts` /
+  `helpers.ts` から無改変で import）を使い、出力パターンの `pivots[0..2].price` と
+  `structureRange.start/end` から再計算した。**再計算した confidence
+  （`finalizeConf(base, type)` または relaxed 経路は `finalizeConf(base×0.95, type)`）は
+  109 行全件で実際の `pattern.confidence` と完全一致**しており、計測ロジックが
+  本体の式を正しく再現していることを確認済み。
+- 1hour・オート `swingDepth`（=3）・strict 経路に絞ると、issue 本文の手検算 3 件のうち 2 件
+  （tolMargin 0.8427 / confidence 0.85、tolMargin 0.8089 / confidence 0.84）と全桁一致、
+  残り 1 件も tolMargin 0.913（issue 記載 0.9113、丸め差）・confidence 0.88 で一致した
+  （issue 側は type を `triple_top` と記載しているが、本計測では同条件の一致候補は
+  `triple_bottom`。手検算時の記載ゆれとみられる）。
+- 副次 C（spreadRatio）は `structural.ts` の `levelSpreadMetrics()` を無改変で import し、
+  2 回呼んでいる: 現行どおり `extremePrice`（高安）を渡す呼び出しと、同じ 5 点の `price`
+  （終値）を `extremePrice` として渡す呼び出し。ネックライン 2 点（v1/v2）は出力に
+  含まれないため、`detectTriples()` に渡したのと同じ `ctx.allValleys` / `ctx.allPeaks`
+  （`detect_patterns.ts` と同じ `detectSwingPoints` → `filterPeaks/filterValleys`）から
+  `findStrictTripleTop/Bottom` と同じ「区間内最安値 / 最高値」規則で再導出し、
+  導出した v1/v2 の平均が出力の `neckline[0].y` と一致すること（全行で一致）を検算に使った。
+- 件数は「時間軸パラメータ表のスイープ × swingDepth」で同一の実構造
+  （`aIdx/bIdx/cIdx` が同じ 3 点）を複数回検出するため、**生の行数（109）** と
+  **`(dataset, type, aIdx, bIdx, cIdx)` で重複排除した件数（26）** の両方を表に出す。
+  分布の形（レンジ・中央値）はどちらで見ても変わらない。
+
+## 計測 1: symmetry の恒等式確認と実測レンジ
+
+`symmetry = 1 − relDev(min(3点), max(3点))` を 109 行全件で検算した結果、**最大誤差 0**
+（浮動小数の丸めを含めて完全一致）。issue 本文の証明（`relDev(m,M)` が 3 pairwise relDev の
+最大値になる）が実データでもそのまま成立している。
+
+symmetry の実測レンジ（時間足別。生 109 行）:
+
+| 時間足 | n | min | p25 | median | p75 | max |
+|---|---:|---:|---:|---:|---:|---:|
+| 全体 | 109 | 0.9752 | 0.9913 | 0.9935 | 0.9969 | 0.9997 |
+| 1min | 30 | 0.9752 | 0.9931 | 0.9955 | 0.9982 | 0.9997 |
+| 5min | 24 | 0.9752 | 0.9915 | 0.9950 | 0.9977 | 0.9997 |
+| 15min | 20 | 0.9752 | 0.9915 | 0.9940 | 0.9962 | 0.9997 |
+| 30min | 19 | 0.9752 | 0.9914 | 0.9935 | 0.9955 | 0.9997 |
+| 1hour | 9 | 0.9752 | 0.9857 | 0.9913 | 0.9915 | 0.9956 |
+| 4hour | 7 | 0.9752 | 0.9810 | 0.9857 | 0.9889 | 0.9915 |
+
+8hour / 12hour / 1day / 1week / 1month のパラメータ表では、この実データ B から accept される
+triple 候補が 1 件も出なかった（`swingDepth` が大きくなり 3 点構成に届く swing ペアが
+形成されない）。
+
+## 計測 2: per の分布（時間足別）
+
+`periodScoreDays` の実測値は、**109 行全件・全時間足で 0.6 のみ**。
+
+| 時間足 | n | per=0.6 | per=0.8 | per=0.9 | per=0.7 |
+|---|---:|---:|---:|---:|---:|
+| 1min | 30 | 30 (100%) | 0 | 0 | 0 |
+| 5min | 24 | 24 (100%) | 0 | 0 | 0 |
+| 15min | 20 | 20 (100%) | 0 | 0 | 0 |
+| 30min | 19 | 19 (100%) | 0 | 0 | 0 |
+| 1hour | 9 | 9 (100%) | 0 | 0 | 0 |
+| 4hour | 7 | 7 (100%) | 0 | 0 | 0 |
+| **合計** | **109** | **109 (100%)** | 0 | 0 | 0 |
+
+`periodScoreDays` は `d<5日→0.6` / `d<15日→0.8` / `d<30日→0.9` / それ以外→0.7 という区分で、
+今回 accept された triple の構成期間（`structureRange.start〜end`）が**すべて 5 日未満**
+だったことを意味する。365 本・約 15 日分の 1hour データという窓の大きさそのものが、
+`tolerancePct` が通す 3 点構成の間隔を 5 日未満に収めてしまっている可能性が高い
+（Phase 2 で「バー数基準」に置き換える案の妥当性を支持する観測）。
+
+## 計測 3: 通過 triple の confidence 分布
+
+`tolMargin` / `symmetry` / `per` を **3 列に分けて**、重複排除後 26 件・生 109 行の両方を出す。
+
+### 重複排除後（26 件 = 別構造の triple のみ）
+
+| | n | min | p25 | median | p75 | max | mean |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **confidence** | 26 | 0.76 | 0.86 | 0.88 | 0.90 | 0.91 | 0.871 |
+| tolMargin | 26 | 0.586 | 0.865 | 0.925 | 0.969 | 0.995 | 0.895 |
+| symmetry | 26 | 0.975 | 0.992 | 0.995 | 0.998 | 1.000 | 0.993 |
+| per | 26 | 0.6 | 0.6 | 0.6 | 0.6 | 0.6 | 0.6 |
+
+### 生 109 行（パラメータスイープ込み。参考）
+
+| | n | min | p25 | median | p75 | max | mean |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **confidence** | 109 | 0.76 | 0.86 | 0.88 | 0.89 | 0.91 | 0.872 |
+| tolMargin | 109 | 0.586 | 0.859 | 0.921 | 0.951 | 0.996 | 0.897 |
+| symmetry | 109 | 0.975 | 0.991 | 0.993 | 0.997 | 1.000 | 0.993 |
+| per | 109 | 0.6 | 0.6 | 0.6 | 0.6 | 0.6 | 0.6 |
+
+`MIN_CONFIDENCE.{triple_top,triple_bottom} = 0.7`（`config.ts:11`）に対し、**実測の最小値は
+0.76** で理論下限 0.70 まで 6pt の余白がある。confidence のばらつき（IQR 0.86〜0.90、
+レンジ幅 0.15）はほぼ全て tolMargin のばらつき（IQR 0.865〜0.969、レンジ幅 0.38）に由来し、
+symmetry（レンジ幅 0.025）・per（レンジ幅 0）はほぼ寄与していない。
+
+confidence のヒストグラム（生 109 行、0.01 刻み）:
+
+| confidence | 0.76 | 0.79 | 0.80 | 0.82 | 0.84 | 0.85 | 0.86 | 0.87 | 0.88 | 0.89 | 0.90 | 0.91 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 件数 | 2 | 3 | 2 | 4 | 7 | 5 | 8 | 19 | 19 | 13 | 17 | 10 |
+
+0.70 台前半（理論下限 0.70 付近）の実例は無く、分布は 0.86〜0.90 に集中している
+（この 5 バケットだけで 109 件中 76 件 = 69.7%）。
+
+## 計測 4（副次 C）: spreadRatio の基準混在
+
+`levelSpreadMetrics()` の分子（`Pivot.price` = 終値）と分母（`Pivot.extremePrice` = 高安）の
+基準混在について、**現行**と**終値基準に統一した場合**の `spreadRatio` を比較した
+（v1/v2 の再導出とその検算方法は「手法メモ」参照）。
+
+| | n | min | p25 | median | p75 | max |
+|---|---:|---:|---:|---:|---:|---:|
+| spreadRatio（現行・高安基準の高さ） | 109 | 0.023 | 0.188 | 0.283 | 0.425 | 0.493 |
+| spreadRatio（終値基準に統一） | 109 | 0.048 | 0.398 | 0.536 | 0.729 | 0.969 |
+
+現行は accept された候補である以上、定義上全件が `≤ 0.5`（`MAX_LEVEL_SPREAD_RATIO`）。
+終値基準に統一すると中央値が 0.5 を超え、**重複排除後 26 件中 15 件（57.7%）で
+通過 / 棄却が反転する**（現行=通過 → 終値統一後=棄却。逆方向の反転は 0 件）。
+
+反転した 15 件（重複排除後。時刻は構成期間 `structureRange`）:
+
+| type | start | end | 現行 spreadRatio | 終値統一後 |
+|---|---|---|---:|---:|
+| triple_top | 2026-08-18T05:00Z | 2026-08-18T14:00Z | 0.485 | 0.894 |
+| triple_top | 2026-08-21T23:00Z | 2026-08-22T12:00Z | 0.455 | 0.729 |
+| triple_top | 2026-08-18T00:00Z | 2026-08-18T14:00Z | 0.449 | 0.635 |
+| triple_top | 2026-08-21T08:00Z | 2026-08-21T23:00Z | 0.283 | 0.969 |
+| triple_top | 2026-08-21T08:00Z | 2026-08-22T16:00Z | 0.270 | 0.834 |
+| triple_bottom | 2026-08-13T11:00Z | 2026-08-14T00:00Z | 0.360 | 0.559 |
+| triple_bottom | 2026-08-15T12:00Z | 2026-08-16T10:00Z | 0.493 | 0.660 |
+| triple_bottom | 2026-08-16T01:00Z | 2026-08-17T00:00Z | 0.411 | 0.649 |
+| triple_bottom | 2026-08-17T22:00Z | 2026-08-18T10:00Z | 0.382 | 0.655 |
+| triple_bottom | 2026-08-21T09:00Z | 2026-08-22T00:00Z | 0.102 | 0.536 |
+| triple_bottom | 2026-08-25T21:00Z | 2026-08-26T05:00Z | 0.320 | 0.895 |
+| triple_bottom | 2026-08-13T11:00Z | 2026-08-14T08:00Z | 0.425 | 0.613 |
+| triple_bottom | 2026-08-14T14:00Z | 2026-08-15T09:00Z | 0.493 | 0.739 |
+| triple_bottom | 2026-08-15T09:00Z | 2026-08-16T10:00Z | 0.427 | 0.660 |
+| triple_bottom | 2026-08-22T22:00Z | 2026-08-24T04:00Z | 0.364 | 0.512 |
+
+issue 記載のケース 1（終値統一で 85,371 / 164,006 ≈ 0.5205）は本計測の
+`2026-08-21T08:00Z〜2026-08-21T23:00Z`（現行 0.283 → 統一後 0.969）付近の構造に対応する
+（`swingDepth` の違いで絶対値は一致しないが、同じ時間帯・同方向の反転）。
+**影響は issue 記載の 1 件に留まらず、実測できた対象構造（completed + near_completion）の
+過半数に及ぶ。**
+
+## 計測 5（副次 A）: completed / near_completion 経路の単調な階段
+
+completed / near_completion の triple のうち、3 主要点が単調（`triple_top` なら
+`peak1<peak2<peak3`、`triple_bottom` なら `valley1>valley2>valley3`）になっているものを数えた。
+
+| | 件数 |
+|---|---:|
+| 対象（重複排除後。completed 4 + near_completion 22） | 26 |
+| うち単調 | **5（19.2%）** |
+| 対象（生 109 行。completed 20 + near_completion 89） | 109 |
+| うち単調 | **22（20.2%）** |
+
+単調 5 件（重複排除後）の `totalStep`（forming 側と同じ定義: `\|last-first\|/first`）:
+
+| type | 方向 | totalStep | start | end | confidence |
+|---|---|---:|---|---|---:|
+| triple_top | 切り上がり | 0.660% | 2026-08-18T05:00Z | 2026-08-18T14:00Z | 0.87 |
+| triple_bottom | 切り下がり | 0.454% | 2026-08-12T23:00Z | 2026-08-13T16:00Z | 0.88 |
+| triple_bottom | 切り下がり | 0.430% | 2026-08-16T01:00Z | 2026-08-17T00:00Z | 0.88 |
+| triple_bottom | 切り下がり | 0.874% | 2026-08-13T11:00Z | 2026-08-14T08:00Z | 0.86 |
+| triple_bottom | 切り下がり | 0.652% | 2026-08-25T13:00Z | 2026-08-26T15:00Z | 0.87 |
+
+`totalStep` は **全件 1% 未満**で、`FORMING_STAIR_STEP_LIMIT = 2%`（`detect_triples.ts:90`。
+形成中経路にのみ存在）を大きく下回る。issue 記載のケース 1（0.669%）と同オーダー。
+**completed / near_completion 経路に forming と同じ単調ゲートを入れても、この 5 件は 1 件も弾けない**
+——issue の「A は優先度が低い」という判断を支持する。
+
+## Phase 2 への含意（本 Phase では決定しない）
+
+- symmetry・per はいずれも実測レンジがほぼゼロ幅で、confidence の弁別力にほとんど寄与していない。
+  「symmetry を実際に対称性を測る量に置き換える」「per をバー数基準にする」は、
+  この実測が示す非寄与の裏付けを踏まえた候補として妥当に見える。
+- spreadRatio の基準統一は、issue 記載の 1 件に限らず実測できた対象構造（completed +
+  near_completion）の過半数（15/26）に影響する規模。統一の要否・方向
+  （終値統一 / 高安統一 / 現状維持）は Phase 2 で判断する。
+- completed / near_completion 経路への単調ゲート追加は、実測 5 件全てが `totalStep < 1%` で forming の 2% 上限にも
+  掛からないため、**この実データの範囲では有効な追加ゲートにならない**。優先度は低いままでよい。
