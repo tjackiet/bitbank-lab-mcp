@@ -130,6 +130,69 @@ export function getSizeThresholdsForTf(tf: string): SizeThresholds {
 }
 
 /**
+ * 時間軸に応じた H&S / 逆 H&S の頭の最小突出率を返す（issue #198）。
+ *
+ * 旧実装は未指定時に {@link getDefaultToleranceForTf}（`tolerancePct` の時間軸オート表）を
+ * そのまま流用していた（`resolveParams` の `headProminencePct = tolAuto`）。**この 2 つは
+ * 向きが逆**（schema の `headProminencePct` 説明を参照。`tolerancePct` は大きいほど緩く、
+ * 本関数の値は大きいほど厳しい）ため、tolerance 表を流用すると `1hour`（5%）が `1day`（4%）
+ * より 25% 厳しくなり、「下位足ほど緩める」という #152 の設計と正反対の効果になっていた。
+ * サイズ下限（{@link getSizeThresholdsForTf}）は #152 / PR #168 で ATR 比カーブに乗ったが、
+ * 本関数（旧: tolerance 表の流用）だけがこのカーブから漏れていた。
+ *
+ * **導出は {@link getSizeThresholdsForTf} と同じ ATR 比テーブルを、アンカー 0.04
+ * （`tolerancePct` の 1day 既定値。旧実装が事実上使っていた値と同値）に掛けただけ。**
+ * ATR を新たに測り直してはいない——#152 が「1day を 1.0 とした ATR 比」を既に測定 / 推定済み
+ * （{@link getSizeThresholdsForTf} の docstring の表）で、本関数もそれをそのまま使う。
+ * #152 の 3 つの設計上の約束（実行時に ATR へ連動させない・1day をアンカーに据え置く・
+ * 種別ごとに分けない）をそのまま踏襲する。
+ *
+ * ## 実測（issue #198 Phase 1。実データ 365 本 `tests/fixtures/btc_jpy_1hour_2026_08.ts`）
+ *
+ * 1hour の実際の head prominence 分布は `head_and_shoulders` で min 0.055%〜max 2.571%
+ * （中央値 1.848%）、`inverse_head_and_shoulders` で min 0.016%〜max 2.261%
+ * （中央値 0.828%）。**現行 5% ではこの実データ上で構造的に妥当な候補
+ * （肩の同水準・ネックライン水平度・先行トレンド・サイズ検査を全て通過済み）103 件が
+ * 1 件残らず頭の突出だけで落ちていた**（最大でも 2.571%）。
+ *
+ * 0.83% に緩めると `globalDedup` 後で `head_and_shoulders` 0→2 件・
+ * `inverse_head_and_shoulders` 0→2 件（他 type は 0 件変化）。4 件とも range と 5 構成点を
+ * 個別に確認し、実在する構造であることを確認した。起票者が目視で妥当と判断した
+ * head prominence 1.85% の実例（頭 idx 294 = 12,851,000）を含む候補群が検出可能になる
+ * （`globalDedup` は同じ頭を持つ近傍の窓から 1 件を代表として残すため、最終出力の 5 点が
+ * 起票者の読みと byte-for-byte 一致するとは限らない）。`1day` は 0 件変化（アンカー不変を確認）。
+ *
+ * **`4hour` 以下は実測していない。** 実データが 365 本（約 15.2 日）の 1hour fixture 1 本しか
+ * なく、これを 4h/8h/12h に再集計しても 91/45/30 本では H&S を構成できる期間を張れない
+ * （再集計データでの実測は 0 件）。{@link getSizeThresholdsForTf} と同じ ATR 比を機械的に
+ * 適用した推定値であり、実測の裏付けは無い——この限界は {@link getSizeThresholdsForTf} 自身の
+ * `1hour` 以外の行（`4hour` 以降）と同じ位置づけ。
+ *
+ * ## relaxed フォールバックとの関係（過剰緩和の確認）
+ *
+ * `detect_hs.ts` の `RELAXED_FACTORS` は本関数の値に 0.6 / 0.4 を掛けるため、`1hour` では
+ * 実効 0.50% / 0.33% まで下がる。実測では prominence 0.33% 未満でも肩・ネックラインが
+ * 通る窓が 37 件あり、この段まで到達すると過剰緩和になり得る。ただし relaxed は
+ * strict が対象 type を 1 件も見つけられなかったときにのみ発火するフォールバックで、
+ * strict が既に 0.83% で `head_and_shoulders` / `inverse_head_and_shoulders` を検出できて
+ * いる限り到達しない。`RELAXED_FACTORS` 自体の設計見直しは本 issue の範囲外。
+ */
+export function getHeadProminenceForTf(tf: string): number {
+	const t = String(tf);
+	// 1day より短い足は ATR 比（1day = 1.0、getSizeThresholdsForTf と同じ表）で緩める。
+	if (t === '1min') return 0.0011;
+	if (t === '5min') return 0.0024;
+	if (t === '15min') return 0.0041;
+	if (t === '30min') return 0.0058;
+	if (t === '1hour') return 0.0083;
+	if (t === '4hour') return 0.0163; // 推定（4hour の ATR は未実測。getSizeThresholdsForTf と同じ限界）
+	if (t === '8hour') return 0.0231;
+	if (t === '12hour') return 0.0283;
+	// 1day / 1week / 1month / 未知の時間足: アンカー（tolerancePct の旧既定値と同値）を据え置く
+	return 0.04;
+}
+
+/**
  * 時間軸に応じた収束係数を返す（三角形・ウェッジ用）
  */
 export function getConvergenceFactorForTf(tf: string): number {
@@ -228,6 +291,7 @@ export function resolveParams(
 } {
 	const auto = getDefaultParamsForTf(tf);
 	const tolAuto = getDefaultToleranceForTf(tf);
+	const headProminenceAuto = getHeadProminenceForTf(tf);
 
 	// swingDepth: スキーマ既定値(7)が来た場合は時間軸オートに置換
 	// （`explicit` = 「有限値が来た」かつ「それが sentinel ではない」。旧実装の入れ子三項と同値で、
@@ -253,12 +317,15 @@ export function resolveParams(
 
 	// headProminencePct（H&S / 逆H&S の頭の最小突出率、issue #149）: スキーマに .default() を
 	// 付けていないため、呼び出し側が省略すれば opts.headProminencePct は確実に undefined になる
-	// （tolerancePct のような「スキーマ既定値と等しいか」の判定は不要）。未指定なら tolerancePct と
-	// 同じ時間軸オート表（tolAuto）を採用する——これは新パラメータ切り出し前に tolerancePct が
-	// 実質担っていた頭の判定閾値と数値上一致させ、既定値のままの挙動を変えないため。
+	// （tolerancePct のような「スキーマ既定値と等しいか」の判定は不要）。未指定なら
+	// {@link getHeadProminenceForTf} の時間軸オート表（headProminenceAuto）を採用する——
+	// tolerancePct の表とは独立（issue #198。#149 時点では新パラメータ切り出し直後で専用の
+	// 時間軸オート表が無く、暫定的に tolerancePct の表（tolAuto）を流用していたが、両者は
+	// 意味の向きが逆（tolerancePct は大きいほど緩い、headProminencePct は大きいほど厳しい）
+	// なので流用は誤りだった。詳細は getHeadProminenceForTf の docstring）。
 	// **本パラメータの `auto` だけは「未指定」と同義**（sentinel 値との衝突が無い）。
 	const headProminenceExplicit = typeof opts.headProminencePct === 'number' && !Number.isNaN(opts.headProminencePct);
-	const headProminencePct = headProminenceExplicit ? (opts.headProminencePct as number) : tolAuto;
+	const headProminencePct = headProminenceExplicit ? (opts.headProminencePct as number) : headProminenceAuto;
 
 	return {
 		swingDepth,

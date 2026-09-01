@@ -352,7 +352,23 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 | `1week` | 7 | 5 | 0.035 |
 | `1month` | 8 | 6 | 0.03 |
 
-`headProminencePct`（H&S / 逆 H&S 専用）は未指定時に `tolerancePct` と同じ列を使う。
+`headProminencePct`（H&S / 逆 H&S 専用。頭が両肩よりどれだけ突出すべきかの最小要求率）は
+`tolerancePct` とは**独立の専用時間軸オート表**（`getHeadProminenceForTf`）を持つ
+（issue #198。#149〜#197 は誤って `tolerancePct` の表を流用しており、`1hour` が `1day` より
+頭の突出要求が 25% 厳しくなる逆転が起きていた）。**`tolerancePct` は大きいほど緩く、
+`headProminencePct` は大きいほど厳しいので、値の意味も表も別**であることに注意。
+
+| 時間足 | `headProminencePct` |
+|---|---|
+| `1min` | 0.0011 |
+| `5min` | 0.0024 |
+| `15min` | 0.0041 |
+| `30min` | 0.0058 |
+| `1hour` | 0.0083 |
+| `4hour` | 0.0163 |
+| `8hour` | 0.0231 |
+| `12hour` | 0.0283 |
+| `1day` / `1week` / `1month` | 0.04（アンカー。据え置き） |
 
 **スキーマ既定値そのもの（`swingDepth=7` / `tolerancePct=0.04` / `minBarsBetweenSwings=5`）を
 明示的に渡しても、時間軸オートに置換される。** `resolveParams` が「スキーマ既定値と等しいか」で
@@ -378,7 +394,7 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 `summary` / `detailed` / `full` は期間 2 行の**下**（＝ヘッダから 4 行目）。
 
 ```text
-実効パラメータ（入力値ではない）: swingDepth=3(auto) / minBarsBetweenSwings=2(auto) / tolerancePct=0.05(auto) / headProminencePct=0.05(auto) ※auto=1hour の時間軸オート値（スキーマ既定値 7/5/0.04 の明示指定も auto）
+実効パラメータ（入力値ではない）: swingDepth=3(auto) / minBarsBetweenSwings=2(auto) / tolerancePct=0.05(auto) / headProminencePct=0.0083(auto) ※auto=1hour の時間軸オート値（スキーマ既定値 7/5/0.04 の明示指定も auto。headProminencePct は tolerancePct とは別表）
 ```
 
 | 表記 | 意味 |

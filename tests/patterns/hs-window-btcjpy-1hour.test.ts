@@ -37,6 +37,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	getDefaultParamsForTf,
 	getDefaultToleranceForTf,
+	getHeadProminenceForTf,
 	getSizeThresholdsForTf,
 } from '../../tools/patterns/config.js';
 import { detectHeadAndShoulders } from '../../tools/patterns/detect_hs.js';
@@ -56,8 +57,9 @@ const TF = '1hour';
 // 手書きすると時間軸オート表を変えたときにテストだけ古い値で通り続ける。
 const { swingDepth: TF_SWING_DEPTH, minBarsBetweenSwings: TF_MIN_DIST } = getDefaultParamsForTf(TF);
 const TF_TOLERANCE = getDefaultToleranceForTf(TF);
-// headProminencePct は未指定なら tolerancePct と同じ時間軸オート値（`resolveParams`。issue #149）。
-const TF_HEAD_PROMINENCE = TF_TOLERANCE;
+// headProminencePct は tolerancePct とは独立の専用時間軸オート表を持つ（`getHeadProminenceForTf`。issue #198）。
+// #149〜#197 は誤って tolerancePct の表を流用しており、1hour は 0.05 だった（#198 で正した対象そのもの）。
+const TF_HEAD_PROMINENCE = getHeadProminenceForTf(TF);
 
 /** #146 が観測した 5 点窓（左肩 / 谷1 / 頭 / 谷2 / 右肩）の fixture 上の idx */
 const ISSUE_146_WINDOW = [283, 285, 294, 305, 308] as const;
@@ -185,10 +187,30 @@ describe('BTC/JPY 1hour 2026-08 fixture のスキャン窓（issue #157）', () 
 			expect(findIssueWindow(ctx)).toBeDefined();
 		});
 
-		it('棄却理由は head_not_higher（頭のマージン不足）', () => {
-			// 頭 12,851,000 / 両肩の高いほう 12,617,817 → 要求水準 12,617,817 × 1.05 = 13,248,708。
-			// 実際の突出は +1.85% で 5% に届かない。**completed で検出されるのは誤り。**
+		it("既定（時間軸オート = getHeadProminenceForTf('1hour') = 0.83%）では accepted になる（issue #198 の修正確認）", () => {
+			// 頭 12,851,000 / 両肩の高いほう 12,617,817 → 実際の突出は +1.85%。
+			// #198 以前は auto が tolerancePct の表（1hour=5%）を流用しており 1.85% < 5% で
+			// head_not_higher により棄却されていた（起票者が報告した偽陰性そのもの）。
+			// #198 で auto を専用テーブル（1hour=0.83%）に差し替えたので、1.85% >= 0.83% を満たし
+			// accepted になる。
 			const ctx = buildCtx();
+			expect(TF_HEAD_PROMINENCE).toBe(0.0083);
+			detectHeadAndShoulders(ctx);
+
+			const cand = findIssueWindow(ctx);
+			expect(cand?.accepted).toBe(true);
+			expect(cand?.reason).toBeUndefined();
+			const points = cand?.points as Array<{ role: string; idx: number; price: number }>;
+			expect(points.find((p) => p.role === 'head')).toMatchObject({ idx: 294, price: 12_851_000 });
+			expect(points.find((p) => p.role === 'left_shoulder')).toMatchObject({ idx: 283, price: 12_582_009 });
+			expect(points.find((p) => p.role === 'right_shoulder')).toMatchObject({ idx: 308, price: 12_617_817 });
+		});
+
+		it('headProminencePct を明示的に 0.05（#198 以前の旧オート値）に戻すと head_not_higher で棄却される', () => {
+			// #198 が正した対象そのものの回帰: この実データの構造では頭の突出は +1.85% しかなく、
+			// 5% を要求する閾値では今も足りない（値自体は #198 で変わっていない。変わったのは
+			// auto の解決先だけ）。要求水準は 12,617,817 × 1.05 = 13,248,708。
+			const ctx = buildCtx({ headProminencePct: 0.05 });
 			detectHeadAndShoulders(ctx);
 
 			const cand = findIssueWindow(ctx);
@@ -209,12 +231,14 @@ describe('BTC/JPY 1hour 2026-08 fixture のスキャン窓（issue #157）', () 
 			expect(details.head).toBeLessThan(details.rightShoulder * (1 + details.headProminencePct));
 		});
 
-		it('頭以外のゲート（肩の左右差・ネックライン水平性）は通っている', () => {
+		it('頭以外のゲート（肩の左右差・ネックライン水平性）は通っている（headProminencePct=0.05 で頭のみ棄却させた状態で確認）', () => {
 			// 理由の梯子は「肩 → 頭 → ネックライン」の順なので、`head_not_higher` が返る時点で
 			// **肩は通過済み**だが、**ネックラインは頭より後段なので未評価**。つまり水平性が
 			// 通っていることは reason からは分からず、ここで別に固定する価値がある。
 			// 実測値そのものも併せて固定し、閾値だけ動かして読み替えられるのを防ぐ。
-			const ctx = buildCtx();
+			// （#198 で auto の既定値が変わったため、頭だけを確実に落とすには headProminencePct を
+			// 明示的に 0.05 へ戻す——auto のままでは上のテストの通り accepted になり reason が無い。）
+			const ctx = buildCtx({ headProminencePct: 0.05 });
 			detectHeadAndShoulders(ctx);
 
 			const details = findIssueWindow(ctx)?.details as {

@@ -52,8 +52,91 @@
 | 37 | #193 | #191 / PR #192 が `view` description に持ち込んだ**実在しない理由コードの例 2 箇所**を実装に合わせ、集計ブロックに **reason 単独の横断合計行**を足した（横断合計で LLM が実測 2 回外していた） | **変わらない**（表示層と description のみ） |
 | 38 | #178 | double の「同水準」判定に**高さ相対の hard gate** を足した（項目 4）。閾値は triple と同じ `MAX_LEVEL_SPREAD_RATIO`（0.5）で、理由コードは新設（`peaks_diff_vs_height_excess` / `valleys_diff_vs_height_excess`） | **変わらない**（0 / 896。現行コーパスでは 1 件も発火しない**潜在ガード**） |
 | 39 | #200 | 縮小段（globalDedup / requireCurrentInPattern / ライフサイクル絞り込み）の件数内訳を `meta.reduction` と content 行に申告。パターン詳細の時刻表示（intraday）と構造図の UTC/JST 不一致を修正 | **変わらない**（表示層のみ。`structureDiagram.svg` / `.artifact.title` を除き完全一致を回帰テストで固定） |
+| 40 | #198 | `headProminencePct`（H&S / 逆H&S の頭の最小突出率）が未指定時に `tolerancePct` の時間軸オート表を誤って流用していたのを、専用の時間軸オート表（`getHeadProminenceForTf`）に切り離した | 実データ 1hour で**増える**（+4 / 14。`head_and_shoulders` 0→2 件・`inverse_head_and_shoulders` 0→2 件。他 type・`1day` は 0 件変化） |
 
-### Added / Fixed（縮小段の件数申告、パターン詳細の時刻表示、構造図の UTC/JST 不一致を修正。#200）
+### Added / Fixed（`headProminencePct` の時間軸オート値を `tolerancePct` の表から切り離した。#198）
+
+`tolerancePct` は大きいほど判定が緩く、`headProminencePct` は大きいほど判定が厳しい
+（schema の description に明記済み・#149 で分離済み）。にもかかわらず `resolveParams`
+（`tools/patterns/config.ts`）は未指定時の `headProminencePct` に `tolerancePct` の時間軸
+オート表（`getDefaultToleranceForTf`）をそのまま使っていたため、**向きが逆の値を共有**していた。
+結果、`1hour`（0.05）が `1day`（0.04）より頭の突出要求が 25% 厳しくなり、下位時間足ほど
+検出が難しくなる逆転が起きていた——サイズ下限（`getSizeThresholdsForTf`）は #152 / PR #168 で
+ATR 比カーブに乗せてあるが、`headProminencePct` だけがこのカーブから漏れていた。
+
+起票者の報告: 目視で妥当と判断した 1hour の H&S（頭 idx 294 = 12,851,000、突出 +1.85%）が、
+既定の 5% では `head_not_higher` で棄却され検出されない。
+
+#### 実測（issue #198 Phase 1。実データ 365 本 `tests/fixtures/btc_jpy_1hour_2026_08.ts`）
+
+1hour の実際の head prominence 分布（`enumerateHsWindows` が生成する全候補、cap 無効化）:
+
+| type | n | min | p25 | p50 | p75 | max |
+|---|---|---|---|---|---|---|
+| `head_and_shoulders` | 376 | 0.055% | 0.890% | 1.848% | 2.263% | 2.571% |
+| `inverse_head_and_shoulders` | 252 | 0.016% | 0.309% | 0.828% | 1.432% | 2.261% |
+
+**現行 5% では、肩の同水準・ネックライン水平度・先行トレンド・サイズ検査を全て通過した
+「構造的に妥当な」候補 103 件が 1 件残らず頭の突出だけで落ちていた**（最大でも 2.571%）。
+1hour では 5% という要求がこの実データ上そもそも達成不可能だったことになる。
+
+#### 新テーブルの導出
+
+新規関数 `getHeadProminenceForTf` は、#152 が既に測定 / 推定済みの ATR 比テーブル
+（`getSizeThresholdsForTf` の docstring）を、アンカー 0.04（`tolerancePct` の 1day 既定値。
+旧実装が事実上使っていた値）に掛けただけで、ATR を新たに測り直してはいない。
+#152 の 3 つの設計上の約束（実行時に ATR へ連動させない・1day をアンカーに据え置く・
+種別ごとに分けない）をそのまま踏襲する。
+
+| 時間足 | `headProminencePct`（新） | 旧値（`tolerancePct` の表を誤って流用） |
+|---|---|---|
+| `1min` | 0.0011 | 0.04 |
+| `5min` | 0.0024 | 0.04 |
+| `15min` | 0.0041 | 0.06 |
+| `30min` | 0.0058 | 0.06 |
+| `1hour` | 0.0083 | 0.05 |
+| `4hour` | 0.0163 | 0.05 |
+| `8hour` | 0.0231 | 0.045 |
+| `12hour` | 0.0283 | 0.045 |
+| `1day` / `1week` / `1month` | 0.04（アンカー・据え置き） | 0.04 / 0.035 / 0.03 |
+
+`1hour` 以外の 1hour 未満（`4hour` 以下）は #152 の `getSizeThresholdsForTf` 同様、実測の
+裏付けが無い√t 推定値。365 本（約 15.2 日）の 1hour fixture しか実データが無く、これを
+4h/8h/12h に再集計しても 91/45/30 本では H&S を構成できる期間を張れない（実測 0 件）。
+
+#### 実測（1hour, `detect_patterns('btc_jpy','1hour',365,{})`、既定オプション。回帰は
+`tests/detect_patterns_data_patterns_regression.test.ts` / `detect_patterns_1hour_data_patterns_baseline.json`）
+
+| | before（旧・共有表） | after（新テーブル） |
+|---|---|---|
+| `head_and_shoulders` | 0 | 2 |
+| `inverse_head_and_shoulders` | 0 | 2 |
+| その他 type（triple / wedge / triangle 等） | 10 | 10（**0 件変化**） |
+| 合計 | 10 | 14 |
+
+新規に検出された 4 件は range と 5 構成点を個別に確認し、実在する構造であることを確認した
+（`globalDedup` が同じ頭を持つ近傍の窓から 1 件を代表として残すため、最終出力の 5 点が
+起票者自身の読みと byte-for-byte 一致するとは限らない——起票者の頭 idx 294 を含む H&S 2 件が
+出力に含まれる）。`1day`（`tests/fixtures/btc_jpy_1day_2026.ts`）は 6→6 で**0 件変化**
+（アンカー不変を確認）。
+
+#### 過剰緩和の確認（relaxed フォールバックとの複合）
+
+`detect_hs.ts` の `RELAXED_FACTORS` は `headProminencePct` に 0.6 / 0.4 を掛けるため、
+1hour では実効 0.50% / 0.33% まで下がる。実測では prominence 0.33% 未満でも肩・ネックラインが
+通る窓が 37 件あり、この段に到達すると過剰緩和になり得る。ただし relaxed は strict が対象
+type を 1 件も見つけられなかったときにのみ発火するフォールバックで、strict が既に 0.83% で
+`head_and_shoulders` / `inverse_head_and_shoulders` を検出できている限り到達しない。
+`RELAXED_FACTORS` 自体の設計見直しは本 issue の範囲外。
+
+#### 影響
+
+- `tools/patterns/config.ts`: `getHeadProminenceForTf` を新設し、`resolveParams` の
+  `headProminencePct` 解決を `tolAuto` から切り離した。
+- `src/schema/patterns.ts`: `headProminencePct` の description の時間軸オート値の列挙を
+  新テーブルに更新（旧: `tolerancePct` と同じ値をハードコード）。
+- **明示指定の呼び出し側は無影響。** `headProminencePct` はスキーマに `.default()` が無いため
+  auto == 未指定（`resolveParams` のコメント参照）。デフォルト値のみの変更。
 
 1hour の H&S で accepted 76 件 → `data.patterns` 2 件のように、`detect_patterns` は
 globalDedup → requireCurrentInPattern → ライフサイクル絞り込みの 3 段を経て縮小するが、

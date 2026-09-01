@@ -158,9 +158,14 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 			'head_and_shoulders / inverse_head_and_shoulders 専用: 頭が両肩よりどれだけ突出していなければ' +
 				'ならないかの最小要求率。**tolerancePct とは向きが逆で、大きいほど判定が厳しくなる**' +
 				'（最小要求を引き上げるため）。緩めたい（=頭の突出要求を下げたい）ときは値を小さくする。\n' +
-				'未指定時は tolerancePct と同じ時間軸オート値（1hour/4hour=0.05, 8hour/12hour=0.045, ' +
-				'15min/30min=0.06, 1week=0.035, 1month=0.03, その他=0.04）を使う。tolerancePct を明示的に' +
-				'変更しても本パラメータには影響しない（H&S の頭の判定は tolerancePct から完全に独立）。',
+				'未指定時は本パラメータ専用の時間軸オート値（1min=0.0011, 5min=0.0024, 15min=0.0041, ' +
+				'30min=0.0058, 1hour=0.0083, 4hour=0.0163, 8hour=0.0231, 12hour=0.0283, ' +
+				'1day/1week/1month/その他=0.04）を使う。**この表は tolerancePct の時間軸オート表とは' +
+				'別物**（issue #198。1hour は tolerancePct では 0.05 だが本パラメータでは 0.0083 —— ' +
+				'両パラメータは意味の向きが逆なので同じ表を共有できない。旧実装は #198 以前、暫定的に ' +
+				'tolerancePct の表を流用しており、1hour が 1day より頭の突出を 25% 厳しく要求する逆転が' +
+				'起きていた）。tolerancePct を明示的に変更しても本パラメータには影響しない' +
+				'（H&S の頭の判定は tolerancePct から完全に独立）。',
 		),
 	view: z
 		.enum(['summary', 'detailed', 'full', 'debug'])
