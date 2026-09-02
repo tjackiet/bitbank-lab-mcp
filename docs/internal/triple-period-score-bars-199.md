@@ -7,8 +7,8 @@ triple の 4 経路だけ **バー数基準の `periodScoreBars`** に置き換�
 候補 2。Phase 1（計測）と Phase 2（実装）を 1 本にまとめてある。
 
 前提: #203（`docs/internal/triple-confidence-distribution-phase1.md`）、
-#204 Phase 2（`docs/internal/hs-confidence-multi-axis-phase2.md`）、
-#199 候補 1（`docs/internal/triple-confidence-multi-axis-phase2.md`）。
+issue #204 Phase 2（`docs/internal/hs-confidence-multi-axis-phase2.md`）、
+issue #199 候補 1（`docs/internal/triple-confidence-multi-axis-phase2.md`）。
 
 ## 結論（断定）
 
@@ -162,7 +162,7 @@ triple（`structureEnd` = `c.idx`）と H&S（`end` = `p4.idx`）は issue 本�
 ## 計測 4: バケット境界の候補
 
 境界は**時間足に依らないバー数**にする（`bar-thresholds.ts` と同じ扱い。時間足別テーブルは
-#198 で事故になっている）。台の四分位と「膝」（台に穴が空く位置）から候補を出す。
+issue #198 で事故になっている）。台の四分位と「膝」（台に穴が空く位置）から候補を出す。
 
 受理 triple の累積分布（検出器層 1,056 ケース。延べ 302 行 / 価格系列上の相異なる構造 32 件）:
 
@@ -406,7 +406,7 @@ after の 28 件は 0.55（3）/ 0.56（4）/ 0.57（8）/ 0.58（4）/ 0.59（9
 
 before は 0.55〜0.57 が同値・0.58〜0.60 が同値で、**帯の中のどこに置いても切れ方が変わらなかった**。
 after は **0.01 動かすたびに通過集合が動く**。「空白に置いた線だから値が任意でない」という
-#214 の論法は、triple では成立しなくなった。
+issue #214 の論法は、triple では成立しなくなった。
 
 ### before の時点でも厳密には空ではなかった
 
