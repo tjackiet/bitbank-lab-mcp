@@ -20,7 +20,7 @@ Phase 1（PR #205、`hs-confidence-distribution-phase1.md`）の実測が前提�
 | confidence の算出位置 | 構造ゲートの直後 | **ブレイク検出と高さ算出の後**（`breakoutQuality` / `patternHeight` が要る） |
 
 **doubles の解法をそのまま適用した**（`buildDoubleScore`。`symmetry` を残して `tolMargin` を捨てる）。
-#199 の triple が逆の選択（`levelMargin` を残す）になったのは triple の `tolMargin` が
+issue #199 の triple が逆の選択（`levelMargin` を残す）になったのは triple の `tolMargin` が
 3 ペアの relDev 平均で中間点の情報を持つためで、**H&S は主構成点が 2 点（両肩）しか無く
 その事情が無い**。`symmetry` は既存フィールドをそのまま使い、新フィールドは
 H&S 固有の 2 軸だけを足した。
@@ -50,7 +50,7 @@ H&S 固有の 2 軸だけを足した。
 | 比較対象 | `main` = `a81278f`（#212 マージ後）vs 本ブランチ |
 | コーパス | **標準コーパス 800**（合成 704 = `tests/detect_patterns_fixtures.test.ts` の fixture 22 件 × オプション 8 通り（`includeForming` / `includeCompleted` / `includeInvalid`）× 時間足 2 種（`1day` / `1hour`）× `swingDepth` 2 種（2 / 3）、実データ A 96 = `tests/fixtures/btc_jpy_1day_2026.ts` × 時間足 3 種 × `swingDepth` 4 種 × オプション 8 通り）**＋ 実データ B 96**（`tests/fixtures/btc_jpy_1hour_2026_08.ts` × 同上）= **896 ケース** |
 | 補助スイープ | 実データ B × 全 11 時間足 × `swingDepth` 4 種 = 44 ケース。**合計 940 ケース**（#205 と同一） |
-| 2 層で測る理由 | **検出器層**（`detectHeadAndShoulders()` 直接呼び出し）は「軸の効き」を、**コーパス層**（`detectPatterns` の `data.patterns` = `globalDedup` 後）は「利用者が見るもの」を測る。両者は `globalDedup` を挟んで別の量になる（[3 章](#3-出力層-datapatterns-の変化)） |
+| 2 層で測る理由 | **検出器層**（`detectHeadAndShoulders()` 直接呼び出し）は「軸の効き」を、**コーパス層**（`detectPatterns` の `data.patterns` = `globalDedup` 後）は「利用者が見るもの」を測る。両者は `globalDedup` を挟んで別の量になる（[3 章](#3-出力層datapatternsの変化)） |
 | view | 検出器を直接呼ぶ経路は MCP の `view` を経由しない。`data.patterns` は `view` で変わらないので **`view=full` と同値**（`view` は `content` の表示量だけを変える） |
 | 錨 | **ネイティブ時間足サブセット**（実データ B × `1hour` = 89 構造）。標準コーパスの「時間足」はリサンプリングではなくパラメータのラベルで、`headProminencePct` が 15 倍違う行を混ぜているため（#205 の同名の注記と同じ限界） |
 
@@ -71,7 +71,7 @@ Phase 1 は候補を 5 つ挙げていた。**#205 の結論 5 はプールし�
 | (c) 時間対称性 `min/max` | −0.22 | −0.415 | 0.0642〜0.9730 | **採用**（限界は下記） |
 | (d) `retracementRatio` | 0.01 | 0.339 | 0.2076〜0.8963 | **採用**（スコア換算後は `r(rd)` = 0.03） |
 | (b) ネックライン水平度 | 0.66 | **0.725** | 0.0002〜0.0462 | **不採用**（rd の再掲） |
-| (e) ブレイク品質 | −0.27 | −0.053 | 算出可 41.8% / 飽和 69% | **再計測して採用**（[1-2](#1-2-e-ブレイク品質は測り直した-飽和が-69--441-に下がる)） |
+| (e) ブレイク品質 | −0.27 | −0.053 | 算出可 41.8% / 飽和 69% | **再計測して採用**（[1-2](#1-2-e-ブレイク品質は測り直した--飽和が-69--441-に下がる)） |
 
 ### 1-1. (d) は「スコアに換算すると rd と直交する」
 
@@ -476,8 +476,8 @@ relaxed の 2 経路も strict と同じ 6 軸に直し、`headProminence` の�
 
 ## 6. スキーマ / 型の宣言
 
-新設した 2 軸は TS と Zod の**両方**に宣言した（#155 / #160 / #184 / #189 の 4 回に加え
-#199 でも起きた「Zod 未宣言で `parse()` が黙って strip」を 6 回目にしないため）:
+新設した 2 軸は TS と Zod の**両方**に宣言した（#155 / #160 / #184 / #189 の 4 回に加え、
+さらに #199 でも起きた「Zod 未宣言で `parse()` が黙って strip」を 6 回目にしないため）:
 
 - `tools/patterns/types.ts` の `PatternScoreBreakdown` に `headProminence` / `timeSymmetry`
 - `src/schema/patterns.ts` の `DetectedPatternSchema.scoreComponents` に同 2 フィールド
@@ -516,7 +516,7 @@ relaxed の 2 経路も strict と同じ 6 軸に直し、`headProminence` の�
 **`globalDedup` の勝者**で、confidence の式が変われば別の構造が代表になる。
 実際に本 PR で、分母が潰れた 4 構造はいずれも代表を取れなくなり `data.patterns` から 0 件になった。
 
-#210 が守りたいのは「退化した分母では進捗を出さない」であって「その構造が dedup に勝つ」では
+issue #210 が守りたいのは「退化した分母では進捗を出さない」であって「その構造が dedup に勝つ」では
 ないので、**対象を dedup より手前の検出器出力に移した**（4 構造すべてを idx 付きで固定）。
 `detectPatterns` 側には「ブレイク済み H&S は、進捗を出すか理由を申告するかのどちらか」という
 **どの構造が勝つかに依存しない**不変条件を別に置いた。#199 が
