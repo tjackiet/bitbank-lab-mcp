@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dayjs } from '../../lib/datetime.js';
 import { getDefaultToleranceForTf, getSizeThresholdsForTf } from '../../tools/patterns/config.js';
-import { detectHeadAndShoulders } from '../../tools/patterns/detect_hs.js';
+import { detectHeadAndShoulders, necklineProjectionTarget } from '../../tools/patterns/detect_hs.js';
 import { linearRegressionWithR2 } from '../../tools/patterns/regression.js';
 import type { Pivot } from '../../tools/patterns/swing.js';
 import type { CandleData, DetectContext } from '../../tools/patterns/types.js';
@@ -1609,5 +1609,236 @@ describe('detectHeadAndShoulders', () => {
 			);
 			expect(misAnchored).toBeUndefined();
 		});
+	});
+});
+
+/**
+ * issue #208: `breakoutTarget` の高さを「頭の真下のネックライン」で測る。
+ *
+ * 旧実装は高さも投影の起点も `necklineAt(neckline, breakoutIdx)`（strict / relaxed）または
+ * `neckline[0].y`（forming）で測っており、傾いたネックラインを外挿するぶん高さが歪んでいた。
+ * 本 describe のフィクスチャは**ネックラインを意図的に傾けてある**——水平ネックライン
+ * （既存の `buildHS` / `buildInverseHS` の既定）では新旧の値が一致してしまい、回帰を検出できない。
+ */
+describe('detectHeadAndShoulders: ネックライン射影の高さ基準（issue #208）', () => {
+	/**
+	 * 傾いたネックラインを持つ H&S + ブレイク。
+	 * 谷1(idx=15,83) → 谷2(idx=45,87) で `relDev = 4/87 = 4.6%`（`HS_NECKLINE_MAX_PCT = 5%` 内）。
+	 * 傾きは +2/15 本 で、頭(idx=30) の真下は 85、ブレイク足(idx=65) 時点では 89.667。
+	 */
+	function buildSlopedHsWithBreakout() {
+		const total = 80;
+		const candles: CandleData[] = Array.from({ length: total }, (_, i) => mkCandle(total - i, 90, 95, 80, 90));
+		candles[0] = mkCandle(total, 99, 100, 97, 99);
+		candles[15] = mkCandle(total - 15, 84, 86, 83, 84);
+		candles[30] = mkCandle(total - 30, 129, 130, 127, 129);
+		candles[45] = mkCandle(total - 45, 88, 90, 87, 88);
+		candles[60] = mkCandle(total - 60, 99, 100, 97, 99);
+		// idx 65 以降を close=80 に落としてネックライン下抜け（idx 61-64 の close=90 では
+		// nlAt(k) * (1 - 0.015) を下回らないので、ブレイク足は必ず 65 になる）。
+		for (let i = 65; i < total; i++) candles[i] = mkCandle(total - i, 82, 85, 77, 80);
+
+		const pivots: Pivot[] = [
+			{ idx: 0, price: 100, kind: 'H', extremePrice: 100 },
+			{ idx: 15, price: 83, kind: 'L', extremePrice: 83 },
+			{ idx: 30, price: 130, kind: 'H', extremePrice: 130 },
+			{ idx: 45, price: 87, kind: 'L', extremePrice: 87 },
+			{ idx: 60, price: 100, kind: 'H', extremePrice: 100 },
+		];
+		return { candles, pivots };
+	}
+
+	/** 傾いたネックラインを持つ逆 H&S + ブレイク（上のミラー）。山1(15,113) → 山2(45,118)。 */
+	function buildSlopedIhsWithBreakout() {
+		const total = 80;
+		const candles: CandleData[] = Array.from({ length: total }, (_, i) => mkCandle(total - i, 90, 95, 80, 90));
+		candles[0] = mkCandle(total, 101, 103, 100, 101);
+		candles[15] = mkCandle(total - 15, 112, 113, 110, 112);
+		candles[30] = mkCandle(total - 30, 71, 73, 70, 71);
+		candles[45] = mkCandle(total - 45, 117, 118, 115, 117);
+		candles[60] = mkCandle(total - 60, 101, 103, 100, 101);
+		for (let i = 65; i < total; i++) candles[i] = mkCandle(total - i, 128, 133, 125, 130);
+
+		const pivots: Pivot[] = [
+			{ idx: 0, price: 100, kind: 'L', extremePrice: 100 },
+			{ idx: 15, price: 113, kind: 'H', extremePrice: 113 },
+			{ idx: 30, price: 70, kind: 'L', extremePrice: 70 },
+			{ idx: 45, price: 118, kind: 'H', extremePrice: 118 },
+			{ idx: 60, price: 100, kind: 'L', extremePrice: 100 },
+		];
+		return { candles, pivots };
+	}
+
+	it('strict H&S: 高さは頭の真下、投影の起点はブレイク足', () => {
+		// nlAt(30) = 85 → 高さ = 130 - 85 = 45
+		// nlAt(65) = 89.667 → target = round(89.667 - 45) = 45
+		// 旧実装（高さもブレイク足時点）は round(89.667 - (130 - 89.667)) = 49 だった。
+		const { candles, pivots } = buildSlopedHsWithBreakout();
+		const ctx = buildCtx({ candles, pivots });
+		const result = detectHeadAndShoulders(ctx);
+
+		const hs = result.patterns.find((p) => p.type === 'head_and_shoulders');
+		expect(hs?.breakoutBarIndex).toBe(65);
+		expect(hs?.breakoutTarget).toBe(45);
+		expect(hs?.breakoutTarget).not.toBe(49);
+		expect(hs?.targetMethod).toBe('neckline_projection');
+	});
+
+	it('strict Inverse H&S: 高さは頭の真下、投影の起点はブレイク足', () => {
+		// nlAt(30) = 115.5 → 高さ = 115.5 - 70 = 45.5
+		// nlAt(65) = 121.333 → target = round(121.333 + 45.5) = 167
+		// 旧実装は round(121.333 + (121.333 - 70)) = 173 だった。
+		const { candles, pivots } = buildSlopedIhsWithBreakout();
+		const ctx = buildCtx({ candles, pivots });
+		const result = detectHeadAndShoulders(ctx);
+
+		const ihs = result.patterns.find((p) => p.type === 'inverse_head_and_shoulders');
+		expect(ihs?.breakoutBarIndex).toBe(65);
+		expect(ihs?.breakoutTarget).toBe(167);
+		expect(ihs?.breakoutTarget).not.toBe(173);
+		expect(ihs?.targetMethod).toBe('neckline_projection');
+	});
+
+	it('下方向 H&S の target はブレイク終値より下に出る（無条件到達にならない）', () => {
+		const { candles, pivots } = buildSlopedHsWithBreakout();
+		const ctx = buildCtx({ candles, pivots });
+		const result = detectHeadAndShoulders(ctx);
+
+		const hs = result.patterns.find((p) => p.type === 'head_and_shoulders');
+		const breakClose = hs?.breakout?.price;
+		expect(breakClose).toBeDefined();
+		// #208 の症状は「下抜けブレイクなのに target がブレイク終値より上」だった。
+		expect(hs?.breakoutTarget).toBeLessThan(breakClose as number);
+	});
+
+	it('forming H&S: 投影の起点は最終構成点（暫定右肩）で、高さは頭の真下', () => {
+		// ネックライン (20,88) → (45,90)、傾き +2/25 本。
+		// nlAt(30) = 88.8 → 高さ = 135 - 88.8 = 46.2
+		// 暫定右肩 idx=65 → nlAt(65) = 91.6 → target = round(91.6 - 46.2) = 45
+		// 旧実装（左端 88 を高さにも起点にも使用）は round(88 - (135 - 88)) = 41 だった。
+		const total = 66;
+		const candles: CandleData[] = Array.from({ length: total }, (_, i) => mkCandle(total - i, 90, 95, 85, 90));
+		candles[5] = mkCandle(total - 5, 99, 100, 97, 99);
+		candles[20] = mkCandle(total - 20, 87, 90, 87, 88);
+		candles[30] = mkCandle(total - 30, 134, 135, 132, 134);
+		candles[45] = mkCandle(total - 45, 89, 92, 89, 90);
+		for (let i = 60; i < total; i++) candles[i] = mkCandle(total - i, 101, 103, 100, 102);
+
+		const allPeaks: Pivot[] = [
+			{ idx: 5, price: 100, kind: 'H', extremePrice: 100 },
+			{ idx: 30, price: 135, kind: 'H', extremePrice: 135 },
+		];
+		const allValleys: Pivot[] = [
+			{ idx: 20, price: 88, kind: 'L', extremePrice: 88 },
+			{ idx: 45, price: 90, kind: 'L', extremePrice: 90 },
+		];
+		const ctx = buildCtx({
+			candles,
+			pivots: [...allPeaks, ...allValleys],
+			allPeaks,
+			allValleys,
+			includeForming: true,
+		});
+		const result = detectHeadAndShoulders(ctx);
+
+		const forming = result.patterns.find((p) => p.type === 'head_and_shoulders' && p.status === 'forming');
+		expect(forming?.breakoutTarget).toBe(45);
+		expect(forming?.breakoutTarget).not.toBe(41);
+	});
+
+	it('水平ネックラインでは起点をどこに取っても target が変わらない（relaxed 経路の値は不変）', () => {
+		const flat = [
+			{ x: 15, y: 85 },
+			{ x: 45, y: 85 },
+		];
+		const atBreak = necklineProjectionTarget({
+			neckline: flat,
+			anchorIdx: 65,
+			headIdx: 30,
+			headPrice: 130,
+			direction: 'down',
+			fallbackNecklinePrice: 85,
+		});
+		const atShoulder = necklineProjectionTarget({
+			neckline: flat,
+			anchorIdx: 60,
+			headIdx: 30,
+			headPrice: 130,
+			direction: 'down',
+			fallbackNecklinePrice: 85,
+		});
+		expect(atBreak).toBe(40);
+		expect(atShoulder).toBe(40);
+	});
+
+	// ── 高さ 0 以下ガード ──
+	//
+	// 検出器の 3 経路はいずれも頭がネックラインの 2 定義点の**間**にあるため、頭の真下の値は
+	// 内挿になり両端の間に収まる。したがってガードは検出器経由では到達不能で、標準コーパス
+	// 896 ケースでも発火 0 件。ここでは helper を直接呼んで振る舞いだけ固定する。
+	it('高さが 0 以下なら target を出さない（H&S）', () => {
+		const nl = [
+			{ x: 15, y: 140 },
+			{ x: 45, y: 150 },
+		];
+		expect(
+			necklineProjectionTarget({
+				neckline: nl,
+				anchorIdx: 65,
+				headIdx: 30,
+				headPrice: 130,
+				direction: 'down',
+				fallbackNecklinePrice: 145,
+			}),
+		).toBeUndefined();
+	});
+
+	it('高さが 0 以下なら target を出さない（逆 H&S）', () => {
+		const nl = [
+			{ x: 15, y: 60 },
+			{ x: 45, y: 65 },
+		];
+		expect(
+			necklineProjectionTarget({
+				neckline: nl,
+				anchorIdx: 65,
+				headIdx: 30,
+				headPrice: 70,
+				direction: 'up',
+				fallbackNecklinePrice: 62,
+			}),
+		).toBeUndefined();
+	});
+
+	it('高さがちょうど 0 なら target を出さない（境界）', () => {
+		const nl = [
+			{ x: 15, y: 130 },
+			{ x: 45, y: 130 },
+		];
+		expect(
+			necklineProjectionTarget({
+				neckline: nl,
+				anchorIdx: 65,
+				headIdx: 30,
+				headPrice: 130,
+				direction: 'down',
+				fallbackNecklinePrice: 130,
+			}),
+		).toBeUndefined();
+	});
+
+	it('ネックラインが 2 点未満なら fallbackNecklinePrice を使う', () => {
+		// necklineAt が NaN を返す経路。頭の真下も起点も fallback に畳まれるので
+		// target = 85 - (130 - 85) = 40。
+		expect(
+			necklineProjectionTarget({
+				neckline: [{ x: 15, y: 85 }],
+				anchorIdx: 65,
+				headIdx: 30,
+				headPrice: 130,
+				direction: 'down',
+				fallbackNecklinePrice: 85,
+			}),
+		).toBe(40);
 	});
 });

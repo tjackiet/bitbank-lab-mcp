@@ -194,6 +194,57 @@ function necklineAt(neckline: NecklinePt[] | undefined, i: number): number {
 	return a.y + ((b.y - a.y) * (i - a.x)) / (b.x - a.x);
 }
 
+// ── Helper: ネックライン射影ターゲット ──
+
+/**
+ * `targetMethod: 'neckline_projection'` の値幅を 1 箇所で出す（issue #208）。
+ *
+ * 教科書の H&S の値幅は「**頭からネックラインまでの高さ**を、ブレイク点のネックラインから
+ * 投影する」。高さの測定基準は `headIdx`（頭の真下）に固定し、投影の**起点だけ**を
+ * `anchorIdx`（strict / relaxed はブレイク足または右肩、forming は最終構成点）にする。
+ *
+ * 両方を `anchorIdx` にしていたのが #208 の欠陥で、`necklineAt` の**外挿距離ぶん高さが歪む**。
+ * 実データ B の 1hour ケースでは定義点から 17 本外挿した結果、高さが 1/2.34 に潰れて
+ * 下方向 H&S の target がブレイク終値より 39,079 円**上**に着地し、`targetReached` が
+ * ブレイク直後に無条件で立っていた。
+ *
+ * `necklineAt` のクランプ有無は**変えない**——ブレイク検出（`findHsBreakoutIdx`）が同じ関数を
+ * 使っており、クランプを入れると検出結果そのものが動くため（別 issue）。
+ *
+ * 高さが 0 以下（外挿したネックラインが頭を追い越した）場合は **target を出さない**。
+ * `validateHorizontalNeckline` が |谷1 − 谷2| <= `HS_NECKLINE_MAX_PCT` を課しており、頭は
+ * ネックラインより上（逆 H&S は下）が保証されるので、頭の真下で測る限り構造的には起きない
+ * 経路だが、`neckline` の張り方が経路ごとに違う（forming は先行谷 → 頭後の谷）ので念のため置く。
+ *
+ * @param direction 'down' = H&S（下方向）/ 'up' = 逆 H&S（上方向）
+ * @param fallbackNecklinePrice `necklineAt` が NaN を返したときに使う代表水準（strict は谷の平均、
+ *   relaxed / forming は検出器自身が使っている水平線の y）
+ *
+ * export しているのは**高さ 0 以下ガードを直接テストするため**。3 経路とも頭がネックラインの
+ * 2 定義点の外側に来ない（頭は 2 点の間にあり、内挿値は必ず両端の間に収まる）ので、検出器
+ * 経由ではガードに到達できない——標準コーパス 896 ケースでも発火 0 件。
+ */
+export function necklineProjectionTarget(args: {
+	neckline: NecklinePt[];
+	anchorIdx: number;
+	headIdx: number;
+	headPrice: number;
+	direction: 'down' | 'up';
+	fallbackNecklinePrice: number;
+}): number | undefined {
+	const { neckline, anchorIdx, headIdx, headPrice, direction, fallbackNecklinePrice } = args;
+	const at = (i: number) => {
+		const v = necklineAt(neckline, i);
+		return Number.isFinite(v) ? v : fallbackNecklinePrice;
+	};
+	const nlAtHead = at(headIdx);
+	const nlAtAnchor = at(anchorIdx);
+	if (!Number.isFinite(nlAtHead) || !Number.isFinite(nlAtAnchor) || !Number.isFinite(headPrice)) return undefined;
+	const height = direction === 'down' ? headPrice - nlAtHead : nlAtHead - headPrice;
+	if (!(height > 0)) return undefined;
+	return Math.round(direction === 'down' ? nlAtAnchor - height : nlAtAnchor + height);
+}
+
 // ── Helper: 右肩後のネックラインブレイクインデックスを検出 ──
 // direction='below': H&S（close < necklineAt * (1 - buffer)）
 // direction='above': 逆H&S（close > necklineAt * (1 + buffer)）
@@ -588,16 +639,20 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 					{ start, end: rangeEnd },
 					{ tz: ctx.tz },
 				);
-				// ターゲットはブレイク日（または右肩日）時点のネックライン値を基準に算出する。
+				// 投影の起点はブレイク日（または右肩日）時点のネックライン値。**高さは頭の真下**で測る（#208）。
 				const targetAnchorIdx = breakoutIdx >= 0 ? breakoutIdx : p4.idx;
-				const nlAtAnchor = necklineAt(neckline, targetAnchorIdx);
-				const ihsTarget = Math.round(
-					(Number.isFinite(nlAtAnchor) ? nlAtAnchor : nlAvg) +
-						((Number.isFinite(nlAtAnchor) ? nlAtAnchor : nlAvg) - p2.price),
-				);
-				const ihsReach = completion.breakout
-					? computeTargetReach(candles, breakoutIdx, completion.breakout.price, ihsTarget, 'up')
-					: undefined;
+				const ihsTarget = necklineProjectionTarget({
+					neckline,
+					anchorIdx: targetAnchorIdx,
+					headIdx: p2.idx,
+					headPrice: p2.price,
+					direction: 'up',
+					fallbackNecklinePrice: nlAvg,
+				});
+				const ihsReach =
+					ihsTarget !== undefined && completion.breakout
+						? computeTargetReach(candles, breakoutIdx, completion.breakout.price, ihsTarget, 'up')
+						: undefined;
 				const ihsPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
 
 				patterns.push({
@@ -617,8 +672,9 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 					neckline,
 					...(structureGate ? { structureGate } : {}),
 					trendlineLabel: 'ネックライン',
-					breakoutTarget: ihsTarget,
-					targetMethod: 'neckline_projection' as const,
+					...(ihsTarget !== undefined
+						? { breakoutTarget: ihsTarget, targetMethod: 'neckline_projection' as const }
+						: {}),
 					...(ihsReach
 						? {
 								targetReachedPct: ihsReach.targetReachedPct,
@@ -775,16 +831,20 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 					{ start, end: rangeEnd },
 					{ tz: ctx.tz },
 				);
-				// ターゲットはブレイク日（または右肩日）時点のネックライン値を基準に算出する。
+				// 投影の起点はブレイク日（または右肩日）時点のネックライン値。**高さは頭の真下**で測る（#208）。
 				const targetAnchorIdx = breakoutIdx >= 0 ? breakoutIdx : p4.idx;
-				const nlAtAnchor = necklineAt(neckline, targetAnchorIdx);
-				const hsTarget = Math.round(
-					(Number.isFinite(nlAtAnchor) ? nlAtAnchor : nlAvg) -
-						(p2.price - (Number.isFinite(nlAtAnchor) ? nlAtAnchor : nlAvg)),
-				);
-				const hsReach = completion.breakout
-					? computeTargetReach(candles, breakoutIdx, completion.breakout.price, hsTarget, 'down')
-					: undefined;
+				const hsTarget = necklineProjectionTarget({
+					neckline,
+					anchorIdx: targetAnchorIdx,
+					headIdx: p2.idx,
+					headPrice: p2.price,
+					direction: 'down',
+					fallbackNecklinePrice: nlAvg,
+				});
+				const hsReach =
+					hsTarget !== undefined && completion.breakout
+						? computeTargetReach(candles, breakoutIdx, completion.breakout.price, hsTarget, 'down')
+						: undefined;
 				const hsPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
 
 				patterns.push({
@@ -804,8 +864,7 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 					neckline,
 					...(structureGate ? { structureGate } : {}),
 					trendlineLabel: 'ネックライン',
-					breakoutTarget: hsTarget,
-					targetMethod: 'neckline_projection' as const,
+					...(hsTarget !== undefined ? { breakoutTarget: hsTarget, targetMethod: 'neckline_projection' as const } : {}),
 					...(hsReach
 						? {
 								targetReachedPct: hsReach.targetReachedPct,
@@ -1014,13 +1073,22 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 				{ start, end: rangeEnd },
 				{ tz: ctx.tz },
 			);
-			// nlY は水平ネックラインの y。breakout 時点でも同値なので nlY を直接使う。
+			// nlY は水平ネックラインの y。頭の真下でもブレイク時点でも同値なので、`necklineProjectionTarget`
+			// を通しても値は変わらない（#208 が揃えたのは**基準の名乗り**で、relaxed の値は不変）。
 			// TODO: relaxed H&S も strict と同じく 谷1→谷2 の傾きつきネックラインを使うべき。
 			//       別 PR で検討（今回の主目的は target reached の high/low 化）。
-			const hsRelTarget = Math.round(nlY - (p2.price - nlY));
-			const hsRelReach = completion.breakout
-				? computeTargetReach(candles, breakoutIdx, completion.breakout.price, hsRelTarget, 'down')
-				: undefined;
+			const hsRelTarget = necklineProjectionTarget({
+				neckline,
+				anchorIdx: breakoutIdx >= 0 ? breakoutIdx : p4.idx,
+				headIdx: p2.idx,
+				headPrice: p2.price,
+				direction: 'down',
+				fallbackNecklinePrice: nlY,
+			});
+			const hsRelReach =
+				hsRelTarget !== undefined && completion.breakout
+					? computeTargetReach(candles, breakoutIdx, completion.breakout.price, hsRelTarget, 'down')
+					: undefined;
 			const hsRelPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
 			debugCandidates.push({
 				type: 'head_and_shoulders',
@@ -1045,8 +1113,9 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 				neckline,
 				...(structureGate ? { structureGate } : {}),
 				trendlineLabel: 'ネックライン',
-				breakoutTarget: hsRelTarget,
-				targetMethod: 'neckline_projection' as const,
+				...(hsRelTarget !== undefined
+					? { breakoutTarget: hsRelTarget, targetMethod: 'neckline_projection' as const }
+					: {}),
 				...(hsRelReach
 					? {
 							targetReachedPct: hsRelReach.targetReachedPct,
@@ -1213,13 +1282,22 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 				{ start, end: rangeEnd },
 				{ tz: ctx.tz },
 			);
-			// nlY は水平ネックラインの y。breakout 時点でも同値なので nlY を直接使う。
+			// nlY は水平ネックラインの y。頭の真下でもブレイク時点でも同値なので、`necklineProjectionTarget`
+			// を通しても値は変わらない（#208 が揃えたのは**基準の名乗り**で、relaxed の値は不変）。
 			// TODO: relaxed Inverse H&S も strict と同じく 山1→山2 の傾きつきネックラインを使うべき。
 			//       別 PR で検討（今回の主目的は target reached の high/low 化）。
-			const ihsRelTarget = Math.round(nlY + (nlY - p2.price));
-			const ihsRelReach = completion.breakout
-				? computeTargetReach(candles, breakoutIdx, completion.breakout.price, ihsRelTarget, 'up')
-				: undefined;
+			const ihsRelTarget = necklineProjectionTarget({
+				neckline,
+				anchorIdx: breakoutIdx >= 0 ? breakoutIdx : p4.idx,
+				headIdx: p2.idx,
+				headPrice: p2.price,
+				direction: 'up',
+				fallbackNecklinePrice: nlY,
+			});
+			const ihsRelReach =
+				ihsRelTarget !== undefined && completion.breakout
+					? computeTargetReach(candles, breakoutIdx, completion.breakout.price, ihsRelTarget, 'up')
+					: undefined;
 			const ihsRelPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
 			debugCandidates.push({
 				type: 'inverse_head_and_shoulders',
@@ -1244,8 +1322,9 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 				neckline,
 				...(structureGate ? { structureGate } : {}),
 				trendlineLabel: 'ネックライン',
-				breakoutTarget: ihsRelTarget,
-				targetMethod: 'neckline_projection' as const,
+				...(ihsRelTarget !== undefined
+					? { breakoutTarget: ihsRelTarget, targetMethod: 'neckline_projection' as const }
+					: {}),
 				...(ihsRelReach
 					? {
 							targetReachedPct: ihsRelReach.targetReachedPct,
@@ -1472,7 +1551,18 @@ function formingHsForHead(
 	const start = isoAt(left.idx);
 	const end = isoAt(rightShoulder.idx);
 
-	const formHsTarget = Math.round(formHsNl - (head.price - formHsNl));
+	// forming にはブレイク足が無いので、投影の起点は**最終構成点**（暫定を含む右肩）の idx。
+	// 高さは strict / relaxed と同じく頭の真下で測る（#208）。以前は `neckline[0].y`
+	// （ネックラインの**左端**）を高さにも起点にも使っており、傾いたネックラインでは
+	// 現在バー時点の水準と食い違っていた。
+	const formHsTarget = necklineProjectionTarget({
+		neckline,
+		anchorIdx: rightShoulder.idx,
+		headIdx: head.idx,
+		headPrice: head.price,
+		direction: 'down',
+		fallbackNecklinePrice: formHsNl,
+	});
 	const formHsStructureRange = start && end ? { start, end } : undefined;
 	const formHsPrecedingTrend = buildPrecedingTrend(candles, trend, left.idx);
 
@@ -1545,8 +1635,9 @@ function formingHsForHead(
 		neckline,
 		...(structureGate ? { structureGate } : {}),
 		trendlineLabel: 'ネックライン',
-		breakoutTarget: formHsTarget,
-		targetMethod: 'neckline_projection' as const,
+		...(formHsTarget !== undefined
+			? { breakoutTarget: formHsTarget, targetMethod: 'neckline_projection' as const }
+			: {}),
 		completionPct: Math.round(completion * 100),
 		_method: isProvisional ? 'forming_hs_provisional' : 'forming_hs',
 	};
@@ -1747,7 +1838,18 @@ function formingInverseHsForHead(
 	const start = isoAt(left.idx);
 	const end = isoAt(rightShoulder.idx);
 
-	const formIhsTarget = Math.round(formIhsNl + (formIhsNl - head.price));
+	// forming にはブレイク足が無いので、投影の起点は**最終構成点**（暫定を含む右肩）の idx。
+	// 高さは strict / relaxed と同じく頭の真下で測る（#208）。以前は `neckline[0].y`
+	// （ネックラインの**左端**）を高さにも起点にも使っており、傾いたネックラインでは
+	// 現在バー時点の水準と食い違っていた。
+	const formIhsTarget = necklineProjectionTarget({
+		neckline,
+		anchorIdx: rightShoulder.idx,
+		headIdx: head.idx,
+		headPrice: head.price,
+		direction: 'up',
+		fallbackNecklinePrice: formIhsNl,
+	});
 	const formIhsStructureRange = start && end ? { start, end } : undefined;
 	const formIhsPrecedingTrend = buildPrecedingTrend(candles, trend, left.idx);
 
@@ -1813,8 +1915,9 @@ function formingInverseHsForHead(
 		neckline,
 		...(structureGate ? { structureGate } : {}),
 		trendlineLabel: 'ネックライン',
-		breakoutTarget: formIhsTarget,
-		targetMethod: 'neckline_projection' as const,
+		...(formIhsTarget !== undefined
+			? { breakoutTarget: formIhsTarget, targetMethod: 'neckline_projection' as const }
+			: {}),
 		completionPct: Math.round(completion * 100),
 		_method: isProvisional ? 'forming_ihs_provisional' : 'forming_ihs',
 	};
