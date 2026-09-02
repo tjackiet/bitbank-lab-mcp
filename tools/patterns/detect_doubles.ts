@@ -7,6 +7,7 @@ import { generatePatternDiagram } from '../../lib/pattern-diagrams.js';
 import { patternBarRange } from './bar-thresholds.js';
 import { computeTargetReach, deduplicatePatterns, finalizeConf, periodScoreDays } from './helpers.js';
 import { clamp01, relDev } from './regression.js';
+import { averageDefinedAxes, breakoutQualityScore, retracementScore } from './scoring.js';
 import {
 	DOUBLE_LEVEL_MAX_PCT,
 	detectTroughZoneReentry,
@@ -15,8 +16,6 @@ import {
 	levelSpreadMetrics,
 	type PatternSizeRejectReason,
 	type PriorTrendResult,
-	RETRACEMENT_MAX,
-	RETRACEMENT_MIN,
 	type ReversalSide,
 	type ReversalStructureResult,
 	type SizeThresholds,
@@ -345,37 +344,6 @@ function buildStructureGate(gate: ReversalStructureResult): PatternStructureGate
 }
 
 /**
- * 戻り率スコア。許容帯 [{@link RETRACEMENT_MIN}, {@link RETRACEMENT_MAX}] の**中央で 1、端で 0**。
- *
- * 帯の外は構造ゲートが既に弾いているので、ここに来る値は必ず帯の中にある。
- * 「帯の中央 = 教科書的な戻り」という評価であって、合否の判定ではない。
- */
-function retracementScore(ratio: number | undefined): number | undefined {
-	if (ratio === undefined || !Number.isFinite(ratio)) return undefined;
-	const center = (RETRACEMENT_MIN + RETRACEMENT_MAX) / 2;
-	const halfWidth = (RETRACEMENT_MAX - RETRACEMENT_MIN) / 2;
-	if (halfWidth <= 0) return undefined;
-	return clamp01(1 - Math.abs(ratio - center) / halfWidth);
-}
-
-/**
- * ブレイク品質スコア。突破足の終値がネックラインをパターン高さの何割ぶん超えたか。
- *
- * ネックラインぎりぎりの突破（`BREAKOUT_BUFFER_PCT` すれすれ）と、
- * 高さの半分ぶん一気に抜けた突破を同じ整合度にしないための軸。
- */
-function breakoutQualityScore(
-	necklinePrice: number,
-	breakoutClose: number,
-	patternHeight: number,
-	side: ReversalSide,
-): number | undefined {
-	if (!Number.isFinite(breakoutClose) || !(patternHeight > EPSILON)) return undefined;
-	const excess = side === 'bottom' ? breakoutClose - necklinePrice : necklinePrice - breakoutClose;
-	return clamp01(excess / patternHeight);
-}
-
-/**
  * 完成済みダブルの整合度サブスコア。
  *
  * 旧実装は `(tolMargin + symmetry + per) / 3` で、`tolMargin` と `symmetry` は
@@ -402,11 +370,9 @@ function buildDoubleScore(opts: {
 		...(breakoutQuality !== undefined ? { breakoutQuality: Number(breakoutQuality.toFixed(4)) } : {}),
 		duration: Number(opts.durationScore.toFixed(4)),
 	};
-	// 算出できなかった軸は平均から外す（0 として混ぜると欠測が減点になる）
-	const values = [symmetry, retracement, breakoutQuality, opts.durationScore].filter(
-		(v): v is number => v !== undefined,
-	);
-	const base = values.reduce((sum, v) => sum + v, 0) / values.length;
+	// 算出できなかった軸は平均から外す（0 として混ぜると欠測が減点になる）。
+	// `symmetry` は常に数値なので `averageDefinedAxes` が `undefined` を返すことはない。
+	const base = averageDefinedAxes([symmetry, retracement, breakoutQuality, opts.durationScore]) ?? symmetry;
 	return { components, base };
 }
 
