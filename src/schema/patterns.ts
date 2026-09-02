@@ -650,7 +650,16 @@ export const DetectedPatternSchema = z.object({
 					'ネックライン突破の質。突破足の終値がネックラインをパターン高さの何割ぶん' +
 						'超えたかで測る。形成中パターンには付かない',
 				),
-			duration: z.number().optional().describe('パターンの形成期間スコア'),
+			duration: z
+				.number()
+				.optional()
+				.describe(
+					'パターンの形成期間スコア。**基準が type で違う**（issue #199 候補 2）: ' +
+						'triple 系は**バー数基準**（外側 2 構成点の距離。< 12 本 → 0.6 / < 18 → 0.7 / ' +
+						'< 26 → 0.8 / 26 本以上 → 0.9 の単調な階梯）、`double` 系と H&S 系は**暦日基準**' +
+						'（< 5 日 → 0.6 / < 15 → 0.8 / < 30 → 0.9 / それ以外 → 0.7）。' +
+						'triple だけバー数なのは、暦日基準では intraday で値が定数に張り付いていたため',
+				),
 		})
 		.optional()
 		.describe(

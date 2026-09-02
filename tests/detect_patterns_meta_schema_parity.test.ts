@@ -92,7 +92,8 @@ function buildNoisyCandles(): Candle[] {
  * `NECKLINE_SLOPE_LIMIT`（2%）、パターン高さ 11% > `heightPct`（3%）、
  * 谷の押し 9% 超 > `depthPct`（5%）、山のばらつき / 高さ = 0.38 < `MAX_LEVEL_SPREAD_RATIO`（0.5）、
  * 構造ゲートの戻り率 0.69 ∈ [0.2, 0.9]、山3 から 20 本以内にネックラインを 1.5% 割る足がある
- * （→ `status='completed'`）。山1-山3 の間隔 20 日で `periodScoreDays` が 0.9 になる。
+ * （→ `status='completed'`）。山1-山3 の間隔は 20 バー（idx 22 → 42）で、triple は #199 候補 2 以降
+ * `periodScoreBars` のバー数基準なので `duration` は 0.8 区分（18 本以上 26 本未満）になる。
  *
  * ## ブレイクの深さ（issue #199 で追加した制約）
  *
