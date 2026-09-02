@@ -7,11 +7,12 @@
 import { MIN_DEPTH_PCT, MIN_PATTERN_HEIGHT_PCT, type SizeThresholds } from './structural.js';
 
 /**
- * パターンごとの最小整合度（閾値）。
+ * パターンごとの最小整合度（下限ゲート）。
  *
- * **実際に読まれているのは `triple_top` / `triple_bottom` の 2 つだけ**（issue #206）。
- * double / H&S の 4 エントリは定義されているが、どの検出器も参照していない。
- * 本表を触るときは「その値が本当に効くのか」を先に確かめること。
+ * **triple の 2 エントリしか無い。これは意図的で、抜けではない**（issue #206）。
+ * #199 までは double / H&S の 4 エントリも並んでいたが、**どの検出器も読んでいない
+ * 死んだ定義**だった（`detect_doubles.ts` / `detect_hs.ts` は本モジュールを import
+ * すらしていない）。#206 で「配線する / 消す」を実測してから決め、**消すほうを採った。**
  *
  * ## triple の 0.6（issue #199 候補 1 で 0.7 から変更）
  *
@@ -27,12 +28,13 @@ import { MIN_DEPTH_PCT, MIN_PATTERN_HEIGHT_PCT, type SizeThresholds } from './st
  * **同じ数値がまったく別の仕事をする**——ゲート棄却が構造単位 58/130 = 44.6% に跳ね上がり、
  * 「形の良さの下限」だった検査が主フィルタに化ける（合成 fixture の教科書的トリプルトップまで落ちる）。
  *
- * 0.6 を採ったのは**このリポジトリが既に持っている「形状不十分」の線**だから:
+ * 0.6 を採った根拠は 3 つあり、**3 つ目が triple 固有**である点が本表の形を決めている:
  *
- * - `detectPatternsViewsHandler` の低 confidence 警告ラベルが `confidence < 0.6`
- * - `detect_patterns` が LLM に出す整合度の帯が「0.6 未満 = 形状不十分」
- * - 形成中トリプルの上限 `FORMING_MAX_CONFIDENCE = 0.59` はこの 0.6 に合わせて置かれている
- *   ——完成済みの下限を 0.6 にすると forming ≤ 0.59 / completed ≥ 0.60 で隣接し、帯が重ならない
+ * 1. `detectPatternsViewsHandler` の低 confidence 警告ラベルが `confidence < 0.6`（type 非依存）
+ * 2. `detect_patterns` が LLM に出す整合度の帯が「0.6 未満 = 形状不十分」（type 非依存）
+ * 3. 形成中トリプルの上限 `FORMING_MAX_CONFIDENCE = 0.59`（`detect_triples.ts`）はこの 0.6 に
+ *    合わせて置かれている——完成済みの下限を 0.6 にすると forming ≤ 0.59 / completed ≥ 0.60 で
+ *    隣接し、帯が重ならない。**この上限は triple にしか無い。**
  *
  * 実測の裏取り（標準コーパス 800 + 実データ B 96 + 補助スイープ、構造単位 130）:
  * 0.6 が切るのは 18 件（13.8%）で、旧ゲートの 12.2% と同じオーダー＝floor のままでいられる。
@@ -42,14 +44,34 @@ import { MIN_DEPTH_PCT, MIN_PATTERN_HEIGHT_PCT, type SizeThresholds } from './st
  * （＝旧 `tolMargin` 一本足打法とは別の切り方になっている）。分布上 0.55〜0.59 は空なので、
  * 0.55〜0.60 のどこに置いても切れ方は同じ。詳細は
  * `docs/internal/triple-confidence-multi-axis-phase2.md`。
+ *
+ * ## なぜ double / H&S には下限を置かないのか（issue #206。**新しく足さないこと**）
+ *
+ * 「triple にあるなら他にも」で足したくなるが、**上の 0.6 を非任意にしていた性質が
+ * double / H&S には無い。** #206 Phase 1 の実測（同じ 940 ケース。構造単位）:
+ *
+ * | | triple | `head_and_shoulders` | `inverse_head_and_shoulders` | `double_*` |
+ * |---|---|---|---|---|
+ * | 分布の空白帯 | **0.55〜0.59 が空** | 0.42 から連続で空白なし | 0.45 から連続で空白なし | 実測が 0.65 以上にしか無い |
+ * | 0.6 が切る集合 | 1 クラス（全件 `retracement ≤ 0.1905` かつ全件未ブレイク） | **直上の 0.60〜0.64 と全 6 軸で見分けが付かない** | 同左 | **0 件（no-op）** |
+ * | 値の感度（構造単位） | 0.55〜0.60 のどこでも 18 件 | 0.58→23 / 0.60→33 / 0.62→45 件 | 0.58→49 / 0.60→72 / 0.62→95 件 | 0.65 に 5 件が同値で載る |
+ *
+ * つまり triple の 0.6 は**分布の空白に置いた線**（値がつまみでない）だが、
+ * H&S に同じことをすると**任意の位置で連続分布を切るつまみ**になり、切った集合が
+ * 「形が不十分」という 1 つのクラスにもならない。#204 Phase 2 後の実データで
+ * `head_and_shoulders` の 0.69（`timeSymmetry` 0.3111 が効いて下がった構造。旧 3 軸式では 0.95）
+ * は #198 が 1hour で検出可能にしたものそのもので、**0.7 を置くと消える。**
+ * 値の根拠が無いまま load-bearing な構造の 0.01 下にゲートを置くことになる。
+ *
+ * 下限を置かない代わりに、低整合度は**消さずにラベルを付けて出す**
+ * （`detectPatternsViewsHandler` の `⚠️ 信頼度: 低い（形状不十分・単独判断不可、他指標と必ず併用）`）。
+ * 「消す」か「ラベルを付ける」かは type ごとの方針の違いで、triple だけが「消す」側なのは
+ * 上の 3 つ目の根拠（`FORMING_MAX_CONFIDENCE` との隣接）と棄却集合のクラス性が
+ * triple にしか無いため。実測ログは `docs/internal/min-confidence-unwired-entries-206.md`。
  */
 export const MIN_CONFIDENCE: Record<string, number> = {
 	triple_top: 0.6,
 	triple_bottom: 0.6,
-	double_top: 0.65,
-	double_bottom: 0.65,
-	head_and_shoulders: 0.7,
-	inverse_head_and_shoulders: 0.7,
 };
 
 /** スキーマのデフォルト値（サーバ側で埋められる値） */

@@ -57,6 +57,75 @@
 | 42 | #208 | H&S / 逆 H&S の `breakoutTarget` の**高さ**を「ブレイク足時点の（外挿した）ネックライン」から「**頭の真下のネックライン**」に戻した。投影の起点は従来どおりブレイク足（forming は最終構成点）。3 経路（strict / relaxed / forming）でばらばらだった基準を `necklineProjectionTarget()` 1 本に揃えた | **変わらない**（0 / 896。`confidence` も全件不変。動くのは `breakoutTarget` / `targetReached` / `targetReachedPct` 系のみ） |
 | 43 | #210 | `targetReachedPct` の 3 つの欠陥（到達側に上限が無い / 分母が潰れる / 走査が系列末尾まで無制限）を同時に直した。`breakoutTarget` の算出式は触らない | **変わらない**（1,456 行を全フィールド突き合わせて target **進捗**系以外は 0 行。`confidence` / `status` / `aftermath` も不変） |
 | 44 | #204 | H&S / 逆 H&S の整合度から `tolMargin` を捨て（`symmetry` と**同じ `relDev(左肩, 右肩)` 由来**で実質 2 軸だった）、`headProminence` / `timeSymmetry` / `retracement` / `breakoutQuality` を足して 6 軸平均にした。H&S に `scoreComponents` が初めて付く | **type 別の件数はほぼ不変**（延べ +6 / 1,962。H&S 以外は 940 ケース全件で完全一致）。ただし `globalDedup` の代表が入れ替わり、`range` の違う候補が残るケースが 80 / 940 |
+| 45 | #206 | `MIN_CONFIDENCE` から**どの検出器も読んでいなかった 4 エントリ**（`double_top` / `double_bottom` / `head_and_shoulders` / `inverse_head_and_shoulders`）を削除した。配線する案（A）と triple の下限も外す案（D）を実測してから「消す」を選んだ | **変わらない**（940 ケース全件で `data.patterns` が完全一致） |
+
+### Removed（`MIN_CONFIDENCE` の未配線 4 エントリを削除した。#206）
+
+`MIN_CONFIDENCE`（`tools/patterns/config.ts`）は 6 種別ぶんのエントリを持っていたが、
+**読まれていたのは `triple_top` / `triple_bottom` の 2 つだけ**だった。
+`detect_doubles.ts` / `detect_hs.ts` は `patterns/config.js` を import すらしておらず、
+`double_*` の 0.65 と H&S 系の 0.7 は**定義だけあって誰も読まない値**だった
+（旧テストは「主要パターン種別が定義されている」として、まさにその死んだエントリの
+存在を要求していた——表の見た目だけを固定していて、効くかどうかは見ていなかった）。
+
+**`data.patterns` は 1 バイトも変わらない**（940 ケース全件で完全一致）。
+
+#### 4 案を実測してから決めた
+
+| 案 | 内容 | 実測した検出結果 |
+|---|---|---|
+| A | 4 エントリを配線する | **減る**（0.6 で出力延べ −13 / 0.7 で −77） |
+| **B（採用）** | 4 エントリを削除し「下限を持つのは triple だけ」を docstring に明記 | **不変** |
+| C | 現状維持 ＋ 未配線を docstring に明記 | 不変 |
+| D | triple の下限も外し全 type で下限なしに統一 | **増える**（triple が出力延べ +20） |
+
+計測は #205 / #213 と同じ 940 ケース（標準コーパス 800 + 実データ B 96 + 補助スイープ 44）。
+A / D は post-hoc のフィルタでは測れない（下限で strict が 0 件になると relaxed フォールバックが
+発火し、`globalDedup` の代表も入れ替わる）ので、**検出器に実際にゲートを入れて測った**。
+閾値 0 で入れたゲートが 940 ケース全件で変更前と完全一致することを先に確認してある。
+詳細は `docs/internal/min-confidence-unwired-entries-206.md`。
+
+#### B を採った理由 — triple の 0.6 を非任意にしていた性質が double / H&S に無い
+
+#199 が triple に 0.6 を置いた根拠は 3 つあり、**3 つ目が triple 固有**だった:
+
+1. 低 confidence 警告ラベルの境界が `confidence < 0.6`（type 非依存。**成り立つ**）
+2. LLM に出す整合度の帯が「0.6 未満 = 形状不十分」（type 非依存。**成り立つ**）
+3. 形成中トリプルの上限 `FORMING_MAX_CONFIDENCE = 0.59` との隣接（**triple にしか無い**
+   ——H&S の forming は実測 0.50〜0.87、`double_bottom` の forming は 0.93〜1.00 で、
+   完成済みの下限を 0.6 にしても帯は重なったまま）
+
+さらに実測（構造単位）:
+
+| | triple | `head_and_shoulders` | `inverse_head_and_shoulders` | `double_*` |
+|---|---|---|---|---|
+| 分布の空白帯 | **0.55〜0.59 が空** | 0.42 から連続で空白なし | 0.45 から連続で空白なし | 実測が 0.65 以上にしか無い |
+| 0.6 が切る集合 | 1 クラス（全件 `retracement ≤ 0.1905` かつ全件未ブレイク） | **直上の 0.60〜0.64 と全 6 軸で見分けが付かない** | 同左 | **0 件（no-op）** |
+| 値の感度 | 0.55〜0.60 のどこでも 18 件 | 0.58→23 / 0.60→33 / 0.62→45 件 | 0.58→49 / 0.60→72 / 0.62→95 件 | 0.65 に 5 件が同値で載る |
+
+つまり triple の 0.6 は**分布の空白に置いた線**で値がつまみではないが、H&S に同じことをすると
+**任意の位置で連続分布を切るつまみ**になり、切った集合が「形状不十分」という 1 つのクラスにも
+ならない。加えて `head_and_shoulders` の実データ 0.69（#198 が 1hour で検出可能にした構造そのもの。
+`timeSymmetry` 0.3111 が効いて下がった。旧 3 軸式では 0.95）は **0.7 を置くと消える**——
+根拠の無い値を load-bearing な構造の 0.01 下に置くことになる。
+
+D（triple の下限も外す）を採らなかったのは、#199 が消した 2 構造
+（「真ん中の山が谷より低い V 字」の `triple_top` と「単調に切り下がる 3 谷」の `triple_bottom`）が
+そのまま戻るため。**対称性のために根拠のある判断を巻き戻すことになる。**
+`MIN_CONFIDENCE` を消すと `FORMING_MAX_CONFIDENCE = 0.59` の根拠（完成済みの下限 0.6 との隣接）も
+同時に失われる点も、D のコストとして残る。
+
+低整合度の扱いは type ごとに違ったままで、triple だけが「消す」・他は「ラベルを付けて出す」
+（`⚠️ 信頼度: 低い（形状不十分・単独判断不可、他指標と必ず併用）`）。
+**この非対称は残るが、根拠がある非対称**なので docstring に理由ごと書いた。
+
+#### 死んだエントリが二度と生えないようにした
+
+`tests/patterns/config.test.ts` で 2 つを機械的に固定した:
+
+- `MIN_CONFIDENCE` のキー集合が `triple_bottom` / `triple_top` **ちょうど**であること
+- `tools/patterns/detect_*.ts` のうち `MIN_CONFIDENCE` を読むのが `detect_triples.ts` **だけ**であること
+  （表を増やさずに配線だけ増える逆向きの事故も止める）
 
 ### Changed（H&S の整合度を多軸化した。#204 Phase 2）
 

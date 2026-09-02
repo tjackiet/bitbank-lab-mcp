@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { DetectPatternsInputSchema } from '../../src/schemas.js';
 import {
@@ -15,11 +18,23 @@ import {
 } from '../../tools/patterns/config.js';
 import { MIN_DEPTH_PCT, MIN_PATTERN_HEIGHT_PCT } from '../../tools/patterns/structural.js';
 
+/**
+ * `MIN_CONFIDENCE` の**エントリ集合そのもの**を固定する（issue #206）。
+ *
+ * #199 まで本表には double / H&S の 4 エントリも並んでいたが、**どの検出器も読んでいない
+ * 死んだ定義**だった（旧テストは「主要パターン種別が定義されている」として、まさにその
+ * 死んだエントリの存在を要求していた——表の見た目だけを固定していて、効くかどうかは
+ * 一切見ていなかった）。#206 で実測のうえ削除した判断を、ここで機械的に固定する。
+ *
+ * 足したくなったら先に `tools/patterns/config.ts` の docstring を読むこと。
+ * triple の 0.6 が非任意なのは**分布の空白帯（0.55〜0.59）に置いた線**だからで、
+ * H&S / double にはその性質が無い（連続分布・棄却集合がクラスにならない・double は no-op）。
+ */
 describe('MIN_CONFIDENCE', () => {
-	it('主要パターン種別が定義されている', () => {
-		expect(MIN_CONFIDENCE.triple_top).toBeDefined();
-		expect(MIN_CONFIDENCE.double_top).toBeDefined();
-		expect(MIN_CONFIDENCE.head_and_shoulders).toBeDefined();
+	it('エントリは triple の 2 つだけ（double / H&S は #206 で削除。増やさない）', () => {
+		expect(Object.keys(MIN_CONFIDENCE).sort()).toEqual(['triple_bottom', 'triple_top']);
+		expect(MIN_CONFIDENCE.triple_top).toBe(0.6);
+		expect(MIN_CONFIDENCE.triple_bottom).toBe(0.6);
 	});
 
 	it('値は 0-1 の範囲', () => {
@@ -27,6 +42,20 @@ describe('MIN_CONFIDENCE', () => {
 			expect(v).toBeGreaterThanOrEqual(0);
 			expect(v).toBeLessThanOrEqual(1);
 		}
+	});
+
+	/**
+	 * 「表にエントリがある」と「検出器が読んでいる」は別（#206 が起きた原因そのもの）。
+	 * 読み手を `detect_triples.ts` だけに固定して、**表を増やさずに配線だけ増える**逆向きの
+	 * 事故も止める。tripwire であって証明ではない——再 export 経由の間接参照は拾えない。
+	 */
+	it('`MIN_CONFIDENCE` を読む検出器は detect_triples.ts だけ', () => {
+		const patternsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'tools', 'patterns');
+		const readers = fs
+			.readdirSync(patternsDir)
+			.filter((f) => f.startsWith('detect_') && f.endsWith('.ts'))
+			.filter((f) => /\bMIN_CONFIDENCE\b/.test(fs.readFileSync(path.join(patternsDir, f), 'utf8')));
+		expect(readers).toEqual(['detect_triples.ts']);
 	});
 });
 
