@@ -36,6 +36,7 @@ import { buildBtcJpy1hour202608Candles } from '../fixtures/btc_jpy_1hour_2026_08
 
 type Candle = ReturnType<typeof buildBtcJpy1hour202608Candles>[number];
 
+/** 与えた candles だけを見せて `detect_patterns` を 1 回叩き、`data.patterns` を返す。 */
 async function runOn(candles: Candle[]) {
 	vi.mocked(analyzeIndicators).mockResolvedValueOnce(
 		asMockResult({ ok: true, summary: 'ok', data: { chart: { candles } } }),

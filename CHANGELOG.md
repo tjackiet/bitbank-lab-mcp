@@ -115,7 +115,7 @@
 `src/schema/patterns.ts` の `targetReachedPct` は `z.number().optional()` だけで description も
 値域も無かったので、**値域（0〜99 / 100〜999）・999 が「以上」であること・出ない 3 条件**を宣言し、
 新設の `targetProgressOmittedReason` も Zod に宣言した（未宣言だと `parse()` が黙って剥がす。
-#155 / #160 / #184 / #189 で 4 回）。実装を `target-reach.ts` に切り出したのは
+issue #155 / #160 / #184 / #189 で 4 回）。実装を `target-reach.ts` に切り出したのは
 **スキーマが 3 定数を import して description に埋めるため**——数値を書き写すと振る舞いと宣言が
 黙ってずれる。
 

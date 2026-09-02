@@ -10,29 +10,6 @@
 
 import type { CandleData } from './types.js';
 
-// ---------------------------------------------------------------------------
-// ブレイク後の target 到達判定（high/low ベース）
-//
-// 最終 close ベースだと、ブレイク後に一度 target を越えてから戻ったケースで
-// 未到達扱いされてしまう。実際には「ブレイク後に target を越えたか」を見たいので、
-// breakoutIdx 以降のローソク足を走査して extremum
-// （下方ブレイクなら min low / 上方ブレイクなら max high）を取り、その値で進捗率を計算する。
-//
-// 入力:
-//   - candles: 全ローソク足
-//   - breakoutIdx: ブレイク確定足のインデックス（このバー以降を走査）
-//   - breakoutPrice: ブレイク確定時の参照価格（通常は close）
-//   - target: 想定ターゲット価格
-//   - direction: 'up'  → breakoutIdx 以降の最高 high で評価
-//                'down' → breakoutIdx 以降の最安 low で評価
-//   - patternHeight: そのパターンが投影している値幅（分母の退化判定に使う）
-//
-// 戻り値:
-//   - `{ kind: 'measured', … }` — 進捗を測れた
-//   - `{ kind: 'omitted', … }` — 分母が退化していて測れない（呼び出し側が申告する）
-//   - `undefined` — 入力不正 / 走査対象の足が無い
-// ---------------------------------------------------------------------------
-
 /**
  * ブレイク足から何本先まで target 到達を探すか（issue #210 (3)）。
  *
@@ -114,6 +91,28 @@ export interface TargetReachOmitted {
 
 export type TargetReachResult = TargetReachInfo | TargetReachOmitted;
 
+/**
+ * ブレイク後に target へどこまで進んだかを **high / low ベース**で測る。
+ *
+ * 最終 close ベースだと、ブレイク後に一度 target を越えてから戻ったケースを未到達扱いして
+ * しまう。見たいのは「ブレイク後に target を越えたか」なので、`breakoutIdx` 以降を走査して
+ * extremum（下方ブレイクなら min low / 上方ブレイクなら max high）を取り、その値で進捗率を出す。
+ *
+ * 走査は系列末尾までではなく `TARGET_REACH_MAX_BARS` 本で打ち切る（#210 (3)）。分母が
+ * `MIN_TARGET_DISTANCE_HEIGHT_RATIO` を下回ったら測らずに `omitted` を返す（#210 (2)）。
+ * 到達側の `targetReachedPct` は `TARGET_REACHED_PCT_CAP` でクランプする（#210 (1)）。
+ *
+ * @param candles 全ローソク足
+ * @param breakoutIdx ブレイク確定足のインデックス（このバーから走査する）
+ * @param breakoutPrice ブレイク確定時の参照価格（通常は close）
+ * @param target 想定ターゲット価格（`breakoutTarget`）
+ * @param direction `'up'` = 最高 high で評価 / `'down'` = 最安 low で評価
+ * @param patternHeight そのパターンが投影している値幅。**分母の退化判定にのみ使う**
+ *   （進捗率の分母は従来どおり `|target − breakoutPrice|`）
+ * @returns `{ kind: 'measured', … }` = 進捗を測れた /
+ *   `{ kind: 'omitted', … }` = 分母が退化していて測れない（呼び出し側が申告する） /
+ *   `undefined` = 入力不正または走査対象の足が無い
+ */
 export function computeTargetReach(
 	candles: readonly CandleData[],
 	breakoutIdx: number,
