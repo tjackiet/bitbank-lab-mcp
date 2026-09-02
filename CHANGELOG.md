@@ -54,6 +54,61 @@
 | 39 | #200 | 縮小段（globalDedup / requireCurrentInPattern / ライフサイクル絞り込み）の件数内訳を `meta.reduction` と content 行に申告。パターン詳細の時刻表示（intraday）と構造図の UTC/JST 不一致を修正 | **変わらない**（表示層のみ。`structureDiagram.svg` / `.artifact.title` を除き完全一致を回帰テストで固定） |
 | 40 | #198 | `headProminencePct`（H&S / 逆H&S の頭の最小突出率）が未指定時に `tolerancePct` の時間軸オート表を誤って流用していたのを、専用の時間軸オート表（`getHeadProminenceForTf`）に切り離した | 実データ 1hour で**増える**（+4 / 14。`head_and_shoulders` 0→2 件・`inverse_head_and_shoulders` 0→2 件。他 type・`1day` は 0 件変化） |
 | 41 | #199 | triple の整合度から `symmetry`（= 1 − 最大 relDev。実質定数）を捨て、`retracement` / `breakoutQuality` を独立軸に足して doubles と同じ 4 軸構成にした。`MIN_CONFIDENCE.triple_*` を 0.7 → 0.6 に置き直した（閾値を緩めたのではなく confidence のスケールが動いたぶんの追随） | 実データで**減る**（−20 / 896。**増加 0**。消えた構造は 2 つで、いずれも「真ん中の山が谷より低い V 字」と「単調に切り下がる 3 谷」）/ 合成 fixture は変わらない |
+| 42 | #208 | H&S / 逆 H&S の `breakoutTarget` の**高さ**を「ブレイク足時点の（外挿した）ネックライン」から「**頭の真下のネックライン**」に戻した。投影の起点は従来どおりブレイク足（forming は最終構成点）。3 経路（strict / relaxed / forming）でばらばらだった基準を `necklineProjectionTarget()` 1 本に揃えた | **変わらない**（0 / 896。`confidence` も全件不変。動くのは `breakoutTarget` / `targetReached` / `targetReachedPct` 系のみ） |
+
+### Fixed（H&S の `breakoutTarget` の高さを頭の真下で測る。#208 案 A）
+
+`detect_hs.ts` の値幅は**高さも投影の起点も**「ブレイク足時点のネックライン」で測っていた
+（strict）。`necklineAt` は**クランプせず線形外挿する**ので、傾いたネックラインを外挿するぶん
+高さが歪む。実データ B の 1hour ケースでは定義点から 17 本外挿した結果、高さが
+472,626 → 202,172（1/2.34）に潰れ、**下抜けブレイクなのに target がブレイク終値より
+39,079 円上**に着地して `targetReached: true` / `targetReachedPct: 100` がブレイク直後に
+無条件で立っていた（issue #208 の症状）。
+
+教科書の H&S の値幅は「**頭からネックラインまでの高さ**を、ブレイク点から投影する」。
+起点をブレイク足に置くのは妥当だが、**高さの測定基準にも同じ値を使っていたのが誤り**。
+
+```text
+hsTarget  = necklineAt(nl, breakoutIdx) − (head.price − necklineAt(nl, head.idx))
+ihsTarget = necklineAt(nl, breakoutIdx) + (necklineAt(nl, head.idx) − head.price)
+```
+
+あわせて、同じ `targetMethod: 'neckline_projection'` を名乗りながら**基準が 3 通りあった**のを
+`necklineProjectionTarget()` 1 本に揃えた。
+
+| 経路 | 高さの基準（before → after） | 投影の起点（before → after） |
+|---|---|---|
+| strict | `necklineAt(breakoutIdx)` → **`necklineAt(head.idx)`** | `necklineAt(breakoutIdx)`（不変） |
+| relaxed | `nlY`（水平線）→ **`necklineAt(head.idx)`** | `nlY` → `necklineAt(breakoutIdx)`（**値は同値**。水平線なのでどの `i` でも `nlY`） |
+| forming | `neckline[0].y`（**左端**）→ **`necklineAt(head.idx)`** | `neckline[0].y` → **`necklineAt(rightShoulder.idx)`** |
+
+高さが 0 以下（外挿ネックラインが頭を追い越した）なら `breakoutTarget` / `targetMethod` を
+**出さない**。標準コーパス 896 ケースで**発火 0 件**——頭はネックラインの 2 定義点の間にあり、
+頭の真下の値は内挿になって必ず両端の間に収まるため構造的に到達しない。潜在ガードとして残す。
+
+**`necklineAt` 本体（外挿クランプ）は触っていない。** `findHsBreakoutIdx` が同じ関数を使うため、
+クランプを入れると `breakoutIdx` が動いて `status` / `range.end` / `per` / `confidence` まで
+連鎖する。issue #208 の案 B として別 issue に切る（計測ログの「副作用」節に、forming の起点が
+7〜54 本外挿になり 32 行で**ネックラインが頭を追い越す**ことを記録した——案 B の最優先対象）。
+
+計測（標準コーパス 800 + 実データ B 96 = 896 ケース / 生 2,680 行）:
+
+| | before | after |
+|---|---:|---:|
+| target 系を除くメンバ・`confidence` の差分 | — | **0 行** |
+| 「ブレイク直後に無条件で到達」（target がブレイク終値の向こう側に無い） | 824 行（構造単位 42） | **144 行（構造単位 9）** |
+| うち下方向 `head_and_shoulders` | 656 行 | **0 行** |
+| `targetReached: true` | 1,152 行（構造単位 67） | 640 行（構造単位 47） |
+| 高さの潰れ率（旧÷新）中央値 | 0.458 | — |
+
+残る 144 行（構造単位 9、すべて逆 H&S）は**全行で「ブレイク足の終値 − ネックライン」が
+値幅以上**——ブレイク足そのものが値幅を走り抜けているケースで、式の欠陥ではない。
+`targetReachedPct` が発散する（16,309% → 240,033%）のは `pct` の分母の取り方の問題で、
+before から存在する別の欠陥。
+
+詳細は `docs/internal/hs-breakout-target-height-208.md`。
+`tests/fixtures/detect_patterns_1hour_data_patterns_baseline.json` は 14 件中 4 件の target 系
+フィールドが変わる（件数・`confidence` は不変）。
 
 ### Changed / Fixed（triple の整合度を多軸化し、`MIN_CONFIDENCE.triple_*` を置き直した。#199 候補 1）
 
