@@ -17,8 +17,9 @@
  */
 
 import { patternBarsCap, structuralFloorBars } from './bar-thresholds.js';
-import { barsPerDay, calcATR, computeTargetReach, deduplicatePatterns, finalizeConf } from './helpers.js';
+import { barsPerDay, calcATR, deduplicatePatterns, finalizeConf } from './helpers.js';
 import { clamp01 } from './regression.js';
+import { computeTargetReach, targetReachFields } from './target-reach.js';
 import type { CandDebugEntry, DetectContext, DetectResult, PatternEntry } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -375,7 +376,7 @@ function buildTriangleResult(c: TriangleCandidateCtx): { pattern: PatternEntry; 
 		const bp = candles[breakoutIdx].close;
 		breakoutTarget = breakoutDirection === 'up' ? bp + patternHeight : bp - patternHeight;
 		breakoutTarget = Math.round(breakoutTarget);
-		targetReach = computeTargetReach(candles, breakoutIdx, bp, breakoutTarget, breakoutDirection);
+		targetReach = computeTargetReach(candles, breakoutIdx, bp, breakoutTarget, breakoutDirection, patternHeight);
 	}
 
 	// --- 用語正規化ラベル ---
@@ -400,14 +401,7 @@ function buildTriangleResult(c: TriangleCandidateCtx): { pattern: PatternEntry; 
 		outcome: hasBreakout ? (status === 'completed' ? 'success' : 'failure') : undefined,
 		breakoutBarIndex: hasBreakout ? breakoutIdx : undefined,
 		...(breakoutTarget !== undefined ? { breakoutTarget, targetMethod } : {}),
-		...(targetReach
-			? {
-					targetReachedPct: targetReach.targetReachedPct,
-					targetReached: targetReach.targetReached,
-					...(targetReach.targetReachedDate ? { targetReachedDate: targetReach.targetReachedDate } : {}),
-					targetReachedPrice: targetReach.targetReachedPrice,
-				}
-			: {}),
+		...targetReachFields(targetReach),
 	};
 
 	const debug: CandDebugEntry = {

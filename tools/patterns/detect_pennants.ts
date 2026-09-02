@@ -17,8 +17,9 @@
  */
 
 import { cappedBarsForDays } from './bar-thresholds.js';
-import { barsPerDay, calcATR, computeTargetReach, deduplicatePatterns, finalizeConf } from './helpers.js';
+import { barsPerDay, calcATR, deduplicatePatterns, finalizeConf } from './helpers.js';
 import { clamp01 } from './regression.js';
+import { computeTargetReach, targetReachFields } from './target-reach.js';
 import type { CandleData, DetectContext, DetectResult, PatternEntry } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -624,7 +625,7 @@ export function detectPennantsFlags(ctx: DetectContext): DetectResult {
 			const bp = candles[breakoutIdx].close;
 			breakoutTarget = breakoutDirection === 'up' ? bp + poleRange : bp - poleRange;
 			breakoutTarget = Math.round(breakoutTarget);
-			targetReach = computeTargetReach(candles, breakoutIdx, bp, breakoutTarget, breakoutDirection);
+			targetReach = computeTargetReach(candles, breakoutIdx, bp, breakoutTarget, breakoutDirection, poleRange);
 		}
 
 		patterns.push({
@@ -650,14 +651,7 @@ export function detectPennantsFlags(ctx: DetectContext): DetectResult {
 			...(hasBreakout ? { isTrendContinuation: isExpectedBreakout } : {}),
 			breakoutBarIndex: hasBreakout ? breakoutIdx : undefined,
 			...(breakoutTarget !== undefined ? { breakoutTarget, targetMethod: 'flagpole_projection' as const } : {}),
-			...(targetReach
-				? {
-						targetReachedPct: targetReach.targetReachedPct,
-						targetReached: targetReach.targetReached,
-						...(targetReach.targetReachedDate ? { targetReachedDate: targetReach.targetReachedDate } : {}),
-						targetReachedPrice: targetReach.targetReachedPrice,
-					}
-				: {}),
+			...targetReachFields(targetReach),
 		});
 
 		debugCandidates.push({

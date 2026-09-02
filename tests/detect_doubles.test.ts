@@ -711,8 +711,9 @@ describe('detectDoubles', () => {
 		expect(dt.targetReachedPct).toBeGreaterThanOrEqual(0);
 	});
 
-	it('double_top: ブレイク close == target（距離ゼロ）→ targetReached=true & pct=100', () => {
-		// target=140, breakClose=140 → breakoutPrice == target → targetDistance=0
+	it('double_top: ブレイク close == target（距離ゼロ）→ 進捗を出さず理由を申告する', () => {
+		// target=140, breakClose=140 → breakoutPrice == target → targetDistance=0。
+		// #210 の退化ガードで target 進捗系は出さず、理由だけを申告する（breakoutTarget は出る）。
 		const { candles, pivots } = buildDoubleTop({ peak1: 200, valley: 170, peak2: 200, breakoutClose: 140 });
 		const ctx = buildCtx({ candles, pivots });
 		const result = detectDoubles(ctx);
@@ -721,10 +722,11 @@ describe('detectDoubles', () => {
 		expect(dt).toBeDefined();
 		if (!dt) return;
 		expect(dt.breakoutTarget).toBe(140);
-		expect(dt.targetReached).toBe(true);
-		expect(dt.targetReachedPct).toBe(100);
-		expect(dt.targetReachedPrice).toBe(140);
-		expect(dt.targetReachedDate).toBeDefined();
+		expect(dt.targetProgressOmittedReason).toBe('degenerate_target_distance');
+		expect(dt.targetReached).toBeUndefined();
+		expect(dt.targetReachedPct).toBeUndefined();
+		expect(dt.targetReachedPrice).toBeUndefined();
+		expect(dt.targetReachedDate).toBeUndefined();
 	});
 
 	it('double_bottom: 一度 target 到達後に close が戻る → high/low ベースで targetReached=true', () => {
@@ -776,8 +778,8 @@ describe('detectDoubles', () => {
 		expect(db.targetReachedPct).toBeGreaterThanOrEqual(0);
 	});
 
-	it('double_bottom: ブレイク close == target（距離ゼロ）→ targetReached=true & pct=100', () => {
-		// target=160, breakClose=160
+	it('double_bottom: ブレイク close == target（距離ゼロ）→ 進捗を出さず理由を申告する', () => {
+		// target=160, breakClose=160（#210 の退化ガード）
 		const { candles, pivots } = buildDoubleBottom({ valley1: 100, peak: 130, valley2: 100, breakoutClose: 160 });
 		const ctx = buildCtx({ candles, pivots });
 		const result = detectDoubles(ctx);
@@ -786,9 +788,10 @@ describe('detectDoubles', () => {
 		expect(db).toBeDefined();
 		if (!db) return;
 		expect(db.breakoutTarget).toBe(160);
-		expect(db.targetReached).toBe(true);
-		expect(db.targetReachedPct).toBe(100);
-		expect(db.targetReachedPrice).toBe(160);
-		expect(db.targetReachedDate).toBeDefined();
+		expect(db.targetProgressOmittedReason).toBe('degenerate_target_distance');
+		expect(db.targetReached).toBeUndefined();
+		expect(db.targetReachedPct).toBeUndefined();
+		expect(db.targetReachedPrice).toBeUndefined();
+		expect(db.targetReachedDate).toBeUndefined();
 	});
 });

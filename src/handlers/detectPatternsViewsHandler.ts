@@ -12,6 +12,7 @@ import { formatFixed, formatInt, formatPctFromRatio, formatRounded } from '../..
 import { toStructured } from '../../lib/result.js';
 import { isIntradayType } from '../../tools/patterns/period.js';
 import type { Pivot } from '../../tools/patterns/swing.js';
+import { formatTargetProgressLine } from '../../tools/patterns/target-reach.js';
 import type { PatternEntry } from '../../tools/patterns/types.js';
 import type { McpResponse } from '../tool-definition.js';
 
@@ -1181,9 +1182,8 @@ export function formatPatternLine(
 			neckline_projection: 'ネックライン投影',
 		};
 		targetLine = `   - ターゲット価格: ${Math.round(Number(p.breakoutTarget)).toLocaleString('ja-JP')}円（${(p.targetMethod && methodJa[p.targetMethod]) || p.targetMethod}）`;
-		if (p?.targetReachedPct != null) {
-			targetLine += `\n   - ターゲット進捗: ${p.targetReachedPct}%${Number(p.targetReachedPct) >= 100 ? '（到達済み）' : ''}`;
-		}
+		const progressLine = formatTargetProgressLine(p);
+		if (progressLine) targetLine += `\n${progressLine}`;
 	}
 
 	// relaxed フォールバック由来の provenance（#191 B。値は `data.patterns[]._fallback` と同一）。

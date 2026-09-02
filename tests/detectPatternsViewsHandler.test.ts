@@ -13,6 +13,7 @@ import {
 	formatSummaryView,
 	REJECTION_CROSS_TOTAL_LABEL,
 } from '../src/handlers/detectPatternsViewsHandler.js';
+import { TARGET_REACH_MAX_BARS, TARGET_REACHED_PCT_CAP } from '../tools/patterns/target-reach.js';
 import type { PatternEntry } from '../tools/patterns/types.js';
 
 afterEach(() => {
@@ -1132,17 +1133,37 @@ describe('formatPatternLine', () => {
 		expect(result).toContain('ネックライン投影');
 	});
 
-	it('targetReachedPct < 100 のとき「到達済み」なし', () => {
+	it('targetReachedPct < 100 のとき「未到達」と走査窓の本数を出す', () => {
 		const p = makePattern({ breakoutTarget: 110000, targetMethod: 'pattern_height', targetReachedPct: 60 });
 		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
 		expect(result).toContain('60%');
-		expect(result).not.toContain('到達済み');
+		expect(result).toContain(`ブレイク後${TARGET_REACH_MAX_BARS}本以内は未到達`);
 	});
 
-	it('targetReachedPct >= 100 のとき「到達済み」を表示する', () => {
+	it('targetReachedPct >= 100 のとき「N本以内に到達」を表示する', () => {
 		const p = makePattern({ breakoutTarget: 110000, targetMethod: 'pattern_height', targetReachedPct: 105 });
 		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
-		expect(result).toContain('到達済み');
+		expect(result).toContain(`ブレイク後${TARGET_REACH_MAX_BARS}本以内に到達`);
+	});
+
+	it('上限に当たった pct は「以上」と申告する（issue #210 (1)）', () => {
+		const p = makePattern({
+			breakoutTarget: 110000,
+			targetMethod: 'pattern_height',
+			targetReachedPct: TARGET_REACHED_PCT_CAP,
+		});
+		expect(formatPatternLine(p, 0, 'summary', emptyMeta)).toContain(`${TARGET_REACHED_PCT_CAP}%以上`);
+	});
+
+	it('退化して進捗を出さなかった場合は content に理由が出る（issue #210 (2)）', () => {
+		const p = makePattern({
+			breakoutTarget: 110000,
+			targetMethod: 'neckline_projection',
+			targetProgressOmittedReason: 'degenerate_target_distance',
+		});
+		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
+		expect(result).toContain('ターゲット価格');
+		expect(result).toContain('ターゲット進捗: 出力なし');
 	});
 
 	it('breakoutTarget なしのとき ターゲット価格 なし', () => {

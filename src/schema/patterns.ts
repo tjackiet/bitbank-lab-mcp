@@ -1,4 +1,12 @@
 import { z } from 'zod';
+// target 進捗系の description は走査窓・上限・退化閾値を名指しで説明する。
+// 数値を書き写すと振る舞いと宣言が黙ってずれるので、実装から読む（`patterns/target-reach.ts`
+// は依存が型だけの軽い単位に切ってある。理由は同ファイル冒頭）。
+import {
+	MIN_TARGET_DISTANCE_HEIGHT_RATIO,
+	TARGET_REACH_MAX_BARS,
+	TARGET_REACHED_PCT_CAP,
+} from '../../tools/patterns/target-reach.js';
 import {
 	BaseMetaSchema,
 	BasePairInputSchema,
@@ -677,15 +685,53 @@ export const DetectedPatternSchema = z.object({
 	breakoutTarget: z.number().optional(), // 想定ターゲット価格（円）
 	targetMethod: z.enum(['flagpole_projection', 'pattern_height', 'neckline_projection']).optional(), // 計算根拠
 	// ターゲットまでの進捗率（%）。全パターン共通でブレイク後の最安値/最高値（high/low）ベースで算出。
-	// reached=true なら 100 以上にクランプ（オーバーシュート時の符号反転防止）、
-	// reached=false なら 99 でキャップ（丸めで 100 にせり上がるのを防ぐ）。
-	targetReachedPct: z.number().optional(),
+	targetReachedPct: z
+		.number()
+		.int()
+		.optional()
+		.describe(
+			`ブレイク価格から breakoutTarget までを 100% としたときの到達度（%）。分子は` +
+				`「ブレイク足から ${TARGET_REACH_MAX_BARS} 本以内の extremum（up=最高 high / down=最安 low）」、` +
+				`分母は |breakoutTarget − ブレイク価格|。\n` +
+				`値域は **0〜99（未到達）または 100〜${TARGET_REACHED_PCT_CAP}（到達済み）**。` +
+				`未到達側は floor して 99 でキャップ（99.6% が 100 に丸まって下流の 100 判定を誤らせるのを防ぐ）、` +
+				`到達側は round して [100, ${TARGET_REACHED_PCT_CAP}] にクランプする。` +
+				`**${TARGET_REACHED_PCT_CAP} ちょうどは「${TARGET_REACHED_PCT_CAP}% 以上」を意味する**（上限で切っている）。\n` +
+				`**出ない条件**: (a) ブレイクしていない、(b) breakoutTarget が出ない、` +
+				`(c) 分母がパターン高さの ${MIN_TARGET_DISTANCE_HEIGHT_RATIO * 100}% 未満に潰れている` +
+				`（= ブレイク足が既に想定値幅の大半を走り終えていて達成度を測れない）。` +
+				`(c) のときは targetProgressOmittedReason で申告する。`,
+		),
 	// ブレイク後の high/low ベース target 到達情報。double / triangle / wedge / pennant / flag /
 	// H&S / 逆H&S すべてで付与される。最終 close ベースだと一度到達してから戻したケースを
 	// 未到達扱いしてしまうため、extremum（up=最高 high / down=最安 low）で評価する。
-	targetReached: z.boolean().optional(),
-	targetReachedDate: z.string().optional(),
-	targetReachedPrice: z.number().optional(),
+	targetReached: z
+		.boolean()
+		.optional()
+		.describe(
+			`ブレイク足から **${TARGET_REACH_MAX_BARS} 本以内**に breakoutTarget へ到達したか。` +
+				`「いつか到達した」ではない——走査を系列末尾まで伸ばすと同じ構造でも問い合わせ時点で値が` +
+				`変わるため、窓を固定してある（issue #210）。ブレイクから ${TARGET_REACH_MAX_BARS} 本ぶんの足が` +
+				`まだ無い場合は、その時点までで判定した暫定値。出ない条件は targetReachedPct と同じ。`,
+		),
+	targetReachedDate: z
+		.string()
+		.optional()
+		.describe(`走査窓（ブレイク足から ${TARGET_REACH_MAX_BARS} 本以内）の extremum が付いた足の時刻（UTC ISO）。`),
+	targetReachedPrice: z
+		.number()
+		.optional()
+		.describe(`走査窓（ブレイク足から ${TARGET_REACH_MAX_BARS} 本以内）の extremum（up=最高 high / down=最安 low）。`),
+	targetProgressOmittedReason: z
+		.literal('degenerate_target_distance')
+		.optional()
+		.describe(
+			`target 進捗系フィールド（targetReached / targetReachedPct / targetReachedDate / targetReachedPrice）を` +
+				`**出さなかった**ことの申告。'degenerate_target_distance' = ` +
+				`|breakoutTarget − ブレイク価格| がパターン高さの ${MIN_TARGET_DISTANCE_HEIGHT_RATIO * 100}% 未満で、` +
+				`進捗率の分母が潰れている。ネックラインから投影する H&S / doubles で、ブレイク足がネックラインから` +
+				`値幅ぶん走り切っているときに起きる。**breakoutTarget 自体は出る**（進捗だけが測れない）。`,
+		),
 	// 用語正規化ラベル（neckline フィールドが何を指すかをパターン種別ごとに明示）
 	trendlineLabel: z.string().optional(),
 	// ペナント用: フラッグポール（旗竿）情報

@@ -1162,10 +1162,11 @@ describe('detectHeadAndShoulders', () => {
 		expect(hs.targetReached).toBe(false);
 	});
 
-	it('H&S: ブレイク close == target（距離ゼロ）→ targetReached=true & pct=100 を確定で返す', () => {
-		// target = 40, breakClose=40 → breakoutPrice === target → targetDistance=0
-		// 旧式は EPSILON ガードで undefined を返し metadata が全て落ちていた。
-		// 新式は「ブレイク時点で既に到達」とみなして reached=true, pct=100 を確定で返す。
+	it('H&S: ブレイク close == target（距離ゼロ）→ 進捗を出さず理由を申告する', () => {
+		// target = 40, breakClose=40 → breakoutPrice === target → targetDistance=0。
+		// #210 まではこれを「ブレイク時点で既に到達」として reached=true / pct=100 で返していたが、
+		// 距離ゼロは達成度を測る余地が無い状態そのものなので、退化ガードで進捗を出さない。
+		// **breakoutTarget は出る**（target の算出式は変えていない）。
 		const { candles, pivots } = buildHsWithBreakout({ breakIdx: 65, breakClose: 40 });
 		const ctx = buildCtx({ candles, pivots });
 		const result = detectHeadAndShoulders(ctx);
@@ -1176,10 +1177,11 @@ describe('detectHeadAndShoulders', () => {
 
 		expect(hs.status).toBe('completed');
 		expect(hs.breakoutTarget).toBe(40);
-		expect(hs.targetReached).toBe(true);
-		expect(hs.targetReachedPct).toBe(100);
-		expect(hs.targetReachedPrice).toBe(40);
-		expect(hs.targetReachedDate).toBeDefined();
+		expect(hs.targetProgressOmittedReason).toBe('degenerate_target_distance');
+		expect(hs.targetReached).toBeUndefined();
+		expect(hs.targetReachedPct).toBeUndefined();
+		expect(hs.targetReachedPrice).toBeUndefined();
+		expect(hs.targetReachedDate).toBeUndefined();
 	});
 
 	it('H&S: ブレイク close が既に target を下回る（オーバーシュート）→ targetReached=true & pct>=100', () => {
@@ -1327,8 +1329,8 @@ describe('detectHeadAndShoulders', () => {
 		expect(ihs.targetReached).toBe(false);
 	});
 
-	it('逆H&S: ブレイク close == target（距離ゼロ）→ targetReached=true & pct=100 を確定で返す', () => {
-		// target = 160, breakClose=160 → breakoutPrice === target → targetDistance=0
+	it('逆H&S: ブレイク close == target（距離ゼロ）→ 進捗を出さず理由を申告する', () => {
+		// target = 160, breakClose=160 → breakoutPrice === target → targetDistance=0（#210 の退化ガード）
 		const { candles, pivots } = buildInverseHsWithBreakout({ breakIdx: 65, breakClose: 160 });
 		const ctx = buildCtx({ candles, pivots });
 		const result = detectHeadAndShoulders(ctx);
@@ -1339,10 +1341,11 @@ describe('detectHeadAndShoulders', () => {
 
 		expect(ihs.status).toBe('completed');
 		expect(ihs.breakoutTarget).toBe(160);
-		expect(ihs.targetReached).toBe(true);
-		expect(ihs.targetReachedPct).toBe(100);
-		expect(ihs.targetReachedPrice).toBe(160);
-		expect(ihs.targetReachedDate).toBeDefined();
+		expect(ihs.targetProgressOmittedReason).toBe('degenerate_target_distance');
+		expect(ihs.targetReached).toBeUndefined();
+		expect(ihs.targetReachedPct).toBeUndefined();
+		expect(ihs.targetReachedPrice).toBeUndefined();
+		expect(ihs.targetReachedDate).toBeUndefined();
 	});
 
 	it('逆H&S: ブレイク close が既に target を上回る（オーバーシュート）→ targetReached=true & pct>=100', () => {

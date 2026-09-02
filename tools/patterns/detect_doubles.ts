@@ -5,7 +5,7 @@
 import { EPSILON } from '../../lib/math.js';
 import { generatePatternDiagram } from '../../lib/pattern-diagrams.js';
 import { patternBarRange } from './bar-thresholds.js';
-import { computeTargetReach, deduplicatePatterns, finalizeConf, periodScoreDays } from './helpers.js';
+import { deduplicatePatterns, finalizeConf, periodScoreDays } from './helpers.js';
 import { clamp01, relDev } from './regression.js';
 import { averageDefinedAxes, breakoutQualityScore, retracementScore } from './scoring.js';
 import {
@@ -24,6 +24,7 @@ import {
 	validateReversalStructure,
 } from './structural.js';
 import type { Pivot } from './swing.js';
+import { computeTargetReach, targetReachFields } from './target-reach.js';
 import {
 	type CandleData,
 	type DetectContext,
@@ -564,7 +565,7 @@ function findRelaxedDoubleTop(
 		);
 		const dtRelTarget = Math.round(necklinePrice - (dtRelAvgPeak - necklinePrice));
 		const dtRelReach = Number.isFinite(dtRelBp)
-			? computeTargetReach(candles, breakoutIdx, dtRelBp, dtRelTarget, 'down')
+			? computeTargetReach(candles, breakoutIdx, dtRelBp, dtRelTarget, 'down', dtRelAvgPeak - necklinePrice)
 			: undefined;
 		const structureRange =
 			candles[a.idx]?.isoTime && candles[c.idx]?.isoTime
@@ -592,14 +593,7 @@ function findRelaxedDoubleTop(
 			breakoutBarIndex: breakoutIdx,
 			breakoutTarget: dtRelTarget,
 			targetMethod: 'neckline_projection' as const,
-			...(dtRelReach
-				? {
-						targetReachedPct: dtRelReach.targetReachedPct,
-						targetReached: dtRelReach.targetReached,
-						...(dtRelReach.targetReachedDate ? { targetReachedDate: dtRelReach.targetReachedDate } : {}),
-						targetReachedPrice: dtRelReach.targetReachedPrice,
-					}
-				: {}),
+			...targetReachFields(dtRelReach),
 			structureDiagram: diagram,
 			_fallback: `relaxed_double_x${factor}`,
 		};
@@ -761,7 +755,7 @@ function findRelaxedDoubleBottom(
 		);
 		const dbRelTarget = Math.round(necklinePrice + (necklinePrice - dbRelAvgValley));
 		const dbRelReach = Number.isFinite(dbRelBp)
-			? computeTargetReach(candles, breakoutIdx, dbRelBp, dbRelTarget, 'up')
+			? computeTargetReach(candles, breakoutIdx, dbRelBp, dbRelTarget, 'up', necklinePrice - dbRelAvgValley)
 			: undefined;
 		const structureRange =
 			candles[a.idx]?.isoTime && candles[c.idx]?.isoTime
@@ -789,14 +783,7 @@ function findRelaxedDoubleBottom(
 			breakoutBarIndex: breakoutIdx,
 			breakoutTarget: dbRelTarget,
 			targetMethod: 'neckline_projection' as const,
-			...(dbRelReach
-				? {
-						targetReachedPct: dbRelReach.targetReachedPct,
-						targetReached: dbRelReach.targetReached,
-						...(dbRelReach.targetReachedDate ? { targetReachedDate: dbRelReach.targetReachedDate } : {}),
-						targetReachedPrice: dbRelReach.targetReachedPrice,
-					}
-				: {}),
+			...targetReachFields(dbRelReach),
 			structureDiagram: diagram,
 			_fallback: `relaxed_double_x${factor}`,
 		};
@@ -1443,7 +1430,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 				);
 				const dtTarget = Math.round(necklinePrice - (dtAvgPeak - necklinePrice));
 				const dtReach = Number.isFinite(dtBp)
-					? computeTargetReach(candles, breakoutIdx, dtBp, dtTarget, 'down')
+					? computeTargetReach(candles, breakoutIdx, dtBp, dtTarget, 'down', dtAvgPeak - necklinePrice)
 					: undefined;
 				const dtStructureRange =
 					candles[a.idx]?.isoTime && candles[c.idx]?.isoTime
@@ -1469,14 +1456,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					breakoutBarIndex: breakoutIdx,
 					breakoutTarget: dtTarget,
 					targetMethod: 'neckline_projection' as const,
-					...(dtReach
-						? {
-								targetReachedPct: dtReach.targetReachedPct,
-								targetReached: dtReach.targetReached,
-								...(dtReach.targetReachedDate ? { targetReachedDate: dtReach.targetReachedDate } : {}),
-								targetReachedPrice: dtReach.targetReachedPrice,
-							}
-						: {}),
+					...targetReachFields(dtReach),
 					structureDiagram: diagram,
 				});
 				foundDoubleTop = true;
@@ -1625,7 +1605,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 				);
 				const dbTarget = Math.round(necklinePrice + (necklinePrice - dbAvgValley));
 				const dbReach = Number.isFinite(dbBp)
-					? computeTargetReach(candles, breakoutIdx, dbBp, dbTarget, 'up')
+					? computeTargetReach(candles, breakoutIdx, dbBp, dbTarget, 'up', necklinePrice - dbAvgValley)
 					: undefined;
 				const dbStructureRange =
 					candles[a.idx]?.isoTime && candles[c.idx]?.isoTime
@@ -1651,14 +1631,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					breakoutBarIndex: breakoutIdx,
 					breakoutTarget: dbTarget,
 					targetMethod: 'neckline_projection' as const,
-					...(dbReach
-						? {
-								targetReachedPct: dbReach.targetReachedPct,
-								targetReached: dbReach.targetReached,
-								...(dbReach.targetReachedDate ? { targetReachedDate: dbReach.targetReachedDate } : {}),
-								targetReachedPrice: dbReach.targetReachedPrice,
-							}
-						: {}),
+					...targetReachFields(dbReach),
 					structureDiagram: diagram,
 				});
 				foundDoubleBottom = true;
