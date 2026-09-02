@@ -1896,3 +1896,139 @@ describe('detectHeadAndShoulders: ネックライン射影の高さ基準（issu
 		).toBe(40);
 	});
 });
+
+/**
+ * 完成済み H&S の整合度サブスコア（issue #204 Phase 2）。
+ *
+ * 旧実装は 4 経路すべてが `(tolMargin + symmetry + per) / 3` で、`tolMargin` と `symmetry` が
+ * **同じ `relDev(左肩, 右肩)`（rd）** から作られていたため confidence が rd の 1 次式に潰れていた。
+ * 本 describe が固定するのは「軸が 6 本あること」ではなく、**rd 以外の量が実際に得点を動かすこと**。
+ */
+describe('detectHeadAndShoulders: 整合度の多軸化（issue #204）', () => {
+	/** `detect_hs.ts` の `necklineAt` と同じ内挿（非 export なのでテスト側に置く）。 */
+	function nlAt(neckline: ReadonlyArray<{ x: number; y: number }>, i: number): number {
+		const [a, b] = neckline;
+		return a.y + ((b.y - a.y) * (i - a.x)) / (b.x - a.x);
+	}
+
+	it('完成済み H&S は scoreComponents を出し、triple 用の levelMargin は含まない', () => {
+		const { candles, pivots } = buildHsWithBreakout();
+		const hs = detectHeadAndShoulders(buildCtx({ candles, pivots })).patterns.find(
+			(p) => p.type === 'head_and_shoulders',
+		);
+		expect(hs?.status).toBe('completed');
+		const sc = hs?.scoreComponents;
+		expect(sc).toBeDefined();
+		// `levelMargin` は triple 専用（正規化した同水準度）。H&S は生の `symmetry` を使う。
+		expect(sc).not.toHaveProperty('levelMargin');
+		expect(sc?.symmetry).toBe(1); // 両肩とも 100
+		expect(sc?.headProminence).toBeGreaterThan(0);
+		expect(sc?.timeSymmetry).toBe(1); // 左肩→頭 30 本 / 頭→右肩 30 本
+		expect(sc?.breakoutQuality).toBeGreaterThan(0);
+		expect(sc?.duration).toBeGreaterThan(0);
+	});
+
+	it('未ブレイク（near_completion）では breakoutQuality が付かない', () => {
+		// ブレイクが無いので突破足の終値が無く、軸そのものが算出できない。
+		// **0 として混ぜず平均から外す**（「測れなかった」を「悪い」に化けさせない）。
+		const { candles, pivots } = buildHS();
+		const hs = detectHeadAndShoulders(buildCtx({ candles, pivots })).patterns.find(
+			(p) => p.type === 'head_and_shoulders',
+		);
+		expect(hs?.status).toBe('near_completion');
+		expect(hs?.scoreComponents).not.toHaveProperty('breakoutQuality');
+		expect(hs?.scoreComponents?.symmetry).toBeDefined();
+	});
+
+	it('headProminence は突出ゲートに対する余裕（ゲートの 2 倍で 0.5）', () => {
+		// headProminencePct = 0.04、head = 108 → 実測突出率 8% はゲートのちょうど 2 倍。
+		const { candles, pivots } = buildHS({ head: 108 });
+		const hs = detectHeadAndShoulders(buildCtx({ candles, pivots })).patterns.find(
+			(p) => p.type === 'head_and_shoulders',
+		);
+		expect(hs?.scoreComponents?.headProminence).toBeCloseTo(0.5, 4);
+
+		// 頭が高いほど余裕が増える（130 → 実測 30% はゲートの 7.5 倍で 1 − 1/7.5 = 0.8667）。
+		const tall = buildHS({ head: 130 });
+		const tallHs = detectHeadAndShoulders(buildCtx({ candles: tall.candles, pivots: tall.pivots })).patterns.find(
+			(p) => p.type === 'head_and_shoulders',
+		);
+		expect(tallHs?.scoreComponents?.headProminence).toBeCloseTo(1 - 0.04 / 0.3, 4);
+	});
+
+	it('timeSymmetry は左肩→頭 と 頭→右肩 のバー数比', () => {
+		// 頭を idx 20 に置く（左 20 本 / 右 40 本 → 0.5）。他は buildHS と同じ水準。
+		const candles: CandleData[] = [];
+		for (let i = 0; i < 70; i++) candles.push(mkCandle(70 - i, 90, 95, 80, 90));
+		candles[0] = mkCandle(70, 99, 100, 97, 99);
+		candles[10] = mkCandle(60, 86, 88, 85, 86);
+		candles[20] = mkCandle(50, 129, 130, 127, 129);
+		candles[45] = mkCandle(25, 86, 88, 85, 86);
+		candles[60] = mkCandle(10, 99, 100, 97, 99);
+		const pivots: Pivot[] = [
+			{ idx: 0, price: 100, kind: 'H', extremePrice: 100 },
+			{ idx: 10, price: 85, kind: 'L', extremePrice: 85 },
+			{ idx: 20, price: 130, kind: 'H', extremePrice: 130 },
+			{ idx: 45, price: 85, kind: 'L', extremePrice: 85 },
+			{ idx: 60, price: 100, kind: 'H', extremePrice: 100 },
+		];
+		const hs = detectHeadAndShoulders(buildCtx({ candles, pivots })).patterns.find(
+			(p) => p.type === 'head_and_shoulders',
+		);
+		expect(hs?.scoreComponents?.timeSymmetry).toBeCloseTo(20 / 40, 4);
+	});
+
+	it('breakoutQuality の分母は「頭の真下のネックライン」までの高さ（#208 と同じ基準）', () => {
+		// 傾きつきネックライン（谷1 = 85 / 谷2 = 89。相対差 4.5% < HS_NECKLINE_MAX_PCT 5%）にすると、
+		// 頭の真下のネックラインとブレイク足時点のネックラインがずれる。
+		const { candles, pivots } = buildHsWithBreakout();
+		pivots[3] = { idx: 45, price: 89, kind: 'L', extremePrice: 89 };
+		candles[45] = mkCandle(35, 90, 92, 89, 90);
+		const hs = detectHeadAndShoulders(buildCtx({ candles, pivots })).patterns.find(
+			(p) => p.type === 'head_and_shoulders',
+		);
+		expect(hs?.status).toBe('completed');
+		const neckline = hs?.neckline as Array<{ x: number; y: number }>;
+		const breakIdx = hs?.breakout?.idx as number;
+		const breakClose = hs?.breakout?.price as number;
+		const excess = nlAt(neckline, breakIdx) - breakClose;
+		const heightAtHead = 130 - nlAt(neckline, 30);
+		const heightAtBreakout = Math.abs(130 - nlAt(neckline, breakIdx));
+
+		expect(hs?.scoreComponents?.breakoutQuality).toBeCloseTo(excess / heightAtHead, 4);
+		// 2 つの高さが実際に違う入力であることを固定する（同値なら上の比較が空虚になる）。
+		expect(heightAtBreakout).not.toBeCloseTo(heightAtHead, 3);
+	});
+
+	it('relaxed 経路も同じ軸構成で、突出ゲートは段の係数を掛けた値になる', () => {
+		// left=100 / right=105 で strict の肩判定が落ち、relaxed 第 1 段（shoulder ×1.6 / head ×0.6）が拾う。
+		const { candles, pivots } = buildHS({ leftShoulder: 100, rightShoulder: 105, head: 130 });
+		const hs = detectHeadAndShoulders(buildCtx({ candles, pivots, tolerancePct: 0.04 })).patterns.find(
+			(p) => p.type === 'head_and_shoulders',
+		);
+		expect(hs?._fallback).toMatch(/relaxed_hs/);
+		expect(hs?.scoreComponents?.headProminence).toBeDefined();
+		// 実測突出率 = 130/105 − 1 = 0.238095、relaxed のゲート = 0.04 × 0.6 = 0.024。
+		const prominence = 130 / 105 - 1;
+		expect(hs?.scoreComponents?.headProminence).toBeCloseTo(1 - 0.024 / prominence, 4);
+		// strict のゲート（0.04）で測った値とは違う——経路ごとの閾値で正規化している。
+		expect(hs?.scoreComponents?.headProminence).not.toBeCloseTo(1 - 0.04 / prominence, 3);
+	});
+
+	it('肩の相対差が同じでも形が違えば confidence が変わる（rd の 1 次式が崩れている）', () => {
+		// 両方とも肩は 100 / 100（rd = 0）。旧実装では `tolMargin` も `symmetry` も rd だけで決まり、
+		// `per` も同じなので **confidence は完全に一致していた**。
+		const tall = buildHS({ head: 130 });
+		const shallow = buildHS({ head: 108 });
+		const run = (f: ReturnType<typeof buildHS>) =>
+			detectHeadAndShoulders(buildCtx({ candles: f.candles, pivots: f.pivots })).patterns.find(
+				(p) => p.type === 'head_and_shoulders',
+			);
+		const tallHs = run(tall);
+		const shallowHs = run(shallow);
+
+		expect(tallHs?.scoreComponents?.symmetry).toBe(shallowHs?.scoreComponents?.symmetry);
+		expect(tallHs?.scoreComponents?.duration).toBe(shallowHs?.scoreComponents?.duration);
+		expect(tallHs?.confidence).toBeGreaterThan(Number(shallowHs?.confidence));
+	});
+});

@@ -612,8 +612,8 @@ export const DetectedPatternSchema = z.object({
 				.number()
 				.optional()
 				.describe(
-					'2 つの構成点（谷-谷 / 山-山）の同水準度。1 = 完全一致。**double 系のみ**' +
-						'（triple は正規化した `levelMargin` を使う）',
+					'2 つの主構成点（谷-谷 / 山-山 / 左肩-右肩）の同水準度。1 = 完全一致。' +
+						'**double 系と H&S 系**（triple は正規化した `levelMargin` を使う）',
 				),
 			levelMargin: z
 				.number()
@@ -623,6 +623,21 @@ export const DetectedPatternSchema = z.object({
 						'relaxed 経路は係数倍した値）で正規化したもの。1 = 完全一致、0 = 許容幅ちょうど。' +
 						'**`symmetry` とは別の量**——`symmetry` は正規化していない生の relDev なので、' +
 						'同じ数値でも意味が違う。**triple 系のみ**',
+				),
+			headProminence: z
+				.number()
+				.optional()
+				.describe(
+					'頭が突出ゲート（`headProminencePct`。relaxed 経路は段の係数を掛けた値）を' +
+						'どれだけ上回っているかの余裕。`1 − ゲート ÷ 実測突出率` で、ゲートちょうど = 0、' +
+						'突出率がゲートの 2 倍 = 0.5。**H&S 系のみ**',
+				),
+			timeSymmetry: z
+				.number()
+				.optional()
+				.describe(
+					'左肩→頭 と 頭→右肩 のバー数の釣り合い（`min ÷ max`）。1 = 左右が同じ長さ。' +
+						'価格ではなく**時間軸**の対称性で、`symmetry`（肩の水準差）とは別の量。**H&S 系のみ**',
 				),
 			retracement: z
 				.number()

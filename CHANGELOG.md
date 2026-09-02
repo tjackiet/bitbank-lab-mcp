@@ -56,6 +56,95 @@
 | 41 | #199 | triple の整合度から `symmetry`（= 1 − 最大 relDev。実質定数）を捨て、`retracement` / `breakoutQuality` を独立軸に足して doubles と同じ 4 軸構成にした。`MIN_CONFIDENCE.triple_*` を 0.7 → 0.6 に置き直した（閾値を緩めたのではなく confidence のスケールが動いたぶんの追随） | 実データで**減る**（−20 / 896。**増加 0**。消えた構造は 2 つで、いずれも「真ん中の山が谷より低い V 字」と「単調に切り下がる 3 谷」）/ 合成 fixture は変わらない |
 | 42 | #208 | H&S / 逆 H&S の `breakoutTarget` の**高さ**を「ブレイク足時点の（外挿した）ネックライン」から「**頭の真下のネックライン**」に戻した。投影の起点は従来どおりブレイク足（forming は最終構成点）。3 経路（strict / relaxed / forming）でばらばらだった基準を `necklineProjectionTarget()` 1 本に揃えた | **変わらない**（0 / 896。`confidence` も全件不変。動くのは `breakoutTarget` / `targetReached` / `targetReachedPct` 系のみ） |
 | 43 | #210 | `targetReachedPct` の 3 つの欠陥（到達側に上限が無い / 分母が潰れる / 走査が系列末尾まで無制限）を同時に直した。`breakoutTarget` の算出式は触らない | **変わらない**（1,456 行を全フィールド突き合わせて target **進捗**系以外は 0 行。`confidence` / `status` / `aftermath` も不変） |
+| 44 | #204 | H&S / 逆 H&S の整合度から `tolMargin` を捨て（`symmetry` と**同じ `relDev(左肩, 右肩)` 由来**で実質 2 軸だった）、`headProminence` / `timeSymmetry` / `retracement` / `breakoutQuality` を足して 6 軸平均にした。H&S に `scoreComponents` が初めて付く | **type 別の件数はほぼ不変**（延べ +6 / 1,962。H&S 以外は 940 ケース全件で完全一致）。ただし `globalDedup` の代表が入れ替わり、`range` の違う候補が残るケースが 80 / 940 |
+
+### Changed（H&S の整合度を多軸化した。#204 Phase 2）
+
+`detect_hs.ts` の完成済み 4 経路が共有する `base = (tolMargin + symmetry + per) / 3` は、
+**`tolMargin` と `symmetry` が同じ `relDev(左肩, 右肩)`（以下 rd）から作られていた**
+（正規化が違うだけで入力は同一値）。実質 2 軸しか無く、`1hour` / `per = 0.6` / strict では
+`confidence = 0.953333 − 7.7·rd` という **rd の 1 次式**に潰れていた。
+Phase 1（PR #205）が 4,349 行全件で検算済み。
+
+`detect_doubles.ts` の `buildDoubleScore` と**同じ選択**で `symmetry` を残し `tolMargin` を捨てた
+——H&S も主構成点は 2 点（両肩）なので、triple（#199）が逆の選択（`levelMargin` を残す）に
+なった事情（3 ペア平均で中間点の情報を持つ）が無い。そのうえで H&S 固有の 2 軸を足した。
+
+| 軸 | 旧 | 新 | ネイティブ 89 構造の `r(rd)` |
+|---|---|---|---|
+| 同水準（正規化） | `tolMargin`（出力に出ない） | **削除** | −1.00（rd の再掲） |
+| 同水準（生） | `symmetry`（出力に出ない） | **`symmetry`**（`scoreComponents` に出る） | −1.00（定義上 rd そのもの） |
+| 頭の突出 | — | **`headProminence`**（新フィールド） | −0.17 |
+| 左右の時間対称 | — | **`timeSymmetry`**（新フィールド） | −0.42 |
+| 戻り率 | — | **`retracement`**（double / triple と共有） | 0.03 |
+| ブレイク品質 | — | **`breakoutQuality`**（同上。未ブレイクでは付かない） | −0.50 |
+| 期間 | `per` | `duration`（**変更なし**） | 0.06 |
+
+**ネックライン水平度は足していない。** Phase 1 の実測で分散はあった（0.0000〜0.0499）が
+rd との相関がネイティブで 0.725 あり、「肩がずれている構造はネックラインもずれている」という
+共変で rd の情報を重ねるだけになる。
+
+結果、`r(confidence, rd)` は全体で **−0.913 → −0.156**、ネイティブで **−0.955 → −0.344**。
+`1hour` / `per = 0.6` の 75 構造で閉じた式が成り立つのは **75/75 → 1/75**（残る 1 件は
+2 桁丸めによる偶然の一致）。整合度の帯は「ネイティブ 89 構造の 63% が 0.8 以上」から
+**19%** になった。
+
+#### ブレイク品質は #205 の測定を捨てて測り直した
+
+PR #205 は `patternHeight = |頭 − **ブレイク足時点の**ネックライン|` で測っており、
+これは #208 の欠陥そのもの（外挿距離ぶん高さが歪む）で PR #209 が直す前の値。
+`necklineProjectionHeight`（頭の真下。`breakoutTarget` が使うのと同じ高さ）で測り直すと:
+
+| | 旧 | 新 |
+|---|---|---|
+| 1.0 に飽和（全体 358 件中） | 247（**69.0%**） | **158（44.1%）** |
+| 1.0 に飽和（ネイティブ 34 件中） | 21（**61.8%**） | **8（23.5%）** |
+
+算出可の割合（41.8%）は `near_completion` が未ブレイクである以上変わらないが、飽和は半分以下。
+**「41.8% しか算出できず 69% が飽和」という #205 の結論は修正前の高さで測った値**だったので、
+軸として採用した。
+
+#### 新フィールド `scoreComponents.headProminence` / `timeSymmetry`
+
+`symmetry` の**意味は差し替えていない**（double と同じ「2 点の生の relDev」で、
+H&S では左肩-右肩に当たる）。description の「**double 系のみ**」を「**double 系と H&S 系**」に
+直しただけ。H&S 固有の 2 軸だけを新フィールドにし、TS（`PatternScoreBreakdown`）と
+Zod（`src/schema/patterns.ts`）の**両方**に宣言した
+（#155 / #160 / #184 / #189 / #199 と同じ「Zod 未宣言で `parse()` が黙って strip」を 6 回目に
+しないため）。`tests/detect_patterns_meta_schema_parity.test.ts` の `requiredKeys` に
+6 軸すべてを足して機械的に固定してある。
+
+#### 件数は「検出器層では不変・出力層では 6 ケースだけ動く」
+
+**H&S には confidence の下限ゲートが無い**（#206。`MIN_CONFIDENCE` は未配線）ので、
+検出器層では延べ 4,421 行 / 構造単位 869 が**前後で完全に不変**（消えた 0 / 増えた 0）。
+
+出力層（`data.patterns`）は 940 ケース中 **6 ケースで H&S の件数が動いた**（延べ +6）。
+原因は `globalDedup` で、期間の重なりが 70% 以上の候補から
+`statusScore` → **`confidence`** の順に代表を選び、しかも畳み込みが逐次なので
+**代表が変わると `range` が変わり、その後の重なり判定まで変わる**。
+代表そのものが入れ替わったケースは 80 / 940、`rankPatterns` の並び順だけが変わったのが 10 / 940。
+**H&S 以外のパターンは 940 ケース全件で完全一致**（`structureDiagram` を含む全フィールド）。
+
+#### 変えなかったもの
+
+- **`finalizeConf` の H&S 係数 1.1** と **relaxed の `× 0.95`**。軸構成と係数を同時に動かすと
+  切り分けできない。
+- **`duration`（`periodScoreDays`）**。triple と違い H&S では `0.6 / 0.7 / 0.8 / 0.9` の 4 値すべてが
+  出る生きた軸なので、#199 候補 2（バー数基準）をそのまま横展開してはいけない。
+- **`MIN_CONFIDENCE.head_and_shoulders` の配線**（#206）。本 PR でも配線しない。
+- **形成中（`forming`）経路**。別式なので対象外（実測でも全件不変）。
+
+#### relaxed 経路は「変化なし」ではなく「測れていない」
+
+relaxed の 2 経路も同じ 6 軸に直し、`headProminence` のゲートだけは経路の閾値
+（`headProminencePct × factors.head`）を渡すようにした。ただし **relaxed は 940 ケースで
+1 件も accept していない**（before / after とも `_fallback` を持つパターンが 0 件）ので、
+**relaxed 固有の式の効果は本コーパスでは実測できていない**。
+代わりに `tests/patterns/detect_hs.test.ts` で、strict を落として relaxed 第 1 段に落ちる入力を
+使って数値を固定した。
+
+実測ログ: `docs/internal/hs-confidence-multi-axis-phase2.md`
 
 ### Fixed（`targetReachedPct` の上限・分母の退化・走査窓。#210）
 
