@@ -1827,6 +1827,57 @@ describe('detectHeadAndShoulders: ネックライン射影の高さ基準（issu
 		).toBeUndefined();
 	});
 
+	// 添字が壊れている入力は fallback の対象外（CodeRabbit の指摘。PR #209 レビュー）。
+	// `necklineAt` は `i` を検査せず NaN をそのまま計算に通すので、先に弾かないと
+	// `at()` が fallbackNecklinePrice に畳んで「もっともらしい target」を返してしまう。
+	it('headIdx が有限でないなら target を出さない（fallback に畳まない）', () => {
+		expect(
+			necklineProjectionTarget({
+				neckline: [
+					{ x: 15, y: 85 },
+					{ x: 45, y: 85 },
+				],
+				anchorIdx: 65,
+				headIdx: Number.NaN,
+				headPrice: 130,
+				direction: 'down',
+				fallbackNecklinePrice: 85,
+			}),
+		).toBeUndefined();
+	});
+
+	it('anchorIdx が有限でないなら target を出さない（fallback に畳まない）', () => {
+		expect(
+			necklineProjectionTarget({
+				neckline: [
+					{ x: 15, y: 85 },
+					{ x: 45, y: 85 },
+				],
+				anchorIdx: Number.POSITIVE_INFINITY,
+				headIdx: 30,
+				headPrice: 130,
+				direction: 'down',
+				fallbackNecklinePrice: 85,
+			}),
+		).toBeUndefined();
+	});
+
+	it('headPrice が有限でないなら target を出さない', () => {
+		expect(
+			necklineProjectionTarget({
+				neckline: [
+					{ x: 15, y: 85 },
+					{ x: 45, y: 85 },
+				],
+				anchorIdx: 65,
+				headIdx: 30,
+				headPrice: Number.NaN,
+				direction: 'down',
+				fallbackNecklinePrice: 85,
+			}),
+		).toBeUndefined();
+	});
+
 	it('ネックラインが 2 点未満なら fallbackNecklinePrice を使う', () => {
 		// necklineAt が NaN を返す経路。頭の真下も起点も fallback に畳まれるので
 		// target = 85 - (130 - 85) = 40。

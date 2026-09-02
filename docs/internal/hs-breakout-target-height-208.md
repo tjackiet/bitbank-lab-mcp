@@ -10,7 +10,8 @@
 
 ## 結論（断定）
 
-1. **`data.patterns` のメンバと `confidence` は完全に不変。** 2,680 行を位置対応で突き合わせて
+1. **target 系フィールドを除く `data.patterns` のメンバと `confidence` は完全に不変。**
+   2,680 行を位置対応で突き合わせて
    `series` / `tf` / `swingDepth` / オプション / `type` / `status` / 経路 / `confidence` /
    `range` / `pivots` / `breakoutBarIndex` / `breakout.price` / `outcome` の差分は **0 行**。
    変わったのは `breakoutTarget` / `targetMethod` / `targetReached` / `targetReachedPct` /
@@ -80,7 +81,7 @@ relaxed 経路の値が変わらないことは**実測ではなく式の同値�
 （#204 Phase 1 と同じ限界）。解釈の錨には**ネイティブ時間足サブセット**
 （実データ B × `1hour` = 1,464 行）を使う。
 
-## 計測 1: メンバの不変性
+## 計測 1: target 系を除くメンバの不変性
 
 | 比較対象 | 差分 |
 |---|---:|

@@ -95,7 +95,7 @@ ihsTarget = necklineAt(nl, breakoutIdx) + (necklineAt(nl, head.idx) − head.pri
 
 | | before | after |
 |---|---:|---:|
-| メンバ・`confidence` の差分 | — | **0 行** |
+| target 系を除くメンバ・`confidence` の差分 | — | **0 行** |
 | 「ブレイク直後に無条件で到達」（target がブレイク終値の向こう側に無い） | 824 行（構造単位 42） | **144 行（構造単位 9）** |
 | うち下方向 `head_and_shoulders` | 656 行 | **0 行** |
 | `targetReached: true` | 1,152 行（構造単位 67） | 640 行（構造単位 47） |

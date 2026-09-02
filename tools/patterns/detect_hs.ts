@@ -233,13 +233,18 @@ export function necklineProjectionTarget(args: {
 	fallbackNecklinePrice: number;
 }): number | undefined {
 	const { neckline, anchorIdx, headIdx, headPrice, direction, fallbackNecklinePrice } = args;
+	// **添字は fallback の対象外**。`fallbackNecklinePrice` は「`neckline` の張り方が壊れている」
+	// ときの代表水準であって、添字が壊れているときの代替ではない。`necklineAt` は `i` を検査せず
+	// NaN をそのまま計算に通すので、先に弾かないと `at()` が fallback に畳んで
+	// **もっともらしい target を返してしまう**（本来は undefined を返すべき入力）。
+	if (!Number.isFinite(anchorIdx) || !Number.isFinite(headIdx) || !Number.isFinite(headPrice)) return undefined;
 	const at = (i: number) => {
 		const v = necklineAt(neckline, i);
 		return Number.isFinite(v) ? v : fallbackNecklinePrice;
 	};
 	const nlAtHead = at(headIdx);
 	const nlAtAnchor = at(anchorIdx);
-	if (!Number.isFinite(nlAtHead) || !Number.isFinite(nlAtAnchor) || !Number.isFinite(headPrice)) return undefined;
+	if (!Number.isFinite(nlAtHead) || !Number.isFinite(nlAtAnchor)) return undefined;
 	const height = direction === 'down' ? headPrice - nlAtHead : nlAtHead - headPrice;
 	if (!(height > 0)) return undefined;
 	return Math.round(direction === 'down' ? nlAtAnchor - height : nlAtAnchor + height);
