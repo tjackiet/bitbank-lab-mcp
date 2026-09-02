@@ -69,6 +69,16 @@ function buildTripleTop(opts?: {
 	v1Price?: number;
 	v2Price?: number;
 	withBreakout?: boolean;
+	/**
+	 * ブレイク足がネックラインを**パターン高さの何割**超えるか（issue #199）。
+	 *
+	 * 既定（未指定）は `BREAKOUT_BUFFER_PCT + 微小マージン`＝**判定を通るギリギリの浅さ**で、
+	 * これは「ブレイクを検出させる」ためだけに選ばれた値だった。#199 で `breakoutQuality`
+	 * （突破幅 ÷ パターン高さ）が整合度の軸になったため、この既定値は
+	 * **軸を 0.1 前後に固定する交絡要因**になる。ブレイクの深さが主題でないテストでは
+	 * ここに 1（＝高さと同じだけ抜ける）を渡し、交絡を外す。
+	 */
+	breakoutExcessOfHeight?: number;
 }) {
 	const pk = opts?.peak ?? 100;
 	const pk2 = opts?.peak2Price ?? pk;
@@ -87,7 +97,12 @@ function buildTripleTop(opts?: {
 	if (opts?.withBreakout) {
 		// 谷の平均（ネックライン）を BREAKOUT_BUFFER_PCT 以上下抜けする終値
 		const nlAvg = (v1 + v2) / 2;
-		const breakClose = Math.floor(nlAvg * (1 - TEST_BREAKOUT_BUFFER_PCT - TEST_BREAKOUT_MARGIN_PCT));
+		const marginal = Math.floor(nlAvg * (1 - TEST_BREAKOUT_BUFFER_PCT - TEST_BREAKOUT_MARGIN_PCT));
+		const patternHeight = (pk + pk2 + pk3) / 3 - nlAvg;
+		const breakClose =
+			opts.breakoutExcessOfHeight === undefined
+				? marginal
+				: Math.min(marginal, Math.floor(nlAvg - patternHeight * opts.breakoutExcessOfHeight));
 		for (let i = 41; i < 50; i++) {
 			candles[i] = mkCandle(50 - i, breakClose, breakClose + 1, breakClose - 3, breakClose);
 		}
@@ -119,6 +134,8 @@ function buildTripleBottom(opts?: {
 	p1Price?: number;
 	p2Price?: number;
 	withBreakout?: boolean;
+	/** {@link buildTripleTop} の同名オプションと同じ。上抜け側 */
+	breakoutExcessOfHeight?: number;
 }) {
 	const vl = opts?.valley ?? 100;
 	const v2 = opts?.v2Price ?? vl;
@@ -137,7 +154,12 @@ function buildTripleBottom(opts?: {
 	if (opts?.withBreakout) {
 		// 山の平均（ネックライン）を BREAKOUT_BUFFER_PCT 以上上抜けする終値
 		const nlAvg = (p1 + p2) / 2;
-		const breakClose = Math.ceil(nlAvg * (1 + TEST_BREAKOUT_BUFFER_PCT + TEST_BREAKOUT_MARGIN_PCT));
+		const marginal = Math.ceil(nlAvg * (1 + TEST_BREAKOUT_BUFFER_PCT + TEST_BREAKOUT_MARGIN_PCT));
+		const patternHeight = nlAvg - (vl + v2 + v3) / 3;
+		const breakClose =
+			opts.breakoutExcessOfHeight === undefined
+				? marginal
+				: Math.max(marginal, Math.ceil(nlAvg + patternHeight * opts.breakoutExcessOfHeight));
 		for (let i = 41; i < 50; i++) {
 			candles[i] = mkCandle(50 - i, breakClose, breakClose + 3, breakClose - 1, breakClose);
 		}
@@ -353,7 +375,17 @@ describe('detectTriples', () => {
 		// - 段 3（`validateLevelSpread`）: 高さ 120-100=20 に対し 3/20 = 0.15 で
 		//   MAX_LEVEL_SPREAD_RATIO（0.5）に遠く通る
 		// 旧 `MAX_VALLEY_SPREAD` だけがこれを弾いていた。
-		const { candles, pivots } = buildTripleBottom({ valley: 100, v2Price: 101, v3Price: 103, withBreakout: true });
+		//
+		// `breakoutExcessOfHeight` を明示するのは #199 の交絡外し。既定のギリギリのブレイクだと
+		// `breakoutQuality` が 0.11 に張り付き、**谷スプレッドとは無関係な軸**で
+		// `confidence_below_min` に落ちてしまう（本テストの主題は段 1 / 段 3 の水準判定）。
+		const { candles, pivots } = buildTripleBottom({
+			valley: 100,
+			v2Price: 101,
+			v3Price: 103,
+			withBreakout: true,
+			breakoutExcessOfHeight: 1,
+		});
 		const ctx = buildCtx({ candles, pivots });
 		const result = detectTriples(ctx);
 
@@ -373,8 +405,23 @@ describe('detectTriples', () => {
 	it('3 点のばらつき 3% の受理は top / bottom で対称', () => {
 		// `MAX_VALLEY_SPREAD` は bottom にしか無く、同形の triple_top は常に通っていた
 		// （#138 確認事項 B の非対称）。削除後は両側とも strict で同じ confidence になる。
-		const top = buildTripleTop({ peak: 100, peak2Price: 101, peak3Price: 103, withBreakout: true });
-		const bottom = buildTripleBottom({ valley: 100, v2Price: 101, v3Price: 103, withBreakout: true });
+		// `breakoutExcessOfHeight` を明示する理由は直前のテストと同じ（#199 の交絡外し）。
+		// 既定のギリギリのブレイクは top / bottom でパターン高さが違うぶん
+		// `breakoutQuality` も違う値になり、**対称性の主張そのものが崩れる**。
+		const top = buildTripleTop({
+			peak: 100,
+			peak2Price: 101,
+			peak3Price: 103,
+			withBreakout: true,
+			breakoutExcessOfHeight: 1,
+		});
+		const bottom = buildTripleBottom({
+			valley: 100,
+			v2Price: 101,
+			v3Price: 103,
+			withBreakout: true,
+			breakoutExcessOfHeight: 1,
+		});
 		const topCtx = buildCtx({ candles: top.candles, pivots: top.pivots });
 		const bottomCtx = buildCtx({ candles: bottom.candles, pivots: bottom.pivots });
 
@@ -1521,6 +1568,128 @@ describe('detectTriples', () => {
 					ctxFail.debugCandidates.some((d) => d.type === 'triple_top' && d.reason === 'neckline_slope_excess'),
 				).toBe(true);
 			}
+		});
+	});
+
+	// ── #199 候補 1: confidence の多軸化 ──────────────────────
+
+	describe('#199 confidence の多軸化（symmetry を捨てて retracement / breakoutQuality を足す）', () => {
+		it('完成済み triple は scoreComponents を出し、double 用の symmetry は含まない', () => {
+			const { candles, pivots } = buildTripleTop({ withBreakout: true, breakoutExcessOfHeight: 1 });
+			const result = detectTriples(buildCtx({ candles, pivots }));
+
+			const tt = result.patterns.find((p) => p.type === 'triple_top');
+			expect(tt?.scoreComponents).toBeDefined();
+			// `symmetry` は「2 点の生の relDev」で double の軸。triple は許容幅で正規化した
+			// `levelMargin` を使う（`.claude/rules/tools.md` 規約 7: 同じ語の意味を差し替えない）。
+			expect(tt?.scoreComponents).not.toHaveProperty('symmetry');
+			expect(tt?.scoreComponents?.levelMargin).toBe(1); // 3 山とも 100
+			expect(tt?.scoreComponents?.breakoutQuality).toBe(1); // 高さと同じだけ抜けている
+			expect(tt?.scoreComponents?.duration).toBeGreaterThan(0);
+		});
+
+		it('未ブレイク（near_completion）では breakoutQuality を出さない — 欠測を 0 として混ぜない', () => {
+			const { candles, pivots } = buildTripleTop();
+			const result = detectTriples(buildCtx({ candles, pivots, includeForming: true }));
+
+			const tt = result.patterns.find((p) => p.type === 'triple_top' && p.status === 'near_completion');
+			expect(tt).toBeDefined();
+			expect(tt?.scoreComponents).not.toHaveProperty('breakoutQuality');
+			expect(tt?.scoreComponents?.levelMargin).toBe(1);
+		});
+
+		it('breakoutQuality は浅いブレイクと深いブレイクを区別する（旧式では同点だった）', () => {
+			const shallow = buildTripleTop({ withBreakout: true });
+			const deep = buildTripleTop({ withBreakout: true, breakoutExcessOfHeight: 1 });
+			const shallowTt = detectTriples(buildCtx({ candles: shallow.candles, pivots: shallow.pivots })).patterns.find(
+				(p) => p.type === 'triple_top',
+			);
+			const deepTt = detectTriples(buildCtx({ candles: deep.candles, pivots: deep.pivots })).patterns.find(
+				(p) => p.type === 'triple_top',
+			);
+
+			// 3 山も谷も同じで、違うのはブレイク足の終値だけ。
+			expect(shallowTt?.scoreComponents?.levelMargin).toBe(deepTt?.scoreComponents?.levelMargin);
+			expect(shallowTt?.scoreComponents?.duration).toBe(deepTt?.scoreComponents?.duration);
+			expect(shallowTt?.scoreComponents?.breakoutQuality).toBeLessThan(0.2);
+			expect(deepTt?.scoreComponents?.breakoutQuality).toBe(1);
+			expect(Number(deepTt?.confidence)).toBeGreaterThan(Number(shallowTt?.confidence));
+		});
+
+		it('levelMargin はその経路の許容幅で正規化する（同じ 3 点でも tolerancePct が変われば変わる）', () => {
+			const { candles, pivots } = buildTripleTop({
+				peak: 100,
+				peak2Price: 102,
+				peak3Price: 104,
+				withBreakout: true,
+				breakoutExcessOfHeight: 1,
+			});
+			// 3 ペアの relDev 平均 = (2/102 + 2/104 + 4/104) / 3 ≈ 0.02577
+			const tight = detectTriples(buildCtx({ candles, pivots, tolerancePct: 0.04 })).patterns.find(
+				(p) => p.type === 'triple_top',
+			);
+			const loose = detectTriples(buildCtx({ candles, pivots, tolerancePct: 0.08 })).patterns.find(
+				(p) => p.type === 'triple_top',
+			);
+
+			expect(tight?.scoreComponents?.levelMargin).toBeCloseTo(1 - 0.02577 / 0.04, 3);
+			expect(loose?.scoreComponents?.levelMargin).toBeCloseTo(1 - 0.02577 / 0.08, 3);
+		});
+
+		it('confidence_below_min は details に confidence / 閾値 / 軸の内訳を載せる', () => {
+			// 3 山 100 / 102 / 104（levelMargin 0.36）+ 浅いブレイク（breakoutQuality 0.09）で
+			// 0.6 を割る。谷は 80 なので押しの深さ・パターン高さ・水準ばらつきはすべて通る。
+			const { candles, pivots } = buildTripleTop({ peak: 100, peak2Price: 102, peak3Price: 104, withBreakout: true });
+			const ctx = buildCtx({ candles, pivots });
+			detectTriples(ctx);
+
+			const rejected = ctx.debugCandidates.find((d) => d.type === 'triple_top' && d.reason === 'confidence_below_min');
+			expect(rejected).toBeDefined();
+			const details = rejected?.details as Record<string, number> | undefined;
+			expect(details?.threshold).toBe(0.6);
+			expect(details?.confidence).toBeLessThan(0.6);
+			// 閾値を再検討するには「何の軸でいくつ落ちたか」が要る（#199）。
+			expect(details?.levelMargin).toBeCloseTo(0.3558, 3);
+			expect(details?.breakoutQuality).toBeGreaterThan(0);
+		});
+
+		/**
+		 * 判定順の変更（#199）。`breakoutQuality` がブレイク足の終値を要るので、confidence の
+		 * 算出は `validatePatternSize` / 構造ゲート / `validateLevelSpread` より後ろに移った。
+		 *
+		 * その結果 **`confidence_below_min` は固有の理由コードを横取りしなくなる**
+		 * （`validatePatternSize` の docstring が言う原則どおり。汎用的な理由を後ろに置く）。
+		 */
+		it('固有のゲートと confidence の両方に該当する候補は、固有の理由コードを返す', () => {
+			// 谷を 97 にすると押しの深さ 3.96% < depthPct(1day = 5%) で `valley_too_shallow`。
+			const shallow = buildTripleTop({
+				peak: 100,
+				peak2Price: 102,
+				peak3Price: 104,
+				v1Price: 97,
+				v2Price: 97,
+				withBreakout: true,
+			});
+			const shallowCtx = buildCtx({ candles: shallow.candles, pivots: shallow.pivots });
+			detectTriples(shallowCtx);
+			const shallowCands = shallowCtx.debugCandidates.filter((d) => d.type === 'triple_top' && !d.accepted);
+			expect(shallowCands.map((d) => d.reason)).toContain('valley_too_shallow');
+			expect(shallowCands.map((d) => d.reason)).not.toContain('confidence_below_min');
+
+			// **同じ 3 山**で谷だけ深くすると、サイズ検査を通って confidence で落ちる
+			// ——つまり上のケースは「confidence でも落ちる候補」であり、順序の入れ替わりを
+			// 見ていることの証明になる（片方だけだと「そもそも confidence は足りていた」を排除できない）。
+			const deepValley = buildTripleTop({
+				peak: 100,
+				peak2Price: 102,
+				peak3Price: 104,
+				withBreakout: true,
+			});
+			const deepCtx = buildCtx({ candles: deepValley.candles, pivots: deepValley.pivots });
+			detectTriples(deepCtx);
+			expect(
+				deepCtx.debugCandidates.filter((d) => d.type === 'triple_top' && !d.accepted).map((d) => d.reason),
+			).toContain('confidence_below_min');
 		});
 	});
 });

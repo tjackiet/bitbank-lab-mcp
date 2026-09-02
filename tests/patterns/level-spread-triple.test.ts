@@ -27,7 +27,13 @@ import detectPatterns from '../../tools/detect_patterns.js';
 import { buildBtcJpy2026Candles } from '../fixtures/btc_jpy_1day_2026.js';
 
 type Candle = { isoTime: string; open: number; high: number; low: number; close: number; volume: number };
-type Candidate = { type: string; accepted: boolean; reason?: string; details?: Record<string, number> };
+type Candidate = {
+	type: string;
+	accepted: boolean;
+	reason?: string;
+	indices?: number[];
+	details?: Record<string, number>;
+};
 
 const main = (price: number) => ({ price });
 const all = (extremePrice: number) => ({ extremePrice });
@@ -236,7 +242,10 @@ describe('detect_patterns: 高さ相対の hard gate（issue #138 ステップ 2
 		// 旧 `MIN_DEPTH_PCT` 5% なら `valley_too_shallow` で落ちていた）。
 		const { patterns, candidates } = await detectOnRealData('4hour', 2, ['triple_top']);
 
-		const hit = candidates.find((c) => c.type === 'triple_top' && c.reason === 'peak_spread_vs_height_excess');
+		// 理由コードだけでなく `indices` でも名指しする（下の triple_bottom 側と同じ理由）。
+		const hit = candidates.find(
+			(c) => c.type === 'triple_top' && c.reason === 'peak_spread_vs_height_excess' && String(c.indices) === '47,53,59',
+		);
 		expect(hit).toBeDefined();
 		expect(hit?.details?.spreadRatio).toBeCloseTo(0.5414, 3);
 		expect(hit?.details?.heightAbs).toBe(736_794);
@@ -253,7 +262,13 @@ describe('detect_patterns: 高さ相対の hard gate（issue #138 ステップ 2
 		// `detectTriples` が relaxed へフォールバックして同じ 3 谷を拾い直すため落ちない。
 		const { patterns, candidates } = await detectOnRealData('1day', 2, ['triple_bottom']);
 
-		const hit = candidates.find((c) => c.type === 'triple_bottom' && c.reason === 'valley_spread_vs_height_excess');
+		// **`indices` で構造を名指しする。** 同じ理由コードで落ちる構造がもう 1 つあり
+		// （idx 33/45/49、比 0.5259）、`find` の先頭一致に頼ると #199 の判定順変更のように
+		// 「別の構造の値を検証していた」に静かにすり替わる。
+		const hit = candidates.find(
+			(c) =>
+				c.type === 'triple_bottom' && c.reason === 'valley_spread_vs_height_excess' && String(c.indices) === '56,66,77',
+		);
 		expect(hit).toBeDefined();
 		expect(hit?.details?.spreadRatio).toBeCloseTo(0.5219, 3);
 

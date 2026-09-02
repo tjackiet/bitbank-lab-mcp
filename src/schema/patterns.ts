@@ -600,7 +600,22 @@ export const DetectedPatternSchema = z.object({
 	 */
 	scoreComponents: z
 		.object({
-			symmetry: z.number().optional().describe('2 つの構成点（谷-谷 / 山-山）の同水準度。1 = 完全一致'),
+			symmetry: z
+				.number()
+				.optional()
+				.describe(
+					'2 つの構成点（谷-谷 / 山-山）の同水準度。1 = 完全一致。**double 系のみ**' +
+						'（triple は正規化した `levelMargin` を使う）',
+				),
+			levelMargin: z
+				.number()
+				.optional()
+				.describe(
+					'主構成点（3 山 / 3 谷）の同水準度を、その経路の許容幅（`tolerancePct`。' +
+						'relaxed 経路は係数倍した値）で正規化したもの。1 = 完全一致、0 = 許容幅ちょうど。' +
+						'**`symmetry` とは別の量**——`symmetry` は正規化していない生の relDev なので、' +
+						'同じ数値でも意味が違う。**triple 系のみ**',
+				),
 			retracement: z
 				.number()
 				.optional()

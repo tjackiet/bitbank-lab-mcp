@@ -53,6 +53,173 @@
 | 38 | #178 | double の「同水準」判定に**高さ相対の hard gate** を足した（項目 4）。閾値は triple と同じ `MAX_LEVEL_SPREAD_RATIO`（0.5）で、理由コードは新設（`peaks_diff_vs_height_excess` / `valleys_diff_vs_height_excess`） | **変わらない**（0 / 896。現行コーパスでは 1 件も発火しない**潜在ガード**） |
 | 39 | #200 | 縮小段（globalDedup / requireCurrentInPattern / ライフサイクル絞り込み）の件数内訳を `meta.reduction` と content 行に申告。パターン詳細の時刻表示（intraday）と構造図の UTC/JST 不一致を修正 | **変わらない**（表示層のみ。`structureDiagram.svg` / `.artifact.title` を除き完全一致を回帰テストで固定） |
 | 40 | #198 | `headProminencePct`（H&S / 逆H&S の頭の最小突出率）が未指定時に `tolerancePct` の時間軸オート表を誤って流用していたのを、専用の時間軸オート表（`getHeadProminenceForTf`）に切り離した | 実データ 1hour で**増える**（+4 / 14。`head_and_shoulders` 0→2 件・`inverse_head_and_shoulders` 0→2 件。他 type・`1day` は 0 件変化） |
+| 41 | #199 | triple の整合度から `symmetry`（= 1 − 最大 relDev。実質定数）を捨て、`retracement` / `breakoutQuality` を独立軸に足して doubles と同じ 4 軸構成にした。`MIN_CONFIDENCE.triple_*` を 0.7 → 0.6 に置き直した（閾値を緩めたのではなく confidence のスケールが動いたぶんの追随） | 実データで**減る**（−20 / 896。**増加 0**。消えた構造は 2 つで、いずれも「真ん中の山が谷より低い V 字」と「単調に切り下がる 3 谷」）/ 合成 fixture は変わらない |
+
+### Changed / Fixed（triple の整合度を多軸化し、`MIN_CONFIDENCE.triple_*` を置き直した。#199 候補 1）
+
+`detect_triples.ts` の完成済み 4 経路の `base = (tolMargin + symmetry + per) / 3` は、
+**3 項のうち 2 項が実質定数**だった。`symmetry = clamp01(1 - span / max(3点))` は
+`relDev` の定義から **`1 − relDev(最小の構成点, 最大の構成点)` と恒等**で、`tolMargin` が既に使う
+3 つの pairwise relDev のうち最大のものを、許容幅で正規化せずに足し直しているだけ
+（新しい情報がゼロ）。Phase 1（PR #203）の実測は 109 サンプル全件で誤差 0 の恒等式成立、
+実測レンジ 0.9752〜0.9997。`per`（`periodScoreDays`）は 109/109 が 0.6。
+
+結果、`conf ≈ (tolMargin + 1.59) / 3 × 1.05` で**通る triple は必ず 0.76〜0.91 に収まり**、
+「高得点 = 良い形」という読みが成立していなかった（issue #199 本文の 3 件は 0.84〜0.88 で、
+上位ではなく通過帯のほぼ中位）。
+
+`detect_doubles.ts` が同じ欠陥を先に直している（`buildDoubleScore`。**戻り率**と**ブレイク品質**を
+独立軸として足して 4 軸平均にする）ので、同じ構成に揃えた。ただし
+**doubles とは逆に、捨てるのは `symmetry` で `tolMargin` を残す**——double は構成点が 2 つしか
+無く `symmetry` が「2 点の relDev そのもの」だったが、triple の `tolMargin` は 3 ペアの平均で
+中間点の情報も拾っており、Phase 1 で唯一レンジを持っていたのがこちら（0.586〜0.996）。
+
+| 軸 | 旧 | 新 | Phase 1 / 本 PR の実測 |
+|---|---|---|---|
+| 同水準 | `tolMargin`（出力に出ない） | **`levelMargin`**（`scoreComponents` に出る） | 0.6056〜1.0000 |
+| 対称性 | `symmetry` | **削除** | 0.9752〜0.9997（ほぼ定数） |
+| 戻り率 | — | **`retracement`** | 0.1026〜0.9681 |
+| ブレイク品質 | — | **`breakoutQuality`**（未ブレイクでは付かない） | 生の比 1.41〜4.97 → clamp で 55 行中 51 行が 1.0 |
+| 期間 | `per` | `duration`（**変更なし**） | 0.6 固定（#199 候補 2 の対象） |
+
+#### 新フィールド `scoreComponents.levelMargin`（`symmetry` の意味を差し替えない）
+
+`symmetry` の description は double 専用の文言（「2 つの構成点（谷-谷 / 山-山）の同水準度」）で、
+triple の `tolMargin`（許容幅で正規化した 3 ペア平均）とは**別の量**。同じ数値でも意味が違う
+（`symmetry=0.9` は「10% ずれている」、`levelMargin=0.9` は「許容幅の 10% ぶんしかずれていない」）。
+`.claude/rules/tools.md` 規約 7 の「同じ語の意味を差し替える変更は alias では救えない」に従い、
+**新フィールドを足した**。TS（`PatternScoreBreakdown`）と Zod（`src/schema/patterns.ts`）の両方に
+宣言し、`tests/detect_patterns_meta_schema_parity.test.ts` の `requiredKeys` で機械的に固定する
+（#155 / #160 / #184 / #189 と同じ「Zod 未宣言で parse が黙って strip」を 5 回目にしないため）。
+
+#### confidence の算出位置を後ろに移した（棄却理由の帰属が変わる）
+
+`breakoutQuality` は突破足の終値が要るので、confidence の算出と `confidence_below_min` 判定を
+**ブレイク検出の後**へ動かした（doubles は元からこの順序）。結果、`confidence_below_min` は
+`validatePatternSize` / 構造ゲート / `validateLevelSpread` より後ろになる。
+
+`validatePatternSize` の docstring の「固有の理由コードを持つ候補の `reason` を横取りしない」
+という原則に照らすと、`confidence_below_min` は汎用的な理由なので**後ろに回るほうが原則に沿う**
+（旧配置では、サイズ不足やスプレッド超過という固有の診断が付くはずの候補に汎用コードが付いていた）。
+
+検出器層 156 ケース（トリム前 8,376 件。前後で総数は不変）を `(ケース, type, indices)` で
+突き合わせた帰属の変化:
+
+| 遷移 | 件数 |
+|---|---|
+| 棄却 → 棄却（理由が変わった） | **33**（`confidence_below_min_relaxed` → `retracement_out_of_band` 14 / → `peak_too_shallow` 12 / → `valley_spread_vs_height_excess` 1、`confidence_below_min` → `neckline_above_pre_decline_high` 4 / → `peak_too_shallow` 2） |
+| 受理 → 棄却 | 28（全件 `confidence_below_min`） |
+| 棄却 → 受理 | **0** |
+
+**入れ替わりは全 33 件が「汎用コード → 固有コード」の方向**（逆方向 0 件）。
+`confidence_below_min_relaxed` は 27 → **0** になった。
+
+#### `MIN_CONFIDENCE.triple_*` を 0.7 → 0.6（**閾値を緩めたのではない**）
+
+軸構成が変わると confidence のスケールが変わる。旧式は算術的な下限が 0.557・実測の下限が 0.76 で、
+**0.7 という値はほとんど何も切っていなかった**。新式は `retracement`（許容帯の中央で 1・端で 0）と
+`duration`（0.6 固定）が平均を押し下げ、実測レンジが 0.48〜1.00 に広がる。
+
+| | 旧式 + 0.7 | 新式 + 0.7 | 新式 + 0.6 |
+|---|---|---|---|
+| ゲート棄却（構造単位） | 18 / 148（**12.2%**） | 58 / 130（**44.6%**） | 18 / 130（**13.8%**） |
+| コーパス層 `data.patterns` の triple | 200 | 132（−68） | **180（−20）** |
+
+0.7 のままだと「形の良さの下限」だった検査が**主フィルタに化ける**（棄却率 3.6 倍。合成 fixture の
+教科書的な triple_top まで落ちる）。0.6 を採ったのは**このリポジトリが既に持っている
+「形状不十分」の線**だから:
+
+- `detectPatternsViewsHandler` の低 confidence 警告ラベルが `confidence < 0.6`
+- `detect_patterns` が LLM に出す整合度の帯が「0.6 未満 = 形状不十分」
+- 形成中トリプルの上限 `FORMING_MAX_CONFIDENCE = 0.59` はこの 0.6 に合わせて置かれている
+  （完成済みの下限を 0.6 にすると forming ≤ 0.59 / completed ≥ 0.60 で隣接し、帯が重ならない。
+  0.7 のままだと [0.60, 0.69] が「どちらの status も取りえない空白帯」になる）
+
+実測の裏取り: 0.6 が切る 18 件は**全件 `retracement ≤ 0.1905` かつ全件未ブレイク**という
+1 つのクラスに収まり、`levelMargin` は 0.5858〜0.9391 とばらけている（＝同水準性だけでは
+切られていない）。分布上 0.55〜0.59 は空なので、0.55〜0.60 のどこに置いても切れ方は同じ。
+
+あわせて、棄却候補に `details: { confidence, threshold, ...scoreComponents }` を載せた
+（#138 が `levelSpreadDetails` で入れたのと同じ趣旨）。旧実装は棄却された候補の confidence を
+どこにも出しておらず、**「0.7 が何を切っているか」をコードを書き換えずに測れなかった。**
+
+#### 消えた検出（実データのみ 2 構造。増加 0）
+
+| type | 期間 | 5 構成点（終値） | before → after |
+|---|---|---|---|
+| `triple_top` | 2026-08-21T08:00Z 〜 23:00Z | 12,571,740 / **12,351,281** / 12,260,243 / **12,250,416** / 12,445,660 | 0.79 → **0.51** |
+| `triple_bottom` | 2026-08-13T11:00Z 〜 08-14T08:00Z | 10,110,000 / **10,165,681** / 10,066,580 / **10,132,001** / 10,021,680 | 0.87 → **0.52** |
+
+前者は**山2（12,260,243）が谷1（12,351,281）より低い** V 字で、水平なレジスタンスに 3 回当たった
+形ではない。後者は**3 谷が単調に切り下がる階段**（`totalStep` 0.874%）で、Phase 1 の副次 A が
+「forming の `FORMING_STAIR_STEP_LIMIT`（2%）では 1 件も弾けない」と結論した 5 件のうちの 1 件。
+**ゲートを増やさずスコアの解像度だけで落ちた。**
+
+逆に、3 山のばらつきは大きいが戻り率が教科書的（0.757）でブレイクも深い `triple_top`
+（実データ B idx 204/219/236）は 0.79 → **0.80** に上がった。旧式ではこれと上記の V 字が
+**同じ 0.79** で並んでいた。
+
+#### 変えなかったもの
+
+- **`duration`（`periodScoreDays`）。** 0.6 に張り付いたままだが、バー数基準への置き換えは
+  #199 候補 2 で、バケット閾値の決定に追加計測が要る。同時に動かすと寄与が分離できない。
+- **`finalizeConf` の triple 係数 1.05。** 軸構成が変われば根拠も変わるが、閾値と係数を同時に
+  動かすと切り分けできない。再検討が要るなら別 issue。
+- **形成中（forming）経路。** confidence が別式。実測でも forming 9 構造は 0.59 のまま不変。
+- **#206**（`MIN_CONFIDENCE` の H&S / double 4 エントリが読まれていない）には手を出していない。
+- **副次 C（`spreadRatio` の基準混在）/ 副次 A（単調階段ゲート）**も #199 の優先順位どおり対象外。
+
+#### 前準備: scoring ヘルパの共有モジュール化（挙動不変）
+
+`retracementScore` / `breakoutQualityScore` は `detect_doubles.ts` の module-private で、
+triple からも #204（H&S）からも使えなかった。**`tools/patterns/scoring.ts`** に切り出した
+（`helpers.ts` に足さなかった理由は同ファイル冒頭に記載: 700 行超の寄せ集めであること /
+`structural.ts` への依存を wedge・triangle・重複排除側に波及させないこと /
+検出器どうしの横依存を作らないこと）。
+
+切り出し単体のコミットで、標準コーパス 896 ケースと検出器層 156 ケースの JSON が
+**バイト単位で完全一致**することを確認済み。
+
+#### 実測（合成 704 + 実データ A 96 + 実データ B 96 = 896 ケース。`main` = d388c9c と比較）
+
+| | before | after |
+|---|---|---|
+| `data.patterns` 合計 | 1,476 | **1,456（−20）** |
+| `triple_top` / `triple_bottom` | 100 / 100 | **88 / 92** |
+| triple 以外の全 type | — | **0 件変化**（triple を除いた `data.patterns` が 896 ケース全件で deep-equal） |
+| 変化したケース | — | 108 / 896（合成 64 / 実データ A 0 / 実データ B 44。**すべて減少、増加 0**） |
+| 受理 triple の confidence（構造単位） | 中央値 0.87 / レンジ幅 0.24 | 中央値 0.75 / **レンジ幅 0.40** |
+
+詳細は `docs/internal/triple-confidence-multi-axis-phase2.md`。
+
+#### 既知の限界（`breakoutQuality` は intraday 実データで飽和する）
+
+生の比（突破幅 ÷ パターン高さ）は実測 **1.41〜4.97** で、`clamp01` により受理 55 行中 **51 行が 1.0**。
+`BREAKOUT_BUFFER_PCT`（価格の 1.5%）が BTC/JPY 1hour のパターン高さ（価格の 0.6〜1.5%）を
+上回るため、**バッファを超えた時点で高さも超えている**。日足の合成 fixture では逆に
+高さが 18% あるので浅い側（0.1376）に寄る。定義は doubles と揃えてあるので、
+直すなら doubles と同時（別 issue）。
+
+#### テスト / フィクスチャの追随
+
+- `tests/fixtures/detect_patterns_1hour_data_patterns_baseline.json` を再生成。**検出件数は 14 件で
+  不変**で、変わったのは triple 2 件の confidence（0.85 → 0.73 / 0.84 → 0.68）と
+  `scoreComponents` の追加、`rankPatterns` の並び。後者は issue #199 本文のケース 3（報告値 0.84）
+  そのもの。
+- `tests/detect_patterns_data_patterns_regression.test.ts` の docstring / describe 名が
+  **「#200 着手前のスナップショット」と名乗ったまま**だった（#202 で一度ずれていた）。
+  「現在の出力のスナップショット」＋更新履歴の表に書き換え、次に更新する人が名乗りを
+  直し忘れないようにした。
+- `tests/detect_patterns_meta_schema_parity.test.ts` の relaxed triple フィクスチャは、
+  ブレイクが浅く（`breakoutQuality` 0.18）confidence 0.53 で消えると
+  **relaxed 経路の `_fallback` 検証が丸ごと空振りする**ため、ブレイクを深くした。
+- `tests/patterns/detect_triples.test.ts` に `breakoutExcessOfHeight` オプションを足し、
+  #178 の 2 テスト（谷スプレッド 3% / top・bottom 対称）で使う。既定のブレイクは
+  「判定を通るギリギリ」で `breakoutQuality` を 0.1 に固定する交絡要因になっており、
+  **両テストの主題（水準判定と対称性）と無関係な軸で落ちていた**。
+- `tests/patterns/level-spread-triple.test.ts` の `find` を `indices` で名指しに変えた。
+  同じ理由コードで落ちる構造が 2 つあり、判定順の変更で**先頭一致が別構造にすり替わっていた**。
+- `tests/patterns/scoring.test.ts`（新規）で切り出した 3 関数の境界を固定。
 
 ### Added / Fixed（`headProminencePct` の時間軸オート値を `tolerancePct` の表から切り離した。#198）
 
