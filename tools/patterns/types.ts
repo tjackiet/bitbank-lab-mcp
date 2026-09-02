@@ -203,6 +203,10 @@ export interface AftermathResult {
  * **構造ゲートを通過した候補どうしの形の良さ**の内訳であって、構造的妥当性の指標ではない。
  */
 export interface PatternScoreBreakdown {
+	/**
+	 * 2 つの主構成点の同水準度（`1 − relDev`）。**正規化していない生の relDev** で、
+	 * double（2 山 / 2 谷）と H&S（左肩 / 右肩）が共有する（issue #199 / #204）。
+	 */
 	symmetry?: number;
 	/**
 	 * 主構成点（triple なら 3 山 / 3 谷）の同水準度を **`tolerancePct` で正規化**した軸（issue #199）。
@@ -214,6 +218,17 @@ export interface PatternScoreBreakdown {
 	 * 旧値を読み続けるクライアントに黙って別の量が返る（`.claude/rules/tools.md` 規約 7）。
 	 */
 	levelMargin?: number;
+	/**
+	 * 頭がゲート（`headProminencePct`。relaxed 経路は段の係数倍）をどれだけ上回っているかの
+	 * 余裕（issue #204）。`1 − ゲート / 実測突出率` で、ゲートちょうどなら 0、
+	 * 突出率がゲートの 2 倍なら 0.5、∞ で 1。**H&S 系のみ。**
+	 */
+	headProminence?: number;
+	/**
+	 * 左肩→頭 と 頭→右肩 のバー数の釣り合い（`min / max`）。1 = 左右同じ長さ（issue #204）。
+	 * 価格ではなく**時間軸**の対称性なので `symmetry`（肩の水準差）とは別の量。**H&S 系のみ。**
+	 */
+	timeSymmetry?: number;
 	retracement?: number;
 	breakoutQuality?: number;
 	duration?: number;

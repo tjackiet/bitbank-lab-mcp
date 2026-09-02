@@ -12,13 +12,15 @@
 import { generatePatternDiagram } from '../../lib/pattern-diagrams.js';
 import { patternBarRange } from './bar-thresholds.js';
 import { finalizeConf, periodScoreDays } from './helpers.js';
-import { clamp01, marginFromRelDev, relDev } from './regression.js';
+import { clamp01, relDev } from './regression.js';
 import { applyReversalGate, buildStructureGate } from './reversal-gate.js';
+import { averageDefinedAxes, breakoutQualityScore, retracementScore } from './scoring.js';
 import {
 	HS_NECKLINE_MAX_PCT,
 	HS_SHOULDER_MAX_PCT,
 	isSameLevel,
 	type PriorTrendResult,
+	type ReversalSide,
 	validateHorizontalNeckline,
 	validatePatternSize,
 	validatePriorTrend,
@@ -32,6 +34,7 @@ import type {
 	DetectResult,
 	PatternConfirmation,
 	PatternPrecedingTrend,
+	PatternScoreBreakdown,
 } from './types.js';
 
 // ── Helper: PriorTrendResult → PatternPrecedingTrend ──
@@ -275,6 +278,133 @@ export function necklineProjectionHeight(args: {
 	const height = direction === 'down' ? headPrice - nlAtHead : nlAtHead - headPrice;
 	if (!(height > 0)) return undefined;
 	return height;
+}
+
+// ── Helper: 完成済み H&S の整合度サブスコア（issue #204 Phase 2） ──
+
+/**
+ * 完成済み H&S / 逆 H&S の整合度サブスコア（issue #204 Phase 2）。
+ *
+ * 旧実装は 4 経路すべてが `(tolMargin + symmetry + per) / 3` で、**`tolMargin` と `symmetry` は
+ * 同じ `relDev(左肩, 右肩)`（以下 rd）から作られていた**（正規化が違うだけ）。実質 2 軸しか無く、
+ * `1hour` / `per = 0.6` / strict では `confidence = 0.953333 − 7.7 rd` という rd の 1 次式に
+ * 潰れていた（Phase 1・PR #205 が 4,349 行全件で検算済み。
+ * `docs/internal/hs-confidence-distribution-phase1.md`）。
+ *
+ * **`detect_doubles.ts` の `buildDoubleScore` と同じ選択で `symmetry` を残し `tolMargin` を捨てる。**
+ * H&S も主構成点は 2 点（両肩）なので、triple が逆の選択（`levelMargin` を残す）になった事情
+ * ——`tolMargin` が 3 ペア平均で中間点の情報を持つ——が無い。そのうえで H&S 固有の 2 軸を足す:
+ *
+ * | 軸 | 出所 | ネイティブ 89 構造での `r(rd)` |
+ * |---|---|---:|
+ * | `symmetry` | double と同じ `1 − rd` | −1.00（定義上 rd そのもの） |
+ * | `headProminence` | 頭の突出ゲートに対する余裕（**本 PR で新設**） | −0.17 |
+ * | `timeSymmetry` | 左右のバー数比（**本 PR で新設**。従来どこにも使われていなかった量） | −0.42 |
+ * | `retracement` | 構造ゲートの戻り率（double / triple と共有） | 0.03 |
+ * | `breakoutQuality` | 突破幅 ÷ パターン高さ（同上） | −0.50 |
+ * | `duration` | `periodScoreDays`（据え置き） | 0.06 |
+ *
+ * **ネックライン水平度は足さない。** Phase 1 の実測で分散はあった（0.0000〜0.0499）が
+ * rd との相関がネイティブで 0.725 あり、「肩がずれている構造はネックラインもずれている」という
+ * 共変で rd の情報を重ねるだけになる。
+ *
+ * **`duration`（`periodScoreDays`）は本 PR では変えない。** triple（#199 Phase 1）と違い H&S の
+ * `per` は 0.6 / 0.7 / 0.8 / 0.9 の 4 値すべてを取る生きた軸で、バー数基準への置き換えは
+ * 別途評価が要る。ここで一緒に動かすと軸構成変更の寄与と分離できない。
+ */
+function buildHsScore(opts: {
+	/** 左肩 / 右肩の `price`（並び順は結果に影響しない） */
+	shoulders: readonly [number, number];
+	/** 頭の `price` */
+	headPrice: number;
+	/** 左肩 / 頭 / 右肩の `idx`（時間対称性はこの 3 点のバー数で測る） */
+	shoulderIdxs: readonly [number, number];
+	headIdx: number;
+	/**
+	 * 頭の突出判定に使ったのと同じ閾値。strict は `headProminencePct`、
+	 * relaxed は `headProminencePct × factors.head`。
+	 */
+	headProminenceGate: number;
+	/** 突破足時点のネックライン値（`necklineAt(neckline, breakoutIdx)`） */
+	necklinePrice: number;
+	/** ブレイク足の終値。**未ブレイク（`near_completion`）では `NaN`** を渡す */
+	breakoutClose: number;
+	/**
+	 * パターン高さ。**`necklineProjectionHeight`（頭の真下のネックラインから頭まで）と同じ値**を
+	 * 渡すこと（issue #208 / #209）。ブレイク足時点のネックラインで測ると外挿距離ぶん高さが歪み、
+	 * `breakoutQuality` が過大に飽和する（Phase 1 の実測では飽和 69.0%、頭の真下基準では 44.1%）。
+	 * 高さが取れない場合は `undefined` を渡すと軸が落ちる。
+	 */
+	patternHeight: number | undefined;
+	side: ReversalSide;
+	retracementRatio?: number;
+	durationScore: number;
+}): { components: PatternScoreBreakdown; base: number } {
+	const [s1, s2] = opts.shoulders;
+	const symmetry = clamp01(1 - relDev(s1, s2));
+	const headProminence = headProminenceScore(opts.headPrice, opts.shoulders, opts.side, opts.headProminenceGate);
+	const timeSymmetry = timeSymmetryScore(opts.shoulderIdxs, opts.headIdx);
+	const retracement = retracementScore(opts.retracementRatio);
+	const breakoutQuality = breakoutQualityScore(
+		opts.necklinePrice,
+		opts.breakoutClose,
+		opts.patternHeight ?? Number.NaN,
+		opts.side,
+	);
+	const components: PatternScoreBreakdown = {
+		symmetry: Number(symmetry.toFixed(4)),
+		...(headProminence !== undefined ? { headProminence: Number(headProminence.toFixed(4)) } : {}),
+		...(timeSymmetry !== undefined ? { timeSymmetry: Number(timeSymmetry.toFixed(4)) } : {}),
+		...(retracement !== undefined ? { retracement: Number(retracement.toFixed(4)) } : {}),
+		...(breakoutQuality !== undefined ? { breakoutQuality: Number(breakoutQuality.toFixed(4)) } : {}),
+		duration: Number(opts.durationScore.toFixed(4)),
+	};
+	// 算出できなかった軸は平均から外す（0 として混ぜると欠測が減点になる）。
+	// `symmetry` は常に数値なので `averageDefinedAxes` が `undefined` を返すことはない。
+	const base =
+		averageDefinedAxes([symmetry, headProminence, timeSymmetry, retracement, breakoutQuality, opts.durationScore]) ??
+		symmetry;
+	return { components, base };
+}
+
+/**
+ * 頭の突出ゲートに対する余裕（issue #204）。ゲートちょうどで 0、ゲートの 2 倍で 0.5、∞ で 1。
+ *
+ * 実測突出率は検出側のゲート（`p2.price > max(肩) * (1 + gate)` / 逆 H&S は
+ * `p2.price < min(肩) * (1 - gate)`）と**同じ式**から出す——ゲートを通った候補なら必ず
+ * `実測 > gate` になるので、この軸は `(0, 1)` に収まる。
+ *
+ * 上限が無い量（比は実測で最大 32 倍）を `1 − gate / 実測` で畳むのは、`marginFromRelDev` が
+ * 上限ゲートに対して `1 − 実測 / 上限` を取るのと同じ発想の下限ゲート版。任意の飽和定数を
+ * 置かずに済む。
+ */
+function headProminenceScore(
+	headPrice: number,
+	shoulders: readonly [number, number],
+	side: ReversalSide,
+	gate: number,
+): number | undefined {
+	const [s1, s2] = shoulders;
+	const ref = side === 'bottom' ? Math.min(s1, s2) : Math.max(s1, s2);
+	if (!(ref > 0) || !Number.isFinite(headPrice)) return undefined;
+	const prominence = side === 'bottom' ? 1 - headPrice / ref : headPrice / ref - 1;
+	if (!(prominence > 0)) return undefined;
+	if (!(gate > 0)) return 1;
+	return clamp01(1 - gate / prominence);
+}
+
+/**
+ * 左肩→頭 と 頭→右肩 のバー数の釣り合い（issue #204）。1 = 左右が同じ長さ。
+ *
+ * **H&S 固有で、従来どこにも使われていなかった量。** Phase 1 の実測で候補軸のうち最も分散が
+ * 広く（0.0556〜1.0000）、`symmetry`（レンジ幅 0.047）と違って実際に順位を動かす。
+ */
+function timeSymmetryScore(shoulderIdxs: readonly [number, number], headIdx: number): number | undefined {
+	const [leftIdx, rightIdx] = shoulderIdxs;
+	const left = headIdx - leftIdx;
+	const right = rightIdx - headIdx;
+	if (!(left > 0) || !(right > 0)) return undefined;
+	return clamp01(Math.min(left, right) / Math.max(left, right));
 }
 
 // ── Helper: 右肩後のネックラインブレイクインデックスを検出 ──
@@ -648,11 +778,6 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 				if (!gate) continue;
 				const structureGate = buildStructureGate(gate);
 
-				const tolMargin = marginFromRelDev(relDev(p0.price, p4.price), tolerancePct);
-				const symmetry = clamp01(1 - relDev(p0.price, p4.price));
-				const per = periodScoreDays(start, end);
-				const base = (tolMargin + symmetry + per) / 3;
-				const confidence = finalizeConf(base, 'inverse_head_and_shoulders');
 				// 右肩後のネックライン上抜けを確認する。
 				const breakoutIdx = findHsBreakoutIdx(candles, neckline, p4.idx, 'above');
 				const completion = buildHsCompletionFields(candles, breakoutIdx, 'up', end);
@@ -694,9 +819,29 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 						: undefined;
 				const ihsPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
 
+				// 整合度（issue #204 Phase 2）。**ブレイク検出と高さ算出の後ろに置く**
+				// ——`breakoutQuality` が突破足の終値を、`patternHeight` が頭の真下のネックライン
+				// （`necklineProjectionHeight`）を要るため。H&S には confidence の下限ゲートが
+				// 無い（#206）ので、triple（#199）と違い棄却理由の帰属は動かない。
+				const { components: scoreComponents, base } = buildHsScore({
+					shoulders: [p0.price, p4.price],
+					headPrice: p2.price,
+					shoulderIdxs: [p0.idx, p4.idx],
+					headIdx: p2.idx,
+					headProminenceGate: headProminencePct,
+					necklinePrice: necklineAt(neckline, breakoutIdx),
+					breakoutClose: completion.breakout?.price ?? Number.NaN,
+					patternHeight: ihsHeight,
+					side: 'bottom',
+					retracementRatio: gate.retracementRatio,
+					durationScore: periodScoreDays(start, end),
+				});
+				const confidence = finalizeConf(base, 'inverse_head_and_shoulders');
+
 				patterns.push({
 					type: 'inverse_head_and_shoulders',
 					confidence,
+					scoreComponents,
 					range: { start, end: rangeEnd },
 					structureRange: { start, end },
 					status: completion.status,
@@ -840,11 +985,6 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 				if (!gate) continue;
 				const structureGate = buildStructureGate(gate);
 
-				const tolMargin = marginFromRelDev(relDev(p0.price, p4.price), tolerancePct);
-				const symmetry = clamp01(1 - relDev(p0.price, p4.price));
-				const per = periodScoreDays(start, end);
-				const base = (tolMargin + symmetry + per) / 3;
-				const confidence = finalizeConf(base, 'head_and_shoulders');
 				// 右肩後のネックライン下抜けを確認する。
 				const breakoutIdx = findHsBreakoutIdx(candles, neckline, p4.idx, 'below');
 				const completion = buildHsCompletionFields(candles, breakoutIdx, 'down', end);
@@ -886,9 +1026,26 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 						: undefined;
 				const hsPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
 
+				// 整合度（issue #204 Phase 2）。配置の理由は `findStrictInverseHS` の同じ箇所を参照。
+				const { components: scoreComponents, base } = buildHsScore({
+					shoulders: [p0.price, p4.price],
+					headPrice: p2.price,
+					shoulderIdxs: [p0.idx, p4.idx],
+					headIdx: p2.idx,
+					headProminenceGate: headProminencePct,
+					necklinePrice: necklineAt(neckline, breakoutIdx),
+					breakoutClose: completion.breakout?.price ?? Number.NaN,
+					patternHeight: hsHeight,
+					side: 'top',
+					retracementRatio: gate.retracementRatio,
+					durationScore: periodScoreDays(start, end),
+				});
+				const confidence = finalizeConf(base, 'head_and_shoulders');
+
 				patterns.push({
 					type: 'head_and_shoulders',
 					confidence,
+					scoreComponents,
 					range: { start, end: rangeEnd },
 					structureRange: { start, end },
 					status: completion.status,
@@ -1081,11 +1238,6 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 			if (!gate) continue;
 			const structureGate = buildStructureGate(gate);
 
-			const tolMargin = marginFromRelDev(relDev(p0.price, p4.price), tolerancePct * factors.shoulder);
-			const symmetry = clamp01(1 - relDev(p0.price, p4.price));
-			const per = periodScoreDays(start, end);
-			const base = (tolMargin + symmetry + per) / 3;
-			const confidence = finalizeConf(base * 0.95, 'head_and_shoulders');
 			const nlAvg = (Number(p1.price) + Number(p3.price)) / 2;
 			// 右肩後のネックライン下抜けを確認する。
 			const breakoutIdx = findHsBreakoutIdx(candles, neckline, p4.idx, 'below');
@@ -1129,6 +1281,23 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 					? computeTargetReach(candles, breakoutIdx, completion.breakout.price, hsRelTarget, 'down', hsRelHeight)
 					: undefined;
 			const hsRelPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
+			// 整合度（issue #204 Phase 2）。strict と同じ軸構成で、**閾値だけ経路のものを渡す**
+			// ——頭の突出ゲートは `headProminencePct × factors.head`。`× 0.95` の relaxed ペナルティは
+			// 据え置き（Phase 1 実測で relaxed は 940 ケース中 accepted 0 件のため効果を測れない）。
+			const { components: scoreComponents, base } = buildHsScore({
+				shoulders: [p0.price, p4.price],
+				headPrice: p2.price,
+				shoulderIdxs: [p0.idx, p4.idx],
+				headIdx: p2.idx,
+				headProminenceGate: headProminencePct * factors.head,
+				necklinePrice: necklineAt(neckline, breakoutIdx),
+				breakoutClose: completion.breakout?.price ?? Number.NaN,
+				patternHeight: hsRelHeight,
+				side: 'top',
+				retracementRatio: gate.retracementRatio,
+				durationScore: periodScoreDays(start, end),
+			});
+			const confidence = finalizeConf(base * 0.95, 'head_and_shoulders');
 			debugCandidates.push({
 				type: 'head_and_shoulders',
 				accepted: true,
@@ -1138,6 +1307,7 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 			return {
 				type: 'head_and_shoulders',
 				confidence,
+				scoreComponents,
 				range: { start, end: rangeEnd },
 				structureRange: { start, end },
 				status: completion.status,
@@ -1290,11 +1460,6 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 			if (!gate) continue;
 			const structureGate = buildStructureGate(gate);
 
-			const tolMargin = marginFromRelDev(relDev(p0.price, p4.price), tolerancePct * factors.shoulder);
-			const symmetry = clamp01(1 - relDev(p0.price, p4.price));
-			const per = periodScoreDays(start, end);
-			const base = (tolMargin + symmetry + per) / 3;
-			const confidence = finalizeConf(base * 0.95, 'inverse_head_and_shoulders');
 			const nlAvg = (Number(p1.price) + Number(p3.price)) / 2;
 			// 右肩後のネックライン上抜けを確認する。
 			const breakoutIdx = findHsBreakoutIdx(candles, neckline, p4.idx, 'above');
@@ -1338,6 +1503,21 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 					? computeTargetReach(candles, breakoutIdx, completion.breakout.price, ihsRelTarget, 'up', ihsRelHeight)
 					: undefined;
 			const ihsRelPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
+			// 整合度（issue #204 Phase 2）。配置と閾値の渡し方は `findRelaxedHS` の同じ箇所を参照。
+			const { components: scoreComponents, base } = buildHsScore({
+				shoulders: [p0.price, p4.price],
+				headPrice: p2.price,
+				shoulderIdxs: [p0.idx, p4.idx],
+				headIdx: p2.idx,
+				headProminenceGate: headProminencePct * factors.head,
+				necklinePrice: necklineAt(neckline, breakoutIdx),
+				breakoutClose: completion.breakout?.price ?? Number.NaN,
+				patternHeight: ihsRelHeight,
+				side: 'bottom',
+				retracementRatio: gate.retracementRatio,
+				durationScore: periodScoreDays(start, end),
+			});
+			const confidence = finalizeConf(base * 0.95, 'inverse_head_and_shoulders');
 			debugCandidates.push({
 				type: 'inverse_head_and_shoulders',
 				accepted: true,
@@ -1347,6 +1527,7 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 			return {
 				type: 'inverse_head_and_shoulders',
 				confidence,
+				scoreComponents,
 				range: { start, end: rangeEnd },
 				structureRange: { start, end },
 				status: completion.status,

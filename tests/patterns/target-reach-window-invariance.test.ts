@@ -30,11 +30,51 @@ vi.mock('../../tools/analyze_indicators.js', () => ({ default: vi.fn() }));
 
 import analyzeIndicators from '../../tools/analyze_indicators.js';
 import detectPatterns from '../../tools/detect_patterns.js';
+import {
+	getDefaultParamsForTf,
+	getDefaultToleranceForTf,
+	getHeadProminenceForTf,
+	getSizeThresholdsForTf,
+} from '../../tools/patterns/config.js';
+import { detectHeadAndShoulders } from '../../tools/patterns/detect_hs.js';
+import { linearRegressionWithR2 } from '../../tools/patterns/regression.js';
+import { detectSwingPoints, type Pivot } from '../../tools/patterns/swing.js';
 import { TARGET_REACH_MAX_BARS, TARGET_REACHED_PCT_CAP } from '../../tools/patterns/target-reach.js';
+import type { CandleData, DetectContext } from '../../tools/patterns/types.js';
 import { asMockResult, assertOk } from '../_assertResult.js';
 import { buildBtcJpy1hour202608Candles } from '../fixtures/btc_jpy_1hour_2026_08.js';
 
 type Candle = ReturnType<typeof buildBtcJpy1hour202608Candles>[number];
+
+/**
+ * `detect_patterns.ts` と同じ組み方の H&S 用 `DetectContext`（`tests/patterns/hs-window-btcjpy-1hour.ts`
+ * と同じ idiom）。実効パラメータは**ハードコードせず `config.ts` から解決する**——手書きすると
+ * 時間軸オート表を変えたときにテストだけ古い値で通り続ける。
+ */
+function buildHsCtx(): DetectContext {
+	const candles = buildBtcJpy1hour202608Candles() as CandleData[];
+	const { swingDepth, minBarsBetweenSwings } = getDefaultParamsForTf('1hour');
+	const tol = getDefaultToleranceForTf('1hour');
+	const pivots = detectSwingPoints(candles, { swingDepth });
+	return {
+		candles,
+		pivots,
+		allPeaks: pivots.filter((p: Pivot) => p.kind === 'H'),
+		allValleys: pivots.filter((p: Pivot) => p.kind === 'L'),
+		tolerancePct: tol,
+		headProminencePct: getHeadProminenceForTf('1hour'),
+		sizeThresholds: getSizeThresholdsForTf('1hour'),
+		minDist: minBarsBetweenSwings,
+		want: new Set(['head_and_shoulders', 'inverse_head_and_shoulders']),
+		includeForming: false,
+		debugCandidates: [],
+		type: '1hour',
+		swingDepth,
+		near: (a: number, b: number) => Math.abs(a - b) <= Math.max(a, b) * tol,
+		pct: (a: number, b: number) => ((b - a) / Math.max(1, a)) * 100,
+		lrWithR2: (pts) => linearRegressionWithR2(pts),
+	};
+}
 
 async function runOn(candles: Candle[]) {
 	vi.mocked(analyzeIndicators).mockResolvedValueOnce(
@@ -109,17 +149,28 @@ describe('targetReachedPct は系列の末尾に依存しない（issue #210 (3)
 		expect(Math.max(...pcts)).toBeLessThanOrEqual(TARGET_REACHED_PCT_CAP);
 	});
 
-	it('分母が潰れた 2 件の逆 H&S は進捗を出さず理由を申告する（issue #210 (2)。旧 240,033% / 43,177%）', async () => {
-		const patterns = await runOn(buildBtcJpy1hour202608Candles());
-		const omitted = patterns.filter(
-			(p) => (p as Record<string, unknown>).targetProgressOmittedReason === 'degenerate_target_distance',
-		);
-		expect(omitted.map((p) => [p.type, p.breakoutTarget])).toEqual([
-			['inverse_head_and_shoulders', 12643525],
-			['inverse_head_and_shoulders', 10277171],
+	it('分母が潰れた逆 H&S は進捗を出さず理由を申告する（issue #210 (2)。旧 240,033% / 43,177%）', () => {
+		// **検出器を直接呼ぶ**（`detectPatterns` の `data.patterns` は見ない）。
+		//
+		// 初版は `data.patterns` から `targetProgressOmittedReason` を持つ 2 件を名指しで拾っていたが、
+		// この 2 件は **`globalDedup` の勝者**であって「分母が潰れた構造」の全体ではない。
+		// 勝者は `statusScore` → `confidence` の順で決まるので、**confidence の式が変われば
+		// 別の構造が代表になり、同じ 2 件が出力に残らなくなる**（issue #204 Phase 2 で実際にそうなった
+		// ——分母が潰れた 4 構造はどれも代表を取れなくなり、`data.patterns` からは 0 件になった）。
+		// #210 が守りたいのは「退化した分母では進捗を出さない」であって「その構造が dedup に勝つ」では
+		// ないので、dedup より手前の検出器出力に対象を移す。
+		const patterns = detectHeadAndShoulders(buildHsCtx()).patterns as Array<Record<string, unknown>>;
+		const omitted = patterns.filter((p) => p.targetProgressOmittedReason === 'degenerate_target_distance');
+		// 空集合に対する forEach は何も検証しないので、まず件数と中身を固定する。
+		expect(
+			omitted.map((p) => [p.type, (p.pivots as Array<{ idx: number }>).map((q) => q.idx).join('-'), p.breakoutTarget]),
+		).toEqual([
+			['inverse_head_and_shoulders', '242-245-249-265-272', 12643525],
+			['inverse_head_and_shoulders', '20-26-42-106-109', 10277171],
+			['inverse_head_and_shoulders', '15-18-42-106-109', 10296129],
+			['inverse_head_and_shoulders', '3-9-42-106-109', 10297337],
 		]);
-		for (const p of omitted) {
-			const q = p as Record<string, unknown>;
+		for (const q of omitted) {
 			// breakoutTarget は出る（target の算出式は #210 の対象外）。進捗系だけが消える。
 			expect(q.breakoutTarget).toEqual(expect.any(Number));
 			expect(q.targetReached).toBeUndefined();
@@ -127,5 +178,39 @@ describe('targetReachedPct は系列の末尾に依存しない（issue #210 (3)
 			expect(q.targetReachedDate).toBeUndefined();
 			expect(q.targetReachedPrice).toBeUndefined();
 		}
+	});
+
+	it('出力に残ったブレイク済み H&S は、進捗を出すか理由を申告するかのどちらかになっている', async () => {
+		// 上のテストを検出器層へ移したぶん、`detectPatterns` 経由でも成り立つ不変条件を別に置く。
+		// **どの構造が dedup に勝つかに依存しない**形にしてある。
+		//
+		// 対象を H&S 系に絞るのは #210 (2) の範囲がそこだから。triple / double は
+		// `breakoutTarget` を出しても `computeTargetReach` を通しておらず、進捗系のフィールドを
+		// そもそも持たない（本 fixture でも `triple_top` / `triple_bottom` が該当）。
+		const patterns = (await runOn(buildBtcJpy1hour202608Candles())) as Array<Record<string, unknown>>;
+		const scored = patterns.filter(
+			(q) =>
+				(q.type === 'head_and_shoulders' || q.type === 'inverse_head_and_shoulders') &&
+				q.breakoutTarget !== undefined &&
+				// 未ブレイク（`near_completion` 等）は進捗の算出対象外——`computeTargetReach` を
+				// 呼ぶ条件が `breakout` の存在なので、`breakoutTarget` だけでは足りない。
+				q.breakoutBarIndex !== undefined,
+		);
+		// 「対象が 1 件も無い」で空虚に通らないようにする。
+		expect(scored.length).toBeGreaterThan(0);
+		// 進捗系 3 フィールドは「理由を申告したか」で全か無かに揃う。
+		expect(
+			scored.map((q) => ({
+				omitted: q.targetProgressOmittedReason !== undefined,
+				hasPct: typeof q.targetReachedPct === 'number',
+				hasReached: q.targetReached !== undefined,
+			})),
+		).toEqual(
+			scored.map((q) => ({
+				omitted: q.targetProgressOmittedReason !== undefined,
+				hasPct: q.targetProgressOmittedReason === undefined,
+				hasReached: q.targetProgressOmittedReason === undefined,
+			})),
+		);
 	});
 });

@@ -265,7 +265,21 @@ const DATA_PARITY_FIXTURES = [
 	{
 		label: 'noisy（strict 経路中心。relaxed は踏まない）',
 		build: buildNoisyCandles,
-		requiredKeys: ['patterns[].confidence', 'patterns[].breakout.idx', 'patterns[]._method'],
+		requiredKeys: [
+			'patterns[].confidence',
+			'patterns[].breakout.idx',
+			'patterns[]._method',
+			// #204 Phase 2 の本体。H&S の整合度の内訳で、**`headProminence` / `timeSymmetry` は
+			// H&S にしか付かない**（triple の `levelMargin` と同じ穴。踏むフィクスチャで別途
+			// 固定しないと Zod の宣言漏れを検出できない）。本フィクスチャは strict H&S が
+			// 6 軸すべてを埋める唯一の入力なので、ここで一括して要求する。
+			'patterns[].scoreComponents.symmetry',
+			'patterns[].scoreComponents.headProminence',
+			'patterns[].scoreComponents.timeSymmetry',
+			'patterns[].scoreComponents.retracement',
+			'patterns[].scoreComponents.breakoutQuality',
+			'patterns[].scoreComponents.duration',
+		],
 	},
 	{
 		label: 'relaxed triple（strict が落ちて relaxed が拾う）',
