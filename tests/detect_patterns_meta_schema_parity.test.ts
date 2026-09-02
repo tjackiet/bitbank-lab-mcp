@@ -92,8 +92,24 @@ function buildNoisyCandles(): Candle[] {
  * `NECKLINE_SLOPE_LIMIT`（2%）、パターン高さ 11% > `heightPct`（3%）、
  * 谷の押し 9% 超 > `depthPct`（5%）、山のばらつき / 高さ = 0.38 < `MAX_LEVEL_SPREAD_RATIO`（0.5）、
  * 構造ゲートの戻り率 0.69 ∈ [0.2, 0.9]、山3 から 20 本以内にネックラインを 1.5% 割る足がある
- * （→ `status='completed'`）。山1-山3 の間隔 20 日で `periodScoreDays` が 0.9 になり
- * confidence 0.76 > `MIN_CONFIDENCE.triple_top`（0.7）。
+ * （→ `status='completed'`）。山1-山3 の間隔 20 日で `periodScoreDays` が 0.9 になる。
+ *
+ * ## ブレイクの深さ（issue #199 で追加した制約）
+ *
+ * 山3（idx 42）からの下落は **idx 44 で 845 まで**落として、ネックライン 900 を
+ * パターン高さ（986 − 900 = 86）の 64% ぶん割らせてある。#199 以前は idx 50 まで
+ * なだらかに 840 へ落としており、**ブレイク足の終値がネックラインを 2% しか割らない**
+ * （`breakoutQuality` 0.18）形だった。
+ *
+ * `breakoutQuality` が整合度の軸になったので、この浅さでは confidence が 0.53 まで落ちて
+ * `confidence_below_min_relaxed` で消える——**本フィクスチャの唯一の仕事である
+ * relaxed 経路の `_fallback` 検証が丸ごと空振りする。** 現在の内訳は
+ * `levelMargin` 0.44 / `retracement` 0.607 / `breakoutQuality` 0.640 / `duration` 0.9 で
+ * confidence **0.65** > `MIN_CONFIDENCE.triple_top`（0.6）。
+ *
+ * **`levelMargin` 0.44 は relaxed 経路の構造的な上限に近い。** relaxed が走るのは strict の
+ * 最大ペアが `tolerancePct` を超えたときだけなので、3 ペア平均を `tolerancePct × factor` で
+ * 割った値は 0.5 前後にしかならない。余裕は他の 3 軸で作るしかない。
  *
  * **既存の `buildNoisyCandles` には手を入れていない。** あちらは `debug.candidates` /
  * `debug.swings` を埋めるための「多数の種別が同時に立つ」列で、relaxed を踏ませるには
@@ -111,7 +127,8 @@ function buildRelaxedTripleTopCandles(): Candle[] {
 		[32, 1000], // 山2
 		[37, 900], // 谷2
 		[42, 958], // 山3 — 山1 との相対差 4.2%（strict 4% 超 / relaxed 5% 以内）
-		[50, 840], // ネックライン 900 を 1.5% 超割る → completed
+		[44, 845], // ネックライン 900 を高さの 64% ぶん割る → completed（上の「ブレイクの深さ」参照）
+		[50, 860],
 		[60, 880],
 	];
 	const lastIdx = anchors[anchors.length - 1][0];
@@ -260,6 +277,13 @@ const DATA_PARITY_FIXTURES = [
 			// #189 の本体。ここが false になったら relaxed 経路を踏めていない
 			// ——`_fallback` の宣言漏れを本テストが二度と検出できなくなる。
 			'patterns[]._fallback',
+			// #199 の本体。triple の整合度の内訳（`symmetry` を捨てて足した軸）。
+			// double 系の `symmetry` とは別フィールドなので、triple を踏むフィクスチャで
+			// 別途固定しないと宣言漏れを検出できない（`_fallback` と同じ穴）。
+			'patterns[].scoreComponents.levelMargin',
+			'patterns[].scoreComponents.retracement',
+			'patterns[].scoreComponents.breakoutQuality',
+			'patterns[].scoreComponents.duration',
 		],
 	},
 ] as const;

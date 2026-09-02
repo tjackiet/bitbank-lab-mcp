@@ -581,8 +581,23 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 
 `confidence` は**構造ゲートを通過した候補どうしの比較値**であって、構造的妥当性の指標ではない。
 構造的に無効な形は整合度が下がるのではなく、そもそも出力されない。
-内訳は `data.patterns[*].scoreComponents`（`symmetry` / `retracement` / `breakoutQuality` / `duration`）、
-ゲートが実際に計測した値は `data.patterns[*].structureGate` にある。
+内訳は `data.patterns[*].scoreComponents`、ゲートが実際に計測した値は
+`data.patterns[*].structureGate` にある。
+
+`scoreComponents` の軸は**種別によって違う**（同じキーが両方に出ることはない）:
+
+| 軸 | 出る種別 | 意味 |
+|---|---|---|
+| `symmetry` | double 系 | 2 構成点（谷-谷 / 山-山）の同水準度。**正規化していない生の relDev** |
+| `levelMargin` | triple 系 | 3 構成点の同水準度を、その経路の許容幅（`tolerancePct`。relaxed は係数倍）で正規化した値 |
+| `retracement` | 共通 | 中間構成点の戻り率が許容帯の中央にどれだけ近いか |
+| `breakoutQuality` | 共通 | 突破足の終値がネックラインをパターン高さの何割ぶん超えたか。**未ブレイクでは出ない** |
+| `duration` | 共通 | 形成期間スコア |
+
+`symmetry` と `levelMargin` は**別の量**なので数値を横に並べて比較しない
+（`symmetry=0.9` は「10% ずれている」、`levelMargin=0.9` は「許容幅の 10% ぶんしかずれていない」）。
+算出できなかった軸（未ブレイク時の `breakoutQuality` 等）は**平均から外す**——
+0 として混ぜると欠測が減点になるため。
 
 ### `debug` の candidates は `patterns` で絞られる
 

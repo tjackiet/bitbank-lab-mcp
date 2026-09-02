@@ -1,16 +1,43 @@
 /**
- * issue #200 の受け入れ条件: `data.patterns` は本 PR（縮小段の申告 E / 時刻表示 F-1 / 構造図 tz 修正 F-2）の
- * 前後で完全一致する——**構造図（`structureDiagram.svg` / `.artifact.title`）を除く**。
+ * `detect_patterns` の `data.patterns`（BTC/JPY 1hour 実データ・デフォルトオプション）を
+ * **スナップショットとして固定する**回帰テスト。手書きの期待値ではなく、実際の出力を
+ * `tests/fixtures/detect_patterns_1hour_data_patterns_baseline.json` に凍結したもの。
  *
- * なぜ構造図だけ除くか: F-2 は構造図の日付表示を `.utc()` 固定から呼び出し側 tz へ修正する
- * （`lib/pattern-diagrams.ts`）。この修正は SVG 内の日付ラベルと `artifact.title` の文字列を
- * **意図的に**変える（JST 09:00 より前のピボットの日付が 1 日ずれていたバグの修正そのもの）。
- * 一方 `artifact.identifier` は tz を通さない値なので、こちらは他のフィールドと同じく
- * 完全一致の対象に含める（issue #200: 「artifact.identifier は触らない」の回帰）。
+ * ## ベースラインは「#200 着手前」ではない（名乗りを実態に合わせた履歴）
  *
- * ベースラインは本 PR 着手前（要件 E / F 実装前）の `tools/detect_patterns.ts` を
- * `git stash` で一時的に復元して実際に取得した実データ（`btc_jpy_1hour_2026_08` fixture、
- * デフォルトオプション）。手書きの期待値ではない。
+ * 初版（#200）は「縮小段の申告 E / 時刻表示 F-1 / 構造図 tz 修正 F-2 の**前後で不変**」を
+ * 主張するテストで、ベースラインは #200 着手前の実装から取っていた。その後 2 度更新している:
+ *
+ * | 更新 | 理由 |
+ * |---|---|
+ * | #202 | `headProminencePct` の時間軸オート値を `tolerancePct` の表から切り離し、1hour の H&S が検出されるようになった |
+ * | #199 候補 1 | triple の整合度を多軸化し、`scoreComponents` が付いて `confidence` が変わった |
+ *
+ * つまり**「不変であること」を主張できるのは各 PR の中だけ**で、ファイルとしては
+ * 「現在の出力のスナップショット」に役割が変わっている。**名乗りを更新せずに中身だけ
+ * 差し替えると、テスト名が嘘になる**（#202 で一度そうなった）ので、ベースラインを
+ * 更新するときはこの表に 1 行足すこと。
+ *
+ * ## 構造図（`structureDiagram.svg` / `.artifact.title`）を比較から除く理由
+ *
+ * #200 の F-2 が構造図の日付表示を `.utc()` 固定から呼び出し側 tz へ修正した
+ * （`lib/pattern-diagrams.ts`）。SVG 内の日付ラベルと `artifact.title` は**意図的に**変わる
+ * （JST 09:00 より前のピボットの日付が 1 日ずれていたバグの修正そのもの）。
+ * 一方 `artifact.identifier` は tz を通さない値なので、他のフィールドと同じく
+ * 完全一致の対象に含める（issue #200:「artifact.identifier は触らない」の回帰）。
+ *
+ * ## #199 候補 1 時点のスナップショットの中身
+ *
+ * 検出件数は 14 件で**変わっていない**（triple は 1 件も消えていない）。変わったのは
+ * triple 2 件の `confidence` と、それに伴う `rankPatterns` の並び:
+ *
+ * | パターン | before | after |
+ * |---|---:|---:|
+ * | `triple_bottom`（2026-08-22T22:00Z〜） | 0.85 | **0.73** |
+ * | `triple_top`（2026-08-21T23:00Z〜） | 0.84 | **0.68** |
+ *
+ * 後者は issue #199 本文のケース 3（報告値 0.84。「目視ではトリプルに見えないのに高得点」）
+ * そのもので、`retracement` 0.18（中間構成点が許容帯の端）が効いて下がっている。
  */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -31,8 +58,8 @@ function stripStructureDiagram(patterns: ReadonlyArray<Record<string, unknown>>)
 	});
 }
 
-describe('detect_patterns: data.patterns は縮小段申告 / 時刻表示 / 構造図 tz 修正の前後で不変（issue #200）', () => {
-	it('btc_jpy 1hour（デフォルトオプション）で data.patterns が構造図の svg/title を除き完全一致する', async () => {
+describe('detect_patterns: data.patterns の実データスナップショット（issue #200 起点。#202 / #199 で更新）', () => {
+	it('btc_jpy 1hour（デフォルトオプション）で data.patterns が構造図の svg/title を除きベースラインと一致する', async () => {
 		const candles = buildBtcJpy1hour202608Candles();
 		vi.mocked(analyzeIndicators).mockResolvedValueOnce(
 			asMockResult({ ok: true, summary: 'ok', data: { chart: { candles } } }),
@@ -41,7 +68,8 @@ describe('detect_patterns: data.patterns は縮小段申告 / 時刻表示 / 構
 		const res = await detectPatterns('btc_jpy', '1hour', 365, {});
 		assertOk(res);
 
-		// 検出件数そのものが変わっていないこと（本 PR の最重要チェック）を先に固定する。
+		// 検出件数を先に固定する。件数がずれているなら以下の deep-equal は
+		// 「どのフィールドが変わったか」ではなく「何件増減したか」を先に見せたほうが速い。
 		expect(res.data.patterns).toHaveLength(baseline.length);
 
 		expect(stripStructureDiagram(res.data.patterns)).toEqual(stripStructureDiagram(baseline));

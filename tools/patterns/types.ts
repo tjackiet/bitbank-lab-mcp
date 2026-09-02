@@ -204,6 +204,16 @@ export interface AftermathResult {
  */
 export interface PatternScoreBreakdown {
 	symmetry?: number;
+	/**
+	 * 主構成点（triple なら 3 山 / 3 谷）の同水準度を **`tolerancePct` で正規化**した軸（issue #199）。
+	 *
+	 * `symmetry` とは別フィールドにしてある。`symmetry` は double の「2 点の relDev」で
+	 * **正規化していない生の同水準度**、こちらは「全ペアの relDev 平均 ÷ その経路の許容幅」で、
+	 * **同じ 0.9 でも意味が違う**（`symmetry=0.9` は 10% ずれている、`levelMargin=0.9` は
+	 * 許容幅の 10% ぶんしかずれていない）。`symmetry` の意味を差し替えて流用すると、
+	 * 旧値を読み続けるクライアントに黙って別の量が返る（`.claude/rules/tools.md` 規約 7）。
+	 */
+	levelMargin?: number;
 	retracement?: number;
 	breakoutQuality?: number;
 	duration?: number;

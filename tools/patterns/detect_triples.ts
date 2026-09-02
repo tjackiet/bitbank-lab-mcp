@@ -8,9 +8,16 @@ import { patternBarRange } from './bar-thresholds.js';
 import { finalizeConf, periodScoreDays } from './helpers.js';
 import { clamp01, relDev } from './regression.js';
 import { applyReversalGate, buildStructureGate } from './reversal-gate.js';
-import { levelSpreadDetailsFrom, levelSpreadMetrics, validateLevelSpread, validatePatternSize } from './structural.js';
+import { averageDefinedAxes, breakoutQualityScore, retracementScore } from './scoring.js';
+import {
+	levelSpreadDetailsFrom,
+	levelSpreadMetrics,
+	type ReversalSide,
+	validateLevelSpread,
+	validatePatternSize,
+} from './structural.js';
 import type { Pivot } from './swing.js';
-import type { CandleData, DeduplicablePattern, DetectContext, DetectResult } from './types.js';
+import type { CandleData, DeduplicablePattern, DetectContext, DetectResult, PatternScoreBreakdown } from './types.js';
 import { pushCand } from './types.js';
 
 // ── 定数 ──
@@ -141,6 +148,65 @@ function findBreakoutIdx(
 	return -1;
 }
 
+/**
+ * 完成済みトリプルの整合度サブスコア（issue #199 候補 1）。
+ *
+ * 旧実装は `(tolMargin + symmetry + per) / 3`。**`symmetry` は
+ * `1 − relDev(最小の構成点, 最大の構成点)` という恒等式**で、`tolMargin` が既に使っている
+ * 3 つの pairwise relDev のうち最大のものを、許容幅で正規化せずに足し直しているだけだった
+ * （新しい情報が無い）。Phase 1（PR #203）の実測では 109 サンプル全件で 0.9752〜0.9997 に
+ * 収まり、confidence の起伏にほぼ寄与していない。
+ *
+ * `detect_doubles.ts` の `buildDoubleScore` と**同じ 4 軸構成**にする。ただし
+ * **double とは逆に、捨てるのは `symmetry` で `tolMargin`（= `levelMargin`）を残す**:
+ *
+ * | 軸 | Phase 1 の実測レンジ | 判断 |
+ * |---|---|---|
+ * | `tolMargin`（3 ペアの relDev 平均を許容幅で正規化） | 0.586〜0.996 | **残す**——唯一レンジを持つ |
+ * | `symmetry`（= 1 − 最大 relDev） | 0.9752〜0.9997 | **捨てる**——ほぼ定数 |
+ *
+ * double が `symmetry` 側を残したのは、あちらが 2 点しか無く「2 点の relDev そのもの」で
+ * 情報が同じだったため。triple の `tolMargin` は 3 ペアの平均なので中間点の情報も拾っている。
+ *
+ * **`duration`（`periodScoreDays`）は本 PR では変えない。** Phase 1 で 109/109 が 0.6 という
+ * 定数だったが、バー数基準への置き換えは issue #199 候補 2 で、閾値決めに追加計測が要る。
+ * ここで一緒に動かすと `symmetry` 除去の寄与と分離できない。
+ */
+function buildTripleScore(opts: {
+	/** 主構成点 3 点の `price`（top なら 3 山、bottom なら 3 谷。並び順は結果に影響しない） */
+	points: readonly [number, number, number];
+	/** 同水準判定に使ったのと同じ許容幅。strict は `tolerancePct`、relaxed は `tolerancePct × factor` */
+	levelTolerancePct: number;
+	necklinePrice: number;
+	/** ブレイク足の終値。**未ブレイク（`near_completion`）では `NaN`** を渡す */
+	breakoutClose: number;
+	side: ReversalSide;
+	retracementRatio?: number;
+	durationScore: number;
+}): { components: PatternScoreBreakdown; base: number } {
+	const [p1, p2, p3] = opts.points;
+	const devs = [relDev(p1, p2), relDev(p2, p3), relDev(p1, p3)];
+	const levelMargin = clamp01(
+		1 - devs.reduce((s, v) => s + v, 0) / devs.length / Math.max(1e-12, opts.levelTolerancePct),
+	);
+	const retracement = retracementScore(opts.retracementRatio);
+	// パターン高さは double と同じ「主構成点の平均とネックラインの距離」。
+	// triple なので平均は 3 点（double は 2 点）。
+	const avgLevel = (p1 + p2 + p3) / 3;
+	const patternHeight = opts.side === 'bottom' ? opts.necklinePrice - avgLevel : avgLevel - opts.necklinePrice;
+	const breakoutQuality = breakoutQualityScore(opts.necklinePrice, opts.breakoutClose, patternHeight, opts.side);
+	const components: PatternScoreBreakdown = {
+		levelMargin: Number(levelMargin.toFixed(4)),
+		...(retracement !== undefined ? { retracement: Number(retracement.toFixed(4)) } : {}),
+		...(breakoutQuality !== undefined ? { breakoutQuality: Number(breakoutQuality.toFixed(4)) } : {}),
+		duration: Number(opts.durationScore.toFixed(4)),
+	};
+	// 算出できなかった軸は平均から外す（0 として混ぜると欠測が減点になる）。
+	// `levelMargin` は常に数値なので `averageDefinedAxes` が `undefined` を返すことはない。
+	const base = averageDefinedAxes([levelMargin, retracement, breakoutQuality, opts.durationScore]) ?? levelMargin;
+	return { components, base };
+}
+
 // ── Helper: Strict Triple Top ──
 
 function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
@@ -202,23 +268,9 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 			});
 			continue;
 		}
-		const devs = [relDev(a.price, b.price), relDev(b.price, c.price), relDev(a.price, c.price)];
-		const tolMargin = clamp01(1 - devs.reduce((s, v) => s + v, 0) / devs.length / Math.max(1e-12, tolerancePct));
-		const span = Math.max(a.price, b.price, c.price) - Math.min(a.price, b.price, c.price);
-		const symmetry = clamp01(1 - span / Math.max(1, Math.max(a.price, b.price, c.price)));
-		const per = periodScoreDays(start, structureEnd);
-		const base = (tolMargin + symmetry + per) / 3;
-		const confidence = finalizeConf(base, 'triple_top');
-
-		if (confidence < (MIN_CONFIDENCE.triple_top ?? 0)) {
-			pcand({
-				type: 'triple_top',
-				accepted: false,
-				reason: 'confidence_below_min',
-				idxs: [a.idx, b.idx, c.idx],
-			});
-			continue;
-		}
+		// **整合度の算出とゲートはブレイク検出の後**（issue #199 候補 1）。`breakoutQuality` 軸が
+		// ブレイク足の終値を要るため。理由の帰属が変わる点は {@link buildTripleScore} の
+		// 呼び出し側コメントを参照。
 
 		// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
 		const sizeReason = validatePatternSize('top', [a, v1, b, v2, c], ctx.sizeThresholds);
@@ -269,6 +321,40 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 		const isCompleted = breakoutIdx >= 0;
 		const rangeEnd = isCompleted ? candles[breakoutIdx]?.isoTime : structureEnd;
 		if (!rangeEnd) continue;
+		const breakoutPrice = isCompleted ? Number(candles[breakoutIdx]?.close ?? NaN) : NaN;
+
+		// 整合度（issue #199 候補 1）。**`confidence_below_min` はここまで下りてきた**
+		// ——`breakoutQuality` 軸がブレイク足の終値を要るため、`validatePatternSize` /
+		// 構造ゲート / `validateLevelSpread` より後ろになる。`validatePatternSize` の
+		// docstring の「固有の理由コードを持つ候補の reason を横取りしない」という原則に照らすと、
+		// `confidence_below_min` は汎用的な理由なので後ろに回るほうが原則に沿う
+		// （旧配置では、サイズ不足やスプレッド超過という固有の診断が付くはずの候補に
+		// `confidence_below_min` という汎用コードが付いていた）。
+		const per = periodScoreDays(start, structureEnd);
+		const { components: scoreComponents, base } = buildTripleScore({
+			points: [a.price, b.price, c.price],
+			levelTolerancePct: tolerancePct,
+			necklinePrice: nlAvg,
+			breakoutClose: breakoutPrice,
+			side: 'top',
+			retracementRatio: gate.retracementRatio,
+			durationScore: per,
+		});
+		const confidence = finalizeConf(base, 'triple_top');
+		if (confidence < (MIN_CONFIDENCE.triple_top ?? 0)) {
+			pcand({
+				type: 'triple_top',
+				accepted: false,
+				reason: 'confidence_below_min',
+				idxs: [a.idx, b.idx, c.idx],
+				// 閾値を再検討するには「いくつで落ちたか」が要る（#138 が `levelSpreadDetails` で
+				// 入れたのと同じ理由）。#199 で軸構成を変えた際、旧実装は棄却された候補の
+				// confidence をどこにも出しておらず、`MIN_CONFIDENCE = 0.7` が何を切っているかを
+				// コードを書き換えずに測れなかった。
+				details: { confidence, threshold: MIN_CONFIDENCE.triple_top ?? 0, ...scoreComponents },
+			});
+			continue;
+		}
 
 		const neckline = [
 			{ x: a.idx, y: nlAvg },
@@ -289,7 +375,6 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 		);
 		const ttAvgPeak = (a.price + b.price + c.price) / 3;
 		const ttTarget = Math.round(nlAvg - (ttAvgPeak - nlAvg));
-		const breakoutPrice = isCompleted ? Number(candles[breakoutIdx]?.close ?? NaN) : NaN;
 		const completionFields = isCompleted
 			? {
 					status: 'completed' as const,
@@ -313,6 +398,7 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 		patterns.push({
 			type: 'triple_top',
 			confidence,
+			scoreComponents,
 			range: { start, end: rangeEnd },
 			structureRange: { start, end: structureEnd },
 			...completionFields,
@@ -409,23 +495,8 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 			});
 			continue;
 		}
-		const devs = [relDev(a.price, b.price), relDev(b.price, c.price), relDev(a.price, c.price)];
-		const tolMargin = clamp01(1 - devs.reduce((s, v) => s + v, 0) / devs.length / Math.max(1e-12, tolerancePct));
-		const span = Math.max(a.price, b.price, c.price) - Math.min(a.price, b.price, c.price);
-		const symmetry = clamp01(1 - span / Math.max(1, Math.max(a.price, b.price, c.price)));
-		const per = periodScoreDays(start, structureEnd);
-		const base = (tolMargin + symmetry + per) / 3;
-		const confidence = finalizeConf(base, 'triple_bottom');
-
-		if (confidence < (MIN_CONFIDENCE.triple_bottom ?? 0)) {
-			pcand({
-				type: 'triple_bottom',
-				accepted: false,
-				reason: 'confidence_below_min',
-				idxs: [a.idx, b.idx, c.idx],
-			});
-			continue;
-		}
+		// **整合度の算出とゲートはブレイク検出の後**（issue #199 候補 1）。理由は
+		// `findStrictTripleTop` の同じ箇所のコメントを参照。
 
 		// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
 		const sizeReason = validatePatternSize('bottom', [a, p1, b, p2, c], ctx.sizeThresholds);
@@ -477,6 +548,34 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 		const isCompleted = breakoutIdx >= 0;
 		const rangeEnd = isCompleted ? candles[breakoutIdx]?.isoTime : structureEnd;
 		if (!rangeEnd) continue;
+		const breakoutPrice = isCompleted ? Number(candles[breakoutIdx]?.close ?? NaN) : NaN;
+
+		// 整合度（issue #199 候補 1）。配置と帰属の変化は `findStrictTripleTop` の同じ箇所を参照。
+		const per = periodScoreDays(start, structureEnd);
+		const { components: scoreComponents, base } = buildTripleScore({
+			points: [a.price, b.price, c.price],
+			levelTolerancePct: tolerancePct,
+			necklinePrice: nlAvg,
+			breakoutClose: breakoutPrice,
+			side: 'bottom',
+			retracementRatio: gate.retracementRatio,
+			durationScore: per,
+		});
+		const confidence = finalizeConf(base, 'triple_bottom');
+		if (confidence < (MIN_CONFIDENCE.triple_bottom ?? 0)) {
+			pcand({
+				type: 'triple_bottom',
+				accepted: false,
+				reason: 'confidence_below_min',
+				idxs: [a.idx, b.idx, c.idx],
+				// 閾値を再検討するには「いくつで落ちたか」が要る（#138 が `levelSpreadDetails` で
+				// 入れたのと同じ理由）。#199 で軸構成を変えた際、旧実装は棄却された候補の
+				// confidence をどこにも出しておらず、`MIN_CONFIDENCE = 0.7` が何を切っているかを
+				// コードを書き換えずに測れなかった。
+				details: { confidence, threshold: MIN_CONFIDENCE.triple_bottom ?? 0, ...scoreComponents },
+			});
+			continue;
+		}
 
 		const neckline = [
 			{ x: a.idx, y: nlAvg },
@@ -497,7 +596,6 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 		);
 		const tbAvgValley = (a.price + b.price + c.price) / 3;
 		const tbTarget = Math.round(nlAvg + (nlAvg - tbAvgValley));
-		const breakoutPrice = isCompleted ? Number(candles[breakoutIdx]?.close ?? NaN) : NaN;
 		const completionFields = isCompleted
 			? {
 					status: 'completed' as const,
@@ -521,6 +619,7 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 		patterns.push({
 			type: 'triple_bottom',
 			confidence,
+			scoreComponents,
 			range: { start, end: rangeEnd },
 			structureRange: { start, end: structureEnd },
 			...completionFields,
@@ -579,13 +678,8 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 		const start = candles[a.idx].isoTime,
 			structureEnd = candles[c.idx].isoTime;
 		if (!start || !structureEnd) continue;
-		const devs = [relDev(a.price, b.price), relDev(b.price, c.price), relDev(a.price, c.price)];
-		const tolMargin = clamp01(1 - devs.reduce((s, v) => s + v, 0) / devs.length / Math.max(1e-12, tolTriple));
-		const span = Math.max(a.price, b.price, c.price) - Math.min(a.price, b.price, c.price);
-		const symmetry = clamp01(1 - span / Math.max(1, Math.max(a.price, b.price, c.price)));
-		const per = periodScoreDays(start, structureEnd);
-		const base = (tolMargin + symmetry + per) / 3;
-		const confidence = finalizeConf(base * 0.95, 'triple_top');
+		// **整合度の算出とゲートはブレイク検出の後**（issue #199 候補 1）。理由は
+		// `findStrictTripleTop` の同じ箇所のコメントを参照。
 		// valleys for neckline & diagram
 		const v1cands = allValleys.filter((v: { idx: number }) => v.idx > a.idx && v.idx < b.idx);
 		const v2cands = allValleys.filter((v: { idx: number }) => v.idx > b.idx && v.idx < c.idx);
@@ -610,16 +704,6 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 			});
 			continue;
 		}
-		if (confidence < (MIN_CONFIDENCE.triple_top ?? 0)) {
-			pcand({
-				type: 'triple_top',
-				accepted: false,
-				reason: 'confidence_below_min_relaxed',
-				idxs: [a.idx, b.idx, c.idx],
-			});
-			continue; // 後続候補で confidence が足りるものを探す
-		}
-
 		// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
 		const sizeReason = validatePatternSize('top', [a, v1, b, v2, c], ctx.sizeThresholds);
 		if (sizeReason) {
@@ -673,6 +757,37 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 		const isCompleted = breakoutIdx >= 0;
 		const rangeEnd = isCompleted ? candles[breakoutIdx]?.isoTime : structureEnd;
 		if (!rangeEnd) continue;
+		const breakoutPrice = isCompleted ? Number(candles[breakoutIdx]?.close ?? NaN) : NaN;
+
+		// 整合度（issue #199 候補 1）。**同水準判定の分母は relaxed の `tolTriple`**
+		// （`tolerancePct × factor`）——`levelMargin` は「その経路の許容幅に対する余裕」なので、
+		// 判定に使ったのと同じ幅で正規化しないと strict より甘い判定に strict の物差しを当てることになる。
+		// 旧実装の `tolMargin` も同じ分母だった。
+		const per = periodScoreDays(start, structureEnd);
+		const { components: scoreComponents, base } = buildTripleScore({
+			points: [a.price, b.price, c.price],
+			levelTolerancePct: tolTriple,
+			necklinePrice: nlAvg,
+			breakoutClose: breakoutPrice,
+			side: 'top',
+			retracementRatio: gate.retracementRatio,
+			durationScore: per,
+		});
+		const confidence = finalizeConf(base * 0.95, 'triple_top');
+		if (confidence < (MIN_CONFIDENCE.triple_top ?? 0)) {
+			pcand({
+				type: 'triple_top',
+				accepted: false,
+				reason: 'confidence_below_min_relaxed',
+				idxs: [a.idx, b.idx, c.idx],
+				// 閾値を再検討するには「いくつで落ちたか」が要る（#138 が `levelSpreadDetails` で
+				// 入れたのと同じ理由）。#199 で軸構成を変えた際、旧実装は棄却された候補の
+				// confidence をどこにも出しておらず、`MIN_CONFIDENCE = 0.7` が何を切っているかを
+				// コードを書き換えずに測れなかった。
+				details: { confidence, threshold: MIN_CONFIDENCE.triple_top ?? 0, ...scoreComponents },
+			});
+			continue; // 後続候補で confidence が足りるものを探す
+		}
 
 		const neckline = [
 			{ x: a.idx, y: nlAvg },
@@ -693,7 +808,6 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 		);
 		const ttRelAvgPeak = (a.price + b.price + c.price) / 3;
 		const ttRelTarget = Math.round(nlAvg - (ttRelAvgPeak - nlAvg));
-		const breakoutPrice = isCompleted ? Number(candles[breakoutIdx]?.close ?? NaN) : NaN;
 		const completionFields = isCompleted
 			? {
 					status: 'completed' as const,
@@ -716,6 +830,7 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 		return {
 			type: 'triple_top',
 			confidence,
+			scoreComponents,
 			range: { start, end: rangeEnd },
 			structureRange: { start, end: structureEnd },
 			...completionFields,
@@ -763,13 +878,8 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 		const start = candles[a.idx].isoTime,
 			structureEnd = candles[c.idx].isoTime;
 		if (!start || !structureEnd) continue;
-		const devs = [relDev(a.price, b.price), relDev(b.price, c.price), relDev(a.price, c.price)];
-		const tolMargin = clamp01(1 - devs.reduce((s, v) => s + v, 0) / devs.length / Math.max(1e-12, tolTriple));
-		const span = Math.max(a.price, b.price, c.price) - Math.min(a.price, b.price, c.price);
-		const symmetry = clamp01(1 - span / Math.max(1, Math.max(a.price, b.price, c.price)));
-		const per = periodScoreDays(start, structureEnd);
-		const base = (tolMargin + symmetry + per) / 3;
-		const confidence = finalizeConf(base * 0.95, 'triple_bottom');
+		// **整合度の算出とゲートはブレイク検出の後**（issue #199 候補 1）。理由は
+		// `findStrictTripleTop` の同じ箇所のコメントを参照。
 		// peaks for neckline & diagram
 		const p1cands = allPeaks.filter((v: { idx: number }) => v.idx > a.idx && v.idx < b.idx);
 		const p2cands = allPeaks.filter((v: { idx: number }) => v.idx > b.idx && v.idx < c.idx);
@@ -794,16 +904,6 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 			});
 			continue;
 		}
-		if (confidence < (MIN_CONFIDENCE.triple_bottom ?? 0)) {
-			pcand({
-				type: 'triple_bottom',
-				accepted: false,
-				reason: 'confidence_below_min_relaxed',
-				idxs: [a.idx, b.idx, c.idx],
-			});
-			continue; // 後続候補で confidence が足りるものを探す
-		}
-
 		// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
 		const sizeReason = validatePatternSize('bottom', [a, p1, b, p2, c], ctx.sizeThresholds);
 		if (sizeReason) {
@@ -852,6 +952,35 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 		const isCompleted = breakoutIdx >= 0;
 		const rangeEnd = isCompleted ? candles[breakoutIdx]?.isoTime : structureEnd;
 		if (!rangeEnd) continue;
+		const breakoutPrice = isCompleted ? Number(candles[breakoutIdx]?.close ?? NaN) : NaN;
+
+		// 整合度（issue #199 候補 1）。分母が relaxed の `tolTriple` である理由は
+		// `findRelaxedTripleTop` の同じ箇所のコメントを参照。
+		const per = periodScoreDays(start, structureEnd);
+		const { components: scoreComponents, base } = buildTripleScore({
+			points: [a.price, b.price, c.price],
+			levelTolerancePct: tolTriple,
+			necklinePrice: nlAvg,
+			breakoutClose: breakoutPrice,
+			side: 'bottom',
+			retracementRatio: gate.retracementRatio,
+			durationScore: per,
+		});
+		const confidence = finalizeConf(base * 0.95, 'triple_bottom');
+		if (confidence < (MIN_CONFIDENCE.triple_bottom ?? 0)) {
+			pcand({
+				type: 'triple_bottom',
+				accepted: false,
+				reason: 'confidence_below_min_relaxed',
+				idxs: [a.idx, b.idx, c.idx],
+				// 閾値を再検討するには「いくつで落ちたか」が要る（#138 が `levelSpreadDetails` で
+				// 入れたのと同じ理由）。#199 で軸構成を変えた際、旧実装は棄却された候補の
+				// confidence をどこにも出しておらず、`MIN_CONFIDENCE = 0.7` が何を切っているかを
+				// コードを書き換えずに測れなかった。
+				details: { confidence, threshold: MIN_CONFIDENCE.triple_bottom ?? 0, ...scoreComponents },
+			});
+			continue; // 後続候補で confidence が足りるものを探す
+		}
 
 		const neckline = [
 			{ x: a.idx, y: nlAvg },
@@ -872,7 +1001,6 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 		);
 		const tbRelAvgValley = (a.price + b.price + c.price) / 3;
 		const tbRelTarget = Math.round(nlAvg + (nlAvg - tbRelAvgValley));
-		const breakoutPrice = isCompleted ? Number(candles[breakoutIdx]?.close ?? NaN) : NaN;
 		const completionFields = isCompleted
 			? {
 					status: 'completed' as const,
@@ -895,6 +1023,7 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 		return {
 			type: 'triple_bottom',
 			confidence,
+			scoreComponents,
 			range: { start, end: rangeEnd },
 			structureRange: { start, end: structureEnd },
 			...completionFields,
