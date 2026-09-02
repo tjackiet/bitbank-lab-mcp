@@ -20,6 +20,7 @@ import { rankPatterns } from './patterns/ranking.js';
 import { linearRegressionWithR2, near as nearFn, pct as pctFn } from './patterns/regression.js';
 import { buildScanWindowWarning } from './patterns/scan-window.js';
 import { type Candle, detectSwingPoints, filterPeaks, filterValleys } from './patterns/swing.js';
+import { formatTargetProgressLine } from './patterns/target-reach.js';
 import type { CandDebugEntry, DeduplicablePattern, DetectContext } from './patterns/types.js';
 
 /**
@@ -55,6 +56,7 @@ interface SummaryPattern extends DeduplicablePattern {
 	breakoutTarget?: number;
 	targetMethod?: string;
 	targetReachedPct?: number;
+	targetProgressOmittedReason?: string;
 	poleDirection?: string;
 	priorTrendDirection?: string;
 	flagpoleHeight?: number;
@@ -510,9 +512,8 @@ export default async function detectPatterns(
 						neckline_projection: 'ネックライン投影',
 					};
 					detail += `\n   - ターゲット価格: ${Math.round(p.breakoutTarget).toLocaleString('ja-JP')}円（${(p.targetMethod && methodJa[p.targetMethod]) || p.targetMethod || '不明'}）`;
-					if (p.targetReachedPct != null) {
-						detail += `\n   - ターゲット進捗: ${p.targetReachedPct}%${p.targetReachedPct >= 100 ? '（到達済み）' : ''}`;
-					}
+					const progressLine = formatTargetProgressLine(p);
+					if (progressLine) detail += `\n${progressLine}`;
 				}
 
 				// flag / pennant 固有フィールド（bull_*/bear_* 含む。legacy 'pennant' も処理）

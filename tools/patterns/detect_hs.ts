@@ -11,7 +11,7 @@
  */
 import { generatePatternDiagram } from '../../lib/pattern-diagrams.js';
 import { patternBarRange } from './bar-thresholds.js';
-import { computeTargetReach, finalizeConf, periodScoreDays } from './helpers.js';
+import { finalizeConf, periodScoreDays } from './helpers.js';
 import { clamp01, marginFromRelDev, relDev } from './regression.js';
 import { applyReversalGate, buildStructureGate } from './reversal-gate.js';
 import {
@@ -24,6 +24,7 @@ import {
 	validatePriorTrend,
 } from './structural.js';
 import type { Pivot } from './swing.js';
+import { computeTargetReach, targetReachFields } from './target-reach.js';
 import type {
 	CandleData,
 	DeduplicablePattern,
@@ -232,22 +233,48 @@ export function necklineProjectionTarget(args: {
 	direction: 'down' | 'up';
 	fallbackNecklinePrice: number;
 }): number | undefined {
-	const { neckline, anchorIdx, headIdx, headPrice, direction, fallbackNecklinePrice } = args;
+	const { neckline, anchorIdx, direction, fallbackNecklinePrice } = args;
 	// **添字は fallback の対象外**。`fallbackNecklinePrice` は「`neckline` の張り方が壊れている」
 	// ときの代表水準であって、添字が壊れているときの代替ではない。`necklineAt` は `i` を検査せず
 	// NaN をそのまま計算に通すので、先に弾かないと `at()` が fallback に畳んで
 	// **もっともらしい target を返してしまう**（本来は undefined を返すべき入力）。
-	if (!Number.isFinite(anchorIdx) || !Number.isFinite(headIdx) || !Number.isFinite(headPrice)) return undefined;
-	const at = (i: number) => {
-		const v = necklineAt(neckline, i);
-		return Number.isFinite(v) ? v : fallbackNecklinePrice;
-	};
-	const nlAtHead = at(headIdx);
-	const nlAtAnchor = at(anchorIdx);
-	if (!Number.isFinite(nlAtHead) || !Number.isFinite(nlAtAnchor)) return undefined;
+	if (!Number.isFinite(anchorIdx)) return undefined;
+	const height = necklineProjectionHeight(args);
+	if (height === undefined) return undefined;
+	const nlAtAnchor = necklineAtOr(neckline, anchorIdx, fallbackNecklinePrice);
+	if (!Number.isFinite(nlAtAnchor)) return undefined;
+	return Math.round(direction === 'down' ? nlAtAnchor - height : nlAtAnchor + height);
+}
+
+/** `necklineAt` が NaN のとき `fallback` に畳む。添字の妥当性は呼び出し側で担保すること。 */
+function necklineAtOr(neckline: NecklinePt[], i: number, fallback: number): number {
+	const v = necklineAt(neckline, i);
+	return Number.isFinite(v) ? v : fallback;
+}
+
+/**
+ * `necklineProjectionTarget` が投影する**値幅そのもの**（頭の真下のネックラインから頭までの高さ）。
+ *
+ * `computeTargetReach` の分母 `|target − breakoutPrice|` が退化しているかを判定するのに
+ * **同じ高さ**が要る（issue #210）。target 側とここで別々に高さを組むと、片方だけ直したときに
+ * 黙ってずれるので 1 箇所に寄せる。`necklineProjectionTarget` もこの関数を通す。
+ *
+ * 高さが 0 以下（外挿したネックラインが頭を追い越した）なら `undefined`。
+ */
+export function necklineProjectionHeight(args: {
+	neckline: NecklinePt[];
+	headIdx: number;
+	headPrice: number;
+	direction: 'down' | 'up';
+	fallbackNecklinePrice: number;
+}): number | undefined {
+	const { neckline, headIdx, headPrice, direction, fallbackNecklinePrice } = args;
+	if (!Number.isFinite(headIdx) || !Number.isFinite(headPrice)) return undefined;
+	const nlAtHead = necklineAtOr(neckline, headIdx, fallbackNecklinePrice);
+	if (!Number.isFinite(nlAtHead)) return undefined;
 	const height = direction === 'down' ? headPrice - nlAtHead : nlAtHead - headPrice;
 	if (!(height > 0)) return undefined;
-	return Math.round(direction === 'down' ? nlAtAnchor - height : nlAtAnchor + height);
+	return height;
 }
 
 // ── Helper: 右肩後のネックラインブレイクインデックスを検出 ──
@@ -654,9 +681,16 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 					direction: 'up',
 					fallbackNecklinePrice: nlAvg,
 				});
+				const ihsHeight = necklineProjectionHeight({
+					neckline,
+					headIdx: p2.idx,
+					headPrice: p2.price,
+					direction: 'up',
+					fallbackNecklinePrice: nlAvg,
+				});
 				const ihsReach =
-					ihsTarget !== undefined && completion.breakout
-						? computeTargetReach(candles, breakoutIdx, completion.breakout.price, ihsTarget, 'up')
+					ihsTarget !== undefined && ihsHeight !== undefined && completion.breakout
+						? computeTargetReach(candles, breakoutIdx, completion.breakout.price, ihsTarget, 'up', ihsHeight)
 						: undefined;
 				const ihsPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
 
@@ -680,14 +714,7 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 					...(ihsTarget !== undefined
 						? { breakoutTarget: ihsTarget, targetMethod: 'neckline_projection' as const }
 						: {}),
-					...(ihsReach
-						? {
-								targetReachedPct: ihsReach.targetReachedPct,
-								targetReached: ihsReach.targetReached,
-								...(ihsReach.targetReachedDate ? { targetReachedDate: ihsReach.targetReachedDate } : {}),
-								targetReachedPrice: ihsReach.targetReachedPrice,
-							}
-						: {}),
+					...targetReachFields(ihsReach),
 					structureDiagram: diagram,
 				});
 				found = true;
@@ -846,9 +873,16 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 					direction: 'down',
 					fallbackNecklinePrice: nlAvg,
 				});
+				const hsHeight = necklineProjectionHeight({
+					neckline,
+					headIdx: p2.idx,
+					headPrice: p2.price,
+					direction: 'down',
+					fallbackNecklinePrice: nlAvg,
+				});
 				const hsReach =
-					hsTarget !== undefined && completion.breakout
-						? computeTargetReach(candles, breakoutIdx, completion.breakout.price, hsTarget, 'down')
+					hsTarget !== undefined && hsHeight !== undefined && completion.breakout
+						? computeTargetReach(candles, breakoutIdx, completion.breakout.price, hsTarget, 'down', hsHeight)
 						: undefined;
 				const hsPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
 
@@ -870,14 +904,7 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 					...(structureGate ? { structureGate } : {}),
 					trendlineLabel: 'ネックライン',
 					...(hsTarget !== undefined ? { breakoutTarget: hsTarget, targetMethod: 'neckline_projection' as const } : {}),
-					...(hsReach
-						? {
-								targetReachedPct: hsReach.targetReachedPct,
-								targetReached: hsReach.targetReached,
-								...(hsReach.targetReachedDate ? { targetReachedDate: hsReach.targetReachedDate } : {}),
-								targetReachedPrice: hsReach.targetReachedPrice,
-							}
-						: {}),
+					...targetReachFields(hsReach),
 					structureDiagram: diagram,
 				});
 				found = true;
@@ -1090,9 +1117,16 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 				direction: 'down',
 				fallbackNecklinePrice: nlY,
 			});
+			const hsRelHeight = necklineProjectionHeight({
+				neckline,
+				headIdx: p2.idx,
+				headPrice: p2.price,
+				direction: 'down',
+				fallbackNecklinePrice: nlY,
+			});
 			const hsRelReach =
-				hsRelTarget !== undefined && completion.breakout
-					? computeTargetReach(candles, breakoutIdx, completion.breakout.price, hsRelTarget, 'down')
+				hsRelTarget !== undefined && hsRelHeight !== undefined && completion.breakout
+					? computeTargetReach(candles, breakoutIdx, completion.breakout.price, hsRelTarget, 'down', hsRelHeight)
 					: undefined;
 			const hsRelPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
 			debugCandidates.push({
@@ -1121,14 +1155,7 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 				...(hsRelTarget !== undefined
 					? { breakoutTarget: hsRelTarget, targetMethod: 'neckline_projection' as const }
 					: {}),
-				...(hsRelReach
-					? {
-							targetReachedPct: hsRelReach.targetReachedPct,
-							targetReached: hsRelReach.targetReached,
-							...(hsRelReach.targetReachedDate ? { targetReachedDate: hsRelReach.targetReachedDate } : {}),
-							targetReachedPrice: hsRelReach.targetReachedPrice,
-						}
-					: {}),
+				...targetReachFields(hsRelReach),
 				structureDiagram: diagram,
 				_fallback: `relaxed_hs_${factors.tag}`,
 			};
@@ -1299,9 +1326,16 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 				direction: 'up',
 				fallbackNecklinePrice: nlY,
 			});
+			const ihsRelHeight = necklineProjectionHeight({
+				neckline,
+				headIdx: p2.idx,
+				headPrice: p2.price,
+				direction: 'up',
+				fallbackNecklinePrice: nlY,
+			});
 			const ihsRelReach =
-				ihsRelTarget !== undefined && completion.breakout
-					? computeTargetReach(candles, breakoutIdx, completion.breakout.price, ihsRelTarget, 'up')
+				ihsRelTarget !== undefined && ihsRelHeight !== undefined && completion.breakout
+					? computeTargetReach(candles, breakoutIdx, completion.breakout.price, ihsRelTarget, 'up', ihsRelHeight)
 					: undefined;
 			const ihsRelPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
 			debugCandidates.push({
@@ -1330,14 +1364,7 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 				...(ihsRelTarget !== undefined
 					? { breakoutTarget: ihsRelTarget, targetMethod: 'neckline_projection' as const }
 					: {}),
-				...(ihsRelReach
-					? {
-							targetReachedPct: ihsRelReach.targetReachedPct,
-							targetReached: ihsRelReach.targetReached,
-							...(ihsRelReach.targetReachedDate ? { targetReachedDate: ihsRelReach.targetReachedDate } : {}),
-							targetReachedPrice: ihsRelReach.targetReachedPrice,
-						}
-					: {}),
+				...targetReachFields(ihsRelReach),
 				structureDiagram: diagram,
 				_fallback: `relaxed_ihs_${factors.tag}`,
 			};

@@ -283,6 +283,8 @@ export interface PatternEntry extends DeduplicablePattern {
 	targetReached?: boolean;
 	targetReachedDate?: string;
 	targetReachedPrice?: number;
+	/** target 進捗系を出さなかった理由（issue #210）。schema 参照。 */
+	targetProgressOmittedReason?: 'degenerate_target_distance';
 	trendlineLabel?: string;
 	poleDirection?: 'up' | 'down';
 	priorTrendDirection?: 'bullish' | 'bearish';

@@ -23,7 +23,6 @@ import {
 	calculatePatternScoreEx,
 	checkContainment,
 	checkConvergenceEx,
-	computeTargetReach,
 	deduplicatePatterns,
 	detectWedgeBreak,
 	determineWedgeType,
@@ -31,6 +30,7 @@ import {
 	generateWindows,
 } from './helpers.js';
 import { smoothCandleExtremes } from './smoothing.js';
+import { computeTargetReach, targetReachFields } from './target-reach.js';
 import type {
 	CandDebugEntry,
 	CandleData,
@@ -472,7 +472,7 @@ function buildRegressionEntry(
 		const bp = breakInfo.breakPrice as number;
 		breakoutTarget = breakoutDirection === 'up' ? bp + patternHeight : bp - patternHeight;
 		breakoutTarget = Math.round(breakoutTarget);
-		targetReach = computeTargetReach(candles, breakInfo.breakIdx, bp, breakoutTarget, breakoutDirection);
+		targetReach = computeTargetReach(candles, breakInfo.breakIdx, bp, breakoutTarget, breakoutDirection, patternHeight);
 	}
 
 	// ダイアグラム用にタッチポイントから主要点を間引きして pivots を構成
@@ -512,7 +512,10 @@ function buildRegressionEntry(
 				// 旧コードは false 固定だったため、wedge 到達済みケースで
 				// top-level `targetReached: true` と aftermath.targetReached: false が
 				// 同居していた。LLM/クライアントが aftermath を見ても整合するよう揃える。
-				targetReached: targetReach?.targetReached ?? false,
+				// 進捗を測れなかった（`kind: 'omitted'`）ときは top-level も出ないので false
+				// ——`aftermath.targetReached` は boolean 固定で「不明」を表せないため、
+				// 「到達したと名乗らない」側に倒す（#210）。
+				targetReached: targetReach?.kind === 'measured' ? targetReach.targetReached : false,
 				outcome: isSuccessfulBreakout
 					? wedgeType === 'falling_wedge'
 						? 'bullish_breakout'
@@ -568,14 +571,7 @@ function buildRegressionEntry(
 		breakoutDate: breakInfo.detected ? breakInfo.breakIsoTime : undefined,
 		breakoutBarIndex: breakInfo.detected ? breakInfo.breakIdx : undefined,
 		...(breakoutTarget !== undefined ? { breakoutTarget, targetMethod: 'pattern_height' as const } : {}),
-		...(targetReach
-			? {
-					targetReachedPct: targetReach.targetReachedPct,
-					targetReached: targetReach.targetReached,
-					...(targetReach.targetReachedDate ? { targetReachedDate: targetReach.targetReachedDate } : {}),
-					targetReachedPrice: targetReach.targetReachedPrice,
-				}
-			: {}),
+		...targetReachFields(targetReach),
 		...(aftermath ? { aftermath } : {}),
 		...(diagram ? { structureDiagram: diagram } : {}),
 	};
@@ -1103,7 +1099,7 @@ function detectFormingWedges(
 			if (Number.isFinite(bp)) {
 				fBreakoutTarget = breakoutDirection === 'up' ? bp + fPatternHeight : bp - fPatternHeight;
 				fBreakoutTarget = Math.round(fBreakoutTarget);
-				fTargetReach = computeTargetReach(candles, breakoutIdx, bp, fBreakoutTarget, breakoutDirection);
+				fTargetReach = computeTargetReach(candles, breakoutIdx, bp, fBreakoutTarget, breakoutDirection, fPatternHeight);
 			}
 		}
 
@@ -1120,14 +1116,7 @@ function detectFormingWedges(
 			...(fBreakoutTarget !== undefined
 				? { breakoutTarget: fBreakoutTarget, targetMethod: 'pattern_height' as const }
 				: {}),
-			...(fTargetReach
-				? {
-						targetReachedPct: fTargetReach.targetReachedPct,
-						targetReached: fTargetReach.targetReached,
-						...(fTargetReach.targetReachedDate ? { targetReachedDate: fTargetReach.targetReachedDate } : {}),
-						targetReachedPrice: fTargetReach.targetReachedPrice,
-					}
-				: {}),
+			...targetReachFields(fTargetReach),
 			_method: 'forming_relaxed',
 		};
 		patterns.push(entry);

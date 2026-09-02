@@ -55,6 +55,78 @@
 | 40 | #198 | `headProminencePct`（H&S / 逆H&S の頭の最小突出率）が未指定時に `tolerancePct` の時間軸オート表を誤って流用していたのを、専用の時間軸オート表（`getHeadProminenceForTf`）に切り離した | 実データ 1hour で**増える**（+4 / 14。`head_and_shoulders` 0→2 件・`inverse_head_and_shoulders` 0→2 件。他 type・`1day` は 0 件変化） |
 | 41 | #199 | triple の整合度から `symmetry`（= 1 − 最大 relDev。実質定数）を捨て、`retracement` / `breakoutQuality` を独立軸に足して doubles と同じ 4 軸構成にした。`MIN_CONFIDENCE.triple_*` を 0.7 → 0.6 に置き直した（閾値を緩めたのではなく confidence のスケールが動いたぶんの追随） | 実データで**減る**（−20 / 896。**増加 0**。消えた構造は 2 つで、いずれも「真ん中の山が谷より低い V 字」と「単調に切り下がる 3 谷」）/ 合成 fixture は変わらない |
 | 42 | #208 | H&S / 逆 H&S の `breakoutTarget` の**高さ**を「ブレイク足時点の（外挿した）ネックライン」から「**頭の真下のネックライン**」に戻した。投影の起点は従来どおりブレイク足（forming は最終構成点）。3 経路（strict / relaxed / forming）でばらばらだった基準を `necklineProjectionTarget()` 1 本に揃えた | **変わらない**（0 / 896。`confidence` も全件不変。動くのは `breakoutTarget` / `targetReached` / `targetReachedPct` 系のみ） |
+| 43 | #210 | `targetReachedPct` の 3 つの欠陥（到達側に上限が無い / 分母が潰れる / 走査が系列末尾まで無制限）を同時に直した。`breakoutTarget` の算出式は触らない | **変わらない**（1,456 行を全フィールド突き合わせて target **進捗**系以外は 0 行。`confidence` / `status` / `aftermath` も不変） |
+
+### Fixed（`targetReachedPct` の上限・分母の退化・走査窓。#210）
+
+`computeTargetReach`（`tools/patterns/helpers.ts` → **`tools/patterns/target-reach.ts` に切り出し**）の
+`targetReachedPct` には独立した欠陥が 3 つあり、合わさって `ターゲット進捗: 240033%（到達済み）` を
+**LLM の唯一のチャネル（`content[0].text`）に**流していた。
+
+| # | 欠陥 | 対策 |
+|---|---|---|
+| (1) | 未到達側は 99 にキャップされているのに**到達側は無制限** | `TARGET_REACHED_PCT_CAP = 999` でクランプ。**999 ちょうどは「999% 以上」** |
+| (2) | 分母 `\|target − ブレイク価格\|` が潰れると桁が爆発する | パターン高さの **15% 未満**なら target **進捗**系を出さず `targetProgressOmittedReason` で申告 |
+| (3) | 走査が `candles.length` まで**無制限** | ブレイク足から `TARGET_REACH_MAX_BARS = 60` 本で打ち切り |
+
+**分母が潰れるのは H&S / doubles だけ。** triangles / wedges / pennants / flags は
+`breakoutTarget = ブレイク価格 ± patternHeight` なので `targetDistance ≡ patternHeight`
+（標準コーパス 896 ケースの実測でも比は 0.9844〜1.0103 = `Math.round` の丸めぶんのみ）。
+`falling_wedge` の 5,102% や `triangle_ascending` の 1,719% は**分母の退化ではなく、
+本当に高さの 51 倍 / 17 倍動いた**値だった。
+
+**issue 起票時の補足にあった「`limit` を変えると `targetReachedPct` が変わる」は実測では成立しない。**
+`limit` は「直近 N 本」なので**先頭**を切るが、走査はブレイク足より後ろしか見ないため、
+共通するパターンの pct は動かない（`limit` 120 / 150 / 200 / 250 / 300 / 365 の総当たりで**差分 0**）。
+動かすのは**系列の末尾**＝「いつ問い合わせたか」で、実データ B を 240 本で切ると 4 構造が
+209,921% → 240,033% / 4,473% → 5,102% のように動く。**4 件とも `targetReachedPrice` が
+系列全体の最高値 12,933,047（2026-08-25T02:00Z）に張り付いていた**——8/17 のブレイクが
+8/25 の高値で採点されていた。欠陥のクラスは #154 と同じ（同じ構造なのに窓次第で答えが変わる）だが、
+**軸は窓の大きさではなく観測時点**。
+
+閾値の根拠（標準コーパス 896 ケース / `computeTargetReach` の生の呼び出し 5,000 行）:
+
+- **0.15**（(2)）: H&S / doubles の比の分布は p50 = 0.49、下側は 0.0033 / 0.0068 / 0.0121 /
+  0.0955 / 0.1012 / 0.1059 / 0.1379 と続き 0.2027 に飛ぶ。**膝は 0.12** で、そこで
+  H&S / doubles に残る `pct` の最大が 13,928% → 817% に落ちる（0.25 まで上げても変わらない）。
+  0.15 はそのすぐ上の丸い値。**閾値は高さ相対（無次元）**——価格相対にすると時間足別テーブルが要る
+  （#198 の事故）。
+- **60 本**（(3)）: 到達済み 2,576 行の初到達までのバー数は p50 = 12 / p95 = 52 / p99 = 72 で、
+  **60 本以内が 96.3%**。`targetReached` は構造単位 75 → 72 件（−3）しか動かない。90 本なら
+  増減 0 だが**窓が揃う行が 29.4% しかない**（60 本なら 39.5%）ため採らなかった。
+
+計測（896 ケース / `data.patterns` 1,456 行を位置対応で全フィールド突き合わせ）:
+
+| | before | after |
+|---|---:|---:|
+| target 進捗系以外の差分（`confidence` / `status` / `pivots` / `breakoutTarget` / `aftermath` 等） | — | **0 行** |
+| `targetReachedPct` の p90 / p99 / max | 2,582 / 240,033 / **240,033** | 475 / 999 / **999** |
+| 進捗を出さなかった行（(2)） | 0 | **52**（逆 H&S 44 / `double_bottom` 8） |
+| 末尾切り詰め 8 通りでの pct の差分 | **17 行** | **5 行**（すべて「まだ 60 本ぶんの足が無い」暫定値） |
+| 上限 999 に当たった行（(1)） | — | 32 行 / **構造単位 1 件**（＝安全網として機能する規模） |
+
+`targetReached` の意味が「いつか到達した」→「**ブレイク後 60 本以内に到達した**」に変わるので、
+スキーマの description と content の文言を揃えた。`content` は
+`ターゲット進捗: 132%（ブレイク後60本以内に到達）` / `999%以上（…）` /
+`出力なし（ブレイク足が想定値幅の85%以上を消化済みで、…）` の 3 形になる
+（`formatTargetProgressLine()` に共通化。`tools/detect_patterns.ts` と
+`src/handlers/detectPatternsViewsHandler.ts` で同じ実装を使う）。
+
+`src/schema/patterns.ts` の `targetReachedPct` は `z.number().optional()` だけで description も
+値域も無かったので、**値域（0〜99 / 100〜999）・999 が「以上」であること・出ない 3 条件**を宣言し、
+新設の `targetProgressOmittedReason` も Zod に宣言した（未宣言だと `parse()` が黙って剥がす。
+#155 / #160 / #184 / #189 で 4 回）。実装を `target-reach.ts` に切り出したのは
+**スキーマが 3 定数を import して description に埋めるため**——数値を書き写すと振る舞いと宣言が
+黙ってずれる。
+
+あわせて、12 箇所に書き写されていた target 進捗フィールドの spread を `targetReachFields()` に
+集約した。`computeTargetReach` は `patternHeight` を受け取り、
+`{ kind: 'measured' | 'omitted' }` の判別共用体を返す。
+
+**`breakoutTarget` の算出式は 1 行も触っていない**（#211 の対象）。詳細は
+`docs/internal/target-reached-pct-210.md`。
+`tests/fixtures/detect_patterns_1hour_data_patterns_baseline.json` は 14 件中 5 件の target 進捗系が
+変わる（件数・`confidence` / `status` / `breakoutTarget` は不変）。
 
 ### Fixed（H&S の `breakoutTarget` の高さを頭の真下で測る。#208 案 A）
 

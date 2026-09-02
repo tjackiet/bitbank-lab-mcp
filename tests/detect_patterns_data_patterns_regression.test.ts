@@ -13,6 +13,7 @@
  * | #202 | `headProminencePct` の時間軸オート値を `tolerancePct` の表から切り離し、1hour の H&S が検出されるようになった |
  * | #199 候補 1 | triple の整合度を多軸化し、`scoreComponents` が付いて `confidence` が変わった |
  * | #208 | H&S の `breakoutTarget` の高さを「頭の真下のネックライン」基準に直した（target 系のみ変化） |
+ * | #210 | `targetReachedPct` に走査窓（ブレイク後 60 本）・退化ガード・上限 999 を入れた（target 進捗系のみ変化） |
  *
  * つまり**「不変であること」を主張できるのは各 PR の中だけ**で、ファイルとしては
  * 「現在の出力のスナップショット」に役割が変わっている。**名乗りを更新せずに中身だけ
@@ -54,6 +55,24 @@
  *
  * 上 2 件が issue #208 の症状そのもの——下抜けブレイクなのに target がブレイク終値（12,407,578）
  * より上に着地し、`targetReached` がブレイク直後に無条件で立っていた。
+ *
+ * ## #210 時点のスナップショットの中身
+ *
+ * 検出件数は 14 件で**変わっていない**。`confidence` / `status` / `pivots` / `range` /
+ * `breakoutTarget` / `aftermath` も全件不変で、変わったのは target **進捗**系 5 件だけ:
+ *
+ * | パターン | before | after |
+ * |---|---|---|
+ * | `inverse_head_and_shoulders`（2026-08-22T22:00Z〜） | `targetReachedPct: 43177` | 進捗系を出さず `targetProgressOmittedReason: 'degenerate_target_distance'` |
+ * | `inverse_head_and_shoulders`（2026-08-13T16:00Z〜） | `targetReachedPct: 240033` | 同上 |
+ * | `falling_wedge`（2026-08-14T21:00Z〜） | 5,102% / 12,933,047 | **999%（上限）** / 11,063,169 |
+ * | `triangle_ascending`（2026-08-16T12:00Z〜） | 1,719% / 12,933,047 | **530%** / 11,063,169 |
+ * | `triangle_ascending`（2026-08-19T16:00Z〜） | 483% / 12,933,047 | **382%** / 12,600,000 |
+ *
+ * 上 2 件が issue #210 本文の 240,033% / 43,177%。分母 `|target − ブレイク価格|` が
+ * パターン高さの 0.68% / 0.33% まで潰れていて達成度を測れないので、**値を出さずに理由を申告する**側に倒した。
+ * 下 3 件は分母は正常（比 1.0）で、`targetReachedPrice` が**系列全体の最高値 12,933,047
+ * （2026-08-25T02:00Z）に張り付いていた**のが直っている——走査がブレイク足から 60 本で止まるため。
  */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -74,7 +93,7 @@ function stripStructureDiagram(patterns: ReadonlyArray<Record<string, unknown>>)
 	});
 }
 
-describe('detect_patterns: data.patterns の実データスナップショット（issue #200 起点。#202 / #199 / #208 で更新）', () => {
+describe('detect_patterns: data.patterns の実データスナップショット（issue #200 起点。#202 / #199 / #208 / #210 で更新）', () => {
 	it('btc_jpy 1hour（デフォルトオプション）で data.patterns が構造図の svg/title を除きベースラインと一致する', async () => {
 		const candles = buildBtcJpy1hour202608Candles();
 		vi.mocked(analyzeIndicators).mockResolvedValueOnce(
