@@ -592,7 +592,11 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 | `levelMargin` | triple 系 | 3 構成点の同水準度を、その経路の許容幅（`tolerancePct`。relaxed は係数倍）で正規化した値 |
 | `retracement` | 共通 | 中間構成点の戻り率が許容帯の中央にどれだけ近いか |
 | `breakoutQuality` | 共通 | 突破足の終値がネックラインをパターン高さの何割ぶん超えたか。**未ブレイクでは出ない** |
-| `duration` | 共通 | 形成期間スコア |
+| `duration` | 共通 | 形成期間スコア。**種別で基準が違う**——triple 系は**バー数基準**（外側 2 構成点の距離。< 12 本 → 0.6 / < 18 → 0.7 / < 26 → 0.8 / 26 本以上 → 0.9）、double 系と H&S 系は**暦日基準**（< 5 日 → 0.6 / < 15 → 0.8 / < 30 → 0.9 / それ以外 → 0.7） |
+
+`duration` も**種別を跨いで横に並べない**。triple 系だけがバー数基準で、しかも単調な階梯
+（長いほど高い）だが、double / H&S 系の暦日基準は最長バケットだけ 0.7 に下がる非単調な形をしている
+（issue #199 候補 2。triple だけ移したのは、暦日基準では intraday で値が定数に張り付いていたため）。
 
 `symmetry` と `levelMargin` は**別の量**なので数値を横に並べて比較しない
 （`symmetry=0.9` は「10% ずれている」、`levelMargin=0.9` は「許容幅の 10% ぶんしかずれていない」）。

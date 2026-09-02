@@ -5,7 +5,7 @@
 import { generatePatternDiagram, type PatternDiagramData } from '../../lib/pattern-diagrams.js';
 import { MIN_CONFIDENCE } from '../patterns/config.js';
 import { patternBarRange } from './bar-thresholds.js';
-import { finalizeConf, periodScoreDays } from './helpers.js';
+import { finalizeConf, periodScoreBars } from './helpers.js';
 import { clamp01, relDev } from './regression.js';
 import { applyReversalGate, buildStructureGate } from './reversal-gate.js';
 import { averageDefinedAxes, breakoutQualityScore, retracementScore } from './scoring.js';
@@ -168,9 +168,12 @@ function findBreakoutIdx(
  * double が `symmetry` 側を残したのは、あちらが 2 点しか無く「2 点の relDev そのもの」で
  * 情報が同じだったため。triple の `tolMargin` は 3 ペアの平均なので中間点の情報も拾っている。
  *
- * **`duration`（`periodScoreDays`）は本 PR では変えない。** Phase 1 で 109/109 が 0.6 という
- * 定数だったが、バー数基準への置き換えは issue #199 候補 2 で、閾値決めに追加計測が要る。
- * ここで一緒に動かすと `symmetry` 除去の寄与と分離できない。
+ * **`duration` は triple だけ `periodScoreBars`（バー数基準）で計算する**（issue #199 候補 2）。
+ * `double` / H&S は `periodScoreDays`（暦日基準）のまま——**同じ `scoreComponents.duration` が
+ * type によって別の基準で計算される。** triple だけ移したのは、暦日版の `per` が triple でのみ
+ * 実質定数（#203 Phase 1 で 109/109 が 0.6）で、`double` / H&S では 4 値すべてが出るため。
+ * バケット境界の根拠は `periodScoreBars` の docstring と
+ * `docs/internal/triple-period-score-bars-199.md`。
  */
 function buildTripleScore(opts: {
 	/** 主構成点 3 点の `price`（top なら 3 山、bottom なら 3 谷。並び順は結果に影響しない） */
@@ -330,7 +333,7 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 		// `confidence_below_min` は汎用的な理由なので後ろに回るほうが原則に沿う
 		// （旧配置では、サイズ不足やスプレッド超過という固有の診断が付くはずの候補に
 		// `confidence_below_min` という汎用コードが付いていた）。
-		const per = periodScoreDays(start, structureEnd);
+		const per = periodScoreBars(c.idx - a.idx);
 		const { components: scoreComponents, base } = buildTripleScore({
 			points: [a.price, b.price, c.price],
 			levelTolerancePct: tolerancePct,
@@ -551,7 +554,7 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 		const breakoutPrice = isCompleted ? Number(candles[breakoutIdx]?.close ?? NaN) : NaN;
 
 		// 整合度（issue #199 候補 1）。配置と帰属の変化は `findStrictTripleTop` の同じ箇所を参照。
-		const per = periodScoreDays(start, structureEnd);
+		const per = periodScoreBars(c.idx - a.idx);
 		const { components: scoreComponents, base } = buildTripleScore({
 			points: [a.price, b.price, c.price],
 			levelTolerancePct: tolerancePct,
@@ -763,7 +766,7 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 		// （`tolerancePct × factor`）——`levelMargin` は「その経路の許容幅に対する余裕」なので、
 		// 判定に使ったのと同じ幅で正規化しないと strict より甘い判定に strict の物差しを当てることになる。
 		// 旧実装の `tolMargin` も同じ分母だった。
-		const per = periodScoreDays(start, structureEnd);
+		const per = periodScoreBars(c.idx - a.idx);
 		const { components: scoreComponents, base } = buildTripleScore({
 			points: [a.price, b.price, c.price],
 			levelTolerancePct: tolTriple,
@@ -956,7 +959,7 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 
 		// 整合度（issue #199 候補 1）。分母が relaxed の `tolTriple` である理由は
 		// `findRelaxedTripleTop` の同じ箇所のコメントを参照。
-		const per = periodScoreDays(start, structureEnd);
+		const per = periodScoreBars(c.idx - a.idx);
 		const { components: scoreComponents, base } = buildTripleScore({
 			points: [a.price, b.price, c.price],
 			levelTolerancePct: tolTriple,

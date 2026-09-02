@@ -106,6 +106,9 @@ triple 候補が 1 件も出なかった（`swingDepth` が大きくなり 3 点
 | 4hour | 7 | 7 (100%) | 0 | 0 | 0 |
 | **合計** | **109** | **109 (100%)** | 0 | 0 | 0 |
 
+**（後日: #199 候補 2 で triple はバー数基準の `periodScoreBars` に移った。この節の
+「per が定数」という観測はその根拠になった。詳細は `triple-period-score-bars-199.md`。）**
+
 `periodScoreDays` は `d<5日→0.6` / `d<15日→0.8` / `d<30日→0.9` / それ以外→0.7 という区分で、
 今回 accept された triple の構成期間（`structureRange.start〜end`）が**すべて 5 日未満**
 だったことを意味する。365 本・約 15 日分の 1hour データという窓の大きさそのものが、

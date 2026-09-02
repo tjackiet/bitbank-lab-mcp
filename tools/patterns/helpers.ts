@@ -26,7 +26,13 @@ import type {
 // 元々日足前提のバー数で書かれていたため、他時間軸では意味がずれていた。
 // 現在の**プリミティブはバー数**で、日数は「その値がどこから来たか」を示す注記に過ぎない
 // （`patterns/bar-thresholds.ts` を参照）。ここが持つのは換算率だけで、
-// 逆方向（バー数 → 日数）の関数は置かない——閾値を日数で判定する検出器はもう無い。
+// 逆方向（バー数 → 日数）の関数は置かない。
+//
+// **ただし「日数で判定する検出器はもう無い」わけではない。** 期間スコアだけが例外で、
+// `periodScoreDays`（暦日 diff でバケットを決める）を `double` の 4 経路と H&S の 4 経路が
+// まだ使っている。triple の 4 経路は #199 候補 2 で `periodScoreBars`（バー数基準）に移した。
+// 移したのが triple だけなのは、実測で `per` が triple でのみ実質定数だったため
+// （#199 Phase 1: `double` / H&S は 0.6〜0.9 の 4 値が出る）。
 // ---------------------------------------------------------------------------
 
 /**
@@ -402,6 +408,19 @@ export function calculatePatternScoreEx(components: PatternScoreComponents, weig
 // ---------------------------------------------------------------------------
 // パターン共通スコアリング
 // ---------------------------------------------------------------------------
+/**
+ * 期間スコア（**暦日基準**）。`double` / H&S の 4 経路が使う。
+ *
+ * **triple はこの関数を使わない**（issue #199 候補 2 で {@link periodScoreBars} に移した）。
+ * 時間足を見ない暦日 diff なので、intraday では構成期間が常に同じバケットに落ちる
+ * ——#203 Phase 1 の実測で triple の 109 行が 1min〜4hour の全時間足で 0.6 に張り付いた。
+ *
+ * **`double` / H&S を移していないのは、両者ではこの軸が定数になっていないから**
+ * （#199 Phase 1 実測。940 ケース延べで `double` は 0.6/0.7/0.8/0.9 の 4 値、
+ * H&S も 4 値。H&S はネイティブ 1hour だけでも 0.8 が 19.0% 出る）。
+ * 定数でない軸を「原則に合わないから」だけで動かすと、寄与が混ざったまま
+ * confidence の分布が動く。詳細は `docs/internal/triple-period-score-bars-199.md`。
+ */
 export function periodScoreDays(startIso?: string, endIso?: string): number {
 	if (!startIso || !endIso) return 0.7;
 	const d = Math.abs(dayjs(endIso).diff(dayjs(startIso), 'day', true));
@@ -409,6 +428,57 @@ export function periodScoreDays(startIso?: string, endIso?: string): number {
 	if (d < 15) return 0.8;
 	if (d < 30) return 0.9;
 	return 0.7;
+}
+
+/** {@link periodScoreBars} のバケット境界（**バー数**。時間足に依らない）。 */
+export const PERIOD_SCORE_BAR_BUCKETS = [12, 18, 26] as const;
+
+/**
+ * 期間スコア（**バー数基準**）。現在は triple の 4 経路のみが使う（issue #199 候補 2）。
+ *
+ * ```
+ * bars < 12 → 0.6   12 <= bars < 18 → 0.7   18 <= bars < 26 → 0.8   26 <= bars → 0.9
+ * ```
+ *
+ * `bars` は主構成点の**外側 2 点の距離**（triple なら `c.idx − a.idx`）。
+ *
+ * ## 境界を実測から決めた（先例が無いため）
+ *
+ * #199 Phase 1 の実測（検出器層 1,056 ケース。受理 302 行 / 価格系列上の相異なる構造 32 件）で、
+ * triple の `c.idx − a.idx` は 8〜42 バーに収まり、相異なる構造の四分位が
+ * p25 = 12 / p50 = 18 / p75 = 23〜25 だった。境界はこの四分位に置いてある:
+ *
+ * | 境界 | 由来 |
+ * |---:|---|
+ * | 12 | p25。8〜11 バーの低い裾（相異なる構造の 15.6%）を切る。台の支持に 10 が無く、合成 fixture の教科書的トリプルはいずれも 12 以上 |
+ * | 18 | p50。合成 fixture が到達する最大スパンでもある（12 / 14 / 18 の 3 値しか出ない） |
+ * | 26 | p75 の直上。26 以降は 26 / 29 / 30 / 32 / 38 / 42 と疎な上側の裾になる |
+ *
+ * **境界は時間足に依らない**（`patterns/bar-thresholds.ts` と同じ扱い。時間足別テーブルは
+ * #198 で事故になっている）。triple の構成間隔ゲートは主構成点の 2 区間に
+ * `minBarsBetweenSwings` を課すので**スパンの構造的下限は `2 × minDist`**（2〜12 バー）で、
+ * **最下位バケット（`< 12`）に到達できないのは `1month`（下限 12）だけ**。
+ * **ゲートではなくスコアなので、仮に飽和しても検出が消えることは無い**——`bar-thresholds.ts` の
+ * 閾値（下限を割ると 0 件になる）とは影響の重さが違う。
+ *
+ * ## 暦日版にあった非単調性（`< 30日 → 0.9` の次が `0.7`）は引き継がない
+ *
+ * 最長バケットだけ点が下がる段差には根拠のコメントが無い。**`periodScoreDays` は引数が
+ * 欠けたときにも同じ 0.7 を返す**ので、末尾の 0.7 は「古すぎるパターンへの減点」ではなく
+ * 「表の外＝中立値」が裾のバケットに漏れたもの、と読むのが自然。加えてこのスコアが測るのは
+ * 構成期間の**長さ**であって**古さ**ではない（`start` が今から何日前かは見ていない）ので、
+ * そもそも「古すぎる」を表現できない。鮮度は別の機構が持っている
+ * （`globalDedup` / `rankPatterns` の `range.end` 比較、`requireCurrentInPattern` /
+ * `currentRelevanceDays`）。由来不明の段差をバー空間に移すより、単調にして意味を
+ * 「構成が長いほど substantial」の 1 つに揃えるほうが読み手を誤らせない。
+ */
+export function periodScoreBars(bars: number): number {
+	if (!Number.isFinite(bars)) return 0.7;
+	const [b1, b2, b3] = PERIOD_SCORE_BAR_BUCKETS;
+	if (bars < b1) return 0.6;
+	if (bars < b2) return 0.7;
+	if (bars < b3) return 0.8;
+	return 0.9;
 }
 
 export function finalizeConf(base: number, type: string): number {

@@ -15,6 +15,7 @@
  * | #208 | H&S の `breakoutTarget` の高さを「頭の真下のネックライン」基準に直した（target 系のみ変化） |
  * | #210 | `targetReachedPct` に走査窓（ブレイク後 60 本）・退化ガード・上限 999 を入れた（target 進捗系のみ変化） |
  * | #204 Phase 2 | H&S の整合度を多軸化し、`scoreComponents` が付いて `confidence` が変わった。**`globalDedup` の代表が入れ替わり、H&S 4 件のうち 3 件が別の構造になった** |
+ * | #199 候補 2 | triple の `duration` を暦日基準（`periodScoreDays`）からバー数基準（`periodScoreBars`）に移した。triple 2 件の `confidence` と `rankPatterns` の並びが変わった |
  *
  * **#206 では更新していない**（`MIN_CONFIDENCE` から未配線の 4 エントリを消しただけで、
  * `data.patterns` は 940 ケース全件で完全一致。行を足す必要が無かった）。
@@ -90,6 +91,22 @@
  * | `inverse_head_and_shoulders` 20-26-42-106-109 / 0.94 | `inverse_head_and_shoulders` **3-9**-42-**118-137** / **0.80** | 同じ頭（idx 42）を持つ、より広い構造に入れ替わり |
  * | `head_and_shoulders` 265-272-294-313-322 / 0.82 | 同じ構造 / **0.85** | 構造は据え置きで得点だけ上昇 |
  *
+ * ## #199 候補 2 時点のスナップショットの中身
+ *
+ * 検出件数は 14 件で**変わっていない**。**構造の集合も同一**（`pivots` の idx が 14 件すべて一致）で、
+ * 代表の入れ替わりも起きていない。変わったのは triple 2 件の `duration` / `confidence` と、
+ * それに伴う `rankPatterns` の並びだけ:
+ *
+ * | パターン（3 構成点 idx） | 構成バー数 | `duration` | `confidence` |
+ * |---|--:|---|---|
+ * | `triple_bottom` 242-249-**272** | 30 | 0.6 → **0.9** | 0.73 → **0.81** |
+ * | `triple_top` 219-223-**232** | 13 | 0.6 → **0.7** | 0.68 → **0.70** |
+ *
+ * 暦日基準では 30 バー = 30 時間 / 13 バー = 13 時間でどちらも「5 日未満」に落ち、
+ * **1hour では全 triple が 0.6 に張り付いていた**（#203 Phase 1 の実測どおり）。
+ * バー数基準にすると 30 本と 13 本が別のバケットに分かれる。
+ * triple 以外の 12 件は全フィールド不変。
+ *
  * **H&S に confidence の下限ゲートは無い**（#204 Phase 2 時点は「`MIN_CONFIDENCE` に
  * エントリはあるが誰も読んでいない」状態で、#206 でそのエントリごと削除した）ので、
  * 得点が下がってパターンが消えたのではない。入れ替わりの原因は `globalDedup` で、
@@ -117,7 +134,7 @@ function stripStructureDiagram(patterns: ReadonlyArray<Record<string, unknown>>)
 	});
 }
 
-describe('detect_patterns: data.patterns の実データスナップショット（issue #200 起点。#202 / #199 / #208 / #210 / #204 で更新）', () => {
+describe('detect_patterns: data.patterns の実データスナップショット（issue #200 起点。#202 / #199 / #208 / #210 / #204 / #199 候補 2 で更新）', () => {
 	it('btc_jpy 1hour（デフォルトオプション）で data.patterns が構造図の svg/title を除きベースラインと一致する', async () => {
 		const candles = buildBtcJpy1hour202608Candles();
 		vi.mocked(analyzeIndicators).mockResolvedValueOnce(

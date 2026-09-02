@@ -459,7 +459,8 @@ describe('detectTriples', () => {
 	// ── Relaxed fallback ─────────────────────────────────────
 
 	it('strict 不検出 → relaxed (x1.25) + ブレイクで Triple Top フォールバック検出', () => {
-		// 24 日間（periodScoreDays=0.9 区分）に 3 山 2 谷 + ブレイクを配置。
+		// 24 バー（山1 idx 0 → 山3 idx 24。`periodScoreBars` の 26 本未満 = 0.8 区分）に
+		// 3 山 2 谷 + ブレイクを配置。
 		// peak3=105 → diff/max=5/105=0.0476 > strict(0.04) だが ≤ 0.05(x1.25) で relaxed が起動。
 		const total = 32;
 		const candles: CandleData[] = Array.from({ length: total }, (_, i) => mkCandle(total - i, 85, 90, 75, 85));
