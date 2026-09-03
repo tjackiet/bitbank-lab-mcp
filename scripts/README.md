@@ -47,6 +47,17 @@ npm run stat -- --last 7d
 | `--style=candles\|line\|depth` | チャートスタイル |
 | `--sma-only` / `--bb-only` / `--ichimoku-only` / `--candles-only` | 指定インジケータのみ表示 |
 
+## 計測（issue の Phase 1 実測ログ用）
+
+| スクリプト | 説明 |
+|---|---|
+| `measure_relaxed_fallback_227.ts` | `detect_hs.ts` の relaxed フォールバック（`RELAXED_FACTORS`）が標準コーパス 800 ＋ 実データ B 96 でどれだけ発火・accepted になるかを段別に計測し、段2 の係数スイープ・`headProminence` 軸の strict 採点試算を Markdown で出す（issue #227 Phase 1。コードは変えない） |
+
+```bash
+npx tsx scripts/measure_relaxed_fallback_227.ts                  # Markdown を stdout へ
+npx tsx scripts/measure_relaxed_fallback_227.ts --json out.json  # 生データも保存
+```
+
 ## バックテスト
 
 | スクリプト | 説明 |
