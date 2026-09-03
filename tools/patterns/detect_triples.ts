@@ -213,8 +213,11 @@ function buildTripleScore(opts: {
 	return { components, base };
 }
 
-// ── Helper: Strict Triple Top ──
-
+/**
+ * 厳格版 triple_top 検出。連続する 3 山（kind=H）が `tolerancePct` 内で同水準、各山間に谷（kind=L）が
+ * あり、谷 2 点のネックラインが `NECKLINE_SLOPE_LIMIT` 内で水平なら受理する。
+ * 返す `pivots` は `[a, v1, b, v2, c]`（主構成点 3 山 + ネックライン定義点 2 谷。#224 症状 3）。
+ */
 function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 	const { candles, pivots, allValleys, tolerancePct, minDist, near } = ctx;
 	const pcand: Pcand = (arg) => pushCand(ctx, arg);
@@ -466,8 +469,10 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 	return patterns;
 }
 
-// ── Helper: Strict Triple Bottom ──
-
+/**
+ * 厳格版 triple_bottom 検出。{@link findStrictTripleTop} の上下対称。
+ * 返す `pivots` は `[a, p1, b, p2, c]`（主構成点 3 谷 + ネックライン定義点 2 山。#224 症状 3）。
+ */
 function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 	const { candles, pivots, allPeaks, tolerancePct, minDist, near } = ctx;
 	const pcand: Pcand = (arg) => pushCand(ctx, arg);
@@ -713,8 +718,10 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 	return patterns;
 }
 
-// ── Helper: Relaxed Triple Top fallback ──
-
+/**
+ * 緩和版 triple_top フォールバック。strict が 0 件のときだけ `tolerancePct × factor` で再走査し、
+ * 最良 1 件を返す（`_fallback` に経路名を載せる）。`pivots` の構成は strict と同じ 5 点。
+ */
 function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicablePattern | null {
 	const { candles, pivots, allValleys, tolerancePct, minDist } = ctx;
 	const pcand: Pcand = (arg) => pushCand(ctx, arg);
@@ -942,8 +949,10 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 	return null;
 }
 
-// ── Helper: Relaxed Triple Bottom fallback ──
-
+/**
+ * 緩和版 triple_bottom フォールバック。{@link findRelaxedTripleTop} の上下対称。
+ * `pivots` の構成は strict と同じ 5 点。
+ */
 function findRelaxedTripleBottom(ctx: DetectContext, factor: number): DeduplicablePattern | null {
 	const { candles, pivots, allPeaks, tolerancePct, minDist } = ctx;
 	const pcand: Pcand = (arg) => pushCand(ctx, arg);

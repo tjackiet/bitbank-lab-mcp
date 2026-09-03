@@ -954,6 +954,11 @@ function formatPivotPrices(pv: Pivot): string {
 	return `終値 ${yen(close)} / ${basisLabel} ${yen(extreme)}（判定は${basisLabel}基準）`;
 }
 
+/**
+ * `data.patterns[i]` 1 件を content 用の複数行テキストに整形する（summary / detailed / full / debug 共通）。
+ * `価格範囲` は `pivots` 全点の min / max（反転系はネックライン定義点を含む。#224 症状 3）、
+ * 形成中 triple の暫定注記は `status === 'forming'` で判定する（`pivots.length` には依存しない）。
+ */
 export function formatPatternLine(
 	p: PatternEntry,
 	idx: number,

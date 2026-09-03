@@ -34,12 +34,14 @@ import { buildBtcJpy1hour202608Candles } from './fixtures/btc_jpy_1hour_2026_08.
 
 type PivotLike = { idx: number; price: number; kind: 'H' | 'L' };
 
+/** 実データ B（`btc_jpy` 1hour）を `analyze_indicators` の応答として 1 回分差し込む。 */
 function mockCandles() {
 	vi.mocked(analyzeIndicators).mockResolvedValueOnce(
 		asMockResult({ ok: true, summary: 'ok', data: { chart: { candles: buildBtcJpy1hour202608Candles() } } }),
 	);
 }
 
+/** `includeForming: true` で `detect_patterns` を走らせ、ok を確認して返す。 */
 async function runForming() {
 	mockCandles();
 	const res = await detectPatterns('btc_jpy', '1hour', 365, { includeForming: true });
