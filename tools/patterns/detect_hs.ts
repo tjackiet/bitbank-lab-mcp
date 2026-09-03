@@ -1244,7 +1244,6 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 			if (!gate) continue;
 			const structureGate = buildStructureGate(gate);
 
-			const nlAvg = (Number(p1.price) + Number(p3.price)) / 2;
 			// 右肩後のネックライン下抜けを確認する。
 			const breakoutIdx = findHsBreakoutIdx(candles, neckline, p4.idx, 'below');
 			const completion = buildHsCompletionFields(candles, breakoutIdx, 'down', end);
@@ -1259,7 +1258,9 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 					{ ...p3, date: candles[p3.idx]?.isoTime },
 					{ ...p4, date: candles[p4.idx]?.isoTime },
 				],
-				{ price: nlAvg },
+				// 構造図にも**ブレイク判定・ターゲット・出力フィールドと同じ `nlY`** を渡す（issue #226）。
+				// 2 定義点の平均を渡していたため、構造図だけが他と食い違っていた。
+				{ price: nlY },
 				{ start, end: rangeEnd },
 				{ tz: ctx.tz },
 			);
@@ -1469,7 +1470,6 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 			if (!gate) continue;
 			const structureGate = buildStructureGate(gate);
 
-			const nlAvg = (Number(p1.price) + Number(p3.price)) / 2;
 			// 右肩後のネックライン上抜けを確認する。
 			const breakoutIdx = findHsBreakoutIdx(candles, neckline, p4.idx, 'above');
 			const completion = buildHsCompletionFields(candles, breakoutIdx, 'up', end);
@@ -1484,7 +1484,9 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 					{ ...p3, date: candles[p3.idx]?.isoTime },
 					{ ...p4, date: candles[p4.idx]?.isoTime },
 				],
-				{ price: nlAvg },
+				// 構造図にも**ブレイク判定・ターゲット・出力フィールドと同じ `nlY`** を渡す（issue #226）。
+				// 2 定義点の平均を渡していたため、構造図だけが他と食い違っていた。
+				{ price: nlY },
 				{ start, end: rangeEnd },
 				{ tz: ctx.tz },
 			);

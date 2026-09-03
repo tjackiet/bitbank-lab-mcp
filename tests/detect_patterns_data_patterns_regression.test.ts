@@ -22,6 +22,13 @@
  * **#206 では更新していない**（`MIN_CONFIDENCE` から未配線の 4 エントリを消しただけで、
  * `data.patterns` は 940 ケース全件で完全一致。行を足す必要が無かった）。
  *
+ * **#226 でも更新していない**（relaxed H&S / 逆 H&S の構造図が描くネックライン水準を
+ * `nlAvg` から `nlY` へ直した表示層のみの修正。実データ A / B それぞれ 1,520 ケースで
+ * `data.patterns` の判定フィールドは全件一致し、**本 fixture が含む H&S 系 4 件は
+ * すべて strict 経路**なので SVG も 1 バイト動いていない。回帰は
+ * `tests/detect_patterns_hs_neckline_diagram_btcjpy.test.ts` と
+ * `tests/patterns/hs-neckline-diagram-consistency.test.ts` が持つ）。
+ *
  * つまり**「不変であること」を主張できるのは各 PR の中だけ**で、ファイルとしては
  * 「現在の出力のスナップショット」に役割が変わっている。**名乗りを更新せずに中身だけ
  * 差し替えると、テスト名が嘘になる**（#202 で一度そうなった）ので、ベースラインを
