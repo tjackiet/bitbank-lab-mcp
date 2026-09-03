@@ -72,6 +72,19 @@ function formatDateIsoShort(iso?: string): string {
 	return String(iso).split('T')[0] || String(iso);
 }
 
+/**
+ * パターン構造図（SVG）を生成する。
+ *
+ * `neckline.price` は**呼び出し側が持っているネックライン水準そのもの**を渡す。図の側で
+ * 構成点から再計算してはいけない（issue #226）。relaxed H&S / 逆 H&S は 2 定義点の平均ではなく
+ * **ブレイク判定（`findHsBreakoutIdx`）に渡す水平線の y** をネックラインとして持っており、
+ * 再計算すると同じ 1 件の出力の中で**構造図だけ**が content 本文行・ターゲット・ブレイク判定と
+ * 食い違う（実測で 27,364 円のずれ）。
+ *
+ * `triple_top` / `triple_bottom` は今も `pivots[1]` / `pivots[3]` の平均を再計算しているが、
+ * 呼び出し側（`detect_triples.ts`）が渡す `nlAvg` がまさにその平均で、**渡し値と再計算値が
+ * 一致している**ため食い違いは起きない。本 issue の範囲外として据え置く。
+ */
 export function generatePatternDiagram(
 	patternType: string,
 	pivots: Array<{ idx: number; price: number; kind: 'H' | 'L'; date?: string }>,
@@ -163,8 +176,11 @@ export function generatePatternDiagram(
 		const headDate = formatDateShort(head?.date, tz);
 		const p2Date = formatDateShort(peak2?.date, tz);
 		const rsDate = formatDateShort(rightShoulder?.date, tz);
-		// ネックライン: 山1/山2の平均価格（表示用）
-		const nlVal = ((peak1?.price ?? 0) + (peak2?.price ?? 0)) / 2;
+		// ネックライン水準は呼び出し側の値をそのまま出す（issue #226。上の docstring を参照）。
+		// strict 経路は `(peak1 + peak2) / 2` を渡してくるので、この経路の出力は 1 バイトも変わらない。
+		// **SVG 内の `<!-- Neckline (peaks average) -->` は据え置く**——strict の SVG を byte 単位で
+		// 不変に保つため（#226 の受け入れ条件）。relaxed では「平均」ではなく水平線の y になる。
+		const nlVal = neckline.price;
 		const necklinePrice = Math.round(nlVal).toLocaleString('ja-JP');
 		const svg = `<svg width="600" height="300" xmlns="http://www.w3.org/2000/svg">
   <rect width="600" height="300" fill="#f8f9fa"/>
@@ -204,8 +220,10 @@ export function generatePatternDiagram(
 		const headDate = formatDateShort(head?.date, tz);
 		const v2Date = formatDateShort(valley2?.date, tz);
 		const rsDate = formatDateShort(rightShoulder?.date, tz);
-		// ネックライン: 谷1/谷2の平均価格（表示用）
-		const nlVal = ((valley1?.price ?? 0) + (valley2?.price ?? 0)) / 2;
+		// ネックライン水準は呼び出し側の値をそのまま出す（issue #226。上の docstring を参照）。
+		// strict 経路は `(valley1 + valley2) / 2` を渡してくるので、この経路の出力は 1 バイトも変わらない。
+		// **SVG 内の `<!-- Neckline (valleys average) -->` は据え置く**——理由は逆 H&S 側と同じ。
+		const nlVal = neckline.price;
 		const necklinePrice = Math.round(nlVal).toLocaleString('ja-JP');
 		const svg = `<svg width="600" height="300" xmlns="http://www.w3.org/2000/svg">
   <rect width="600" height="300" fill="#f8f9fa"/>
