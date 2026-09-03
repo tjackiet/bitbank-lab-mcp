@@ -84,14 +84,34 @@ describe('mainPointIdxs', () => {
 
 describe('excludeTriplesSharingHsMainPoints', () => {
 	it('空配列は空配列を返す', () => {
-		expect(excludeTriplesSharingHsMainPoints([])).toEqual({ kept: [], excluded: [] });
+		expect(excludeTriplesSharingHsMainPoints([])).toEqual({ kept: [], excluded: [], hsCandidateCount: 0 });
 	});
 
-	it('H&S が 1 件も無ければ triple を落とさない', () => {
+	it('H&S が 1 件も無ければ triple を落とさず、hsCandidateCount=0 で「比較できなかった」と申告する（#224 症状 1）', () => {
 		const input = [triple('triple_bottom', [10, 20, 30]), triple('triple_top', [40, 50, 60])];
 		const res = excludeTriplesSharingHsMainPoints(input);
 		expect(res.kept).toEqual(input);
 		expect(res.excluded).toHaveLength(0);
+		// `excluded` が空なのは「比較して該当なし」ではなく「比較対象が無い」——ここで区別する。
+		expect(res.hsCandidateCount).toBe(0);
+	});
+
+	it('H&S があれば hsCandidateCount に比較対象の件数が載る（該当 0 件でも 1 以上）', () => {
+		const t = triple('triple_top', [219, 223, 232]);
+		const h1 = hs('head_and_shoulders', [265, 272, 294, 313, 322]);
+		const h2 = hs('head_and_shoulders', [204, 249, 294, 313, 318]);
+		const res = excludeTriplesSharingHsMainPoints([t, h1, h2]);
+		// 共有 0 点なので落ちないが、比較自体は 2 件の H&S に対して行われた
+		expect(res.excluded).toHaveLength(0);
+		expect(res.hsCandidateCount).toBe(2);
+	});
+
+	it('主構成点が取れない H&S（pivots 無し）は比較対象に数えない', () => {
+		const t = triple('triple_top', [219, 223, 232]);
+		const broken = { type: 'head_and_shoulders', pivots: [] } as unknown as DeduplicablePattern;
+		const res = excludeTriplesSharingHsMainPoints([t, broken]);
+		expect(res.kept).toEqual([t, broken]);
+		expect(res.hsCandidateCount).toBe(0);
 	});
 
 	it('主構成点を 2 点共有していたら triple を落とし、H&S は残す', () => {
@@ -102,6 +122,7 @@ describe('excludeTriplesSharingHsMainPoints', () => {
 		const res = excludeTriplesSharingHsMainPoints([t, h]);
 		expect(res.kept).toEqual([h]);
 		expect(res.excluded).toHaveLength(1);
+		expect(res.hsCandidateCount).toBe(1);
 		expect(res.excluded[0].triple).toBe(t);
 		expect(res.excluded[0].tripleMainIdxs).toEqual([242, 249, 272]);
 		expect(res.excluded[0].matches).toEqual([

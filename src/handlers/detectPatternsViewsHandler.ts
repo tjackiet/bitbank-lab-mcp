@@ -82,6 +82,11 @@ interface ReductionCounts {
 	lifecycleExcluded: number;
 	/** triple × H&S の型間排他（issue #218 Phase 2）で落ちた件数。**減るのは `triple_*` だけ**。 */
 	tripleHsExcluded: number;
+	/**
+	 * 排他の段で比較対象になった H&S の件数（issue #224 症状 1）。0 なら `tripleHsExcluded` の 0 は
+	 * 「比較対象が無かった」の意味。waterfall の等式には入らない。
+	 */
+	tripleHsCandidateCount: number;
 	output: number;
 }
 
@@ -275,6 +280,11 @@ export function buildDetectionRouteLine(pats: PatternEntry[]): string {
  * `tests/view-content-superset.test.ts` が定型要素の抽出に使うので、変えるなら向こうも直す。
  */
 export const REDUCTION_LABEL = '検出内訳';
+/**
+ * `triple×H&S排他 -0` に付ける注記（issue #224 症状 1）。比較対象の H&S が出力集合に 1 件も
+ * 無く、排他を**試せなかった**ことを示す。テストが文言を固定するのでここで一元管理する。
+ */
+export const TRIPLE_HS_NO_CANDIDATE_NOTE = '（比較対象 H&S 無し）';
 
 /**
  * 縮小段の件数申告行（issue #200 要件 E）。
@@ -296,22 +306,41 @@ export const REDUCTION_LABEL = '検出内訳';
  * 対応は崩れない。一方 `dedupMerged` / `lifecycleExcluded` / `tripleHsExcluded` は 0 でも省かない——
  * 本 issue の主眼（各段でどれだけ減ったか）を呼び出しごとに揺らさず答えるため
  * （`buildDetectionRouteLine` の「relaxed 0 件でも明示する」と同じ方針）。
- * `tripleHsExcluded`（issue #218 Phase 2）も同じ扱いで、**常に走る段なので 0 は
- * 「排他したが 1 件も該当しなかった」を意味する**——省くとその事実が読めなくなる。
+ * `tripleHsExcluded`（issue #218 Phase 2）も同じ扱いで 0 でも省かない。
+ *
+ * **ただし `tripleHsExcluded` の 0 は 2 通りある**（issue #224 症状 1）。関数呼び出し自体は
+ * 常に行われるが、判定は出力集合の中だけで閉じている（`tools/patterns/mutual-exclusion.ts` 冒頭
+ * 「根拠は『実際に出力される H&S』だけ」）ので、`patterns: ['triple_bottom']` のように H&S を
+ * 要求しない呼び出しでは根拠になる H&S が集合に無く**比較そのものが起きない**。
+ * 「比較したが該当なし」と「比較できなかった」の区別は `tripleHsCandidateCount` で行い、
+ * 0（比較対象無し）のときだけ `triple×H&S排他 -0（比較対象 H&S 無し）` と注記する。
+ * 比較対象が 1 件以上あるときは今までの表示に曖昧さが無いので変えない。
  *
  * @param meta `meta.reduction` を持たない meta（ハンドラ直呼びのテスト等）では空文字を返す。
  */
 export function buildReductionLine(meta: PatternMeta | undefined): string {
 	const r = meta?.reduction;
 	if (!r) return '';
-	const { detected, dedupMerged, currentFiltered, lifecycleExcluded, tripleHsExcluded, output } = r;
+	const {
+		detected,
+		dedupMerged,
+		currentFiltered,
+		lifecycleExcluded,
+		tripleHsExcluded,
+		tripleHsCandidateCount,
+		output,
+	} = r;
 	if (![detected, dedupMerged, currentFiltered, lifecycleExcluded, tripleHsExcluded, output].every(Number.isFinite))
 		return '';
 	const parts = [`検出 ${formatInt(detected)}件`, `重複統合 -${formatInt(dedupMerged)}`];
 	if (currentFiltered > 0) parts.push(`現在時点フィルタ -${formatInt(currentFiltered)}`);
+	// 比較対象の H&S が 0 件なら「排他を試せなかった」ので注記する（issue #224 症状 1）。
+	// `tripleHsCandidateCount` が無い古い meta（ハンドラ直呼びのテスト等）では注記を出さない
+	// ——無いことを「比較対象無し」と読ませない。
+	const hsNote = tripleHsCandidateCount === 0 ? TRIPLE_HS_NO_CANDIDATE_NOTE : '';
 	parts.push(
 		`ライフサイクル除外 -${formatInt(lifecycleExcluded)}`,
-		`triple×H&S排他 -${formatInt(tripleHsExcluded)}`,
+		`triple×H&S排他 -${formatInt(tripleHsExcluded)}${hsNote}`,
 		`出力 ${formatInt(output)}件`,
 	);
 	return `${REDUCTION_LABEL}: ${parts.join(' → ')}`;

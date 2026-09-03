@@ -417,7 +417,22 @@ const ReductionSchema = z
 					'——H&S 系と主構成点（triple は 3 点すべて / H&S は左肩・頭・右肩）を 2 点以上共有する ' +
 					'triple を落とす段で、H&S 側は 1 件も落とさない。落とした triple の理由は ' +
 					'view=debug の candidates に reason=excluded_by_hs_main_point_overlap として残り、' +
-					'details にどの H&S と何点共有したかが入る。',
+					'details にどの H&S と何点共有したかが入る。' +
+					'**0 は 2 通りある**（issue #224 症状 1）: 出力集合に H&S があって比較したが該当が無かった / ' +
+					'H&S が出力集合に 1 件も無く比較そのものが起きなかった。区別は `tripleHsCandidateCount` を見る。',
+			),
+		tripleHsCandidateCount: z
+			.number()
+			.int()
+			.describe(
+				'triple × H&S 排他の段で**比較対象になった H&S の件数**（ライフサイクル絞り込み後の出力集合に' +
+					'残った H&S 系で、主構成点が取れたもの）。**0 なら `tripleHsExcluded` の 0 は' +
+					"「検査して該当なし」ではなく「比較対象が無かった」を意味する**——`patterns: ['triple_bottom']` の" +
+					'ように H&S を要求しない呼び出しでは H&S 検出器が走らず、必ずこの状態になる（排他の根拠は' +
+					'呼び出し側が実際に受け取る H&S に限る仕様。`tools/patterns/mutual-exclusion.ts` 冒頭）。' +
+					'1 以上なら `tripleHsExcluded` は実際に比較した結果。件数の減少ではないので waterfall の等式' +
+					'（`detected = dedupMerged + currentFiltered + lifecycleExcluded + tripleHsExcluded + output`）には入らない。' +
+					'content の「検出内訳:」行は 0 のときだけ `triple×H&S排他 -0（比較対象 H&S 無し）` と注記する。',
 			),
 		output: z.number().int().describe('最終的に data.patterns へ残った件数（meta.count と同値）。'),
 	})

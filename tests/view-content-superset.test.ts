@@ -41,6 +41,7 @@ import {
 	REDUCTION_LABEL,
 	REJECTION_CROSS_TOTAL_LABEL,
 	REJECTION_SUMMARY_LABEL,
+	TRIPLE_HS_NO_CANDIDATE_NOTE,
 } from '../src/handlers/detectPatternsViewsHandler.js';
 import { toolDef as volatilityTool } from '../src/handlers/getVolatilityMetricsHandler.js';
 import detectPatterns from '../tools/detect_patterns.js';
@@ -365,12 +366,14 @@ function patternsFixture(opts: { relaxed?: number; candidates?: DebugCandidate[]
 			// → -1 current → -0 lifecycle → -1 triple×H&S 排他 → 7 output（PATTERN_COUNT と一致）。
 			// `currentFiltered` を 0 超にして「0 のとき省く」分岐と両方を 1 フィクスチャで確認できる
 			// ようにしてあり、`lifecycleExcluded` は 0 のまま（0 でも省かない側）に残してある。
+			// `tripleHsCandidateCount`（#224 症状 1）は 1 以上 = 排他を実際に比較した側。
 			reduction: {
 				detected: 11,
 				dedupMerged: 2,
 				currentFiltered: 1,
 				lifecycleExcluded: 0,
 				tripleHsExcluded: 1,
+				tripleHsCandidateCount: 2,
 				output: PATTERN_COUNT,
 			},
 			warning: '取得層: 180本中20本が欠損しています',
@@ -645,6 +648,8 @@ describe('階梯上の view の content は下位 view の上位集合（§3-2 �
 					currentFiltered: 0,
 					lifecycleExcluded: 0,
 					tripleHsExcluded: 0,
+					// 比較対象の H&S はある（1 件以上）が該当が無かった側。注記は付かない（#224 症状 1）。
+					tripleHsCandidateCount: 1,
 					output: PATTERN_COUNT,
 				},
 			},
@@ -653,10 +658,42 @@ describe('階梯上の view の content は下位 view の上位集合（§3-2 �
 		const text = (res as { content: Array<{ text: string }> }).content[0].text;
 		const [line] = reductionLines(text);
 		// `triple×H&S排他` は 0 でも省かない側（`ライフサイクル除外` と同じ扱い。issue #218）。
+		// 比較対象が 1 件以上あるときは「比較して該当なし」なので注記は出ない（誤って「無し」と言わない）。
 		expect(line).toBe(
 			`${REDUCTION_LABEL}: 検出 9件 → 重複統合 -2 → ライフサイクル除外 -0 → triple×H&S排他 -0 → 出力 7件`,
 		);
 		expect(line).not.toContain('現在時点フィルタ');
+		expect(line).not.toContain(TRIPLE_HS_NO_CANDIDATE_NOTE);
+	});
+
+	it('detect_patterns: 検出内訳行は tripleHsCandidateCount=0 のとき「比較対象 H&S 無し」を注記する（issue #224 症状 1）', async () => {
+		// `tripleHsExcluded: 0` は「比較して該当なし」と「比較対象が無く比較できなかった」の 2 通りある。
+		// 後者（`patterns: ['triple_bottom']` のように H&S を要求しない呼び出し）だけ注記を付けて区別する。
+		const fx = patternsFixture() as Extract<PatternsFixture, { ok: true }>;
+		vi.mocked(detectPatterns).mockResolvedValue({
+			...fx,
+			meta: {
+				...fx.meta,
+				reduction: {
+					detected: 9,
+					dedupMerged: 2,
+					currentFiltered: 0,
+					lifecycleExcluded: 0,
+					tripleHsExcluded: 0,
+					tripleHsCandidateCount: 0,
+					output: PATTERN_COUNT,
+				},
+			},
+		});
+		const byView = await collectContentByView(['summary', 'detailed', 'full', 'debug'] as const, (view) =>
+			detectPatternsTool.handler({ pair: 'btc_jpy', type: '1day', limit: 180, view }),
+		);
+		for (const view of ['summary', 'detailed', 'full', 'debug'] as const) {
+			const [line] = reductionLines(byView.get(view) as string);
+			expect(line, `view=${view}`).toBe(
+				`${REDUCTION_LABEL}: 検出 9件 → 重複統合 -2 → ライフサイクル除外 -0 → triple×H&S排他 -0${TRIPLE_HS_NO_CANDIDATE_NOTE} → 出力 7件`,
+			);
+		}
 	});
 
 	it('detect_patterns: 検出経路行が summary / detailed / full すべてに同一文言で出る（#191 B）', async () => {
