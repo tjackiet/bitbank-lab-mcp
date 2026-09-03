@@ -62,6 +62,67 @@
 | 47 | #218 Phase 2 | `triple_*` と H&S 系が**主構成点を 2 点以上共有**していたら triple を落とす型間排他を入れた。**閾値を 1 つも導入していない**（Phase 1 が深さ比の hard gate 案を実測で否定したため、確かな根拠がある二重出力だけを直した） | **減る**（940 ケースで `triple_bottom` −25 / 1,968 → 1,943。**他の 13 type は 1 件も動かない**） |
 | 48 | #216 Phase 2 | `triple_*` / `double_*` の**主構成点がすべてネックラインの正しい側にある**ことを要求する構造ゲートを入れた。**閾値（許容幅）を 1 つも導入していない**（Phase 1 の実測で逸脱量がゼロから離れているため）。H&S 系は #211 待ちで触っていない | **減る**（940 ケースで −60 / 1,943 → 1,883。`triple_top` −44 / `triple_bottom` −12 / `double_bottom` −4。**H&S 系を含む他の 10 type は 1 件も動かない**） |
 | 49 | #224 症状 2 | target 進捗を出さなかった**全経路**に理由コードを付けた。`computeTargetReach` の戻り値型と `targetReachFields` の引数型から `undefined` を外し、**理由を書かずに畳む書き方を typecheck で潰した** | **変わらない**（940 ケース全件で `data.patterns` が完全一致。足したのは出力専用フィールド `targetProgressOmittedReason` と content の 1 行だけ） |
+| 50 | #224 症状 3 | `triple_*` の `pivots` に**ネックライン定義点 v1 / v2 を含めた**（完成済み 4 経路は 3 → 5 点、形成中 2 経路は 2 → 4 点。並びは構造図と同じ）。H&S（p1 / p3）/ double（b）は既に含んでおり、triple だけが例外だった | **判定は変わらない**（940 ケース全件で件数・`confidence` / `status` / `neckline` / `breakoutTarget` / `aftermath` / `meta.reduction.tripleHsExcluded` が完全一致。動くのは `triple_top` 68 件 / `triple_bottom` 71 件の `pivots` と content の `価格範囲` 行だけで、**他の 13 type は 1 バイトも動かない**。`bear_flag` はコーパスに 0 件で、実測で動いたと確認できたのは出現した 12 type） |
+
+### Fixed（`triple_*` の `pivots` にネックライン定義点を含める。#224 症状 3）
+
+`triple_top` / `triple_bottom` の `data.patterns[].pivots` は主構成点 3 点（形成中は 2 点）しか
+持たず、**ネックラインを定義している中間点 v1 / v2 が入っていなかった**。content に
+`ネックライン: 12,285,548円（水平）` と書いてあっても、`neckline[].y` は
+`(v1.price + v2.price) / 2` で決まるのに v1 / v2 がどこにも出ないため、**消費者は報告された点から
+検算できない**。H&S は `p1` / `p3`、double は `b` を既に含んでおり、**triple だけが例外**だった。
+値は手元にあった——構造図には 5 点 `[a, v1, b, v2, c]` を渡していて、出力にだけ出していない。
+
+| 経路 | before | after |
+|---|---|---|
+| strict / relaxed × top | `[a, b, c]` | `[a, v1, b, v2, c]` |
+| strict / relaxed × bottom | `[a, b, c]` | `[a, p1, b, p2, c]` |
+| forming top / bottom | `[peak1, peak2]` | `[peak1, v1, peak2, v2]`（暫定 3 点目は従来どおり含めない） |
+
+#### 別フィールドにしなかった理由
+
+`necklinePoints` のような並行フィールドは採らない。`pivots` は**種別混在の構造点リスト**で、
+主構成点は `kind` で識別する規約（`mainPointIdxs` の docstring）。triple だけ別フィールドにすると
+例外がもう 1 つ増える。`pivots` の `.describe()` に「反転系はネックライン定義点も含む」を書き足し、
+`docs/tools.md` に並びの表を置いた——書かないと、また triple だけ抜ける方向に戻る。
+
+#### `pivots` を触ると黙って壊れた消費者（`grep -rn "\.pivots\b"` で全件を判定）
+
+| 消費者 | 判定 | 対応 |
+|---|---|---|
+| `detectPatternsViewsHandler.ts` 形成中 triple の注記 | **壊れる**（`pivots.length === 2` で判定しており 4 点になると注記が消える） | `status === 'forming'` で判定する。**長さ依存の条件を残さない** |
+| `detect_patterns.ts` `view=debug` の排他エントリ `points` | **壊れる**（全点を `role: 'main'` と名乗るので `indices` と食い違う） | role を `kind` から決める（`mainPointKind`。`mainPointIdxs` と同じ表）。`main` の集合 = `indices` |
+| `detectPatternsViewsHandler.ts` `価格範囲` | **変わるのが正しい**（`pivots` 全点の min / max。triple だけ谷を含まない不自然に狭い範囲だった） | H&S / double と揃う。仕様の是正 |
+| `mutual-exclusion.ts` `mainPointIdxs` | 不変（`kind` で絞る。v1 / v2 は反対側の kind） | 実測: `tripleHsExcluded` 940 ケース全件一致 |
+| `aftermath.ts` `theoreticalTarget` | 不変（bearish は `max`、bullish は `min`。谷は山より下、山は谷より上） | 実測: `aftermath` 940 ケース全件一致 |
+| `detectPatternsViewsHandler.ts` `view=full` の構成点明細行（`pivots.length >= 3`） | 不変（`roleLabels` が `double_*` 以外は `null` で triple には出ない） | — |
+| `helpers.ts` `globalDedup` のタイブレーク | 不変（`double_*` 専用） | — |
+| `detect_triples.ts` `validateMainPointsNecklineSide` | 不変（`[a, b, c]` を明示的に渡し `pattern.pivots` を読まない） | — |
+| `pattern-diagrams.ts` `structureDiagram` | 不変（既に 5 点を別引数で受けている） | 実測: `artifact.identifier` 全件一致 |
+
+#### 実測（940 ケース。`data.patterns` と `view=full` / `view=debug` の content を before / after で突き合わせ）
+
+- 件数 1,883 → 1,883。`confidence` / `status` / `neckline` / `breakoutTarget` / `aftermath` /
+  `meta.reduction` は**全件一致**。`pivots` が動くのは `triple_top` 68 件 / `triple_bottom` 71 件の
+  全件で、**他の 13 type は 1 件も動かない**（`bear_flag` はコーパスに 0 件。出現した 12 type はすべて全フィールド一致）。
+- 139 件すべてで `(中間側 kind の 2 点の price の平均) === neckline[0].y`。並びは構造図と同じ
+  （kind が交互・idx 昇順）で、主構成点（kind で絞った集合）は before の `pivots` と一致。
+- 形成中 triple の注記は before / after とも 44 件（消えていない）。
+- `view=debug` の排他エントリ 25 件すべてで `points` の `role: 'main'` の集合が `indices` と一致。
+- content の差分は triple の `価格範囲` 行（139 行）**だけ**。H&S / double / triangle / wedge / pennant の
+  `価格範囲` は不変。
+- 実データ B（`btc_jpy` 1hour、`includeForming`）をネイティブのまま見た before / after:
+
+  | パターン | `pivots` before → after | `価格範囲` before → after |
+  |---|---|---|
+  | `triple_bottom` near_completion（305-313-331） | `305 L / 313 L / 331 L` → `305 L / 308 H / 313 L / 318 H / 331 L` | 12,449,981 - 12,531,708 円 → 12,449,981 - **12,617,817** 円 |
+  | `triple_bottom` forming（313-331） | `313 L / 331 L` → `313 L / 318 H / 331 L / 355 H` | 12,449,981 - 12,521,114 円 → 12,449,981 - **12,799,028** 円 |
+
+  実データ A（`btc_jpy` 1day）は既定 / `includeForming` とも triple を 1 件も出さないので、
+  before / after の差分は無い。
+- 回帰ベースライン（`tests/detect_patterns_data_patterns_regression.test.ts`）は**更新していない**——
+  #216 / #218 以降 triple を 1 件も含まないため差分が出ない。docstring にその旨を 1 段落足した。
+  triple の実データ回帰は `tests/detect_patterns_triple_neckline_pivots_btcjpy.test.ts` が持つ。
 
 ### Fixed（target 進捗を出さなかった理由を全経路で申告する。#224 症状 2）
 

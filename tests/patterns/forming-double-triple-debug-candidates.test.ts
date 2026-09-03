@@ -176,7 +176,14 @@ describe('forming double / triple debug candidates (#158)', () => {
 
 			const pattern = patterns.find((p) => p.type === 'triple_top' && p.status === 'forming');
 			expect(pattern).toBeDefined();
-			expect(pattern?.pivots?.map((p) => p.idx)).toEqual([9, 22]);
+			// #224 症状 3: pivots にもネックライン定義点（2 谷）が入る。並びは points と同じ H-L-H-L で、
+			// 現在価格（暫定 3 山目）だけが pivots に入らない。
+			expect(pattern?.pivots?.map((p) => [p.kind, p.idx])).toEqual([
+				['H', 9],
+				['L', 15],
+				['H', 22],
+				['L', 28],
+			]);
 
 			const hits = formingAcceptedFor(candidates, 'triple_top');
 			expect(hits).toHaveLength(1);
@@ -197,7 +204,12 @@ describe('forming double / triple debug candidates (#158)', () => {
 
 			const pattern = patterns.find((p) => p.type === 'triple_bottom' && p.status === 'forming');
 			expect(pattern).toBeDefined();
-			expect(pattern?.pivots?.map((p) => p.idx)).toEqual([9, 22]);
+			expect(pattern?.pivots?.map((p) => [p.kind, p.idx])).toEqual([
+				['L', 9],
+				['H', 15],
+				['L', 22],
+				['H', 28],
+			]);
 
 			const hits = formingAcceptedFor(candidates, 'triple_bottom');
 			expect(hits).toHaveLength(1);

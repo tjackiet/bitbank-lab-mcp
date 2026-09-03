@@ -213,8 +213,11 @@ function buildTripleScore(opts: {
 	return { components, base };
 }
 
-// ── Helper: Strict Triple Top ──
-
+/**
+ * 厳格版 triple_top 検出。連続する 3 山（kind=H）が `tolerancePct` 内で同水準、各山間に谷（kind=L）が
+ * あり、谷 2 点のネックラインが `NECKLINE_SLOPE_LIMIT` 内で水平なら受理する。
+ * 返す `pivots` は `[a, v1, b, v2, c]`（主構成点 3 山 + ネックライン定義点 2 谷。#224 症状 3）。
+ */
 function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 	const { candles, pivots, allValleys, tolerancePct, minDist, near } = ctx;
 	const pcand: Pcand = (arg) => pushCand(ctx, arg);
@@ -439,7 +442,10 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 			range: { start, end: rangeEnd },
 			structureRange: { start, end: structureEnd },
 			...completionFields,
-			pivots: [a, b, c],
+			// ネックライン定義点 v1 / v2 を主構成点の間に挟む（issue #224 症状 3）。並びは構造図に渡す
+			// 5 点と同じ。主構成点は位置ではなく `kind`（triple_top は H）で取る規約なので、
+			// 消費者は `mainPointIdxs()` と同じく kind で絞ること。
+			pivots: [a, v1, b, v2, c],
 			neckline,
 			...(structureGate ? { structureGate } : {}),
 			trendlineLabel: 'ネックライン',
@@ -463,8 +469,10 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 	return patterns;
 }
 
-// ── Helper: Strict Triple Bottom ──
-
+/**
+ * 厳格版 triple_bottom 検出。{@link findStrictTripleTop} の上下対称。
+ * 返す `pivots` は `[a, p1, b, p2, c]`（主構成点 3 谷 + ネックライン定義点 2 山。#224 症状 3）。
+ */
 function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 	const { candles, pivots, allPeaks, tolerancePct, minDist, near } = ctx;
 	const pcand: Pcand = (arg) => pushCand(ctx, arg);
@@ -683,7 +691,10 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 			range: { start, end: rangeEnd },
 			structureRange: { start, end: structureEnd },
 			...completionFields,
-			pivots: [a, b, c],
+			// ネックライン定義点 p1 / p2 を主構成点の間に挟む（issue #224 症状 3）。並びは構造図に渡す
+			// 5 点と同じ。主構成点は位置ではなく `kind`（triple_bottom は L）で取る規約なので、
+			// 消費者は `mainPointIdxs()` と同じく kind で絞ること。
+			pivots: [a, p1, b, p2, c],
 			neckline,
 			...(structureGate ? { structureGate } : {}),
 			trendlineLabel: 'ネックライン',
@@ -707,8 +718,10 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 	return patterns;
 }
 
-// ── Helper: Relaxed Triple Top fallback ──
-
+/**
+ * 緩和版 triple_top フォールバック。strict が 0 件のときだけ `tolerancePct × factor` で再走査し、
+ * 最良 1 件を返す（`_fallback` に経路名を載せる）。`pivots` の構成は strict と同じ 5 点。
+ */
 function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicablePattern | null {
 	const { candles, pivots, allValleys, tolerancePct, minDist } = ctx;
 	const pcand: Pcand = (arg) => pushCand(ctx, arg);
@@ -920,7 +933,10 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 			range: { start, end: rangeEnd },
 			structureRange: { start, end: structureEnd },
 			...completionFields,
-			pivots: [a, b, c],
+			// ネックライン定義点 v1 / v2 を主構成点の間に挟む（issue #224 症状 3）。並びは構造図に渡す
+			// 5 点と同じ。主構成点は位置ではなく `kind`（triple_top は H）で取る規約なので、
+			// 消費者は `mainPointIdxs()` と同じく kind で絞ること。
+			pivots: [a, v1, b, v2, c],
 			neckline,
 			...(structureGate ? { structureGate } : {}),
 			trendlineLabel: 'ネックライン',
@@ -933,8 +949,10 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 	return null;
 }
 
-// ── Helper: Relaxed Triple Bottom fallback ──
-
+/**
+ * 緩和版 triple_bottom フォールバック。{@link findRelaxedTripleTop} の上下対称。
+ * `pivots` の構成は strict と同じ 5 点。
+ */
 function findRelaxedTripleBottom(ctx: DetectContext, factor: number): DeduplicablePattern | null {
 	const { candles, pivots, allPeaks, tolerancePct, minDist } = ctx;
 	const pcand: Pcand = (arg) => pushCand(ctx, arg);
@@ -1136,7 +1154,10 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 			range: { start, end: rangeEnd },
 			structureRange: { start, end: structureEnd },
 			...completionFields,
-			pivots: [a, b, c],
+			// ネックライン定義点 p1 / p2 を主構成点の間に挟む（issue #224 症状 3）。並びは構造図に渡す
+			// 5 点と同じ。主構成点は位置ではなく `kind`（triple_bottom は L）で取る規約なので、
+			// 消費者は `mainPointIdxs()` と同じく kind で絞ること。
+			pivots: [a, p1, b, p2, c],
 			neckline,
 			...(structureGate ? { structureGate } : {}),
 			trendlineLabel: 'ネックライン',
@@ -1367,9 +1388,13 @@ function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
 			confidence,
 			range: { start: isoAt(peak1.idx), end: isoAt(lastIdx) },
 			status: 'forming',
+			// ネックライン定義点 v1 / v2 を確定 2 山の間に挟む（issue #224 症状 3。並びは `pts` と同じ
+			// H-L-H-L）。3 山目は現在価格の暫定値なので**含めない**。主構成点は `kind`（H）で取ること。
 			pivots: [
 				{ idx: peak1.idx, price: peak1.price, kind: 'H' as const, extremePrice: peak1.extremePrice },
+				{ idx: v1.idx, price: v1.price, kind: 'L' as const, extremePrice: v1.extremePrice },
 				{ idx: peak2.idx, price: peak2.price, kind: 'H' as const, extremePrice: peak2.extremePrice },
+				{ idx: v2.idx, price: v2.price, kind: 'L' as const, extremePrice: v2.extremePrice },
 			],
 			neckline,
 			...(structureGate ? { structureGate } : {}),
@@ -1592,9 +1617,13 @@ function tryFormingTripleBottom(ctx: DetectContext): DeduplicablePattern | null 
 			confidence,
 			range: { start: isoAt(valley1.idx), end: isoAt(lastIdx) },
 			status: 'forming',
+			// ネックライン定義点 pTop1 / pTop2 を確定 2 谷の間に挟む（issue #224 症状 3。並びは `pts` と
+			// 同じ L-H-L-H）。3 谷目は現在価格の暫定値なので**含めない**。主構成点は `kind`（L）で取ること。
 			pivots: [
 				{ idx: valley1.idx, price: valley1.price, kind: 'L' as const, extremePrice: valley1.extremePrice },
+				{ idx: pTop1.idx, price: pTop1.price, kind: 'H' as const, extremePrice: pTop1.extremePrice },
 				{ idx: valley2.idx, price: valley2.price, kind: 'L' as const, extremePrice: valley2.extremePrice },
+				{ idx: pTop2.idx, price: pTop2.price, kind: 'H' as const, extremePrice: pTop2.extremePrice },
 			],
 			neckline,
 			...(structureGate ? { structureGate } : {}),

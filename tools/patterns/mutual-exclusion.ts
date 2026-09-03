@@ -81,6 +81,15 @@ const MAIN_POINT_KIND: Readonly<Record<string, Pivot['kind']>> = {
 };
 
 /**
+ * type の**主構成点の `kind`** を返す（対象外の type は `undefined`）。`mainPointIdxs` と同じ表
+ * （`MAIN_POINT_KIND`）を読むので、`pivots` の要素を「主構成点 / ネックライン定義点」に
+ * 振り分ける側（`view=debug` の `pts.role`）と `idxs` の絞り込みが食い違わない。
+ */
+export function mainPointKind(type: string | undefined): Pivot['kind'] | undefined {
+	return MAIN_POINT_KIND[String(type)];
+}
+
+/**
  * 本段が `view=debug` の candidates に積む理由コード。`details` に
  * `tripleMainIdxs` / `sharedCount` / `matches`（どの H&S と何点共有したか）が入る。
  *

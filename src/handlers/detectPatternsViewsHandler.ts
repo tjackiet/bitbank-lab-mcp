@@ -954,6 +954,11 @@ function formatPivotPrices(pv: Pivot): string {
 	return `終値 ${yen(close)} / ${basisLabel} ${yen(extreme)}（判定は${basisLabel}基準）`;
 }
 
+/**
+ * `data.patterns[i]` 1 件を content 用の複数行テキストに整形する（summary / detailed / full / debug 共通）。
+ * `価格範囲` は `pivots` 全点の min / max（反転系はネックライン定義点を含む。#224 症状 3）、
+ * 形成中 triple の暫定注記は `status === 'forming'` で判定する（`pivots.length` には依存しない）。
+ */
 export function formatPatternLine(
 	p: PatternEntry,
 	idx: number,
@@ -1051,14 +1056,14 @@ export function formatPatternLine(
 	}
 
 	// forming triple: 3 点目が確定していないことを LLM に明示する。
-	// 2 確定ピボットだけで構成されているため、pivots 配列だけ見ると 3 山構造を勘違いされる。
+	// 確定した主構成点は 2 点だけ（3 点目は現在価格の暫定値で `pivots` に入らない）なので、
+	// pivots 配列だけ見ると 3 山構造を勘違いされる。
+	// **`pivots.length` では判定しない**（#224 症状 3 で v1 / v2 のネックライン定義点を足したとき、
+	// `length === 2` の条件が黙って注記を消した）。形成中 triple の 3 点目が暫定であることは
+	// `status === 'forming'` そのものが表す事実なので、それだけで判定する——`pivots` の構成を
+	// 再び変えても壊れない。
 	let formingTripleNote: string | null = null;
-	if (
-		(p?.type === 'triple_top' || p?.type === 'triple_bottom') &&
-		p?.status === 'forming' &&
-		Array.isArray(p?.pivots) &&
-		p.pivots.length === 2
-	) {
+	if ((p?.type === 'triple_top' || p?.type === 'triple_bottom') && p?.status === 'forming') {
 		const role = p.type === 'triple_top' ? '3 山目' : '3 谷目';
 		formingTripleNote = `   - 注: ${role}は現在価格を暫定（未確定）。2 確定ピボット + 現在価格で評価しているため、参考材料として扱う`;
 	}

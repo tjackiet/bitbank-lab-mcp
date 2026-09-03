@@ -116,6 +116,18 @@ describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）
 		expect(hit[0].type).toBe('triple_bottom');
 		expect(hit[0].accepted).toBe(false);
 		expect(hit[0].indices).toEqual([242, 249, 272]);
+		// #224 症状 3: triple の `pivots` にネックライン定義点（2 山）が入ったので、`points` は 5 点になる。
+		// role は `kind` から決めるため、`role: 'main'` の集合は `indices` と一致する（全点を main と
+		// 名乗ると `indices` と食い違う）。
+		const points = hit[0].points as Array<{ role: string; idx: number }>;
+		expect(points.map((p) => [p.role, p.idx])).toEqual([
+			['main', 242],
+			['neckline', 245],
+			['main', 249],
+			['neckline', 265],
+			['main', 272],
+		]);
+		expect(points.filter((p) => p.role === 'main').map((p) => p.idx)).toEqual(hit[0].indices);
 		expect(hit[0].details).toEqual({
 			tripleMainIdxs: [242, 249, 272],
 			sharedCount: 2,

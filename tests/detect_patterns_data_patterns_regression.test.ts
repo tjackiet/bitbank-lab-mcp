@@ -29,6 +29,12 @@
  * `tests/detect_patterns_hs_neckline_diagram_btcjpy.test.ts` と
  * `tests/patterns/hs-neckline-diagram-consistency.test.ts` が持つ）。
  *
+ * **#224 症状 3 でも更新していない**（`triple_*` の `pivots` にネックライン定義点 v1 / v2 を
+ * 足した変更。940 ケースの実測では `pivots` が動くのは `triple_top` 68 件 / `triple_bottom` 71 件
+ * の全件で、他の 13 type は 1 バイトも動かない（`bear_flag` はコーパスに 0 件）が、**本 fixture は #216 / #218 以降 triple を
+ * 1 件も含まない**（H&S 系 4 / wedge 4 / triangle 4）ので差分が出ない。triple の実データ回帰は
+ * `tests/detect_patterns_triple_neckline_pivots_btcjpy.test.ts`（実データ B × `includeForming`）が持つ）。
+ *
  * つまり**「不変であること」を主張できるのは各 PR の中だけ**で、ファイルとしては
  * 「現在の出力のスナップショット」に役割が変わっている。**名乗りを更新せずに中身だけ
  * 差し替えると、テスト名が嘘になる**（#202 で一度そうなった）ので、ベースラインを
