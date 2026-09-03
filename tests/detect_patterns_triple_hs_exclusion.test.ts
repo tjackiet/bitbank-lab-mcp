@@ -1,0 +1,162 @@
+/**
+ * triple × H&S の型間排他（issue #218 Phase 2）を**実データのパイプライン全体**で固定する。
+ *
+ * `tests/patterns/mutual-exclusion.test.ts` が純関数の契約を見るのに対し、こちらは
+ * `detect_patterns` を通したときに
+ *
+ * 1. issue #218 の受け入れ条件（実データ B `1hour` の `triple_bottom` 242-249-272 が
+ *    逆 H&S 230-232-249-265-272 と 249・272 を共有して落ちる）が成立すること
+ * 2. **落ちるのは `triple_*` だけ**で H&S 系・double・wedge・triangle・pennant が 1 件も動かないこと
+ * 3. 新しい縮小段が `meta.reduction` と `検出内訳:` 行に申告されること（#200 の契約）
+ * 4. 落ちた理由が `view=debug` から追えること（**cap トリムで押し出されない**こと込み）
+ * 5. **排他の根拠が「実際に出力される H&S」であること**——ライフサイクル絞り込みより後に
+ *    置いていることの回帰。先に置くと、根拠にした H&S が後段で消えて「どちらも残らない」
+ *    ケースが作れてしまう
+ *
+ * を見る。
+ */
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('../tools/analyze_indicators.js', () => ({ default: vi.fn() }));
+
+import { toolDef as detectPatternsTool } from '../src/handlers/detectPatternsHandler.js';
+import analyzeIndicators from '../tools/analyze_indicators.js';
+import detectPatterns from '../tools/detect_patterns.js';
+import { mainPointIdxs, TRIPLE_HS_EXCLUSION_REASON } from '../tools/patterns/mutual-exclusion.js';
+import type { DeduplicablePattern } from '../tools/patterns/types.js';
+import { asMockResult, assertOk } from './_assertResult.js';
+import { buildBtcJpy1hour202608Candles } from './fixtures/btc_jpy_1hour_2026_08.js';
+
+/** `type` と主構成点 idx だけに畳んだ識別キー。 */
+function keyOf(p: { type?: string; pivots?: Array<{ idx: number; kind: string }> }): string {
+	return `${p.type}|${(p.pivots ?? []).map((v) => `${v.kind}${v.idx}`).join('-')}`;
+}
+
+async function run(opts: Record<string, unknown> = {}) {
+	const candles = buildBtcJpy1hour202608Candles();
+	vi.mocked(analyzeIndicators).mockResolvedValueOnce(
+		asMockResult({ ok: true, summary: 'ok', data: { chart: { candles } } }),
+	);
+	const res = await detectPatterns('btc_jpy', '1hour', 365, opts);
+	assertOk(res);
+	return res;
+}
+
+describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）', () => {
+	it('受け入れ条件: triple_bottom 242-249-272 が落ち、共有した逆 H&S は残る', async () => {
+		const res = await run();
+		const keys = res.data.patterns.map(keyOf);
+
+		// 落ちる側: issue #218 本文の実例（conf 0.81 / 構成点 idx 242 / 249 / 272）
+		expect(keys).not.toContain('triple_bottom|L242-L249-L272');
+		// 根拠側: 主構成点は左肩 230 / 頭 249 / 右肩 272。**249・272 の 2 点**を共有する
+		expect(keys).toContain('inverse_head_and_shoulders|L230-H232-L249-H265-L272');
+
+		// 逆 H&S の主構成点と triple の主構成点の共有が 2 点であることを実データで固定する
+		// （どちらかの構造が入れ替わったらこの数が変わり、受け入れ条件の前提が崩れる）。
+		const ihs = res.data.patterns.find((p) => keyOf(p) === 'inverse_head_and_shoulders|L230-H232-L249-H265-L272');
+		expect(mainPointIdxs(ihs as DeduplicablePattern)).toEqual([230, 249, 272]);
+	});
+
+	it('落ちるのは triple_* だけ — H&S 系 / double / wedge / triangle / pennant は 1 件も動かない', async () => {
+		const res = await run();
+		const byType = new Map<string, number>();
+		for (const p of res.data.patterns) byType.set(p.type, (byType.get(p.type) ?? 0) + 1);
+		// 実データ B の 1hour（デフォルトオプション）の内訳。`triple_bottom` だけが 1 → 0。
+		// **`triple_top` は残る**——その主構成点 219 / 223 / 232 は出力に残る 2 件の
+		// `head_and_shoulders`（主構成点 265-294-322 / 204-294-322）と 1 点も共有しない。
+		expect(Object.fromEntries([...byType].sort())).toEqual({
+			falling_wedge: 2,
+			head_and_shoulders: 2,
+			inverse_head_and_shoulders: 2,
+			rising_wedge: 2,
+			triangle_ascending: 4,
+			triple_top: 1,
+		});
+		expect(res.meta.count).toBe(13);
+	});
+
+	it('meta.reduction に新しい段が載り、waterfall が成立する', async () => {
+		const res = await run();
+		const r = res.meta.reduction as Record<string, number>;
+		expect(r.tripleHsExcluded).toBe(1);
+		expect(r.dedupMerged + r.currentFiltered + r.lifecycleExcluded + r.tripleHsExcluded + r.output).toBe(r.detected);
+		expect(r.output).toBe(res.meta.count);
+	});
+
+	it('検出内訳行に段が出る（#200 の契約。0 件でも省かない）', async () => {
+		const candles = buildBtcJpy1hour202608Candles();
+		vi.mocked(analyzeIndicators).mockResolvedValueOnce(
+			asMockResult({ ok: true, summary: 'ok', data: { chart: { candles } } }),
+		);
+		const res = (await detectPatternsTool.handler({ pair: 'btc_jpy', type: '1hour', limit: 365, view: 'summary' })) as {
+			content: Array<{ text: string }>;
+		};
+		const line = res.content[0].text.split('\n').find((l) => l.startsWith('検出内訳:'));
+		expect(line).toContain('triple×H&S排他 -1');
+		// 段の並びはパイプライン順（ライフサイクル絞り込みの**後**）。
+		expect(line).toMatch(/ライフサイクル除外 -\d+ → triple×H&S排他 -\d+ → 出力/);
+	});
+
+	it('view=debug で「どの H&S と何点共有したか」が追える（cap トリムで押し出されない）', async () => {
+		const res = await run();
+		const candidates = (res.meta.debug?.candidates ?? []) as Array<Record<string, unknown>>;
+		// **cap（200 件）に対して候補は 1,900 件超ある。** 検出器の棄却理由と同じ優先度で積むと
+		// 本段は最後に push されるため必ず押し出される——ここが落ちたらトリムの優先度が戻っている。
+		expect(res.meta.debug?.candidatesOmitted).toBeGreaterThan(0);
+
+		const hit = candidates.filter((c) => c.reason === TRIPLE_HS_EXCLUSION_REASON);
+		expect(hit).toHaveLength(1);
+		expect(hit[0].type).toBe('triple_bottom');
+		expect(hit[0].accepted).toBe(false);
+		expect(hit[0].indices).toEqual([242, 249, 272]);
+		expect(hit[0].details).toEqual({
+			tripleMainIdxs: [242, 249, 272],
+			sharedCount: 2,
+			matches: [{ hsType: 'inverse_head_and_shoulders', hsMainIdxs: [230, 249, 272], sharedIdxs: [249, 272] }],
+		});
+	});
+
+	// **ライフサイクル絞り込みより後に置いていることの回帰。** 先に置くと、根拠にした H&S が
+	// あとから `includeForming` / `includeCompleted` / `includeInvalid` で消え、
+	// **triple も H&S も残らない**組み合わせが作れてしまう。ここでは「落とした triple の
+	// `matches` が、同じ応答の `data.patterns` に実在する H&S を指している」ことを
+	// 8 通りのライフサイクル組み合わせすべてで固定する。
+	const LIFECYCLE_COMBOS = [false, true].flatMap((includeForming) =>
+		[false, true].flatMap((includeCompleted) =>
+			[false, true].map((includeInvalid) => ({ includeForming, includeCompleted, includeInvalid })),
+		),
+	);
+
+	it.each(LIFECYCLE_COMBOS)('排他の根拠は出力に残る H&S だけ: %o', async (opts) => {
+		const res = await run(opts);
+		const outputHsMain = new Set(
+			res.data.patterns
+				.filter((p) => p.type === 'head_and_shoulders' || p.type === 'inverse_head_and_shoulders')
+				.map((p) => mainPointIdxs(p as DeduplicablePattern).join('-')),
+		);
+		const hit = ((res.meta.debug?.candidates ?? []) as Array<Record<string, unknown>>).filter(
+			(c) => c.reason === TRIPLE_HS_EXCLUSION_REASON,
+		);
+		const r = res.meta.reduction as Record<string, number>;
+		expect(hit).toHaveLength(r.tripleHsExcluded);
+		for (const c of hit) {
+			const matches = (c.details as { matches: Array<{ hsMainIdxs: number[] }> }).matches;
+			expect(matches.length).toBeGreaterThan(0);
+			for (const m of matches) {
+				expect(outputHsMain, `${c.type} の根拠 ${m.hsMainIdxs} が data.patterns に居ない`).toContain(
+					m.hsMainIdxs.join('-'),
+				);
+			}
+		}
+	});
+
+	it('8 通りのうち少なくとも 1 つで実際に排他が起きている（上のテストが空振りしていない）', async () => {
+		let total = 0;
+		for (const opts of LIFECYCLE_COMBOS) {
+			const res = await run(opts);
+			total += (res.meta.reduction as Record<string, number>).tripleHsExcluded;
+		}
+		expect(total).toBeGreaterThan(0);
+	});
+});

@@ -80,6 +80,8 @@ interface ReductionCounts {
 	dedupMerged: number;
 	currentFiltered: number;
 	lifecycleExcluded: number;
+	/** triple × H&S の型間排他（issue #218 Phase 2）で落ちた件数。**減るのは `triple_*` だけ**。 */
+	tripleHsExcluded: number;
 	output: number;
 }
 
@@ -288,23 +290,30 @@ export const REDUCTION_LABEL = '検出内訳';
  * （#180）と同じ理由で、2 箇所で計算すると見出しと集計が食い違う事故になる。
  *
  * **`currentFiltered`（requireCurrentInPattern。既定 false）は 0 のとき区間ごと省く。**
- * `dedupMerged` / `lifecycleExcluded` と違い、このフィルタは無効時でも必ず評価されて
+ * 他の 3 段と違い、このフィルタは無効時でも必ず評価されて
  * 確定的に 0 を返す（`buildDetectionRouteLine` の relaxed 0 件のような「試したかどうか
- * 分からない」曖昧さが無い）ため、省いても `検出 - 重複統合 - ライフサイクル除外 = 出力` の
- * 対応は崩れない。一方 `dedupMerged` / `lifecycleExcluded` は 0 でも省かない——
- * 本 issue の主眼（2 段でどれだけ減ったか）を呼び出しごとに揺らさず答えるため
+ * 分からない」曖昧さが無い）ため、省いても `検出 - 重複統合 - ライフサイクル除外 - triple×H&S排他 = 出力` の
+ * 対応は崩れない。一方 `dedupMerged` / `lifecycleExcluded` / `tripleHsExcluded` は 0 でも省かない——
+ * 本 issue の主眼（各段でどれだけ減ったか）を呼び出しごとに揺らさず答えるため
  * （`buildDetectionRouteLine` の「relaxed 0 件でも明示する」と同じ方針）。
+ * `tripleHsExcluded`（issue #218 Phase 2）も同じ扱いで、**常に走る段なので 0 は
+ * 「排他したが 1 件も該当しなかった」を意味する**——省くとその事実が読めなくなる。
  *
  * @param meta `meta.reduction` を持たない meta（ハンドラ直呼びのテスト等）では空文字を返す。
  */
 export function buildReductionLine(meta: PatternMeta | undefined): string {
 	const r = meta?.reduction;
 	if (!r) return '';
-	const { detected, dedupMerged, currentFiltered, lifecycleExcluded, output } = r;
-	if (![detected, dedupMerged, currentFiltered, lifecycleExcluded, output].every(Number.isFinite)) return '';
+	const { detected, dedupMerged, currentFiltered, lifecycleExcluded, tripleHsExcluded, output } = r;
+	if (![detected, dedupMerged, currentFiltered, lifecycleExcluded, tripleHsExcluded, output].every(Number.isFinite))
+		return '';
 	const parts = [`検出 ${formatInt(detected)}件`, `重複統合 -${formatInt(dedupMerged)}`];
 	if (currentFiltered > 0) parts.push(`現在時点フィルタ -${formatInt(currentFiltered)}`);
-	parts.push(`ライフサイクル除外 -${formatInt(lifecycleExcluded)}`, `出力 ${formatInt(output)}件`);
+	parts.push(
+		`ライフサイクル除外 -${formatInt(lifecycleExcluded)}`,
+		`triple×H&S排他 -${formatInt(tripleHsExcluded)}`,
+		`出力 ${formatInt(output)}件`,
+	);
 	return `${REDUCTION_LABEL}: ${parts.join(' → ')}`;
 }
 

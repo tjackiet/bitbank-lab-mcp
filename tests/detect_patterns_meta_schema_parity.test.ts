@@ -320,6 +320,7 @@ describe('detect_patterns: meta に載せたキーが出力スキーマで strip
 		// 縮小段の申告（issue #200 要件 E）。#155 / #160 / #184 / #189 と同じ「meta に足したが
 		// 宣言し忘れて strip される」クラスの事故を、宣言直後にここで固定する。
 		expect(before.has('reduction.detected')).toBe(true);
+		expect(before.has('reduction.tripleHsExcluded')).toBe(true);
 		expect(before.has('reduction.output')).toBe(true);
 		expect(before.size).toBeGreaterThan(20);
 
@@ -394,16 +395,23 @@ describe('detect_patterns: meta に載せたキーが出力スキーマで strip
 			'detected',
 			'lifecycleExcluded',
 			'output',
+			'tripleHsExcluded',
 		]);
 		for (const [name, value] of Object.entries(reduction)) {
 			expect(typeof value, name).toBe('number');
 		}
-		// detected = dedupMerged + currentFiltered + lifecycleExcluded + output が常に成り立つ
-		// （tools/detect_patterns.ts の docstring が明示する不変条件。#180 の resolveTrimCounts と
-		// 同じ「見出しと集計が食い違わない」ことを、実際の検出パイプラインの出力で固定する）。
-		expect(reduction.dedupMerged + reduction.currentFiltered + reduction.lifecycleExcluded + reduction.output).toBe(
-			reduction.detected,
-		);
+		// detected = dedupMerged + currentFiltered + lifecycleExcluded + tripleHsExcluded + output が
+		// 常に成り立つ（tools/detect_patterns.ts の docstring が明示する不変条件。#180 の
+		// resolveTrimCounts と同じ「見出しと集計が食い違わない」ことを、実際の検出パイプラインの
+		// 出力で固定する）。**段を足したらこの式も一緒に直すこと**——足した段を右辺に入れ忘れると、
+		// 新しい段が減らしたぶんだけ等式が黙って崩れる（issue #218 で 1 段追加）。
+		expect(
+			reduction.dedupMerged +
+				reduction.currentFiltered +
+				reduction.lifecycleExcluded +
+				reduction.tripleHsExcluded +
+				reduction.output,
+		).toBe(reduction.detected);
 		// meta.count（= 最終的な data.patterns 件数）と output は同値のはず。
 		expect(reduction.output).toBe(metaOf(output).count);
 	});
@@ -434,7 +442,14 @@ describe('detect_patterns: meta に載せたキーが出力スキーマで strip
 		// 検出器を一切呼ばない経路なので全段 0（waterfall は 0 = 0 + 0 + 0 + 0 で自明に成立する）。
 		const reduction = metaOf(output).reduction as Record<string, number>;
 		expect(reduction, 'insufficient data 経路で reduction が落ちている').toBeDefined();
-		expect(reduction).toEqual({ detected: 0, dedupMerged: 0, currentFiltered: 0, lifecycleExcluded: 0, output: 0 });
+		expect(reduction).toEqual({
+			detected: 0,
+			dedupMerged: 0,
+			currentFiltered: 0,
+			lifecycleExcluded: 0,
+			tripleHsExcluded: 0,
+			output: 0,
+		});
 		// この経路でも宣言漏れが無いこと
 		expectNoStrippedKeys(metaOf(input), metaOf(output), 'detect_patterns meta（insufficient data）');
 	});
