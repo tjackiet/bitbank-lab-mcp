@@ -11,6 +11,7 @@
  *   (3) 走査窓 `TARGET_REACH_MAX_BARS` 本
  */
 import { describe, expect, it } from 'vitest';
+import { DetectedPatternSchema, TargetProgressOmittedReasonEnum } from '../../src/schema/patterns.js';
 import {
 	computeTargetReach,
 	formatTargetProgressLine,
@@ -37,8 +38,8 @@ function measured(r: TargetReachResult): TargetReachInfo {
 }
 
 /**
- * 理由コードの全集合。**ユニオンから導出しない**——`satisfies` で突き合わせることで、
- * ユニオンに足したのにこの配列へ足し忘れたら typecheck が落ちる
+ * 理由コードの全集合。**単一ソース（Zod enum）から導出しない**——`satisfies` で突き合わせる
+ * ことで、コードを足したのにこの配列へ足し忘れたら typecheck が落ちる
  * （導出すると「網羅している」が自明になり、網羅テストが空虚に通る）。
  */
 const ALL_OMISSION_REASONS = [
@@ -284,6 +285,31 @@ describe('computeTargetReach', () => {
 		const r = measured(computeTargetReach(candles, 0, 100, 120, 'up', 20));
 		expect(r.targetReached).toBe(false);
 		expect(r.targetReachedPrice).toBe(112);
+	});
+});
+
+describe('理由コードの単一ソース（issue #224 症状 2）', () => {
+	// **Zod enum が単一ソース**（`src/schema/patterns.ts`）で、`TargetReachOmissionReason` は
+	// そこから導出される。ここは「テストが知っている集合」と「実際に parse を通る集合」が
+	// 一致することの実行時の裏取り——型側は `satisfies` が見ているが、`z.enum` の options が
+	// 型と食い違う書き方（`as` 等）を将来入れたときはこちらが落ちる。
+	it('Zod enum の options とテストの全集合が一致する', () => {
+		expect([...TargetProgressOmittedReasonEnum.options].sort()).toEqual([...ALL_OMISSION_REASONS].sort());
+	});
+
+	it('全 reason が DetectedPatternSchema.parse() を通り抜ける（黙って剥がされない）', () => {
+		// 宣言漏れの事故（#155 / #160 / #184 / #189 / #199）はこの形で出る——
+		// 型は通るのに parse が落として**どのクライアントにも届かない**。
+		for (const reason of ALL_OMISSION_REASONS) {
+			const parsed = DetectedPatternSchema.parse({
+				type: 'double_top',
+				confidence: 0.75,
+				range: { start: '2026-01-01T00:00:00.000Z', end: '2026-01-20T00:00:00.000Z' },
+				breakoutTarget: 110000,
+				targetProgressOmittedReason: reason,
+			});
+			expect(parsed.targetProgressOmittedReason).toBe(reason);
+		}
 	});
 });
 

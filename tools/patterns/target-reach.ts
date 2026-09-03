@@ -8,6 +8,9 @@
  * 依存が `./types.js` の型だけで済むこの単位に分けてある。
  */
 
+// **型のみ**の import（出力から消えるので実行時の循環は生じない）。理由コードの単一ソースは
+// Zod 側に置いてある——詳細は `TargetReachOmissionReason` の docstring。
+import type { TargetProgressOmittedReason } from '../../src/schema/patterns.js';
 import type { CandleData } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -113,18 +116,30 @@ export interface TargetReachInfo {
  * 進捗を測れなかった理由（issue #210 で 1 コード、#224 症状 2 で 5 コード追加）。
  *
  * **`targetReachedPct` が出ない経路はここに列挙されたコードのどれかを必ず名乗る。**
- * 追加するときは 3 箇所を同時に直す——落とすと Zod が黙って剥がす（#155 / #160 / #184 /
- * #189 / #199 で 5 回起きている事故）:
- *   1. このユニオン
- *   2. `src/schema/patterns.ts` の `targetProgressOmittedReason`（`z.enum`）
- *   3. `tools/patterns/types.ts` の `PatternEntry.targetProgressOmittedReason`
- * 文言（content 1 行）は `TARGET_PROGRESS_OMISSION_NOTE` に足す。網羅は
- * `tests/patterns/target-reach.test.ts` の「全 reason に文言がある」で機械的に固定してある。
  *
- * **2 系統を混ぜない。** `not_computed_by_detector` だけが「実装がまだ配線されていない」を
- * 意味し、他はすべて**その構造のデータ条件**を意味する。前者は将来のリリースで消えるが、
- * 後者は同じ構造を問い合わせ直しても答えが変わらない。混ぜると消費側が
- * 「時間を置けば値が出るのか」を判断できなくなる。
+ * **単一ソースは `src/schema/patterns.ts` の `TargetProgressOmittedReasonEnum`**（Zod）で、
+ * この型はそこから導出している。TypeScript のユニオンを別に持つと、型上は正しい理由を
+ * 返しても Zod 側の宣言漏れで `parse()` が黙って剥がす——#155 / #160 / #184 / #189 / #199 で
+ * **5 回起きている事故**なので、片方だけ足せない形にしてある。実行時の依存は
+ * `src/schema/patterns.ts` → 本ファイル（閾値 3 定数）の一方向のままで、
+ * 逆向きは `import type` のみ（出力から消える）。
+ *
+ * コードを足すときは Zod enum に足し、`TARGET_PROGRESS_OMISSION_NOTE` に content 文言を書く。
+ * 文言の書き忘れは `Record<TargetReachOmissionReason, string>` が typecheck で落とす。
+ *
+ * ## 再問い合わせで答えが変わりうるか（3 通り。**混ぜない**）
+ *
+ * 消費側が知りたいのは「時間を置けば値が出るのか」なので、そこを取り違えさせない。
+ *
+ * | 区分 | コード | 意味 |
+ * |---|---|---|
+ * | **(i) 暫定** | `not_broken_out` / `no_bars_after_breakout` | **足が増えれば測れるようになりうる。** 形成中のパターンが後の足でネックラインを抜ければ進捗が出る |
+ * | **(ii) 確定** | `no_target` / `invalid_breakout_price` / `degenerate_target_distance` | **その構造では変わらない。** 分母はブレイク価格と target だけで決まり、欠損したブレイク足は後から直らない |
+ * | **(iii) 実装ギャップ** | `not_computed_by_detector` | 再問い合わせでは変わらないが、**将来のリリースで消える**（配線されたら進捗が出る） |
+ *
+ * 初版は (i) と (ii) をまとめて「データ条件 = 問い合わせ直しても変わらない」と書いていたが、
+ * **`not_broken_out` は変わりうる**（PR #225 のレビュー指摘）。最多の経路をここで
+ * 取り違えさせると、「もう一度呼んでも無駄」と読ませてしまう。
  *
  * ## 標準コーパス 940 ケースでの発生件数（構造単位。#224 症状 2 の実測）
  *
@@ -155,28 +170,12 @@ export interface TargetReachInfo {
  *
  * **`degenerate_target_distance` の 60 構造は #210 から動いていない**（今回の変更は
  * `undefined` 経路に名前を付けただけで、判定を 1 つも変えていない）。
+ *
+ * 各コードの意味は Zod 側の `.describe()` が単一ソース（`src/schema/patterns.ts`）。
+ * `not_computed_by_detector` の現在の対象は `detect_triples.ts` の完成済み 4 経路
+ * （strict / relaxed × top / bottom）だけで、**配線は #224 のフォローアップとして別 issue で扱う**。
  */
-export type TargetReachOmissionReason =
-	/** ブレイクが確定していない（`near_completion` / `forming` / ブレイク足を特定できない）。 */
-	| 'not_broken_out'
-	/** ターゲット価格またはパターン高さが算出できない。 */
-	| 'no_target'
-	/** ブレイク足の終値が非有限（欠損足など）。 */
-	| 'invalid_breakout_price'
-	/** ブレイク足以降に走査できるローソク足が無い。 */
-	| 'no_bars_after_breakout'
-	/** 分母 `|target − breakoutPrice|` がパターン高さに対して退化している（#210 (2)）。 */
-	| 'degenerate_target_distance'
-	/**
-	 * **データ条件ではなく実装ギャップ。** その検出器が `computeTargetReach` を呼んでいない。
-	 * 現在の対象は `detect_triples.ts` の完成済み 4 経路
-	 * （strict top / strict bottom / relaxed top / relaxed bottom。申告は `:421` / `:665` /
-	 * `:903` / `:1119`）だけで、ブレイク足も target もパターン高さも揃っているのに
-	 * 進捗を算出していない。
-	 * 標準コーパス 940 ケースで 13 構造（`triple_bottom` 11 / `triple_top` 2）。
-	 * **配線は #224 のフォローアップとして別 issue で扱う**——配線したらこのコードは消える。
-	 */
-	| 'not_computed_by_detector';
+export type TargetReachOmissionReason = TargetProgressOmittedReason;
 
 /** 進捗を測れないケース。**黙って落とさず呼び出し側が申告する。** */
 export interface TargetReachOmitted {

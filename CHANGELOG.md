@@ -75,7 +75,7 @@
     （進捗行なし・理由なし）
 
 を出し、検証した LLM は「理由はこの出力からは分からないので、推測は避けます」と答えている。
-#181（cap 切り捨て）/ #196（件数打ち切り）/ #200（縮小段）/ #210（`targetProgressOmittedReason`）
+`#181`（cap 切り捨て）/ #196（件数打ち切り）/ #200（縮小段）/ #210（`targetProgressOmittedReason`）
 と同じクラスの欠落の 5 回目。
 
 #### 個別に潰さず、型で潰した
@@ -96,9 +96,16 @@
 | `degenerate_target_distance` | 分母がパターン高さの 15% 未満に潰れている（#210 (2)。**据え置き**） | データ条件 |
 | `not_computed_by_detector` | その検出器が `computeTargetReach` を呼んでいない | **実装ギャップ** |
 
-**2 系統を混ぜない。** データ条件は同じ構造を問い合わせ直しても答えが変わらないが、
-実装ギャップは将来のリリースで消える（＝そのとき進捗が出るようになる）。同じ語彙に混ぜると
-消費側が「時間を置けば値が出るのか」を判断できない。
+**消費側が知りたいのは「時間を置けば値が出るのか」**なので、そこを 3 通りに分けて宣言する:
+
+| 区分 | コード | 意味 |
+|---|---|---|
+| **(i) 暫定** | `not_broken_out` / `no_bars_after_breakout` | **足が増えれば測れるようになりうる**（形成中が後の足でネックラインを抜ければ進捗が出る） |
+| **(ii) 確定** | `no_target` / `invalid_breakout_price` / `degenerate_target_distance` | **その構造では変わらない**（分母はブレイク価格と target だけで決まり、欠損したブレイク足は後から直らない） |
+| **(iii) 実装ギャップ** | `not_computed_by_detector` | 再問い合わせでは変わらないが**将来のリリースで消える** |
+
+**最多の経路 `not_broken_out` が (i) であることを取り違えさせない**——「もう一度呼んでも無駄」と
+読ませると、形成中パターンの追跡がそこで止まる。
 
 `not_computed_by_detector` の現在の対象は **`detect_triples.ts` の完成済み 4 経路だけ**
 （strict / relaxed × top / bottom）。ブレイク足・target・パターン高さが揃っているのに
@@ -158,11 +165,16 @@ triple 6）。受け入れ条件「`breakoutTarget` が出ているのに進捗�
 
 #### スキーマ
 
-`src/schema/patterns.ts` の `targetProgressOmittedReason` を `z.literal` から `z.enum` に広げ、
-各コードの意味と 2 系統の別を description に書いた（未宣言だと `parse()` が黙って剥がす。
-#155 / #160 / #184 / #189 / #199 で 5 回）。`targetReachedPct` の description は
+理由コードの**単一ソースは `src/schema/patterns.ts` の `TargetProgressOmittedReasonEnum`**（Zod）で、
+実装側の `TargetReachOmissionReason` と `PatternEntry.targetProgressOmittedReason` は
+**そこから型として導出**する。TS のユニオンと Zod の enum を別々に持つと、型上は正しい理由を
+返しても Zod 側の宣言漏れで `parse()` が黙って剥がす——`#155` / #160 / #184 / #189 / #199 で
+**5 回起きている事故**なので、片方だけ足せない形にした。enum から 1 コード削ると
+実装・文言テーブル・テストの 5 箇所で typecheck が落ちることを確認済み。
+
+**実行時の依存の向きは変えていない**（`src/schema/patterns.ts` → `target-reach.ts` の一方向。
+逆向きは `import type` だけで出力から消える）。`targetReachedPct` の description は
 「(c) のときは申告する」→「**(a)〜(e) いずれも申告する**」に直した。
-`tools/patterns/types.ts` の `PatternEntry` も同じユニオンに広げてある。
 
 #### テスト
 
