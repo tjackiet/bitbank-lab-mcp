@@ -200,11 +200,12 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 				'——行が無いことを「relaxed なし」と読ませないため（値が無いのか content に出していないのかを' +
 				'呼び出し側が区別できない状態が #189 / #191 の直した欠陥）。構造化データは data.patterns[]._fallback。\n' +
 				'**`検出内訳:` 行は 4 view すべて（`debug` を含む）に出る**（issue #200）。' +
-				'`検出 N件 → 重複統合 -M → [現在時点フィルタ -K →] ライフサイクル除外 -L → 出力 P件` の形で、' +
-				'globalDedup / requireCurrentInPattern（既定 false）/ ライフサイクル絞り込み（includeForming 等）の' +
-				'3 段でどれだけ減ったかを申告する。`現在時点フィルタ` は 0 のとき区間ごと省くが、' +
-				'`重複統合` / `ライフサイクル除外` は 0 でも省かない。構造化データは meta.reduction' +
-				'（`detected` = `dedupMerged + currentFiltered + lifecycleExcluded + output`）。\n' +
+				'`検出 N件 → 重複統合 -M → [現在時点フィルタ -K →] ライフサイクル除外 -L → triple×H&S排他 -X → 出力 P件` の形で、' +
+				'globalDedup / requireCurrentInPattern（既定 false）/ ライフサイクル絞り込み（includeForming 等）/ ' +
+				'triple×H&S の型間排他（issue #218。**減るのは triple_* だけ**）の' +
+				'4 段でどれだけ減ったかを申告する。`現在時点フィルタ` は 0 のとき区間ごと省くが、' +
+				'`重複統合` / `ライフサイクル除外` / `triple×H&S排他` は 0 でも省かない。構造化データは meta.reduction' +
+				'（`detected` = `dedupMerged + currentFiltered + lifecycleExcluded + tripleHsExcluded + output`）。\n' +
 				'- summary: ヘッダ ＋ 分類内訳 ＋ 直近30日/90日件数 ＋ 上記 2 行 ＋ 実効パラメータ行 ＋ 検出経路行 ＋ 検出内訳行 ＋ 検討パターン。' +
 				'個々のパターンの詳細は content に出ない（**どのパターンが relaxed 由来かも出ない**——届くのは検出経路行の件数だけ）。\n' +
 				'- detailed（既定）: 上位 5 件の詳細。6 件目以降は content に出ない。' +
@@ -408,12 +409,22 @@ const ReductionSchema = z
 			.number()
 			.int()
 			.describe('includeForming / includeCompleted / includeInvalid のライフサイクル絞り込みで除外された件数。'),
+		tripleHsExcluded: z
+			.number()
+			.int()
+			.describe(
+				'triple × H&S の型間排他（issue #218 Phase 2）で除外された件数。**減るのは triple_* だけ**' +
+					'——H&S 系と主構成点（triple は 3 点すべて / H&S は左肩・頭・右肩）を 2 点以上共有する ' +
+					'triple を落とす段で、H&S 側は 1 件も落とさない。落とした triple の理由は ' +
+					'view=debug の candidates に reason=excluded_by_hs_main_point_overlap として残り、' +
+					'details にどの H&S と何点共有したかが入る。',
+			),
 		output: z.number().int().describe('最終的に data.patterns へ残った件数（meta.count と同値）。'),
 	})
 	.optional()
 	.describe(
-		'検出結果が縮小する 3 段（globalDedup → requireCurrentInPattern → ライフサイクル絞り込み）の' +
-			'件数内訳。**入力フィルタの結果を変えるものではなく、既存の縮小を可視化するだけ**。' +
+		'検出結果が縮小する 4 段（globalDedup → requireCurrentInPattern → ライフサイクル絞り込み → ' +
+			'triple×H&S 排他）の件数内訳。**入力フィルタの結果を変えるものではなく、既存の縮小を可視化するだけ**。' +
 			'content には「検出内訳:」行として summary / detailed / full / debug に出る。',
 	);
 

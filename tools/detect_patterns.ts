@@ -15,13 +15,14 @@ import { detectTriangles } from './patterns/detect_triangles.js';
 import { detectTriples } from './patterns/detect_triples.js';
 import { detectWedges } from './patterns/detect_wedges.js';
 import { globalDedup } from './patterns/helpers.js';
+import { excludeTriplesSharingHsMainPoints, TRIPLE_HS_EXCLUSION_REASON } from './patterns/mutual-exclusion.js';
 import { buildPeriodBlock, buildScanRange } from './patterns/period.js';
 import { rankPatterns } from './patterns/ranking.js';
 import { linearRegressionWithR2, near as nearFn, pct as pctFn } from './patterns/regression.js';
 import { buildScanWindowWarning } from './patterns/scan-window.js';
 import { type Candle, detectSwingPoints, filterPeaks, filterValleys } from './patterns/swing.js';
 import { formatTargetProgressLine } from './patterns/target-reach.js';
-import type { CandDebugEntry, DeduplicablePattern, DetectContext } from './patterns/types.js';
+import { type CandDebugEntry, type DeduplicablePattern, type DetectContext, pushCand } from './patterns/types.js';
 
 /**
  * flag / pennant 系パターン固有の検証メタデータ。
@@ -192,7 +193,14 @@ export default async function detectPatterns(
 						count: 0,
 						...(scan ? { scan } : {}),
 						effective_params: effectiveParams,
-						reduction: { detected: 0, dedupMerged: 0, currentFiltered: 0, lifecycleExcluded: 0, output: 0 },
+						reduction: {
+							detected: 0,
+							dedupMerged: 0,
+							currentFiltered: 0,
+							lifecycleExcluded: 0,
+							tripleHsExcluded: 0,
+							output: 0,
+						},
 					},
 				),
 			);
@@ -318,13 +326,49 @@ export default async function detectPatterns(
 		});
 		const reductionLifecycleExcluded = patterns.length - filteredPatterns.length;
 		patterns = filteredPatterns;
-		// detected = dedupMerged + currentFiltered + lifecycleExcluded + output（waterfall の不変条件）。
+
+		// --- triple × H&S の型間排他（issue #218 Phase 2）---
+		//
+		// 主構成点を 2 点以上共有する `triple_*` と H&S 系が二重に出ていた（Phase 1 実測で
+		// 構造単位 18 ペア）。H&S は `headProminencePct` のゲートを通過している = 中央の構成点が
+		// 両隣と明確に違うことが**検証済み**で、triple の前提「3 点が同水準」とは両立しない。
+		// 同じ点集合が両方を満たすなら証拠がある側が正しいので triple を落とす。
+		// 判定・スコープ・閾値を持たない理由は `patterns/mutual-exclusion.ts` の冒頭が単一ソース。
+		//
+		// **置く位置はライフサイクル絞り込みの後でなければならない。** 先に置くと、triple を
+		// 落とした後で根拠にした H&S が `includeForming` 等の絞り込みで消え、**どちらも残らない**。
+		// 後に置けば「実際に出力される H&S」だけが根拠になる。
+		const tripleHsExclusion = excludeTriplesSharingHsMainPoints(patterns);
+		const reductionTripleHsExcluded = patterns.length - tripleHsExclusion.kept.length;
+		patterns = tripleHsExclusion.kept;
+		// 落とした理由を `view=debug` に残す（issue #218 の決定性要件）。**どの H&S と何点共有したかを
+		// 含める**——含めないと「accepted だったはずの triple が data.patterns に居ない」理由を
+		// 追えなくなる。検出器が積んだ accepted エントリはそのまま残るので、同じ構成点の候補が
+		// accepted 1 件 + 本 reason の rejected 1 件で並ぶのが正常な見え方。
+		for (const ex of tripleHsExclusion.excluded) {
+			pushCand(ctx, {
+				type: String(ex.triple.type),
+				accepted: false,
+				reason: TRIPLE_HS_EXCLUSION_REASON,
+				idxs: ex.tripleMainIdxs,
+				pts: (ex.triple.pivots ?? []).map((pv) => ({ role: 'main', idx: pv.idx, price: pv.price })),
+				details: {
+					tripleMainIdxs: ex.tripleMainIdxs,
+					sharedCount: Math.max(...ex.matches.map((m) => m.sharedIdxs.length)),
+					matches: ex.matches,
+				},
+			});
+		}
+
+		// detected = dedupMerged + currentFiltered + lifecycleExcluded + tripleHsExcluded + output
+		// （waterfall の不変条件）。
 		// tests/detect_patterns_meta_schema_parity.test.ts が実データでこの等式を固定する。
 		const reduction = {
 			detected: reductionDetected,
 			dedupMerged: reductionDedupMerged,
 			currentFiltered: reductionCurrentFiltered,
 			lifecycleExcluded: reductionLifecycleExcluded,
+			tripleHsExcluded: reductionTripleHsExcluded,
 			output: patterns.length,
 		};
 
@@ -392,18 +436,25 @@ export default async function detectPatterns(
 		const cap = 200;
 		const swingsTrimmed = Array.isArray(debugSwings) ? debugSwings.slice(0, cap) : [];
 		const acc = relevantCandidates.filter((c) => !!c?.accepted);
-		const rej = relevantCandidates.filter((c) => !c?.accepted);
-		const candidatesTrimmed: CandDebugEntry[] = [...acc, ...rej].slice(0, cap);
+		// 型間排他（#218）の棄却は**検出器の棄却理由ではなく「accepted になった候補が output に
+		// 居ない理由」**なので、accepted と同じ優先度で残す。検出器の棄却と一緒に末尾へ積むと、
+		// この段は最後に push されるため**実データでは必ず cap で押し出される**
+		// （実測: 実データ B の 1hour で候補 1,994 件 / cap 200）——消えた理由を追うという
+		// `view=debug` の目的そのものが果たせなくなる。#180 の「押し出しは棄却理由から始まる」は維持。
+		const pipelineRej = relevantCandidates.filter((c) => !c?.accepted && c?.reason === TRIPLE_HS_EXCLUSION_REASON);
+		const rej = relevantCandidates.filter((c) => !c?.accepted && c?.reason !== TRIPLE_HS_EXCLUSION_REASON);
+		const candidatesTrimmed: CandDebugEntry[] = [...acc, ...pipelineRej, ...rej].slice(0, cap);
 		// --- トリムの申告（#180 案 1） ---
 		// 配列を黙って切り詰めると、呼び出し側は 200 件を受け取っても全件か一部か判別できない。
 		// トリムは accepted を先に並べてから切るので、**押し出しは rejected 側から始まる**。
 		// `view=debug` の目的（なぜ検出されなかったかを理由コードで追う。#144 / #145）は
 		// まさにその rejected の理由コードなので、目的の情報から先に censored される。
-		// cap の値もトリム戦略も変えず、件数だけを申告する。
+		// cap の値は変えず、件数だけを申告する（#218 で**順序に 1 段だけ**手を入れた。すぐ上を参照）。
 		//
-		// **「押し出されたのは全部 rejected」と言い切れるのは `acc.length <= cap` のときだけ。**
-		// `acc.length > cap` なら accepted も押し出される（本リポジトリの標準コーパス 800 ケースでは
-		// accepted の最大が 20 件で一度も起きていないが、**コードが保証しているのは順序だけ**）。
+		// **「押し出されたのは全部 rejected」と言い切れるのは `acc.length + pipelineRej.length <= cap`
+		// のときだけ。** 超えれば accepted / 型間排他の棄却も押し出される（本リポジトリの標準コーパス
+		// 800 ケースでは accepted の最大が 20 件・排他は 1 ケースあたり最大 1 件で一度も起きていないが、
+		// **コードが保証しているのは順序だけ**）。
 		// 判別は「返した配列に `accepted: false` が 1 件でも残っているか」でできるので、
 		// 表示側（`formatDebugView`）がそこで文言を分ける。ここでフィールドを増やさない。
 		//

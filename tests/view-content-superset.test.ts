@@ -361,10 +361,18 @@ function patternsFixture(opts: { relaxed?: number; candidates?: DebugCandidate[]
 				headProminencePct: { value: 0.04, source: 'auto' as const },
 			},
 			visualization_hints: { preferred_style: 'line', highlight_patterns: [] },
-			// 縮小段の内訳行の元データ（issue #200 要件 E）。10 detected → -2 dedup → -1 current
-			// → -0 lifecycle → 7 output（PATTERN_COUNT と一致）。`currentFiltered` を 0 超にして
-			// 「0 のとき省く」分岐と両方を 1 フィクスチャで確認できるようにしてある。
-			reduction: { detected: 10, dedupMerged: 2, currentFiltered: 1, lifecycleExcluded: 0, output: PATTERN_COUNT },
+			// 縮小段の内訳行の元データ（issue #200 要件 E / #218 で 1 段追加）。11 detected → -2 dedup
+			// → -1 current → -0 lifecycle → -1 triple×H&S 排他 → 7 output（PATTERN_COUNT と一致）。
+			// `currentFiltered` を 0 超にして「0 のとき省く」分岐と両方を 1 フィクスチャで確認できる
+			// ようにしてあり、`lifecycleExcluded` は 0 のまま（0 でも省かない側）に残してある。
+			reduction: {
+				detected: 11,
+				dedupMerged: 2,
+				currentFiltered: 1,
+				lifecycleExcluded: 0,
+				tripleHsExcluded: 1,
+				output: PATTERN_COUNT,
+			},
 			warning: '取得層: 180本中20本が欠損しています',
 			warnings: ['計算層: スイング検出に必要なバー数が不足しています'],
 			// **cap トリムの申告 4 つは production（`tools/detect_patterns.ts`）が常に埋める。**
@@ -616,9 +624,10 @@ describe('階梯上の view の content は下位 view の上位集合（§3-2 �
 		expect(lines.size, 'view ごとに検出内訳行の文言が違う').toBe(1);
 
 		const [line] = [...lines];
-		// フィクスチャ: 10 detected → -2 dedup → -1 current（>0 なので出る）→ -0 lifecycle（0 でも出る）→ 7 output
+		// フィクスチャ: 11 detected → -2 dedup → -1 current（>0 なので出る）→ -0 lifecycle（0 でも出る）
+		// → -1 triple×H&S 排他（issue #218）→ 7 output
 		expect(line).toBe(
-			`${REDUCTION_LABEL}: 検出 10件 → 重複統合 -2 → 現在時点フィルタ -1 → ライフサイクル除外 -0 → 出力 7件`,
+			`${REDUCTION_LABEL}: 検出 11件 → 重複統合 -2 → 現在時点フィルタ -1 → ライフサイクル除外 -0 → triple×H&S排他 -1 → 出力 7件`,
 		);
 	});
 
@@ -630,13 +639,23 @@ describe('階梯上の view の content は下位 view の上位集合（§3-2 �
 			...fx,
 			meta: {
 				...fx.meta,
-				reduction: { detected: 9, dedupMerged: 2, currentFiltered: 0, lifecycleExcluded: 0, output: PATTERN_COUNT },
+				reduction: {
+					detected: 9,
+					dedupMerged: 2,
+					currentFiltered: 0,
+					lifecycleExcluded: 0,
+					tripleHsExcluded: 0,
+					output: PATTERN_COUNT,
+				},
 			},
 		});
 		const res = await detectPatternsTool.handler({ pair: 'btc_jpy', type: '1day', limit: 180, view: 'summary' });
 		const text = (res as { content: Array<{ text: string }> }).content[0].text;
 		const [line] = reductionLines(text);
-		expect(line).toBe(`${REDUCTION_LABEL}: 検出 9件 → 重複統合 -2 → ライフサイクル除外 -0 → 出力 7件`);
+		// `triple×H&S排他` は 0 でも省かない側（`ライフサイクル除外` と同じ扱い。issue #218）。
+		expect(line).toBe(
+			`${REDUCTION_LABEL}: 検出 9件 → 重複統合 -2 → ライフサイクル除外 -0 → triple×H&S排他 -0 → 出力 7件`,
+		);
 		expect(line).not.toContain('現在時点フィルタ');
 	});
 
