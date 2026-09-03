@@ -60,6 +60,50 @@
 | 45 | #206 | `MIN_CONFIDENCE` から**どの検出器も読んでいなかった 4 エントリ**（`double_top` / `double_bottom` / `head_and_shoulders` / `inverse_head_and_shoulders`）を削除した。配線する案（A）と triple の下限も外す案（D）を実測してから「消す」を選んだ | **変わらない**（940 ケース全件で `data.patterns` が完全一致） |
 | 46 | #199 候補 2 | triple の期間スコア `duration` を**暦日基準から バー数基準**に移した（`periodScoreBars`）。暦日基準は `barsPerDay` 換算で `1min` / `5min` / `15min` が 0.6 固定・`1month` が 0.7 固定と、**データによらず定数になる**構造だった。`double` / H&S は実測で定数化していないので暦日基準のまま | **変わらない**（940 ケース全件で件数・構造キーとも一致。`globalDedup` の代表入れ替わりも 0。動くのは triple の `duration` / `confidence` と `rankPatterns` の並びだけ） |
 
+### Security（`fast-uri` を 3.1.5 → 3.1.6 に上げた。`npm audit` の high 対応）
+
+`npm audit --audit-level=high` が `fast-uri` の high アドバイザリ 4 件で落ちていたのを解消した。
+**`package-lock.json` の 3 行だけの変更**で、`package.json` は触っていない。
+
+| | |
+|---|---|
+| 対象 | `fast-uri` 3.1.5 → **3.1.6**（推移的依存。`@modelcontextprotocol/sdk` → `ajv@8.18.0` → `fast-uri`） |
+| アドバイザリ | GHSA-5jgf-p345-68v8 / GHSA-f65p-4m7j-42xc / GHSA-fph4-wmhf-6fwf / GHSA-jqff-g426-hqxp（脆弱範囲 `3.0.0 - 3.1.5`） |
+| 直接依存の変更 | 無し（`ajv` の `^3.0.1` の範囲内なので上位パッケージは動かない） |
+
+#### 依存は 1 つも変えていないのに CI が赤くなった
+
+`package-lock.json` の最終変更は #123 で、それ以降触られていない。それでも `main` の
+Security Audit は `11e39a6`（#217 マージ・09-02 14:42Z）で success、`1b98e57`（#219 マージ・
+同 22:19Z）で failure に変わった。この 2 コミット間の lockfile の diff は**空**なので、
+**動いたのはアドバイザリ DB 側**である。以降 `main` に出るすべての PR が赤くなっていた。
+
+#### クールダウン（`min-release-age=7`）を守ったうえで直せる
+
+`.npmrc` の `min-release-age=7`（CONTRIBUTING.md「依存パッケージのクールダウン運用」）があるため、
+**公開 7 日未満のバージョンは解決対象にならない**。今回はそれを守ったまま high を解消できた:
+
+| 版 | 公開 | クールダウン | 脆弱範囲 `3.0.0 - 3.1.5` |
+|---|---|---|---|
+| 3.1.5（現行） | 33 日前 | — | **該当** |
+| **3.1.6（採用）** | **10 日前** | **外（採用可）** | 非該当 |
+| 3.1.7 | 0 日前 | 内（採用不可） | 非該当 |
+
+**npm 10.x では `min-release-age` が黙って無視される**（CONTRIBUTING.md の注意点どおり）。
+npm 10.9.7 で `npm update fast-uri` すると 3.1.7 を掴むので、**本変更は npm 11.19.1 で解決した**。
+
+#### `qs` の moderate は残る（意図的）
+
+同時に報告されている `qs`（moderate。`express` → `qs@6.15.2`）は、脆弱範囲が `2.2.5 - 6.15.3` で
+**クールダウン内の 6.16.0 まで上げないと解消しない**（公開 4 日前）。CI のゲートは
+`--audit-level=high` なので moderate は落とさない。7 日経過後に別途上げる。
+
+#### 検証
+
+`npm ci` → `npm audit --audit-level=high` が **exit 0**（残るのは `qs` の moderate 1 件のみ）。
+`npm run typecheck` 通過、`npm test` は 209 ファイル / 5,380 件すべて通過。
+
+
 ### Changed（triple の期間スコアをバー数基準にした。#199 候補 2）
 
 `periodScoreDays`（暦日 diff で 5 / 15 / 30 日のバケットを決める期間スコア）を、
