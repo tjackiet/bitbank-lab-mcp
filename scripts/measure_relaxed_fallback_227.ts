@@ -172,6 +172,16 @@ const SYNTHETIC_BUILDERS: ReadonlyArray<readonly [string, () => Candle[]]> = [
 	['unequal_valleys_double_bottom', synth.buildUnequalValleysDoubleBottomCandles],
 ];
 
+/**
+ * MCP の統合オプション 3 つ（`includeForming` / `includeCompleted` / `includeInvalid`）の全組み合わせ。
+ *
+ * **検出器に届くのは `includeForming` だけ**（`DetectContext.includeForming`。しかも relaxed 経路は
+ * これも見ない）。`includeCompleted` / `includeInvalid` は `detect_patterns.ts` の検出後のライフサイクル
+ * 絞り込みでしか使われないので、検出器層では 8 通りのうち実質 2 通り（× 4 の同一反復）になる。
+ * それでも 8 通りを回すのは、#204 / #206 / #210 の実測ログと**ケース数（800 / 96）と延べ件数の
+ * 単位を揃える**ため。延べ列は同一設定の反復を含む（strict 0 件率は分子・分母とも 4 倍されるので
+ * 比は変わらない）。重複を畳んだ数字は「構造」列と `(系列, tf, swingDepth, type)` 単位の集計を見る。
+ */
 const OPTS8: CaseOpts[] = Array.from({ length: 8 }, (_, b) => ({
 	includeForming: (b & 1) !== 0,
 	includeCompleted: (b & 2) !== 0,
@@ -587,6 +597,7 @@ function selfCheck(standard: CaseSpec[], realB: CaseSpec[]): SelfCheckRow[] {
 function main() {
 	const jsonIdx = process.argv.indexOf('--json');
 	const jsonPath = jsonIdx >= 0 ? process.argv[jsonIdx + 1] : undefined;
+	if (jsonIdx >= 0 && !jsonPath) throw new Error('--json には出力先パスが必要です');
 
 	const { standard, realB } = buildCorpus();
 	const stdResults = standard.flatMap(runCase);
@@ -601,6 +612,9 @@ function main() {
 	out.push('');
 	out.push(
 		`- 標準コーパス: ${standard.length} ケース（合成 ${standard.filter((c) => c.series.group === 'synthetic').length} + 実データ A ${standard.filter((c) => c.series.group === 'realA').length}）、実データ B: ${realB.length} ケース。呼び出しはケース × 2 type`,
+	);
+	out.push(
+		'- 呼び出しの延べ数はオプション 8 通りを含む（検出器に届くのは `includeForming` だけなので、同一設定の 4 反復を含む。#204 / #206 と単位を揃えるため）。重複を畳んだ数字は「構造」列と組単位の集計を見る',
 	);
 	out.push(
 		`- 検算: \`_fallback\` 付き pattern 件数と \`debugCandidates\` の \`fallback_relaxed\` accepted 件数の不一致 **${candMismatch.length} 件**`,
