@@ -608,7 +608,8 @@ export const DetectedPatternSchema = z.object({
 				'triple_bottom / 逆 H&S は L）。**反転系はネックライン定義点も含む**（H&S は p1 / p3、double は b、' +
 				'triple は v1 / v2。並びは H&S `[p0,p1,p2,p3,p4]`、double `[a,b,c]`、triple `[a,v1,b,v2,c]`。' +
 				'形成中 triple は 3 点目が現在価格の暫定値なので `[a,v1,b,v2]` の 4 点）。' +
-				'水平ネックラインの y は中間側 `kind` の 2 点の `price` の平均で再現できる。' +
+				'triple の水平ネックラインの y は中間側 `kind` の 2 点の `price` の平均で再現できる' +
+				'（double は `b.price` そのもの。H&S は傾きを持つので `neckline` を参照）。' +
 				`${PATTERN_INDEX_NOTE}`,
 		),
 	neckline: z
