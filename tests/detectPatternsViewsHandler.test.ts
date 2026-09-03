@@ -1328,10 +1328,44 @@ describe('formatPatternLine', () => {
 
 	// ── forming triple_top / triple_bottom の 3 点目暫定マーカー ──
 	//
-	// forming triple は pivots に 2 確定点しか入らない。LLM が「3 山構造」と
-	// 誤読しないよう、現在価格を 3 点目に仮置きしている旨を明示する。
+	// forming triple は pivots に確定した主構成点が 2 点しか入らない（#224 症状 3 以降は
+	// ネックライン定義点 2 点を挟んだ 4 点）。LLM が「3 山構造」と誤読しないよう、
+	// 現在価格を 3 点目に仮置きしている旨を明示する。
+	// **判定は `status === 'forming'` で行い、`pivots.length` に依存しない**——長さで判定していた
+	// ときは、pivots の構成を変えた瞬間に注記が黙って消えた（#224 症状 3 で実際に起きた）。
 
-	it('forming triple_top: 確定 pivot 2 個 + 現在価格暫定マーカーを表示する', () => {
+	it('forming triple_top: 検出器の実出力どおり 4 点（H-L-H-L）でも現在価格暫定マーカーを表示する', () => {
+		const p = makePattern({
+			type: 'triple_top',
+			status: 'forming',
+			pivots: [
+				{ idx: 0, price: 100, kind: 'H', extremePrice: 100 },
+				{ idx: 10, price: 80, kind: 'L', extremePrice: 80 },
+				{ idx: 20, price: 101, kind: 'H', extremePrice: 101 },
+				{ idx: 32, price: 81, kind: 'L', extremePrice: 81 },
+			],
+		});
+		const result = formatPatternLine(p, 0, 'detailed', emptyMeta);
+		expect(result).toContain('3 山目は現在価格を暫定');
+		expect(result).toContain('参考材料');
+	});
+
+	it('forming triple_bottom: 4 点（L-H-L-H）でも現在価格暫定マーカーを表示する', () => {
+		const p = makePattern({
+			type: 'triple_bottom',
+			status: 'forming',
+			pivots: [
+				{ idx: 0, price: 100, kind: 'L', extremePrice: 100 },
+				{ idx: 10, price: 120, kind: 'H', extremePrice: 120 },
+				{ idx: 20, price: 99, kind: 'L', extremePrice: 99 },
+				{ idx: 32, price: 119, kind: 'H', extremePrice: 119 },
+			],
+		});
+		const result = formatPatternLine(p, 0, 'detailed', emptyMeta);
+		expect(result).toContain('3 谷目は現在価格を暫定');
+	});
+
+	it('forming triple_top: 旧形式の 2 点（主構成点のみ）でも暫定マーカーは出る（長さに依存しない）', () => {
 		const p = makePattern({
 			type: 'triple_top',
 			status: 'forming',
@@ -1342,34 +1376,56 @@ describe('formatPatternLine', () => {
 		});
 		const result = formatPatternLine(p, 0, 'detailed', emptyMeta);
 		expect(result).toContain('3 山目は現在価格を暫定');
-		expect(result).toContain('参考材料');
 	});
 
-	it('forming triple_bottom: 確定 pivot 2 個 + 現在価格暫定マーカーを表示する', () => {
-		const p = makePattern({
-			type: 'triple_bottom',
-			status: 'forming',
-			pivots: [
-				{ idx: 0, price: 100, kind: 'L', extremePrice: 100 },
-				{ idx: 20, price: 99, kind: 'L', extremePrice: 99 },
-			],
-		});
-		const result = formatPatternLine(p, 0, 'detailed', emptyMeta);
-		expect(result).toContain('3 谷目は現在価格を暫定');
-	});
-
-	it('completed triple_top（pivots.length===3）には暫定マーカーを付けない', () => {
+	it('completed triple_top（5 点 H-L-H-L-H）には暫定マーカーを付けない', () => {
 		const p = makePattern({
 			type: 'triple_top',
 			status: 'completed',
 			pivots: [
 				{ idx: 0, price: 100, kind: 'H', extremePrice: 100 },
+				{ idx: 10, price: 80, kind: 'L', extremePrice: 80 },
 				{ idx: 20, price: 100, kind: 'H', extremePrice: 100 },
+				{ idx: 30, price: 80, kind: 'L', extremePrice: 80 },
 				{ idx: 40, price: 100, kind: 'H', extremePrice: 100 },
 			],
 		});
 		const result = formatPatternLine(p, 0, 'detailed', emptyMeta);
 		expect(result).not.toContain('現在価格を暫定');
+	});
+
+	it('near_completion の triple_top（forming ではない）には暫定マーカーを付けない', () => {
+		const p = makePattern({
+			type: 'triple_top',
+			status: 'near_completion',
+			pivots: [
+				{ idx: 0, price: 100, kind: 'H', extremePrice: 100 },
+				{ idx: 10, price: 80, kind: 'L', extremePrice: 80 },
+				{ idx: 20, price: 100, kind: 'H', extremePrice: 100 },
+				{ idx: 30, price: 80, kind: 'L', extremePrice: 80 },
+				{ idx: 40, price: 100, kind: 'H', extremePrice: 100 },
+			],
+		});
+		const result = formatPatternLine(p, 0, 'detailed', emptyMeta);
+		expect(result).not.toContain('現在価格を暫定');
+	});
+
+	it('価格範囲は pivots 全点の min/max（triple_top ならネックライン定義点の谷が下限に入る）', () => {
+		// #224 症状 3 で triple の pivots に谷が入ったため、価格範囲は H&S / double と同じく
+		// ネックライン定義点を含んだ幅になる（3 山だけの不自然に狭い範囲ではなくなる）。
+		const p = makePattern({
+			type: 'triple_top',
+			status: 'completed',
+			pivots: [
+				{ idx: 0, price: 100, kind: 'H', extremePrice: 100 },
+				{ idx: 10, price: 80, kind: 'L', extremePrice: 80 },
+				{ idx: 20, price: 101, kind: 'H', extremePrice: 101 },
+				{ idx: 30, price: 82, kind: 'L', extremePrice: 82 },
+				{ idx: 40, price: 100, kind: 'H', extremePrice: 100 },
+			],
+		});
+		const result = formatPatternLine(p, 0, 'detailed', emptyMeta);
+		expect(result).toContain('価格範囲: 80円 - 101円');
 	});
 
 	it('forming double_top には triple 用の暫定マーカーを付けない', () => {

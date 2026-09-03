@@ -15,7 +15,11 @@ import { detectTriangles } from './patterns/detect_triangles.js';
 import { detectTriples } from './patterns/detect_triples.js';
 import { detectWedges } from './patterns/detect_wedges.js';
 import { globalDedup } from './patterns/helpers.js';
-import { excludeTriplesSharingHsMainPoints, TRIPLE_HS_EXCLUSION_REASON } from './patterns/mutual-exclusion.js';
+import {
+	excludeTriplesSharingHsMainPoints,
+	mainPointKind,
+	TRIPLE_HS_EXCLUSION_REASON,
+} from './patterns/mutual-exclusion.js';
 import { buildPeriodBlock, buildScanRange } from './patterns/period.js';
 import { rankPatterns } from './patterns/ranking.js';
 import { linearRegressionWithR2, near as nearFn, pct as pctFn } from './patterns/regression.js';
@@ -351,7 +355,14 @@ export default async function detectPatterns(
 				accepted: false,
 				reason: TRIPLE_HS_EXCLUSION_REASON,
 				idxs: ex.tripleMainIdxs,
-				pts: (ex.triple.pivots ?? []).map((pv) => ({ role: 'main', idx: pv.idx, price: pv.price })),
+				// `pivots` は主構成点とネックライン定義点（v1 / v2）の混在リスト（#224 症状 3）。
+				// `idxs` は `mainPointIdxs()` が `kind` で主構成点に絞っているので、`pts` の role も
+				// 同じ表（`mainPointKind`）から決める——全点を `main` と名乗ると `idxs` と食い違う。
+				pts: (ex.triple.pivots ?? []).map((pv) => ({
+					role: pv.kind === mainPointKind(String(ex.triple.type)) ? 'main' : 'neckline',
+					idx: pv.idx,
+					price: pv.price,
+				})),
 				details: {
 					tripleMainIdxs: ex.tripleMainIdxs,
 					sharedCount: Math.max(...ex.matches.map((m) => m.sharedIdxs.length)),

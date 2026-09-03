@@ -199,6 +199,14 @@ describe('detectTriples', () => {
 		expect(tt[0]?.neckline).toBeDefined();
 		expect(tt[0]?.breakoutTarget).toBeDefined();
 		expect(tt[0]?.targetMethod).toBe('neckline_projection');
+		// #224 症状 3: pivots は主構成点 3 山 + ネックライン定義点 2 谷の 5 点（H-L-H-L-H。構造図と同じ並び）。
+		expect(tt[0]?.pivots?.map((p) => p.kind)).toEqual(['H', 'L', 'H', 'L', 'H']);
+		expect(tt[0]?.pivots?.every((p, i, arr) => i === 0 || p.idx > arr[i - 1].idx)).toBe(true);
+		// 報告された 2 谷の price の平均が neckline の y そのもの（消費者が検算できる）。
+		const valleys = tt[0]?.pivots?.filter((p) => p.kind === 'L') ?? [];
+		expect(valleys).toHaveLength(2);
+		expect((valleys[0].price + valleys[1].price) / 2).toBe(tt[0]?.neckline?.[0]?.y);
+		expect(tt[0]?.neckline?.[1]?.y).toBe(tt[0]?.neckline?.[0]?.y);
 	});
 
 	it('Triple Top ターゲット価格 = neckline - (avgPeak - neckline)', () => {
@@ -302,6 +310,12 @@ describe('detectTriples', () => {
 		expect(tb[0]?.neckline).toBeDefined();
 		expect(tb[0]?.breakoutTarget).toBeDefined();
 		expect(tb[0]?.targetMethod).toBe('neckline_projection');
+		// #224 症状 3: pivots は主構成点 3 谷 + ネックライン定義点 2 山の 5 点（L-H-L-H-L）。
+		expect(tb[0]?.pivots?.map((p) => p.kind)).toEqual(['L', 'H', 'L', 'H', 'L']);
+		expect(tb[0]?.pivots?.every((p, i, arr) => i === 0 || p.idx > arr[i - 1].idx)).toBe(true);
+		const peaks = tb[0]?.pivots?.filter((p) => p.kind === 'H') ?? [];
+		expect(peaks).toHaveLength(2);
+		expect((peaks[0].price + peaks[1].price) / 2).toBe(tb[0]?.neckline?.[0]?.y);
 	});
 
 	it('Triple Bottom ターゲット価格 = neckline + (neckline - avgValley)', () => {
@@ -488,6 +502,15 @@ describe('detectTriples', () => {
 		expect(tt[0]?._fallback).toMatch(/relaxed_triple/);
 		expect(tt[0]?.status).toBe('completed');
 		expect(tt[0]?.breakoutDirection).toBe('down');
+		// relaxed 経路も strict と同じ 5 点（#224 症状 3）。谷 2 点の平均 = neckline の y。
+		expect(tt[0]?.pivots?.map((p) => [p.idx, p.kind])).toEqual([
+			[0, 'H'],
+			[6, 'L'],
+			[12, 'H'],
+			[18, 'L'],
+			[24, 'H'],
+		]);
+		expect(tt[0]?.neckline?.[0]?.y).toBe((80 + 80) / 2);
 	});
 
 	it('strict 不検出 → relaxed (x1.25) + ブレイクで Triple Bottom フォールバック検出', () => {
@@ -519,6 +542,14 @@ describe('detectTriples', () => {
 		expect(tb[0]?._fallback).toMatch(/relaxed_triple/);
 		expect(tb[0]?.status).toBe('completed');
 		expect(tb[0]?.breakoutDirection).toBe('up');
+		expect(tb[0]?.pivots?.map((p) => [p.idx, p.kind])).toEqual([
+			[0, 'L'],
+			[6, 'H'],
+			[12, 'L'],
+			[18, 'H'],
+			[24, 'L'],
+		]);
+		expect(tb[0]?.neckline?.[0]?.y).toBe((120 + 120) / 2);
 	});
 
 	// ── 形成中 Triple Top ───────────────────────────────────
@@ -901,8 +932,9 @@ describe('detectTriples', () => {
 		expect(rejected).toBeDefined();
 	});
 
-	it('forming triple_top: 確定 pivot は 2 個（pivots.length === 2）で 3 点目は未確定であることを示す', () => {
-		// LLM が pivots だけ見て 3 山構造と誤読しないよう、forming は 2 確定 pivot のみ返す。
+	it('forming triple_top: pivots は確定 2 山 + ネックライン定義点 2 谷の 4 点（H-L-H-L）で、3 山目（現在価格）は含まない', () => {
+		// LLM が pivots だけ見て 3 山構造と誤読しないよう、forming は確定した主構成点（kind=H）を 2 点しか返さない。
+		// ネックラインを定義する 2 谷（kind=L）は #224 症状 3 で足した——これが無いと neckline の y を検算できない。
 		const total = 51;
 		const candles: CandleData[] = Array.from({ length: total }, (_, i) => mkCandle(total - i, 85, 90, 80, 85));
 		candles[0] = mkCandle(total, 99, 100, 97, 99);
@@ -933,7 +965,16 @@ describe('detectTriples', () => {
 
 		const forming = result.patterns.find((p) => p.type === 'triple_top' && p.status === 'forming');
 		expect(forming).toBeDefined();
-		expect(Array.isArray(forming?.pivots) ? forming.pivots.length : -1).toBe(2);
+		expect(forming?.pivots?.map((p) => [p.idx, p.kind])).toEqual([
+			[0, 'H'],
+			[10, 'L'],
+			[20, 'H'],
+			[32, 'L'],
+		]);
+		// 主構成点（kind=H）は 2 点だけ。3 山目は現在価格の暫定値なので pivots に入らない。
+		expect(forming?.pivots?.filter((p) => p.kind === 'H')).toHaveLength(2);
+		// 報告された 2 谷から neckline の y が再現できる。
+		expect(forming?.neckline?.[0]?.y).toBe((80 + 81) / 2);
 	});
 
 	// ── 形成中 Triple Bottom: 階段状切り下がり / 山乖離の reject（対称ケース）──
@@ -1132,7 +1173,7 @@ describe('detectTriples', () => {
 		expect(rejected).toBeDefined();
 	});
 
-	it('forming triple_bottom: 確定 pivot は 2 個（pivots.length === 2）で 3 点目は未確定であることを示す', () => {
+	it('forming triple_bottom: pivots は確定 2 谷 + ネックライン定義点 2 山の 4 点（L-H-L-H）で、3 谷目（現在価格）は含まない', () => {
 		// 現在価格を valley 水準に置き、forming triple_bottom として検出させる。
 		const total = 51;
 		const candles: CandleData[] = Array.from({ length: total }, (_, i) => mkCandle(total - i, 105, 115, 100, 110));
@@ -1164,7 +1205,14 @@ describe('detectTriples', () => {
 
 		const forming = result.patterns.find((p) => p.type === 'triple_bottom' && p.status === 'forming');
 		expect(forming).toBeDefined();
-		expect(Array.isArray(forming?.pivots) ? forming.pivots.length : -1).toBe(2);
+		expect(forming?.pivots?.map((p) => [p.idx, p.kind])).toEqual([
+			[0, 'L'],
+			[10, 'H'],
+			[20, 'L'],
+			[32, 'H'],
+		]);
+		expect(forming?.pivots?.filter((p) => p.kind === 'L')).toHaveLength(2);
+		expect(forming?.neckline?.[0]?.y).toBe((120 + 119) / 2);
 	});
 
 	it('includeForming=false では forming / near_completion パターンは返さない', () => {

@@ -478,6 +478,25 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 `analyze_indicators` の `chart.candles` は warmup 分（`chart.meta.pastBuffer` 本）を先頭に含む
 **別配列**なので、これらをそのまま添字として使ってはいけない（使うなら `pastBuffer` を足す）。
 
+### `pivots` は種別混在の構造点リスト（主構成点は `kind` で取る）
+
+`data.patterns[*].pivots` は**主構成点とネックライン定義点が混在した**リストで、主構成点は
+位置ではなく `kind` で識別する（`triple_top` / H&S は `H`、`triple_bottom` / 逆 H&S は `L`。
+`tools/patterns/mutual-exclusion.ts` の `mainPointIdxs` が同じ取り方をしている）。
+反転系は**すべて**ネックライン定義点を含む（#224 症状 3 で triple を他に揃えた）:
+
+| 検出器 | `pivots` の並び | ネックライン定義点 | 水平ネックラインの `y` |
+|---|---|---|---|
+| H&S / 逆 H&S | `[p0, p1, p2, p3, p4]` | `p1` / `p3` | — （H&S は傾きあり。`neckline` を参照） |
+| double | `[a, b, c]` | `b` | `b.price` |
+| triple（完成済み / near_completion） | `[a, v1, b, v2, c]` | `v1` / `v2` | `(v1.price + v2.price) / 2` |
+| triple（形成中） | `[a, v1, b, v2]` | `v1` / `v2` | 同上 |
+
+形成中 triple の 3 点目は現在価格の暫定値なので `pivots` に入らない（content の
+「3 山目は現在価格を暫定」注記がそれを言う）。**消費者は `pivots.length` で構成を判定しないこと**——
+主構成点が要るなら `kind` で絞る。`view=debug` の `candidates[].points[].role` も同じ表から
+`main` / `neckline` を決めている。
+
 ### `pivots[].price` は終値、`extremePrice` が判定値
 
 スイング検出（`tools/patterns/swing.ts`）は**極値判定を高値 / 安値で行い、`price` には終値を入れる**。
