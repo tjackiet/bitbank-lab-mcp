@@ -19,7 +19,7 @@
 import { patternBarsCap, structuralFloorBars } from './bar-thresholds.js';
 import { barsPerDay, calcATR, deduplicatePatterns, finalizeConf } from './helpers.js';
 import { clamp01 } from './regression.js';
-import { computeTargetReach, targetReachFields } from './target-reach.js';
+import { computeTargetReach, omittedTargetReach, type TargetReachResult, targetReachFields } from './target-reach.js';
 import type { CandDebugEntry, DetectContext, DetectResult, PatternEntry } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -370,7 +370,9 @@ function buildTriangleResult(c: TriangleCandidateCtx): { pattern: PatternEntry; 
 	// --- ターゲット価格計算 ---
 	const patternHeight = gapStart;
 	let breakoutTarget: number | undefined;
-	let targetReach: ReturnType<typeof computeTargetReach> | undefined;
+	// 未ブレイクでも**理由を名乗る**（#224 症状 2）。`undefined` で初期化すると
+	// `targetReachFields` が黙って `{}` に畳み、content から進捗行ごと消える。
+	let targetReach: TargetReachResult = omittedTargetReach('not_broken_out');
 	const targetMethod: 'pattern_height' | undefined = 'pattern_height';
 	if (hasBreakout && breakoutDirection) {
 		const bp = candles[breakoutIdx].close;

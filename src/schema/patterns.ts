@@ -442,6 +442,34 @@ const PATTERN_INDEX_NOTE =
 	'別配列なので、そちらへ直接添字として使わないこと（使うなら pastBuffer を足す）。' +
 	'日時で突き合わせるなら range / date 等の ISO 文字列を使う。';
 
+/**
+ * target 進捗を出さなかった理由コードの**単一ソース**（issue #210 / #224 症状 2）。
+ *
+ * **Zod 側をここに置くのは、宣言漏れが「黙って剥がされる」形で出るから。**
+ * TypeScript のユニオンと Zod の enum を別々に持つと、検出器が型上は正しい理由を返しても
+ * `DetectPatternsOutputSchema.parse()` がそれを落とし、**どのクライアントにも届かない**
+ * （#155 / #160 / #184 / #189 / #199 で 5 回起きている）。実装側の
+ * `TargetReachOmissionReason`（`tools/patterns/target-reach.ts`）はこの enum から
+ * **型として導出**してあるので、片方だけ足すことができない。
+ *
+ * **依存の向きは変えていない。** 実行時は `src/schema/patterns.ts` → `target-reach.ts`
+ * （閾値 3 定数を読む）の一方向のままで、逆向きは `import type` だけ（出力から消える）。
+ *
+ * コードを足すときはここに足し、`target-reach.ts` の `TARGET_PROGRESS_OMISSION_NOTE`
+ * （`Record<TargetReachOmissionReason, string>`）に content 文言を書く——書き忘れは typecheck が落とす。
+ */
+export const TargetProgressOmittedReasonEnum = z.enum([
+	'not_broken_out',
+	'no_target',
+	'invalid_breakout_price',
+	'no_bars_after_breakout',
+	'degenerate_target_distance',
+	'not_computed_by_detector',
+]);
+
+/** `TargetProgressOmittedReasonEnum` から導出した理由コードの型。実装側はこれを再エクスポートする。 */
+export type TargetProgressOmittedReason = z.infer<typeof TargetProgressOmittedReasonEnum>;
+
 export const DetectedPatternSchema = z.object({
 	type: PatternTypeEnum,
 	confidence: z.number().min(0).max(1),
@@ -732,10 +760,12 @@ export const DetectedPatternSchema = z.object({
 				`未到達側は floor して 99 でキャップ（99.6% が 100 に丸まって下流の 100 判定を誤らせるのを防ぐ）、` +
 				`到達側は round して [100, ${TARGET_REACHED_PCT_CAP}] にクランプする。` +
 				`**${TARGET_REACHED_PCT_CAP} ちょうどは「${TARGET_REACHED_PCT_CAP}% 以上」を意味する**（上限で切っている）。\n` +
-				`**出ない条件**: (a) ブレイクしていない、(b) breakoutTarget が出ない、` +
+				`**出ない条件**: (a) ブレイクしていない、(b) breakoutTarget またはパターン高さが出ない、` +
 				`(c) 分母がパターン高さの ${MIN_TARGET_DISTANCE_HEIGHT_RATIO * 100}% 未満に潰れている` +
-				`（= ブレイク足が既に想定値幅の大半を走り終えていて達成度を測れない）。` +
-				`(c) のときは targetProgressOmittedReason で申告する。`,
+				`（= ブレイク足が既に想定値幅の大半を走り終えていて達成度を測れない）、` +
+				`(d) ブレイク足の終値が非有限、(e) ブレイク足以降に走査できる足が無い。` +
+				`**(a)〜(e) いずれも targetProgressOmittedReason で申告する**（issue #224 症状 2。` +
+				`#210 時点では (c) しか申告しておらず、残りは進捗行ごと無言で消えていた）。`,
 		),
 	// ブレイク後の high/low ベース target 到達情報。double / triangle / wedge / pennant / flag /
 	// H&S / 逆H&S すべてで付与される。最終 close ベースだと一度到達してから戻したケースを
@@ -757,16 +787,30 @@ export const DetectedPatternSchema = z.object({
 		.number()
 		.optional()
 		.describe(`走査窓（ブレイク足から ${TARGET_REACH_MAX_BARS} 本以内）の extremum（up=最高 high / down=最安 low）。`),
-	targetProgressOmittedReason: z
-		.literal('degenerate_target_distance')
-		.optional()
-		.describe(
-			`target 進捗系フィールド（targetReached / targetReachedPct / targetReachedDate / targetReachedPrice）を` +
-				`**出さなかった**ことの申告。'degenerate_target_distance' = ` +
-				`|breakoutTarget − ブレイク価格| がパターン高さの ${MIN_TARGET_DISTANCE_HEIGHT_RATIO * 100}% 未満で、` +
-				`進捗率の分母が潰れている。ネックラインから投影する H&S / doubles で、ブレイク足がネックラインから` +
-				`値幅ぶん走り切っているときに起きる。**breakoutTarget 自体は出る**（進捗だけが測れない）。`,
-		),
+	targetProgressOmittedReason: TargetProgressOmittedReasonEnum.optional().describe(
+		`target 進捗系フィールド（targetReached / targetReachedPct / targetReachedDate / targetReachedPrice）を` +
+			`**出さなかった**ことの申告。**breakoutTarget 自体は出ることがある**（進捗だけが測れない）ので、` +
+			`「進捗 0%」と「測っていない」を取り違えないための唯一の手がかりになる。\n` +
+			`**再問い合わせで答えが変わりうるかは 3 通りある。**\n` +
+			`  (i) 足が増えれば測れるようになりうる（暫定）: 'not_broken_out' / 'no_bars_after_breakout'\n` +
+			`  (ii) その構造では変わらない（確定）: 'no_target' / 'invalid_breakout_price' / 'degenerate_target_distance'\n` +
+			`  (iii) 実装ギャップ。再問い合わせでは変わらないが将来のリリースで消える: 'not_computed_by_detector'\n` +
+			`- 'not_broken_out' = ブレイクが確定していない（status が near_completion / forming、` +
+			`またはブレイク足を特定できない）。**最も多い経路。** (i)——後の足でネックラインを抜ければ進捗が出る。\n` +
+			`- 'no_target' = ターゲット価格またはパターン高さを算出できない（ネックライン投影が解けない等）。(ii)\n` +
+			`- 'invalid_breakout_price' = ブレイク足の終値が非有限（欠損足など）。(ii)——その足は後から直らない。\n` +
+			`- 'no_bars_after_breakout' = ブレイク足以降に走査できるローソク足が無い。(i)\n` +
+			`- 'degenerate_target_distance' = |breakoutTarget − ブレイク価格| がパターン高さの ` +
+			`${MIN_TARGET_DISTANCE_HEIGHT_RATIO * 100}% 未満で進捗率の分母が潰れている。` +
+			`ネックラインから投影する H&S / doubles で、ブレイク足がネックラインから値幅ぶん` +
+			`走り切っているときに起きる（issue #210 (2)）。(ii)——分母はブレイク価格と target だけで決まるので` +
+			`足が増えても変わらない。\n` +
+			`- 'not_computed_by_detector' = **構造の性質ではなく triple 系検出器の未配線。** ` +
+			`detect_triples.ts の完成済み 4 経路（strict / relaxed × top / bottom）はブレイク足・target・` +
+			`パターン高さが揃っているのに computeTargetReach を呼んでいない（標準コーパス 940 ケースで` +
+			` 13 構造）。**配線は issue #224 のフォローアップとして別 issue で扱う**——` +
+			`配線されたらこのコードは出なくなり、代わりに進捗が出る。(iii)`,
+	),
 	// 用語正規化ラベル（neckline フィールドが何を指すかをパターン種別ごとに明示）
 	trendlineLabel: z.string().optional(),
 	// ペナント用: フラッグポール（旗竿）情報

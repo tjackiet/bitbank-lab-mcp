@@ -184,9 +184,14 @@ describe('targetReachedPct は系列の末尾に依存しない（issue #210 (3)
 		// 上のテストを検出器層へ移したぶん、`detectPatterns` 経由でも成り立つ不変条件を別に置く。
 		// **どの構造が dedup に勝つかに依存しない**形にしてある。
 		//
-		// 対象を H&S 系に絞るのは #210 (2) の範囲がそこだから。triple / double は
-		// `breakoutTarget` を出しても `computeTargetReach` を通しておらず、進捗系のフィールドを
-		// そもそも持たない（本 fixture でも `triple_top` / `triple_bottom` が該当）。
+		// 対象を H&S 系に絞るのは #210 (2) の範囲がそこだから。
+		//
+		// **#224 症状 2 以降、triple / double も無言ではない。** `detect_triples.ts` は
+		// 依然 `computeTargetReach` を呼んでいないが、`targetProgressOmittedReason` で
+		// `not_computed_by_detector` を申告するようになった（doubles は `not_broken_out` /
+		// `invalid_breakout_price`）。全 type を横断する「無言 0 件」の固定は
+		// `tests/patterns/target-progress-declared.test.ts` にある。ここは #210 (2) の
+		// 退化ガードが H&S でどう働くかの回帰なので、対象は H&S 系のまま。
 		const patterns = (await runOn(buildBtcJpy1hour202608Candles())) as Array<Record<string, unknown>>;
 		const scored = patterns.filter(
 			(q) =>

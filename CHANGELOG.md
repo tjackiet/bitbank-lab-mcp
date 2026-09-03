@@ -61,6 +61,133 @@
 | 46 | #199 候補 2 | triple の期間スコア `duration` を**暦日基準から バー数基準**に移した（`periodScoreBars`）。暦日基準は `barsPerDay` 換算で `1min` / `5min` / `15min` が 0.6 固定・`1month` が 0.7 固定と、**データによらず定数になる**構造だった。`double` / H&S は実測で定数化していないので暦日基準のまま | **変わらない**（940 ケース全件で件数・構造キーとも一致。`globalDedup` の代表入れ替わりも 0。動くのは triple の `duration` / `confidence` と `rankPatterns` の並びだけ） |
 | 47 | #218 Phase 2 | `triple_*` と H&S 系が**主構成点を 2 点以上共有**していたら triple を落とす型間排他を入れた。**閾値を 1 つも導入していない**（Phase 1 が深さ比の hard gate 案を実測で否定したため、確かな根拠がある二重出力だけを直した） | **減る**（940 ケースで `triple_bottom` −25 / 1,968 → 1,943。**他の 13 type は 1 件も動かない**） |
 | 48 | #216 Phase 2 | `triple_*` / `double_*` の**主構成点がすべてネックラインの正しい側にある**ことを要求する構造ゲートを入れた。**閾値（許容幅）を 1 つも導入していない**（Phase 1 の実測で逸脱量がゼロから離れているため）。H&S 系は #211 待ちで触っていない | **減る**（940 ケースで −60 / 1,943 → 1,883。`triple_top` −44 / `triple_bottom` −12 / `double_bottom` −4。**H&S 系を含む他の 10 type は 1 件も動かない**） |
+| 49 | #224 症状 2 | target 進捗を出さなかった**全経路**に理由コードを付けた。`computeTargetReach` の戻り値型と `targetReachFields` の引数型から `undefined` を外し、**理由を書かずに畳む書き方を typecheck で潰した** | **変わらない**（940 ケース全件で `data.patterns` が完全一致。足したのは出力専用フィールド `targetProgressOmittedReason` と content の 1 行だけ） |
+
+### Fixed（target 進捗を出さなかった理由を全経路で申告する。#224 症状 2）
+
+`targetReachFields`（`tools/patterns/target-reach.ts`）の先頭が `if (!reach) return {};` で、
+**理由を付けずに黙って畳んでいた**。同じ関数の docstring は「`omitted` を黙って `{}` に畳まない」と
+宣言していたのに、`undefined` 経路だけが例外になっていた。結果 `formatTargetProgressLine` が
+`null` を返し、`content[0].text` から**進捗行ごと消える**——LLM は「進捗 0%」なのか
+「測っていない」のかを区別できない。issue のライブ実例（`btc_jpy` 1hour）では `triple_top` が
+
+    - ターゲット価格: 12,644,737円（ネックライン投影）
+    （進捗行なし・理由なし）
+
+を出し、検証した LLM は「理由はこの出力からは分からないので、推測は避けます」と答えている。
+`#181`（cap 切り捨て）/ #196（件数打ち切り）/ #200（縮小段）/ #210（`targetProgressOmittedReason`）
+と同じクラスの欠落の 5 回目。
+
+#### 個別に潰さず、型で潰した
+
+`undefined` を「測れなかった」の表現に使っている限り、**新しい呼び出し側が同じ穴を再生産する。**
+`computeTargetReach` の戻り値型と `targetReachFields` の引数型から `undefined` を外し、
+呼び出し側ガードには `omittedTargetReach(reason)` を渡させることで、
+**理由を書かない畳み方が typecheck を通らなくなる。**
+
+#### 理由コード（`degenerate_target_distance` に 5 つ追加）
+
+| コード | 条件 | 系統 |
+|---|---|---|
+| `not_broken_out` | ブレイクが確定していない（`near_completion` / `forming` / ブレイク足を特定できない） | データ条件 |
+| `no_target` | ターゲット価格またはパターン高さが算出できない | データ条件 |
+| `invalid_breakout_price` | ブレイク足の終値が非有限 | データ条件 |
+| `no_bars_after_breakout` | ブレイク足以降に走査できるローソク足が無い | データ条件 |
+| `degenerate_target_distance` | 分母がパターン高さの 15% 未満に潰れている（#210 (2)。**据え置き**） | データ条件 |
+| `not_computed_by_detector` | その検出器が `computeTargetReach` を呼んでいない | **実装ギャップ** |
+
+**消費側が知りたいのは「時間を置けば値が出るのか」**なので、そこを 3 通りに分けて宣言する:
+
+| 区分 | コード | 意味 |
+|---|---|---|
+| **(i) 暫定** | `not_broken_out` / `no_bars_after_breakout` | **足が増えれば測れるようになりうる**（形成中が後の足でネックラインを抜ければ進捗が出る） |
+| **(ii) 確定** | `no_target` / `invalid_breakout_price` / `degenerate_target_distance` | **その構造では変わらない**（分母はブレイク価格と target だけで決まり、欠損したブレイク足は後から直らない） |
+| **(iii) 実装ギャップ** | `not_computed_by_detector` | 再問い合わせでは変わらないが**将来のリリースで消える** |
+
+**最多の経路 `not_broken_out` が (i) であることを取り違えさせない**——「もう一度呼んでも無駄」と
+読ませると、形成中パターンの追跡がそこで止まる。
+
+`not_computed_by_detector` の現在の対象は **`detect_triples.ts` の完成済み 4 経路だけ**
+（strict / relaxed × top / bottom）。ブレイク足・target・パターン高さが揃っているのに
+進捗を算出していない——これが issue のライブ実例の正体で、**`targetReachFields` の
+`undefined` 経路ですらなかった**（triple は `computeTargetReach` を一度も呼んでいない）。
+**配線は #224 のフォローアップとして別 issue で扱う**。値を測る変更は
+`targetReachedPct` の分布・cap 到達・分母の退化を #210 と同じ密度で実測する必要があり、
+本 PR の「数値は 1 つも動かさない」を壊すため。
+
+#### 配線した経路（22 箇所。issue の表の 12 箇所＋実測で見つかった 10 箇所）
+
+issue が列挙したのは `targetReachFields` を既に呼んでいる 12 箇所（doubles 4 / H&S 4 /
+pennants 1 / wedges 2 / triangles 1）だが、**それだけでは無言が 0 にならなかった。**
+標準コーパスで数えたところ、`targetReachFields` を**そもそも呼んでいない**のに
+`breakoutTarget` を出す経路が 10 箇所あった（形成中 H&S 2 / 形成中 double 2 /
+triple 6）。受け入れ条件「`breakoutTarget` が出ているのに進捗行も理由行も無いパターンが 0 件」
+はこの 10 箇所を含めて初めて満たせる。
+
+#### 実測（標準コーパス 940 ケース = 標準 800 + 実データ B 96 + 補助スイープ 44）
+
+**`data.patterns` は 1 バイトも変わらない。** 940 ケース全件で、検出器の生の出力（7,321 行）と
+`globalDedup` 後（3,289 行）の両方を `targetProgressOmittedReason` を除いて SHA-1 で
+突き合わせ、**940 / 940 で完全一致**。件数・`confidence` / `status` / `breakoutTarget` はもちろん、
+`targetReachedPct` を含む既存フィールドが 1 つも動いていない。
+
+| reason | 生の行数 | 構造単位 | 内訳（構造単位） |
+|---|---:|---:|---|
+| `not_broken_out` | 2,625 | **547** | H&S 266 / 逆 H&S 245 / `triple_top` 9 / `double_bottom` 8 / `triple_bottom` 8 / `triangle_ascending` 4 / `rising_wedge` 3 / `falling_wedge` 2 / `triangle_symmetrical` 2 |
+| `degenerate_target_distance` | 278 | 60 | 逆 H&S 59 / `double_bottom` 1（**#210 から不変**） |
+| `not_computed_by_detector` | 72 | 13 | `triple_bottom` 11 / `triple_top` 2 |
+| `no_target` | 0 | **0** | — |
+| `invalid_breakout_price` | 0 | **0** | — |
+| `no_bars_after_breakout` | 0 | **0** | — |
+
+無言（`breakoutTarget` あり・進捗なし・理由なし）は **構造単位 546 → 0**（生 2,587 → 0 行）。
+
+**下 3 つのコードは本コーパスで 1 件も出ない。** それでも置くのは、`undefined` を返せなくした
+結果**すべての早期 return が名前を要求される**からで、名前が無いとその経路だけがまた無言に戻る。
+到達性の見立ては `target-reach.ts` の `TargetReachOmissionReason` の docstring に書いた。
+
+実データはネイティブの時間足のまま見た（プールした値から結論を書かない。#219）:
+
+| | 実データ A（`btc_jpy` 1day） | 実データ B（`btc_jpy` 1hour） |
+|---|---|---|
+| `not_broken_out` | 7 構造（H&S 3 / `double_bottom` 2 / 逆 H&S 2） | 67 構造（H&S 30 / 逆 H&S 27 / `triple_bottom` 3 / `triple_top` 3 / `double_bottom` 3 / `triangle_ascending` 1） |
+| `degenerate_target_distance` | **0 構造** | 6 構造（すべて逆 H&S） |
+| `not_computed_by_detector` | **0 構造** | 2 構造（`triple_bottom`） |
+
+#### content の文言
+
+`degenerate_target_distance` の既存文言は 1 文字も変えていない。追加分は
+`ターゲット進捗: 出力なし（未ブレイクのため未算出）` のような 1 行で、
+`not_computed_by_detector` だけは**データ条件ではなく「算出していない」側の言い方**にした
+（`出力なし（この検出器がターゲット進捗を算出していないため。実装の未配線であり、構造の性質ではない）`）。
+`formatTargetProgressLine` は**理由があれば必ず 1 行返す**——未知のコードが来てもコードそのものを
+出し、黙らない（写像漏れを無言にしない）。
+
+#### スキーマ
+
+理由コードの**単一ソースは `src/schema/patterns.ts` の `TargetProgressOmittedReasonEnum`**（Zod）で、
+実装側の `TargetReachOmissionReason` と `PatternEntry.targetProgressOmittedReason` は
+**そこから型として導出**する。TS のユニオンと Zod の enum を別々に持つと、型上は正しい理由を
+返しても Zod 側の宣言漏れで `parse()` が黙って剥がす——`#155` / #160 / #184 / #189 / #199 で
+**5 回起きている事故**なので、片方だけ足せない形にした。enum から 1 コード削ると
+実装・文言テーブル・テストの 5 箇所で typecheck が落ちることを確認済み。
+
+**実行時の依存の向きは変えていない**（`src/schema/patterns.ts` → `target-reach.ts` の一方向。
+逆向きは `import type` だけで出力から消える）。`targetReachedPct` の description は
+「(c) のときは申告する」→「**(a)〜(e) いずれも申告する**」に直した。
+
+#### テスト
+
+- `tests/patterns/target-progress-declared.test.ts`（新規）— 受け入れ条件そのもの。
+  `res.summary`（`tools/detect_patterns.ts`）と views handler の各 view で
+  **`ターゲット価格:` の行数と `ターゲット進捗:` の行数が一致する**ことを実データで固定する
+  （「どこかにある」だと 1 件欠けても通ってしまうため行数で見る）。
+- `tests/patterns/target-reach.test.ts` — `expect(targetReachFields(undefined)).toEqual({})`
+  は**それ自体が本欠陥**なので、各 reason を申告するケースに置き換えた。
+  理由コードの網羅は `satisfies` で双方向に固定してあり、**ユニオンに足して配列に足し忘れると
+  typecheck が落ちる**（実際に `not_computed_by_detector` を足したとき落ちた）。
+- `tests/fixtures/detect_patterns_1hour_data_patterns_baseline.json` は**更新なし**
+  （差分 0。#206 と同じく履歴表にも行を足していない）。
 
 ### Changed（triple / double の主構成点とネックラインの位置関係を hard gate にした。#216 Phase 2）
 

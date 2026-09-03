@@ -26,7 +26,7 @@ import {
 	validateReversalStructure,
 } from './structural.js';
 import type { Pivot } from './swing.js';
-import { computeTargetReach, targetReachFields } from './target-reach.js';
+import { computeTargetReach, omittedTargetReach, targetReachFields } from './target-reach.js';
 import {
 	type CandleData,
 	type DetectContext,
@@ -621,9 +621,10 @@ function findRelaxedDoubleTop(
 			{ tz },
 		);
 		const dtRelTarget = Math.round(necklinePrice - (dtRelAvgPeak - necklinePrice));
+		// ブレイク足の終値が非有限なら**理由を名乗って**畳む（#224 症状 2）。
 		const dtRelReach = Number.isFinite(dtRelBp)
 			? computeTargetReach(candles, breakoutIdx, dtRelBp, dtRelTarget, 'down', dtRelAvgPeak - necklinePrice)
-			: undefined;
+			: omittedTargetReach('invalid_breakout_price');
 		const structureRange =
 			candles[a.idx]?.isoTime && candles[c.idx]?.isoTime
 				? { start: candles[a.idx].isoTime as string, end: candles[c.idx].isoTime as string }
@@ -812,9 +813,10 @@ function findRelaxedDoubleBottom(
 			{ tz },
 		);
 		const dbRelTarget = Math.round(necklinePrice + (necklinePrice - dbRelAvgValley));
+		// ブレイク足の終値が非有限なら**理由を名乗って**畳む（#224 症状 2）。
 		const dbRelReach = Number.isFinite(dbRelBp)
 			? computeTargetReach(candles, breakoutIdx, dbRelBp, dbRelTarget, 'up', necklinePrice - dbRelAvgValley)
-			: undefined;
+			: omittedTargetReach('invalid_breakout_price');
 		const structureRange =
 			candles[a.idx]?.isoTime && candles[c.idx]?.isoTime
 				? { start: candles[a.idx].isoTime as string, end: candles[c.idx].isoTime as string }
@@ -1057,6 +1059,9 @@ function tryFormingDoubleTop(ctx: DetectContext): PatternEntry | null {
 		trendlineLabel: 'ネックライン',
 		breakoutTarget: formDtTarget,
 		targetMethod: 'neckline_projection' as const,
+		// 形成中は定義上ブレイクしていないので進捗は測れない。**それを言う**（#224 症状 2）——
+		// `breakoutTarget` は出るので、黙ると LLM が「進捗 0%」と読み違える。
+		...targetReachFields(omittedTargetReach('not_broken_out')),
 		completionPct: Math.round(completion * 100),
 		_method: 'forming_double_top',
 	};
@@ -1326,6 +1331,9 @@ function tryFormingDoubleBottom(ctx: DetectContext): PatternEntry | null {
 			trendlineLabel: 'ネックライン',
 			breakoutTarget: formDbTarget,
 			targetMethod: 'neckline_projection' as const,
+			// 形成中は定義上ブレイクしていないので進捗は測れない。**それを言う**（#224 症状 2）——
+			// `breakoutTarget` は出るので、黙ると LLM が「進捗 0%」と読み違える。
+			...targetReachFields(omittedTargetReach('not_broken_out')),
 			completionPct: Math.round(completion * 100),
 			_method: 'forming_double_bottom',
 		};
@@ -1488,9 +1496,10 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					{ tz: ctx.tz },
 				);
 				const dtTarget = Math.round(necklinePrice - (dtAvgPeak - necklinePrice));
+				// ブレイク足の終値が非有限なら**理由を名乗って**畳む（#224 症状 2）。
 				const dtReach = Number.isFinite(dtBp)
 					? computeTargetReach(candles, breakoutIdx, dtBp, dtTarget, 'down', dtAvgPeak - necklinePrice)
-					: undefined;
+					: omittedTargetReach('invalid_breakout_price');
 				const dtStructureRange =
 					candles[a.idx]?.isoTime && candles[c.idx]?.isoTime
 						? { start: candles[a.idx].isoTime as string, end: candles[c.idx].isoTime as string }
@@ -1664,9 +1673,10 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					{ tz: ctx.tz },
 				);
 				const dbTarget = Math.round(necklinePrice + (necklinePrice - dbAvgValley));
+				// ブレイク足の終値が非有限なら**理由を名乗って**畳む（#224 症状 2）。
 				const dbReach = Number.isFinite(dbBp)
 					? computeTargetReach(candles, breakoutIdx, dbBp, dbTarget, 'up', necklinePrice - dbAvgValley)
-					: undefined;
+					: omittedTargetReach('invalid_breakout_price');
 				const dbStructureRange =
 					candles[a.idx]?.isoTime && candles[c.idx]?.isoTime
 						? { start: candles[a.idx].isoTime as string, end: candles[c.idx].isoTime as string }

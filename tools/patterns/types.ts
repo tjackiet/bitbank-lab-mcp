@@ -1,6 +1,11 @@
 /**
  * detect_patterns 系モジュール共通の型定義
  */
+
+// **理由コードの単一ソースは Zod 側**（`src/schema/patterns.ts` の
+// `TargetProgressOmittedReasonEnum`）。ここから型を取ることで、宣言漏れで `parse()` に
+// 黙って剥がされる形を作れなくしてある。`import type` なので実行時の依存は増えない。
+import type { TargetProgressOmittedReason } from '../../src/schema/patterns.js';
 import type { SizeThresholds } from './structural.js';
 import type { Pivot } from './swing.js';
 
@@ -298,8 +303,8 @@ export interface PatternEntry extends DeduplicablePattern {
 	targetReached?: boolean;
 	targetReachedDate?: string;
 	targetReachedPrice?: number;
-	/** target 進捗系を出さなかった理由（issue #210）。schema 参照。 */
-	targetProgressOmittedReason?: 'degenerate_target_distance';
+	/** target 進捗系を出さなかった理由（issue #210 / #224）。schema 参照。 */
+	targetProgressOmittedReason?: TargetProgressOmittedReason;
 	trendlineLabel?: string;
 	poleDirection?: 'up' | 'down';
 	priorTrendDirection?: 'bullish' | 'bearish';
