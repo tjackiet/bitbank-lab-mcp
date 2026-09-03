@@ -258,6 +258,31 @@ export function getSizeThresholdsForTf(tf: string): SizeThresholds {
  * strict が対象 type を 1 件も見つけられなかったときにのみ発火するフォールバックで、
  * strict が既に 0.83% で `head_and_shoulders` / `inverse_head_and_shoulders` を検出できて
  * いる限り到達しない。`RELAXED_FACTORS` 自体の設計見直しは本 issue の範囲外。
+ *
+ * ### 実測（issue #227 Phase 1。`scripts/measure_relaxed_fallback_227.ts`）
+ *
+ * 上の「到達しない」は `btc_jpy` / `1hour` のライブ実行で崩れた（strict 0 件・段2
+ * `x2.0_0.4` でだけ拾われた `head_and_shoulders` が整合度 0.79 で出力され、頭の突出は要求 0.83% の
+ * 58%）。ただし**標準コーパス 800 ＋ 実データ B 96（呼び出し 1,792 回）では relaxed accepted は
+ * 段1 / 段2・H&S / 逆 H&S とも 0 件**で、#204 Phase 1 の「940 ケース中 0 件」と同じ。
+ * ライブで見えた構造は fixture（2026-08-12〜08-28）の外にあり、本コーパスでは再現できない。
+ *
+ * relaxed が発火する（= strict 0 件）割合は高いが、発火しても通らない:
+ *
+ * | 部分集合 | `head_and_shoulders` strict 0 件率 | `inverse_head_and_shoulders` 同 | relaxed accepted |
+ * |---|---:|---:|---:|
+ * | 合成 704 | 95.5% | 93.2% | 0 |
+ * | 実データ A 96（`1day` 系列） | 41.7% | 58.3% | 0 |
+ * | 実データ B 96（`1hour` 系列） | 33.3% | 66.7% | 0 |
+ * | 実データ B × ネイティブ `1hour` | 0.0% | 0.0% | 0 |
+ * | 実データ A × ネイティブ `1day` | 50.0% | 100.0% | 0 |
+ *
+ * 通らない理由は頭の突出ではなく**窓の形**——relaxed は連続する 5 ピボットしか見ない（strict は
+ * `enumerateHsWindows` で非連続の組も見る）ため、strict 0 件の組では段2 の頭ゲートに到達する
+ * 窓自体が 0 だった（肩 `tol × 2.0`・ネックライン・先行トレンド・サイズ検査まで通る窓のうち
+ * 頭が肩より高いもの）。したがって「`head: 0.4` を 0.35〜0.5 で動かしたときの通過集合」は本コーパスでは
+ * 全域で空で、膝も空白帯も観測できない。段2 の過剰緩和を測るには、ライブで relaxed が拾った
+ * `1hour` 系列を fixture に足す必要がある（Phase 2 の前提）。
  */
 export function getHeadProminenceForTf(tf: string): number {
 	const t = String(tf);
