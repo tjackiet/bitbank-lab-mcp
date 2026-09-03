@@ -3,6 +3,10 @@
  */
 import type { SizeThresholds } from './structural.js';
 import type { Pivot } from './swing.js';
+// 型のみの循環参照（`target-reach.ts` は `CandleData` をここから取る）。`import type` は
+// 出力から消えるので実行時の循環は生じない。**単一ソースは `target-reach.ts` 側**——
+// 理由コードを生やす場所と文言テーブルを同じファイルに置いておくため。
+import type { TargetReachOmissionReason } from './target-reach.js';
 
 /** トレンドライン（線形回帰の結果） */
 export interface TrendLine {
@@ -298,8 +302,8 @@ export interface PatternEntry extends DeduplicablePattern {
 	targetReached?: boolean;
 	targetReachedDate?: string;
 	targetReachedPrice?: number;
-	/** target 進捗系を出さなかった理由（issue #210）。schema 参照。 */
-	targetProgressOmittedReason?: 'degenerate_target_distance';
+	/** target 進捗系を出さなかった理由（issue #210 / #224）。schema 参照。 */
+	targetProgressOmittedReason?: TargetReachOmissionReason;
 	trendlineLabel?: string;
 	poleDirection?: 'up' | 'down';
 	priorTrendDirection?: 'bullish' | 'bearish';

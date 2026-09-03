@@ -19,7 +19,7 @@
 import { cappedBarsForDays } from './bar-thresholds.js';
 import { barsPerDay, calcATR, deduplicatePatterns, finalizeConf } from './helpers.js';
 import { clamp01 } from './regression.js';
-import { computeTargetReach, targetReachFields } from './target-reach.js';
+import { computeTargetReach, omittedTargetReach, type TargetReachResult, targetReachFields } from './target-reach.js';
 import type { CandleData, DetectContext, DetectResult, PatternEntry } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -620,7 +620,9 @@ export function detectPennantsFlags(ctx: DetectContext): DetectResult {
 
 		// --- ターゲット価格計算（flagpole_projection 方式） ---
 		let breakoutTarget: number | undefined;
-		let targetReach: ReturnType<typeof computeTargetReach> | undefined;
+		// 未ブレイクでも**理由を名乗る**（#224 症状 2）。`undefined` で初期化すると
+		// `targetReachFields` が黙って `{}` に畳み、content から進捗行ごと消える。
+		let targetReach: TargetReachResult = omittedTargetReach('not_broken_out');
 		if (hasBreakout && breakoutDirection) {
 			const bp = candles[breakoutIdx].close;
 			breakoutTarget = breakoutDirection === 'up' ? bp + poleRange : bp - poleRange;

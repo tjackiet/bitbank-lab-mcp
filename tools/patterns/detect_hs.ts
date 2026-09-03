@@ -26,7 +26,7 @@ import {
 	validatePriorTrend,
 } from './structural.js';
 import type { Pivot } from './swing.js';
-import { computeTargetReach, targetReachFields } from './target-reach.js';
+import { computeTargetReach, omittedTargetReach, targetReachFields } from './target-reach.js';
 import type {
 	CandleData,
 	DeduplicablePattern,
@@ -813,10 +813,13 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 					direction: 'up',
 					fallbackNecklinePrice: nlAvg,
 				});
-				const ihsReach =
-					ihsTarget !== undefined && ihsHeight !== undefined && completion.breakout
-						? computeTargetReach(candles, breakoutIdx, completion.breakout.price, ihsTarget, 'up', ihsHeight)
-						: undefined;
+				// ブレイク未確定 / target 未算出でも**理由を名乗る**（#224 症状 2）。
+				// `undefined` を渡す書き方は `targetReachFields` の引数型から外してあるので通らない。
+				const ihsReach = !completion.breakout
+					? omittedTargetReach('not_broken_out')
+					: ihsTarget === undefined || ihsHeight === undefined
+						? omittedTargetReach('no_target')
+						: computeTargetReach(candles, breakoutIdx, completion.breakout.price, ihsTarget, 'up', ihsHeight);
 				const ihsPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
 
 				// 整合度（issue #204 Phase 2）。**ブレイク検出と高さ算出の後ろに置く**
@@ -1020,10 +1023,13 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 					direction: 'down',
 					fallbackNecklinePrice: nlAvg,
 				});
-				const hsReach =
-					hsTarget !== undefined && hsHeight !== undefined && completion.breakout
-						? computeTargetReach(candles, breakoutIdx, completion.breakout.price, hsTarget, 'down', hsHeight)
-						: undefined;
+				// ブレイク未確定 / target 未算出でも**理由を名乗る**（#224 症状 2）。
+				// `undefined` を渡す書き方は `targetReachFields` の引数型から外してあるので通らない。
+				const hsReach = !completion.breakout
+					? omittedTargetReach('not_broken_out')
+					: hsTarget === undefined || hsHeight === undefined
+						? omittedTargetReach('no_target')
+						: computeTargetReach(candles, breakoutIdx, completion.breakout.price, hsTarget, 'down', hsHeight);
 				const hsPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
 
 				// 整合度（issue #204 Phase 2）。配置の理由は `findStrictInverseHS` の同じ箇所を参照。
@@ -1276,10 +1282,13 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 				direction: 'down',
 				fallbackNecklinePrice: nlY,
 			});
-			const hsRelReach =
-				hsRelTarget !== undefined && hsRelHeight !== undefined && completion.breakout
-					? computeTargetReach(candles, breakoutIdx, completion.breakout.price, hsRelTarget, 'down', hsRelHeight)
-					: undefined;
+			// ブレイク未確定 / target 未算出でも**理由を名乗る**（#224 症状 2）。
+			// `undefined` を渡す書き方は `targetReachFields` の引数型から外してあるので通らない。
+			const hsRelReach = !completion.breakout
+				? omittedTargetReach('not_broken_out')
+				: hsRelTarget === undefined || hsRelHeight === undefined
+					? omittedTargetReach('no_target')
+					: computeTargetReach(candles, breakoutIdx, completion.breakout.price, hsRelTarget, 'down', hsRelHeight);
 			const hsRelPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
 			// 整合度（issue #204 Phase 2）。strict と同じ軸構成で、**閾値だけ経路のものを渡す**
 			// ——頭の突出ゲートは `headProminencePct × factors.head`。`× 0.95` の relaxed ペナルティは
@@ -1498,10 +1507,13 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 				direction: 'up',
 				fallbackNecklinePrice: nlY,
 			});
-			const ihsRelReach =
-				ihsRelTarget !== undefined && ihsRelHeight !== undefined && completion.breakout
-					? computeTargetReach(candles, breakoutIdx, completion.breakout.price, ihsRelTarget, 'up', ihsRelHeight)
-					: undefined;
+			// ブレイク未確定 / target 未算出でも**理由を名乗る**（#224 症状 2）。
+			// `undefined` を渡す書き方は `targetReachFields` の引数型から外してあるので通らない。
+			const ihsRelReach = !completion.breakout
+				? omittedTargetReach('not_broken_out')
+				: ihsRelTarget === undefined || ihsRelHeight === undefined
+					? omittedTargetReach('no_target')
+					: computeTargetReach(candles, breakoutIdx, completion.breakout.price, ihsRelTarget, 'up', ihsRelHeight);
 			const ihsRelPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
 			// 整合度（issue #204 Phase 2）。配置と閾値の渡し方は `findRelaxedHS` の同じ箇所を参照。
 			const { components: scoreComponents, base } = buildHsScore({
@@ -1851,6 +1863,9 @@ function formingHsForHead(
 		...(formHsTarget !== undefined
 			? { breakoutTarget: formHsTarget, targetMethod: 'neckline_projection' as const }
 			: {}),
+		// 形成中は定義上ブレイクしていないので進捗は測れない。**それを言う**（#224 症状 2）——
+		// `breakoutTarget` は出るので、黙ると LLM が「進捗 0%」と読み違える。
+		...targetReachFields(omittedTargetReach('not_broken_out')),
 		completionPct: Math.round(completion * 100),
 		_method: isProvisional ? 'forming_hs_provisional' : 'forming_hs',
 	};
@@ -2131,6 +2146,9 @@ function formingInverseHsForHead(
 		...(formIhsTarget !== undefined
 			? { breakoutTarget: formIhsTarget, targetMethod: 'neckline_projection' as const }
 			: {}),
+		// 形成中は定義上ブレイクしていないので進捗は測れない。**それを言う**（#224 症状 2）——
+		// `breakoutTarget` は出るので、黙ると LLM が「進捗 0%」と読み違える。
+		...targetReachFields(omittedTargetReach('not_broken_out')),
 		completionPct: Math.round(completion * 100),
 		_method: isProvisional ? 'forming_ihs_provisional' : 'forming_ihs',
 	};

@@ -19,6 +19,7 @@ import {
 	validatePatternSize,
 } from './structural.js';
 import type { Pivot } from './swing.js';
+import { omittedTargetReach, targetReachFields } from './target-reach.js';
 import type { CandleData, DeduplicablePattern, DetectContext, DetectResult, PatternScoreBreakdown } from './types.js';
 import { pushCand } from './types.js';
 
@@ -413,6 +414,11 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 					},
 					breakout: { idx: breakoutIdx, price: breakoutPrice },
 					breakoutBarIndex: breakoutIdx,
+					// **本検出器は進捗を算出していない。** ブレイク足も target もパターン高さも
+					// 揃っているが `computeTargetReach` を一度も呼んでいないので、`breakoutTarget` が
+					// 出る一方で進捗行だけが消えていた（issue #224 症状 2 のライブ実例がこれ）。
+					// 値を出さないまま**理由だけを申告する**——配線は #224 のフォローアップ。
+					...targetReachFields(omittedTargetReach('not_computed_by_detector')),
 					breakoutDate: rangeEnd,
 					breakoutDirection: 'down' as const,
 					outcome: 'success' as const,
@@ -420,6 +426,10 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 			: {
 					status: 'near_completion' as const,
 					confirmation: { type: 'not_confirmed' as const },
+					// ネックライン未達なので進捗は測れない。**それを言う**（#224 症状 2）——
+					// `breakoutTarget` は完成 / 未完成に関わらず出るので、黙ると
+					// LLM が「進捗 0%」と読み違える。
+					...targetReachFields(omittedTargetReach('not_broken_out')),
 				};
 
 		patterns.push({
@@ -648,6 +658,11 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 					},
 					breakout: { idx: breakoutIdx, price: breakoutPrice },
 					breakoutBarIndex: breakoutIdx,
+					// **本検出器は進捗を算出していない。** ブレイク足も target もパターン高さも
+					// 揃っているが `computeTargetReach` を一度も呼んでいないので、`breakoutTarget` が
+					// 出る一方で進捗行だけが消えていた（issue #224 症状 2 のライブ実例がこれ）。
+					// 値を出さないまま**理由だけを申告する**——配線は #224 のフォローアップ。
+					...targetReachFields(omittedTargetReach('not_computed_by_detector')),
 					breakoutDate: rangeEnd,
 					breakoutDirection: 'up' as const,
 					outcome: 'success' as const,
@@ -655,6 +670,10 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 			: {
 					status: 'near_completion' as const,
 					confirmation: { type: 'not_confirmed' as const },
+					// ネックライン未達なので進捗は測れない。**それを言う**（#224 症状 2）——
+					// `breakoutTarget` は完成 / 未完成に関わらず出るので、黙ると
+					// LLM が「進捗 0%」と読み違える。
+					...targetReachFields(omittedTargetReach('not_broken_out')),
 				};
 
 		patterns.push({
@@ -877,6 +896,11 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 					},
 					breakout: { idx: breakoutIdx, price: breakoutPrice },
 					breakoutBarIndex: breakoutIdx,
+					// **本検出器は進捗を算出していない。** ブレイク足も target もパターン高さも
+					// 揃っているが `computeTargetReach` を一度も呼んでいないので、`breakoutTarget` が
+					// 出る一方で進捗行だけが消えていた（issue #224 症状 2 のライブ実例がこれ）。
+					// 値を出さないまま**理由だけを申告する**——配線は #224 のフォローアップ。
+					...targetReachFields(omittedTargetReach('not_computed_by_detector')),
 					breakoutDate: rangeEnd,
 					breakoutDirection: 'down' as const,
 					outcome: 'success' as const,
@@ -884,6 +908,10 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 			: {
 					status: 'near_completion' as const,
 					confirmation: { type: 'not_confirmed' as const },
+					// ネックライン未達なので進捗は測れない。**それを言う**（#224 症状 2）——
+					// `breakoutTarget` は完成 / 未完成に関わらず出るので、黙ると
+					// LLM が「進捗 0%」と読み違える。
+					...targetReachFields(omittedTargetReach('not_broken_out')),
 				};
 		return {
 			type: 'triple_top',
@@ -1084,6 +1112,11 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 					},
 					breakout: { idx: breakoutIdx, price: breakoutPrice },
 					breakoutBarIndex: breakoutIdx,
+					// **本検出器は進捗を算出していない。** ブレイク足も target もパターン高さも
+					// 揃っているが `computeTargetReach` を一度も呼んでいないので、`breakoutTarget` が
+					// 出る一方で進捗行だけが消えていた（issue #224 症状 2 のライブ実例がこれ）。
+					// 値を出さないまま**理由だけを申告する**——配線は #224 のフォローアップ。
+					...targetReachFields(omittedTargetReach('not_computed_by_detector')),
 					breakoutDate: rangeEnd,
 					breakoutDirection: 'up' as const,
 					outcome: 'success' as const,
@@ -1091,6 +1124,10 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 			: {
 					status: 'near_completion' as const,
 					confirmation: { type: 'not_confirmed' as const },
+					// ネックライン未達なので進捗は測れない。**それを言う**（#224 症状 2）——
+					// `breakoutTarget` は完成 / 未完成に関わらず出るので、黙ると
+					// LLM が「進捗 0%」と読み違える。
+					...targetReachFields(omittedTargetReach('not_broken_out')),
 				};
 		return {
 			type: 'triple_bottom',
@@ -1339,6 +1376,9 @@ function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
 			trendlineLabel: 'ネックライン',
 			breakoutTarget: formTtTarget,
 			targetMethod: 'neckline_projection' as const,
+			// 形成中は定義上ブレイクしていないので進捗は測れない。**それを言う**（#224 症状 2）——
+			// `breakoutTarget` は出るので、黙ると LLM が「進捗 0%」と読み違える。
+			...targetReachFields(omittedTargetReach('not_broken_out')),
 			completionPct: Math.round(completion * 100),
 			_method: 'forming_triple_top',
 		};
@@ -1561,6 +1601,9 @@ function tryFormingTripleBottom(ctx: DetectContext): DeduplicablePattern | null 
 			trendlineLabel: 'ネックライン',
 			breakoutTarget: formTbTarget,
 			targetMethod: 'neckline_projection' as const,
+			// 形成中は定義上ブレイクしていないので進捗は測れない。**それを言う**（#224 症状 2）——
+			// `breakoutTarget` は出るので、黙ると LLM が「進捗 0%」と読み違える。
+			...targetReachFields(omittedTargetReach('not_broken_out')),
 			completionPct: Math.round(completion * 100),
 			_method: 'forming_triple_bottom',
 		};

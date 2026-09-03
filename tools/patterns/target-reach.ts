@@ -27,10 +27,13 @@ import type { CandleData } from './types.js';
 //                'down' → breakoutIdx 以降の最安 low で評価
 //   - patternHeight: そのパターンが投影している値幅（分母の退化判定に使う）
 //
-// 戻り値:
+// 戻り値（issue #224 症状 2 以降、**`undefined` を返さない**）:
 //   - `{ kind: 'measured', … }` — 進捗を測れた
-//   - `{ kind: 'omitted', … }` — 分母が退化していて測れない（呼び出し側が申告する）
-//   - `undefined` — 入力不正 / 走査対象の足が無い
+//   - `{ kind: 'omitted', reason }` — 測れなかった。**理由コードを必ず持つ**
+//
+// 「測れなかった」を `undefined` で表すと、呼び出し側が `targetReachFields(undefined)` →
+// `{}` と畳んだ時点で理由が消え、content から進捗行ごと消える（#224 症状 2）。
+// 戻り値型から `undefined` を外してあるので、**理由を書かない畳み方は typecheck を通らない。**
 // ---------------------------------------------------------------------------
 
 /**
@@ -106,13 +109,91 @@ export interface TargetReachInfo {
 	targetReachedPrice: number;
 }
 
-/** 分母が退化していて進捗を測れないケース。**黙って落とさず呼び出し側が申告する。** */
+/**
+ * 進捗を測れなかった理由（issue #210 で 1 コード、#224 症状 2 で 5 コード追加）。
+ *
+ * **`targetReachedPct` が出ない経路はここに列挙されたコードのどれかを必ず名乗る。**
+ * 追加するときは 3 箇所を同時に直す——落とすと Zod が黙って剥がす（#155 / #160 / #184 /
+ * #189 / #199 で 5 回起きている事故）:
+ *   1. このユニオン
+ *   2. `src/schema/patterns.ts` の `targetProgressOmittedReason`（`z.enum`）
+ *   3. `tools/patterns/types.ts` の `PatternEntry.targetProgressOmittedReason`
+ * 文言（content 1 行）は `TARGET_PROGRESS_OMISSION_NOTE` に足す。網羅は
+ * `tests/patterns/target-reach.test.ts` の「全 reason に文言がある」で機械的に固定してある。
+ *
+ * **2 系統を混ぜない。** `not_computed_by_detector` だけが「実装がまだ配線されていない」を
+ * 意味し、他はすべて**その構造のデータ条件**を意味する。前者は将来のリリースで消えるが、
+ * 後者は同じ構造を問い合わせ直しても答えが変わらない。混ぜると消費側が
+ * 「時間を置けば値が出るのか」を判断できなくなる。
+ *
+ * ## 標準コーパス 940 ケースでの発生件数（構造単位。#224 症状 2 の実測）
+ *
+ * | reason | 生の行数 | 構造単位 | 内訳（構造単位） |
+ * |---|---:|---:|---|
+ * | `not_broken_out` | 2,625 | **547** | `head_and_shoulders` 266 / `inverse_head_and_shoulders` 245 / `triple_top` 9 / `double_bottom` 8 / `triple_bottom` 8 / `triangle_ascending` 4 / `rising_wedge` 3 / `falling_wedge` 2 / `triangle_symmetrical` 2 |
+ * | `degenerate_target_distance` | 278 | 60 | `inverse_head_and_shoulders` 59 / `double_bottom` 1（#210 から不変） |
+ * | `not_computed_by_detector` | 72 | 13 | `triple_bottom` 11 / `triple_top` 2 |
+ * | `no_target` | 0 | **0** | — |
+ * | `invalid_breakout_price` | 0 | **0** | — |
+ * | `no_bars_after_breakout` | 0 | **0** | — |
+ *
+ * **下 3 つは本コーパスで 1 件も出ない。** それでもコードを置くのは、
+ * `undefined` を返せなくした結果 **`computeTargetReach` と呼び出し側ガードのすべての早期
+ * return が名前を要求される**からで、名前が無いとその経路だけがまた無言に戻る。
+ * 到達性の見立て:
+ *
+ * - `no_target` — H&S 4 経路の `target === undefined || height === undefined` と
+ *   `computeTargetReach` の `!Number.isFinite(target)`。`necklineProjectionTarget` が
+ *   `undefined` を返すのは添字またはネックライン値が非有限のときだけで、検出器経由では
+ *   ピボット添字が常に有限（`detect_hs.ts` の `necklineProjectionHeight` と同じ理由で
+ *   **検出器経由では到達不能に近い**）。
+ * - `invalid_breakout_price` — doubles 4 経路 / wedges 2 経路の `Number.isFinite(bp)` false。
+ *   ブレイク足の `close` が欠損した系列でのみ起きるので、正常な OHLC では出ない。
+ * - `no_bars_after_breakout` — `breakoutIdx >= candles.length` または走査窓に有限な
+ *   high/low が 1 本も無い。検出器はブレイク足を系列内から取るので前者は起きず、
+ *   後者は欠損足の系列でのみ起きる。
+ *
+ * **`degenerate_target_distance` の 60 構造は #210 から動いていない**（今回の変更は
+ * `undefined` 経路に名前を付けただけで、判定を 1 つも変えていない）。
+ */
+export type TargetReachOmissionReason =
+	/** ブレイクが確定していない（`near_completion` / `forming` / ブレイク足を特定できない）。 */
+	| 'not_broken_out'
+	/** ターゲット価格またはパターン高さが算出できない。 */
+	| 'no_target'
+	/** ブレイク足の終値が非有限（欠損足など）。 */
+	| 'invalid_breakout_price'
+	/** ブレイク足以降に走査できるローソク足が無い。 */
+	| 'no_bars_after_breakout'
+	/** 分母 `|target − breakoutPrice|` がパターン高さに対して退化している（#210 (2)）。 */
+	| 'degenerate_target_distance'
+	/**
+	 * **データ条件ではなく実装ギャップ。** その検出器が `computeTargetReach` を呼んでいない。
+	 * 現在の対象は `detect_triples.ts` の完成済み 4 経路
+	 * （strict top / strict bottom / relaxed top / relaxed bottom。申告は `:421` / `:665` /
+	 * `:903` / `:1119`）だけで、ブレイク足も target もパターン高さも揃っているのに
+	 * 進捗を算出していない。
+	 * 標準コーパス 940 ケースで 13 構造（`triple_bottom` 11 / `triple_top` 2）。
+	 * **配線は #224 のフォローアップとして別 issue で扱う**——配線したらこのコードは消える。
+	 */
+	| 'not_computed_by_detector';
+
+/** 進捗を測れないケース。**黙って落とさず呼び出し側が申告する。** */
 export interface TargetReachOmitted {
 	kind: 'omitted';
-	reason: 'degenerate_target_distance';
+	reason: TargetReachOmissionReason;
 }
 
 export type TargetReachResult = TargetReachInfo | TargetReachOmitted;
+
+/**
+ * 呼び出し側のガード（ブレイク未確定 / target 未算出 等）で `computeTargetReach` を
+ * そもそも呼ばないときに使う。**`undefined` の代わりにこれを返す**ことで、
+ * 理由を書かない畳み方が型で潰れる。
+ */
+export function omittedTargetReach(reason: TargetReachOmissionReason): TargetReachOmitted {
+	return { kind: 'omitted', reason };
+}
 
 export function computeTargetReach(
 	candles: readonly CandleData[],
@@ -121,11 +202,15 @@ export function computeTargetReach(
 	target: number,
 	direction: 'up' | 'down',
 	patternHeight: number,
-): TargetReachResult | undefined {
-	if (!Number.isFinite(breakoutPrice) || !Number.isFinite(target)) return undefined;
+): TargetReachResult {
+	// **入力不正も理由を名乗る**（#224 症状 2）。呼び出し側ガードの `invalid_breakout_price` /
+	// `no_target` と同じコードに寄せてあるので、ガードの手前で落ちたか中で落ちたかで
+	// 申告が変わらない。
+	if (!Number.isFinite(breakoutPrice)) return omittedTargetReach('invalid_breakout_price');
+	if (!Number.isFinite(target)) return omittedTargetReach('no_target');
 	const targetDistance = Math.abs(target - breakoutPrice);
 	const startIdx = Math.max(0, breakoutIdx);
-	if (startIdx >= candles.length) return undefined;
+	if (startIdx >= candles.length) return omittedTargetReach('no_bars_after_breakout');
 
 	// 分母の退化ガード（#210 (2)）。**距離ゼロもここに含まれる**——
 	// 以前は `targetDistance <= EPSILON` を「既に到達」として pct=100 で返していたが、
@@ -133,7 +218,7 @@ export function computeTargetReach(
 	// 比が小さいケースと分けて扱う理由が無い。`patternHeight` が正でない場合も
 	// 比を判定できないので測らない（高さが出ない形は target 自体が出ない経路が大半）。
 	if (!(patternHeight > 0) || targetDistance < patternHeight * MIN_TARGET_DISTANCE_HEIGHT_RATIO) {
-		return { kind: 'omitted', reason: 'degenerate_target_distance' };
+		return omittedTargetReach('degenerate_target_distance');
 	}
 
 	// 走査はブレイク足から `TARGET_REACH_MAX_BARS` 本先まで（#210 (3)）。
@@ -161,7 +246,7 @@ export function computeTargetReach(
 			}
 		}
 	}
-	if (extremeIdx < 0 || !Number.isFinite(extremePrice)) return undefined;
+	if (extremeIdx < 0 || !Number.isFinite(extremePrice)) return omittedTargetReach('no_bars_after_breakout');
 
 	const targetReached = direction === 'down' ? extremePrice <= target : extremePrice >= target;
 	// pct はブレイク価格から target 方向へどれだけ進んだかを 100% スケールで返す。
@@ -191,18 +276,22 @@ export function computeTargetReach(
 /**
  * `computeTargetReach` の結果を `PatternEntry` に載せるフィールドへ落とす。
  *
- * 12 箇所の呼び出し側に同じ spread を書き写していたのを 1 箇所に寄せたもの。
+ * 呼び出し側に同じ spread を書き写していたのを 1 箇所に寄せたもの。
  * **`omitted` を黙って `{}` に畳まない**——進捗が出ない理由を
  * `targetProgressOmittedReason` で申告する（#181 / #196 / #200 と同じ方針）。
+ *
+ * **引数から `undefined` を外してあるのは規約ではなく型で潰すため**（#224 症状 2）。
+ * 以前は「ブレイクしていない」等のガードで `undefined` を渡せてしまい、
+ * その 1 経路だけが理由を書かずに `{}` に畳んでいた（docstring は「畳まない」と宣言していた）。
+ * ガードで呼ばない場合は `omittedTargetReach(reason)` を渡す。
  */
-export function targetReachFields(reach: TargetReachResult | undefined): {
+export function targetReachFields(reach: TargetReachResult): {
 	targetReachedPct?: number;
 	targetReached?: boolean;
 	targetReachedDate?: string;
 	targetReachedPrice?: number;
-	targetProgressOmittedReason?: 'degenerate_target_distance';
+	targetProgressOmittedReason?: TargetReachOmissionReason;
 } {
-	if (!reach) return {};
 	if (reach.kind === 'omitted') return { targetProgressOmittedReason: reach.reason };
 	return {
 		targetReachedPct: reach.targetReachedPct,
@@ -213,20 +302,48 @@ export function targetReachFields(reach: TargetReachResult | undefined): {
 }
 
 /**
+ * 理由コード → content 1 行に出す日本語文言。
+ *
+ * **`Record<TargetReachOmissionReason, string>` にしてあるのは、コードを足したときに
+ * 文言を書き忘れると typecheck が落ちるようにするため。** 文言を落とすと
+ * `formatTargetProgressLine` が「理由はあるのに何も言わない」に戻る。
+ * `degenerate_target_distance` の文言は #210 のまま——既存の content 契約を動かさない。
+ */
+const TARGET_PROGRESS_OMISSION_NOTE: Record<TargetReachOmissionReason, string> = {
+	not_broken_out: '未ブレイクのため未算出',
+	no_target: 'ターゲット価格またはパターン高さが算出できないため',
+	invalid_breakout_price: 'ブレイク足の終値が取得できないため',
+	no_bars_after_breakout: 'ブレイク足以降のローソク足が無いため',
+	degenerate_target_distance: `ブレイク足が想定値幅の${Math.round((1 - MIN_TARGET_DISTANCE_HEIGHT_RATIO) * 100)}%以上を消化済みで、残り距離が短く進捗率が意味を持たないため`,
+	// **他の 5 つと言い回しを分ける。** 他は「この構造では測れない」だが、これは
+	// 「測っていない」——構造の性質ではなく検出器の未配線なので、算出していない側の言い方にする。
+	not_computed_by_detector: 'この検出器がターゲット進捗を算出していないため。実装の未配線であり、構造の性質ではない',
+};
+
+/**
  * content テキストの「ターゲット進捗」行を組む（`tools/detect_patterns.ts` と
  * `src/handlers/detectPatternsViewsHandler.ts` の共通実装）。
  *
  * `content[0].text` が LLM への唯一のチャネルなので、**走査窓が有限であること**と
  * **上限に当たったこと / 出さなかったこと**をこの 1 行で言い切る。
- * 行そのものを返す（先頭の `\n` は呼び出し側が付ける）。値が無ければ `null`。
+ * 行そのものを返す（先頭の `\n` は呼び出し側が付ける）。
+ *
+ * **`targetProgressOmittedReason` があれば必ず 1 行返す**（#224 症状 2）。`null` を返すのは
+ * 「進捗も理由も無い」＝ そもそも `computeTargetReach` の対象外だったときだけ。
+ * 引数の型が `string` なのは `PatternEntry` を経由せず素の JSON を渡す消費者
+ * （`detect_patterns.ts` の `SummaryPattern`）があるため。未知のコードが来ても
+ * **黙らせない**——コードそのものを出す。
  */
 export function formatTargetProgressLine(p: {
 	targetReachedPct?: number;
 	targetReached?: boolean;
 	targetProgressOmittedReason?: string;
 }): string | null {
-	if (p.targetProgressOmittedReason === 'degenerate_target_distance') {
-		return `   - ターゲット進捗: 出力なし（ブレイク足が想定値幅の${Math.round((1 - MIN_TARGET_DISTANCE_HEIGHT_RATIO) * 100)}%以上を消化済みで、残り距離が短く進捗率が意味を持たないため）`;
+	if (p.targetProgressOmittedReason) {
+		const note =
+			TARGET_PROGRESS_OMISSION_NOTE[p.targetProgressOmittedReason as TargetReachOmissionReason] ??
+			p.targetProgressOmittedReason;
+		return `   - ターゲット進捗: 出力なし（${note}）`;
 	}
 	if (p.targetReachedPct == null) return null;
 	const pct = Number(p.targetReachedPct);

@@ -15,9 +15,11 @@ import {
 	computeTargetReach,
 	formatTargetProgressLine,
 	MIN_TARGET_DISTANCE_HEIGHT_RATIO,
+	omittedTargetReach,
 	TARGET_REACH_MAX_BARS,
 	TARGET_REACHED_PCT_CAP,
 	type TargetReachInfo,
+	type TargetReachOmissionReason,
 	type TargetReachResult,
 	targetReachFields,
 } from '../../tools/patterns/target-reach.js';
@@ -29,10 +31,28 @@ function c(high: number, low: number, close: number, iso?: string): CandleData {
 }
 
 /** `kind: 'measured'` であることを表明して絞り込む。 */
-function measured(r: TargetReachResult | undefined): TargetReachInfo {
-	expect(r?.kind).toBe('measured');
+function measured(r: TargetReachResult): TargetReachInfo {
+	expect(r.kind).toBe('measured');
 	return r as TargetReachInfo;
 }
+
+/**
+ * 理由コードの全集合。**ユニオンから導出しない**——`satisfies` で突き合わせることで、
+ * ユニオンに足したのにこの配列へ足し忘れたら typecheck が落ちる
+ * （導出すると「網羅している」が自明になり、網羅テストが空虚に通る）。
+ */
+const ALL_OMISSION_REASONS = [
+	'not_broken_out',
+	'no_target',
+	'invalid_breakout_price',
+	'no_bars_after_breakout',
+	'degenerate_target_distance',
+	'not_computed_by_detector',
+] as const satisfies readonly TargetReachOmissionReason[];
+type ListedReason = (typeof ALL_OMISSION_REASONS)[number];
+// 逆向き（ユニオン → 配列）の包含。片方向だけだと配列に足りない値を見逃す。
+const _exhaustive: ListedReason = null as unknown as TargetReachOmissionReason;
+void _exhaustive;
 
 describe('computeTargetReach', () => {
 	// direction='down' ─────────────────────────────────────
@@ -123,19 +143,39 @@ describe('computeTargetReach', () => {
 
 	// 入力不正 ─────────────────────────────────────────────
 
-	it('breakoutPrice が NaN → undefined を返す', () => {
+	// **`undefined` は返さない**（issue #224 症状 2）。測れない経路は全部 reason を名乗る。
+
+	it('breakoutPrice が NaN → invalid_breakout_price を名乗る', () => {
 		const candles = [c(102, 98, 100, 'iso-0')];
-		expect(computeTargetReach(candles, 0, Number.NaN, 80, 'down', 20)).toBeUndefined();
+		expect(computeTargetReach(candles, 0, Number.NaN, 80, 'down', 20)).toEqual({
+			kind: 'omitted',
+			reason: 'invalid_breakout_price',
+		});
 	});
 
-	it('target が NaN → undefined を返す', () => {
+	it('target が NaN → no_target を名乗る', () => {
 		const candles = [c(102, 98, 100, 'iso-0')];
-		expect(computeTargetReach(candles, 0, 100, Number.NaN, 'down', 20)).toBeUndefined();
+		expect(computeTargetReach(candles, 0, 100, Number.NaN, 'down', 20)).toEqual({
+			kind: 'omitted',
+			reason: 'no_target',
+		});
 	});
 
-	it('breakoutIdx が candles.length 以上 → undefined を返す', () => {
+	it('breakoutIdx が candles.length 以上 → no_bars_after_breakout を名乗る', () => {
 		const candles = [c(102, 98, 100, 'iso-0')];
-		expect(computeTargetReach(candles, 5, 100, 80, 'down', 20)).toBeUndefined();
+		expect(computeTargetReach(candles, 5, 100, 80, 'down', 20)).toEqual({
+			kind: 'omitted',
+			reason: 'no_bars_after_breakout',
+		});
+	});
+
+	it('走査窓に有限な high/low が 1 本も無い → no_bars_after_breakout を名乗る', () => {
+		// 全足の high/low が非有限 → extremeIdx < 0 の経路（旧: undefined）
+		const candles = [c(Number.NaN, Number.NaN, 100, 'iso-0'), c(Number.NaN, Number.NaN, 100, 'iso-1')];
+		expect(computeTargetReach(candles, 0, 100, 120, 'up', 20)).toEqual({
+			kind: 'omitted',
+			reason: 'no_bars_after_breakout',
+		});
 	});
 
 	it('breakoutIdx が負 → Math.max(0, ...) で 0 から走査', () => {
@@ -248,14 +288,11 @@ describe('computeTargetReach', () => {
 });
 
 describe('targetReachFields', () => {
-	it('undefined → 空オブジェクト（ブレイクしていない等）', () => {
-		expect(targetReachFields(undefined)).toEqual({});
-	});
-
-	it('omitted → targetProgressOmittedReason だけを載せる（黙って落とさない）', () => {
-		expect(targetReachFields({ kind: 'omitted', reason: 'degenerate_target_distance' })).toEqual({
-			targetProgressOmittedReason: 'degenerate_target_distance',
-		});
+	// 旧テストは `targetReachFields(undefined)` が `{}` になることを固定していたが、
+	// **それが #224 症状 2 の欠陥そのもの**（理由を書かずに畳む）。引数型から `undefined` を
+	// 外したので、この呼び方は typecheck で落ちる。全 reason が申告されることに置き換える。
+	it.each(ALL_OMISSION_REASONS)('omitted(%s) → targetProgressOmittedReason だけを載せる', (reason) => {
+		expect(targetReachFields(omittedTargetReach(reason))).toEqual({ targetProgressOmittedReason: reason });
 	});
 
 	it('measured → 進捗 4 フィールドを載せ、申告フィールドは出さない', () => {
@@ -309,6 +346,29 @@ describe('formatTargetProgressLine', () => {
 		const line = formatTargetProgressLine({ targetProgressOmittedReason: 'degenerate_target_distance' });
 		expect(line).toContain('出力なし');
 		expect(line).toContain('85%以上');
+	});
+
+	// issue #224 症状 2。**理由があるのに null を返す経路を残さない**——`null` は content から
+	// 行ごと消えることを意味するので、「進捗 0%」と「測っていない」が LLM に区別できなくなる。
+	it.each(ALL_OMISSION_REASONS)('reason=%s は必ず 1 行返す（黙らない）', (reason) => {
+		const line = formatTargetProgressLine({ targetProgressOmittedReason: reason });
+		expect(line).not.toBeNull();
+		expect(line).toContain('   - ターゲット進捗: 出力なし（');
+		// コードそのものを content に漏らさない（日本語文言に写像されている）。
+		expect(line).not.toContain(reason);
+	});
+
+	it('未知の reason でも黙らずコードを出す（写像漏れを無言にしない）', () => {
+		const line = formatTargetProgressLine({ targetProgressOmittedReason: 'brand_new_reason' });
+		expect(line).toBe('   - ターゲット進捗: 出力なし（brand_new_reason）');
+	});
+
+	it('reason があれば pct より優先する（全 reason で）', () => {
+		for (const reason of ALL_OMISSION_REASONS) {
+			expect(formatTargetProgressLine({ targetProgressOmittedReason: reason, targetReachedPct: 4242 })).not.toContain(
+				'4242',
+			);
+		}
 	});
 
 	it('退化の申告は pct より優先する（両方あっても進捗値を名乗らない）', () => {

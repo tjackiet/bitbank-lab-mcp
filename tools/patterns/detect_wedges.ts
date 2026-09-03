@@ -30,7 +30,7 @@ import {
 	generateWindows,
 } from './helpers.js';
 import { smoothCandleExtremes } from './smoothing.js';
-import { computeTargetReach, targetReachFields } from './target-reach.js';
+import { computeTargetReach, omittedTargetReach, type TargetReachResult, targetReachFields } from './target-reach.js';
 import type {
 	CandDebugEntry,
 	CandleData,
@@ -467,12 +467,25 @@ function buildRegressionEntry(
 	// --- ターゲット価格計算（pattern_height 方式） ---
 	const patternHeight = Math.abs(upper.valueAt(startIdx) - lower.valueAt(startIdx));
 	let breakoutTarget: number | undefined;
-	let targetReach: ReturnType<typeof computeTargetReach> | undefined;
-	if (breakInfo.detected && breakoutDirection && Number.isFinite(breakInfo.breakPrice)) {
-		const bp = breakInfo.breakPrice as number;
-		breakoutTarget = breakoutDirection === 'up' ? bp + patternHeight : bp - patternHeight;
-		breakoutTarget = Math.round(breakoutTarget);
-		targetReach = computeTargetReach(candles, breakInfo.breakIdx, bp, breakoutTarget, breakoutDirection, patternHeight);
+	// 未ブレイク / ブレイク足の終値が非有限でも**理由を名乗る**（#224 症状 2）。
+	// **`breakoutTarget` を出す条件は 1 文字も変えない**——理由の申告だけを足している。
+	let targetReach: TargetReachResult = omittedTargetReach('not_broken_out');
+	if (breakInfo.detected && breakoutDirection) {
+		if (Number.isFinite(breakInfo.breakPrice)) {
+			const bp = breakInfo.breakPrice as number;
+			breakoutTarget = breakoutDirection === 'up' ? bp + patternHeight : bp - patternHeight;
+			breakoutTarget = Math.round(breakoutTarget);
+			targetReach = computeTargetReach(
+				candles,
+				breakInfo.breakIdx,
+				bp,
+				breakoutTarget,
+				breakoutDirection,
+				patternHeight,
+			);
+		} else {
+			targetReach = omittedTargetReach('invalid_breakout_price');
+		}
 	}
 
 	// ダイアグラム用にタッチポイントから主要点を間引きして pivots を構成
@@ -1093,13 +1106,16 @@ function detectFormingWedges(
 		// --- ターゲット価格計算（pattern_height 方式） ---
 		const fPatternHeight = Math.abs(upperLine.valueAt(startIdx) - lowerLine.valueAt(startIdx));
 		let fBreakoutTarget: number | undefined;
-		let fTargetReach: ReturnType<typeof computeTargetReach> | undefined;
+		// 上と同じ（#224 症状 2）。`undefined` 初期化＝無言の畳み込みを型で潰してある。
+		let fTargetReach: TargetReachResult = omittedTargetReach('not_broken_out');
 		if (breakoutDirection && breakoutIdx !== -1) {
 			const bp = Number(candles[breakoutIdx]?.close);
 			if (Number.isFinite(bp)) {
 				fBreakoutTarget = breakoutDirection === 'up' ? bp + fPatternHeight : bp - fPatternHeight;
 				fBreakoutTarget = Math.round(fBreakoutTarget);
 				fTargetReach = computeTargetReach(candles, breakoutIdx, bp, fBreakoutTarget, breakoutDirection, fPatternHeight);
+			} else {
+				fTargetReach = omittedTargetReach('invalid_breakout_price');
 			}
 		}
 
