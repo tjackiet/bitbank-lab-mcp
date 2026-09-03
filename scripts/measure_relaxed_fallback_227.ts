@@ -178,6 +178,7 @@ const OPTS8: CaseOpts[] = Array.from({ length: 8 }, (_, b) => ({
 	includeInvalid: (b & 4) !== 0,
 }));
 
+/** 標準コーパス 800（合成 704 + 実データ A 96）と実データ B 96 を組む。実データ A / B は別配列で返す（プールしない）。 */
 function buildCorpus(): { standard: CaseSpec[]; realB: CaseSpec[] } {
 	const standard: CaseSpec[] = [];
 	for (const [name, build] of SYNTHETIC_BUILDERS) {
@@ -209,6 +210,7 @@ function buildCorpus(): { standard: CaseSpec[]; realB: CaseSpec[] } {
 
 // ── ハーネス（detect_patterns.ts と同じ ctx の組み方） ──
 
+/** `resolveParams` に渡すオプション。`swingDepth` 未指定は時間軸オート、`headProminencePct` は陽性対照でのみ指定。 */
 function resolveOpts(spec: CaseSpec): Partial<{ swingDepth: number; headProminencePct: number }> {
 	return {
 		...(spec.swingDepth === undefined ? {} : { swingDepth: spec.swingDepth }),
@@ -223,6 +225,7 @@ interface CtxOverride {
 	want?: Set<string>;
 }
 
+/** `detect_patterns.ts` と同じ順序で `DetectContext` を組む。`override` は段2 の再現（`emulateStage2`）専用。 */
 function buildCtx(spec: CaseSpec, override: CtxOverride = {}): DetectContext {
 	const { candles } = spec.series;
 	const resolved = resolveParams(spec.tf, resolveOpts(spec));
@@ -251,6 +254,7 @@ function buildCtx(spec: CaseSpec, override: CtxOverride = {}): DetectContext {
 	};
 }
 
+/** 頭の突出率。検出側のゲートと同じ式（H&S: `p2/max(肩) − 1`、逆 H&S: `1 − p2/min(肩)`）。 */
 function prominenceOf(type: HsType, pivots: ReadonlyArray<{ price: number }>): number {
 	const [p0, , p2, , p4] = pivots;
 	return type === 'head_and_shoulders'
@@ -258,6 +262,7 @@ function prominenceOf(type: HsType, pivots: ReadonlyArray<{ price: number }>): n
 		: 1 - p2.price / Math.min(p0.price, p4.price);
 }
 
+/** relaxed で accepted になった pattern から集計用の `RelaxedHit` を作る（段は `_fallback` の末尾で判定）。 */
 function toHit(p: DeduplicablePattern, type: HsType, gate: number): RelaxedHit {
 	const tag = String(p._fallback);
 	const stage = tag.endsWith(RELAXED_FACTORS[1].tag) ? 2 : 1;
@@ -275,6 +280,7 @@ function toHit(p: DeduplicablePattern, type: HsType, gate: number): RelaxedHit {
 	};
 }
 
+/** ケース 1 件を実行し、type ごとの strict 件数 / relaxed accepted / `fallback_relaxed` 候補数を返す。strict と relaxed の共存は不変条件違反として throw する。 */
 function runCase(spec: CaseSpec): CallResult[] {
 	const ctx = buildCtx(spec);
 	const res = detectHeadAndShoulders(ctx);
@@ -356,6 +362,7 @@ function windowPool(spec: CaseSpec, type: HsType): number[] {
 
 // ── 集計ユーティリティ ──
 
+/** nearest-rank のパーセンタイル（#205 / #206 の表と同じ流儀）。空配列は `undefined`。 */
 function percentile(sorted: number[], p: number): number | undefined {
 	if (sorted.length === 0) return undefined;
 	// nearest-rank（#205 / #206 の表と同じ）
@@ -363,14 +370,17 @@ function percentile(sorted: number[], p: number): number | undefined {
 	return sorted[rank - 1];
 }
 
+/** 数値を固定小数で整形する。`undefined` は「—」。 */
 function fmtNum(v: number | undefined, digits = 4): string {
 	return v === undefined ? '—' : v.toFixed(digits);
 }
 
+/** 比率を百分率の文字列にする。 */
 function fmtPct(v: number, digits = 2): string {
 	return `${(v * 100).toFixed(digits)}%`;
 }
 
+/** 分布 1 行（n / min / p25 / p50 / p75 / p95 / max）を Markdown の表の行にする。 */
 function distRow(label: string, values: number[], asPct = false): string {
 	const s = [...values].sort((a, b) => a - b);
 	const f = (v: number | undefined) => (v === undefined ? '—' : asPct ? fmtPct(v, 3) : v.toFixed(3));
@@ -384,6 +394,7 @@ function structureKey(r: CallResult): string {
 	return `${r.series}|${r.tf}|${r.type}|${r.relaxed?.indices.join('-') ?? ''}`;
 }
 
+/** `(系列, tf, swingDepth, type)` のキー。オプション 8 通りの重複を畳むときに使う。 */
 function comboKey(r: Pick<CallResult, 'series' | 'tf' | 'swingDepth' | 'type'>): string {
 	return `${r.series}|${r.tf}|${r.swingDepth ?? 'auto'}|${r.type}`;
 }
@@ -399,6 +410,7 @@ interface FireStats {
 	acceptedStructures: Map<string, Set<string>>;
 }
 
+/** strict 0 件の呼び出し数と relaxed の段別 accepted を数える（延べと構造単位の両方）。 */
 function tallyFire(results: CallResult[]): FireStats {
 	const s: FireStats = {
 		calls: results.length,
@@ -424,10 +436,12 @@ function tallyFire(results: CallResult[]): FireStats {
 	return s;
 }
 
+/** `_fallback` のタグ文字列（`relaxed_hs_x1.6_0.6` 等）を組み立てる。 */
 function tagFor(type: HsType, tag: string): string {
 	return `relaxed_${type === 'head_and_shoulders' ? 'hs' : 'ihs'}_${tag}`;
 }
 
+/** 計測 1 / 3 の表（type 別の呼び出し数・strict 0 件率・段別 accepted）を Markdown で出す。 */
 function fireTable(title: string, results: CallResult[]): string {
 	const lines: string[] = [`#### ${title}`, ''];
 	lines.push(
@@ -445,6 +459,7 @@ function fireTable(title: string, results: CallResult[]): string {
 	return lines.join('\n');
 }
 
+/** 計測 5 の表（時間足別）。ネイティブ時間足の行を太字にする。 */
 function fireByTf(title: string, results: CallResult[], nativeTf: string): string {
 	const tfs = [...new Set(results.map((r) => r.tf))];
 	const lines: string[] = [`#### ${title}（時間足別。ネイティブ = \`${nativeTf}\`）`, ''];
@@ -478,6 +493,7 @@ interface Rescored {
 	delta: number;
 }
 
+/** 計測 4: `scoreComponents` から base を復元して現行 confidence の再現を確認し、`headProminence` 軸だけを strict のゲートで採点し直した confidence を出す。 */
 function rescore(r: CallResult): Rescored | null {
 	const hit = r.relaxed;
 	if (!hit?.scoreComponents) return null;
@@ -567,6 +583,7 @@ function selfCheck(standard: CaseSpec[], realB: CaseSpec[]): SelfCheckRow[] {
 
 // ── main ──
 
+/** コーパスを回して Markdown を stdout へ書く。`--json <path>` で生データも保存する。 */
 function main() {
 	const jsonIdx = process.argv.indexOf('--json');
 	const jsonPath = jsonIdx >= 0 ? process.argv[jsonIdx + 1] : undefined;
