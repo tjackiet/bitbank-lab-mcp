@@ -321,6 +321,8 @@ describe('detect_patterns: meta に載せたキーが出力スキーマで strip
 		// 宣言し忘れて strip される」クラスの事故を、宣言直後にここで固定する。
 		expect(before.has('reduction.detected')).toBe(true);
 		expect(before.has('reduction.tripleHsExcluded')).toBe(true);
+		// #224 症状 1。`tripleHsExcluded` の 0 を「比較して該当なし / 比較対象無し」に切り分ける申告。
+		expect(before.has('reduction.tripleHsCandidateCount')).toBe(true);
 		expect(before.has('reduction.output')).toBe(true);
 		expect(before.size).toBeGreaterThan(20);
 
@@ -385,7 +387,7 @@ describe('detect_patterns: meta に載せたキーが出力スキーマで strip
 		}
 	});
 
-	it('reduction の 5 フィールドが parse 後も残り、waterfall が実データで成立する（issue #200）', async () => {
+	it('reduction の 7 フィールドが parse 後も残り、waterfall が実データで成立する（issue #200）', async () => {
 		const { output } = await runAndCapture();
 		const reduction = metaOf(output).reduction as Record<string, number>;
 		expect(reduction).toBeDefined();
@@ -395,6 +397,7 @@ describe('detect_patterns: meta に載せたキーが出力スキーマで strip
 			'detected',
 			'lifecycleExcluded',
 			'output',
+			'tripleHsCandidateCount',
 			'tripleHsExcluded',
 		]);
 		for (const [name, value] of Object.entries(reduction)) {
@@ -405,6 +408,7 @@ describe('detect_patterns: meta に載せたキーが出力スキーマで strip
 		// resolveTrimCounts と同じ「見出しと集計が食い違わない」ことを、実際の検出パイプラインの
 		// 出力で固定する）。**段を足したらこの式も一緒に直すこと**——足した段を右辺に入れ忘れると、
 		// 新しい段が減らしたぶんだけ等式が黙って崩れる（issue #218 で 1 段追加）。
+		// `tripleHsCandidateCount`（#224 症状 1）は件数の減少ではなく比較対象の申告なので**等式の外**。
 		expect(
 			reduction.dedupMerged +
 				reduction.currentFiltered +
@@ -448,6 +452,7 @@ describe('detect_patterns: meta に載せたキーが出力スキーマで strip
 			currentFiltered: 0,
 			lifecycleExcluded: 0,
 			tripleHsExcluded: 0,
+			tripleHsCandidateCount: 0,
 			output: 0,
 		});
 		// この経路でも宣言漏れが無いこと

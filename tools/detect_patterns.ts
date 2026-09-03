@@ -203,6 +203,7 @@ export default async function detectPatterns(
 							currentFiltered: 0,
 							lifecycleExcluded: 0,
 							tripleHsExcluded: 0,
+							tripleHsCandidateCount: 0,
 							output: 0,
 						},
 					},
@@ -344,6 +345,10 @@ export default async function detectPatterns(
 		// 後に置けば「実際に出力される H&S」だけが根拠になる。
 		const tripleHsExclusion = excludeTriplesSharingHsMainPoints(patterns);
 		const reductionTripleHsExcluded = patterns.length - tripleHsExclusion.kept.length;
+		// 比較対象になった H&S の件数（issue #224 症状 1）。`tripleHsExcluded` の 0 は
+		// 「比較して該当なし」と「H&S が集合に無く比較できなかった」の 2 通りあり、この値が
+		// 0 なら後者。再計算せず関数の申告をそのまま載せる（#180 の resolveTrimCounts と同じ理由）。
+		const reductionTripleHsCandidateCount = tripleHsExclusion.hsCandidateCount;
 		patterns = tripleHsExclusion.kept;
 		// 落とした理由を `view=debug` に残す（issue #218 の決定性要件）。**どの H&S と何点共有したかを
 		// 含める**——含めないと「accepted だったはずの triple が data.patterns に居ない」理由を
@@ -372,7 +377,8 @@ export default async function detectPatterns(
 		}
 
 		// detected = dedupMerged + currentFiltered + lifecycleExcluded + tripleHsExcluded + output
-		// （waterfall の不変条件）。
+		// （waterfall の不変条件）。`tripleHsCandidateCount` は件数の減少ではなく比較対象の
+		// 申告なので**この等式の外**。
 		// tests/detect_patterns_meta_schema_parity.test.ts が実データでこの等式を固定する。
 		const reduction = {
 			detected: reductionDetected,
@@ -380,6 +386,7 @@ export default async function detectPatterns(
 			currentFiltered: reductionCurrentFiltered,
 			lifecycleExcluded: reductionLifecycleExcluded,
 			tripleHsExcluded: reductionTripleHsExcluded,
+			tripleHsCandidateCount: reductionTripleHsCandidateCount,
 			output: patterns.length,
 		};
 

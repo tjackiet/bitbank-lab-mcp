@@ -35,6 +35,13 @@
  * 1 件も含まない**（H&S 系 4 / wedge 4 / triangle 4）ので差分が出ない。triple の実データ回帰は
  * `tests/detect_patterns_triple_neckline_pivots_btcjpy.test.ts`（実データ B × `includeForming`）が持つ）。
  *
+ * **#224 症状 1 でも更新していない**（`meta.reduction` に `tripleHsCandidateCount` を足し、
+ * 「検出内訳:」行に `（比較対象 H&S 無し）` の注記を付けた申告のみの変更。判定ロジックは
+ * 触っておらず `data.patterns` は不変。本 fixture は `data.patterns` だけを凍結していて
+ * `meta.reduction` を含まないので差分も出ない。新フィールドの実データ回帰は
+ * `tests/detect_patterns_triple_hs_exclusion.test.ts` と
+ * `tests/detect_patterns_meta_schema_parity.test.ts` が持つ）。
+ *
  * つまり**「不変であること」を主張できるのは各 PR の中だけ**で、ファイルとしては
  * 「現在の出力のスナップショット」に役割が変わっている。**名乗りを更新せずに中身だけ
  * 差し替えると、テスト名が嘘になる**（#202 で一度そうなった）ので、ベースラインを

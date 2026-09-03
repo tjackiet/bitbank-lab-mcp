@@ -20,6 +20,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('../tools/analyze_indicators.js', () => ({ default: vi.fn() }));
 
 import { toolDef as detectPatternsTool } from '../src/handlers/detectPatternsHandler.js';
+import { TRIPLE_HS_NO_CANDIDATE_NOTE } from '../src/handlers/detectPatternsViewsHandler.js';
 import analyzeIndicators from '../tools/analyze_indicators.js';
 import detectPatterns from '../tools/detect_patterns.js';
 import { mainPointIdxs, TRIPLE_HS_EXCLUSION_REASON } from '../tools/patterns/mutual-exclusion.js';
@@ -86,8 +87,60 @@ describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）
 		const res = await run();
 		const r = res.meta.reduction as Record<string, number>;
 		expect(r.tripleHsExcluded).toBe(1);
+		// 既定呼び出しでは H&S 系 4 件（H&S 2 / 逆 H&S 2）が出力に残り、それが比較対象になる（#224 症状 1）。
+		expect(r.tripleHsCandidateCount).toBe(4);
 		expect(r.dedupMerged + r.currentFiltered + r.lifecycleExcluded + r.tripleHsExcluded + r.output).toBe(r.detected);
 		expect(r.output).toBe(res.meta.count);
+	});
+
+	// issue #224 症状 1: `tripleHsExcluded` の 0 は「比較して該当なし」と「比較対象が無く比較できなかった」の
+	// 2 通りある。`patterns` で triple 系だけを要求すると H&S 検出器が走らず後者になる
+	// （`mutual-exclusion.ts` 冒頭「`patterns` で絞ると排他も効かない」は仕様）。判定は変えず申告だけ足す。
+	describe('patterns で絞って H&S が出力集合に無いとき（issue #224 症状 1）', () => {
+		it('tripleHsExcluded=0 かつ tripleHsCandidateCount=0 になり、既定呼び出しなら落ちる triple_bottom がそのまま返る', async () => {
+			const res = await run({ patterns: ['triple_bottom'] });
+			const r = res.meta.reduction as Record<string, number>;
+			expect(r.tripleHsExcluded).toBe(0);
+			expect(r.tripleHsCandidateCount).toBe(0);
+			// 既定呼び出しで排他される 242-249-272（conf 0.81）が、比較対象が無いので残る（仕様どおり）。
+			// `pivots` にはネックライン定義点 245 / 265 も入る（#224 症状 3）。
+			expect(res.data.patterns.map(keyOf)).toContain('triple_bottom|L242-H245-L249-H265-L272');
+			expect(res.data.patterns.every((p) => p.type === 'triple_bottom')).toBe(true);
+			expect(r.dedupMerged + r.currentFiltered + r.lifecycleExcluded + r.tripleHsExcluded + r.output).toBe(r.detected);
+		});
+
+		it('検出内訳行に「比較対象 H&S 無し」の注記が付く', async () => {
+			const candles = buildBtcJpy1hour202608Candles();
+			vi.mocked(analyzeIndicators).mockResolvedValueOnce(
+				asMockResult({ ok: true, summary: 'ok', data: { chart: { candles } } }),
+			);
+			const res = (await detectPatternsTool.handler({
+				pair: 'btc_jpy',
+				type: '1hour',
+				limit: 365,
+				patterns: ['triple_bottom'],
+				view: 'summary',
+			})) as { content: Array<{ text: string }> };
+			const line = res.content[0].text.split('\n').find((l) => l.startsWith('検出内訳:'));
+			expect(line).toContain(`triple×H&S排他 -0${TRIPLE_HS_NO_CANDIDATE_NOTE}`);
+		});
+
+		it('既定呼び出し（H&S も検出）では注記が付かない', async () => {
+			const candles = buildBtcJpy1hour202608Candles();
+			vi.mocked(analyzeIndicators).mockResolvedValueOnce(
+				asMockResult({ ok: true, summary: 'ok', data: { chart: { candles } } }),
+			);
+			const res = (await detectPatternsTool.handler({
+				pair: 'btc_jpy',
+				type: '1hour',
+				limit: 365,
+				view: 'summary',
+			})) as {
+				content: Array<{ text: string }>;
+			};
+			const line = res.content[0].text.split('\n').find((l) => l.startsWith('検出内訳:'));
+			expect(line).not.toContain(TRIPLE_HS_NO_CANDIDATE_NOTE);
+		});
 	});
 
 	it('検出内訳行に段が出る（#200 の契約。0 件でも省かない）', async () => {

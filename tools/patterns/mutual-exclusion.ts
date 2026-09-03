@@ -145,6 +145,15 @@ export interface TripleHsExclusionResult {
 	kept: DeduplicablePattern[];
 	/** 落とした triple の明細（`view=debug` の理由コードに使う）。 */
 	excluded: TripleHsOverlap[];
+	/**
+	 * この段で**比較対象になった H&S の件数**（入力集合のうち H&S 系で主構成点が取れたもの）。
+	 *
+	 * `excluded.length === 0` は 2 通りある——「H&S と比較したが 2 点以上共有する triple が
+	 * 無かった」と「H&S が集合に 1 件も無く比較そのものが起きなかった」（モジュール冒頭の
+	 * 「`patterns` で絞ると排他も効かない」）。呼び出し側はこの値が 0 かどうかで両者を区別する
+	 * （issue #224 症状 1。`meta.reduction.tripleHsCandidateCount` として申告される）。
+	 */
+	hsCandidateCount: number;
 }
 
 /**
@@ -161,7 +170,9 @@ export function excludeTriplesSharingHsMainPoints(
 		.filter((p) => isHeadAndShoulders(String(p?.type)))
 		.map((p) => ({ type: String(p.type), mainIdxs: mainPointIdxs(p) }))
 		.filter((e) => e.mainIdxs.length > 0);
-	if (hsEntries.length === 0) return { kept: [...patterns], excluded: [] };
+	// 比較対象が無い = 排他を**試せなかった**。`excluded: []` だけでは「試して該当なし」と
+	// 区別できないので `hsCandidateCount: 0` で申告する（issue #224 症状 1）。
+	if (hsEntries.length === 0) return { kept: [...patterns], excluded: [], hsCandidateCount: 0 };
 
 	const kept: DeduplicablePattern[] = [];
 	const excluded: TripleHsOverlap[] = [];
@@ -184,5 +195,5 @@ export function excludeTriplesSharingHsMainPoints(
 		}
 		excluded.push({ triple: p, tripleMainIdxs, matches });
 	}
-	return { kept, excluded };
+	return { kept, excluded, hsCandidateCount: hsEntries.length };
 }
