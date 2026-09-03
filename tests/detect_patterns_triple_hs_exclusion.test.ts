@@ -24,7 +24,7 @@ import analyzeIndicators from '../tools/analyze_indicators.js';
 import detectPatterns from '../tools/detect_patterns.js';
 import { mainPointIdxs, TRIPLE_HS_EXCLUSION_REASON } from '../tools/patterns/mutual-exclusion.js';
 import type { DeduplicablePattern } from '../tools/patterns/types.js';
-import { asMockResult, assertOk } from './_assertResult.js';
+import { asMockResult, assertFail, assertOk } from './_assertResult.js';
 import { buildBtcJpy1hour202608Candles } from './fixtures/btc_jpy_1hour_2026_08.js';
 
 /** `type` と主構成点 idx だけに畳んだ識別キー。 */
@@ -158,5 +158,30 @@ describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）
 			total += (res.meta.reduction as Record<string, number>).tripleHsExcluded;
 		}
 		expect(total).toBeGreaterThan(0);
+	});
+
+	// 上流失敗の早期 return（`if (!res.ok) return fail(...)`）は本段より**前**にあるので、
+	// 排他は走らず `meta.reduction` も生えない。
+	//
+	// **`fail` / `patterns` / `debug` 側の一般契約は
+	// `tests/patterns/level-spread-triple.test.ts` が既に固定している**ので、ここでは重複させず
+	// **#218 が足した 2 つだけ**を見る: `meta.reduction`（4 段目 `tripleHsExcluded` を含む）が
+	// 生えないことと、排他の棄却候補が 1 件も積まれないこと。
+	//
+	// `ok()` を返す 2 経路（通常 / `'insufficient data'`）の `reduction` は
+	// `tests/detect_patterns_meta_schema_parity.test.ts` が押さえており、**これで 3 つある
+	// 出口すべてが埋まる**——早期 return に段を足し忘れる #184 決定事項 1 のクラスの穴を塞ぐ。
+	it('上流がエラーなら排他まで到達せず、meta.reduction も排他候補も生えない', async () => {
+		vi.mocked(analyzeIndicators).mockResolvedValueOnce(
+			asMockResult({ ok: false, summary: 'Error: upstream failed', data: {}, meta: { errorType: 'network' } }),
+		);
+
+		const res = await detectPatterns('btc_jpy', '1hour', 365, { view: 'debug' });
+
+		assertFail(res);
+		expect((res.meta as { reduction?: unknown }).reduction).toBeUndefined();
+		const candidates = ((res.meta as { debug?: { candidates?: Array<Record<string, unknown>> } }).debug?.candidates ??
+			[]) as Array<Record<string, unknown>>;
+		expect(candidates.filter((c) => c.reason === TRIPLE_HS_EXCLUSION_REASON)).toHaveLength(0);
 	});
 });
