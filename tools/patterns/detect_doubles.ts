@@ -14,12 +14,14 @@ import {
 	isSameLevel,
 	levelSpreadDetailsFrom,
 	levelSpreadMetrics,
+	necklineSideDetailsFrom,
 	type PatternSizeRejectReason,
 	type PriorTrendResult,
 	type ReversalSide,
 	type ReversalStructureResult,
 	type SizeThresholds,
 	validateLevelDiff,
+	validateMainPointsNecklineSide,
 	validatePriorTrend,
 	validateReversalStructure,
 } from './structural.js';
@@ -271,6 +273,60 @@ function rejectByLevelDiff(
 			{ role: `${outerRole}2`, idx: c.idx, price: c.price },
 		],
 		details: levelSpreadDetailsFrom(metrics, levelTolerancePct),
+	});
+	return true;
+}
+
+/**
+ * 主構成点とネックラインの位置関係の検査（issue #216 Phase 2）。棄却したら debug candidate を
+ * 積んで `true` を返す（呼び出し側は `continue`）。判定の実体と根拠——価格基準を `price`
+ * （終値）にした理由、許容幅を置かない理由、H&S 系に配線しない理由——は
+ * {@link validateMainPointsNecklineSide} の docstring が単一ソース。
+ *
+ * ## double の主構成点は `a` と `c` の 2 点。`b` は渡さない
+ *
+ * **`b`（中間構成点）はネックラインの定義点そのもの**（`necklinePrice = b.price`）なので、
+ * 検査に含めると `deviation === 0` で必ず失格になる——全 double が落ちる。
+ * triple の 3 点がすべて主構成点なのに対し、double は 3 点のうち 2 点だけが主構成点で、
+ * この非対称は「ネックラインをどう引くか」の違いから来ている
+ * （triple は 2 つの中間構成点の平均、double は 1 つの中間構成点そのもの）。
+ *
+ * ## 呼び出し位置
+ *
+ * {@link rejectByLevelDiff} の**直後**——既存の棄却検査（{@link applyStructuralGate} /
+ * {@link checkPostPivotInvalidation} / 高さ相対の同水準検査）をすべて通過した後。
+ * 理由は `validatePatternSize` / `validateLevelSpread` の docstring と同じで、
+ * 前に置くと固有の理由コードを持つ候補の `reason` を横取りする。
+ *
+ * ## 理由コードに `_relaxed` 接尾辞を付けない
+ *
+ * {@link rejectByLevelDiff} と同じ——本ゲートは strict / relaxed とも**同じ判定**
+ * （閾値を持たないので緩める余地が無い）。
+ */
+function rejectByNecklineSide(
+	side: ReversalSide,
+	type: 'double_top' | 'double_bottom',
+	a: Pivot,
+	b: Pivot,
+	c: Pivot,
+	necklinePrice: number,
+	pcand: Pcand,
+): boolean {
+	const { reason, offenders } = validateMainPointsNecklineSide(side, [a, c], necklinePrice);
+	if (!reason) return false;
+	const outerRole = side === 'top' ? 'peak' : 'valley';
+	const midRole = side === 'top' ? 'valley' : 'peak';
+	pcand({
+		type,
+		accepted: false,
+		reason,
+		idxs: [a.idx, b.idx, c.idx],
+		pts: [
+			{ role: `${outerRole}1`, idx: a.idx, price: a.price },
+			{ role: midRole, idx: b.idx, price: b.price },
+			{ role: `${outerRole}2`, idx: c.idx, price: c.price },
+		],
+		details: necklineSideDetailsFrom(necklinePrice, offenders),
 	});
 	return true;
 }
@@ -529,6 +585,7 @@ function findRelaxedDoubleTop(
 			continue;
 		}
 		if (rejectByLevelDiff('top', 'double_top', a, b, c, Math.min(tolRelax, DOUBLE_LEVEL_MAX_PCT), pcand)) continue;
+		if (rejectByNecklineSide('top', 'double_top', a, b, c, necklinePrice, pcand)) continue;
 
 		const start = candles[a.idx].isoTime,
 			end = candles[breakoutIdx].isoTime;
@@ -719,6 +776,7 @@ function findRelaxedDoubleBottom(
 		}
 		if (rejectByLevelDiff('bottom', 'double_bottom', a, b, c, Math.min(tolRelax, DOUBLE_LEVEL_MAX_PCT), pcand))
 			continue;
+		if (rejectByNecklineSide('bottom', 'double_bottom', a, b, c, necklinePrice, pcand)) continue;
 
 		const start = candles[a.idx].isoTime,
 			end = candles[breakoutIdx].isoTime;
@@ -1396,6 +1454,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					continue;
 				}
 				if (rejectByLevelDiff('top', 'double_top', a, b, c, levelTolerancePct, pcand)) continue;
+				if (rejectByNecklineSide('top', 'double_top', a, b, c, necklinePrice, pcand)) continue;
 				const start = candles[a.idx].isoTime;
 				const end = candles[breakoutIdx].isoTime;
 				if (!start || !end) continue;
@@ -1571,6 +1630,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					continue;
 				}
 				if (rejectByLevelDiff('bottom', 'double_bottom', a, b, c, levelTolerancePct, pcand)) continue;
+				if (rejectByNecklineSide('bottom', 'double_bottom', a, b, c, necklinePrice, pcand)) continue;
 				const start = candles[a.idx].isoTime;
 				const end = candles[breakoutIdx].isoTime;
 				if (!start || !end) continue;

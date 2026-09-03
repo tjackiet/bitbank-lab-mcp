@@ -62,18 +62,24 @@ describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）
 		const res = await run();
 		const byType = new Map<string, number>();
 		for (const p of res.data.patterns) byType.set(p.type, (byType.get(p.type) ?? 0) + 1);
-		// 実データ B の 1hour（デフォルトオプション）の内訳。`triple_bottom` だけが 1 → 0。
-		// **`triple_top` は残る**——その主構成点 219 / 223 / 232 は出力に残る 2 件の
-		// `head_and_shoulders`（主構成点 265-294-322 / 204-294-322）と 1 点も共有しない。
+		// 実データ B の 1hour（デフォルトオプション）の内訳。本段（型間排他）が落とすのは
+		// `triple_bottom` 242-249-272 の 1 件だけで、H&S 系 / double / wedge / triangle /
+		// pennant は 1 件も動かない（`tripleHsExcluded` が 1 のままであることは下の
+		// waterfall のテストが固定する）。
+		//
+		// **`triple_top` 219-223-232 は #216 Phase 2 で消えた**——本段の対象外
+		// （出力に残る 2 件の `head_and_shoulders` と主構成点を 1 点も共有しない）だが、
+		// 山3（idx 232 / 終値 12,282,275）がネックライン 12,285,548.5 より 3,273.5 円下で、
+		// **検出器層の `peaks_below_neckline` がここへ到達する前に落としている。**
+		// この件数は本 issue のゲートではなく #216 Phase 2 のゲートが決めている。
 		expect(Object.fromEntries([...byType].sort())).toEqual({
 			falling_wedge: 2,
 			head_and_shoulders: 2,
 			inverse_head_and_shoulders: 2,
 			rising_wedge: 2,
 			triangle_ascending: 4,
-			triple_top: 1,
 		});
-		expect(res.meta.count).toBe(13);
+		expect(res.meta.count).toBe(12);
 	});
 
 	it('meta.reduction に新しい段が載り、waterfall が成立する', async () => {

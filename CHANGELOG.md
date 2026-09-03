@@ -60,6 +60,106 @@
 | 45 | #206 | `MIN_CONFIDENCE` から**どの検出器も読んでいなかった 4 エントリ**（`double_top` / `double_bottom` / `head_and_shoulders` / `inverse_head_and_shoulders`）を削除した。配線する案（A）と triple の下限も外す案（D）を実測してから「消す」を選んだ | **変わらない**（940 ケース全件で `data.patterns` が完全一致） |
 | 46 | #199 候補 2 | triple の期間スコア `duration` を**暦日基準から バー数基準**に移した（`periodScoreBars`）。暦日基準は `barsPerDay` 換算で `1min` / `5min` / `15min` が 0.6 固定・`1month` が 0.7 固定と、**データによらず定数になる**構造だった。`double` / H&S は実測で定数化していないので暦日基準のまま | **変わらない**（940 ケース全件で件数・構造キーとも一致。`globalDedup` の代表入れ替わりも 0。動くのは triple の `duration` / `confidence` と `rankPatterns` の並びだけ） |
 | 47 | #218 Phase 2 | `triple_*` と H&S 系が**主構成点を 2 点以上共有**していたら triple を落とす型間排他を入れた。**閾値を 1 つも導入していない**（Phase 1 が深さ比の hard gate 案を実測で否定したため、確かな根拠がある二重出力だけを直した） | **減る**（940 ケースで `triple_bottom` −25 / 1,968 → 1,943。**他の 13 type は 1 件も動かない**） |
+| 48 | #216 Phase 2 | `triple_*` / `double_*` の**主構成点がすべてネックラインの正しい側にある**ことを要求する構造ゲートを入れた。**閾値（許容幅）を 1 つも導入していない**（Phase 1 の実測で逸脱量がゼロから離れているため）。H&S 系は #211 待ちで触っていない | **減る**（940 ケースで −60 / 1,943 → 1,883。`triple_top` −44 / `triple_bottom` −12 / `double_bottom` −4。**H&S 系を含む他の 10 type は 1 件も動かない**） |
+
+### Changed（triple / double の主構成点とネックラインの位置関係を hard gate にした。#216 Phase 2）
+
+`triple_*` / `double_*` の**主構成点がすべてネックラインの正しい側にある**ことを要求する検査を、
+完成済み 8 経路（triple の strict / relaxed × top / bottom、double の同 4 経路）の
+**既存の棄却検査の最後尾**に足した。判定は `tools/patterns/structural.ts` の
+`validateMainPointsNecklineSide`。
+
+```text
+top     すべての主構成点が nlAvg より上（point.price > nlAvg）
+bottom  すべての主構成点が nlAvg より下（point.price < nlAvg）
+```
+
+`validateReversalStructure` に渡っていたのは構成点列の**先頭 2 点だけ**で、
+それ以降の主構成点——double の第2構成点、triple の第2 / 第3構成点——は
+**一度もネックラインと比較されていなかった。** 起票時の実例（BTC/JPY `1hour`）では
+**山3 がネックラインより 15,895 円下にある `triple_top` が整合度 0.95 で出力**され、
+同じ 3 点の先頭 2 山から出た `double_top`（0.88）と二重に並んでいた。
+
+#### 閾値（許容幅）を 1 つも導入していない
+
+Phase 1（`docs/internal/structural-neckline-main-points-216.md`）の結論 4 が根拠。
+**`double` / `triple` の逸脱量は最小がパターン高さの 2.96%**（絶対額 2,147〜20,213 円）で、
+`inverse_head_and_shoulders` の最小 0.012%（31 円）のようなゼロ近傍の集団が無い。
+**ゼロ許容で切れるので、つまみが増えていない。**
+
+#### H&S 系は触っていない（#211 の後で別 PR）
+
+Phase 1 の結論 2 は「基準で件数が 2 桁動くので基準の意味から先に決める必要がある」としていたが、
+**その依存は H&S にしか無い**——triple / double のネックラインは**水平スカラー**で、
+線として評価しても同じ値になる（Phase 1 の 1-3 章でも triple / double の件数は 4 基準すべてで同一）。
+H&S は構造ゲートにスカラーを渡しブレイク判定には傾きつきの線を使い、右肩が線の定義 2 点の
+外側にあるため外挿がかかる——**同じ構造がスカラー基準では「上に外れ」、線基準では「下に収まる」
+という反転が実際に起きている。** #211（`necklineAt` の外挿クランプ）の是非が決まるまで保留する。
+**形成中経路も対象外**（別式・別構造で、ネックラインの引き方も暫定構成点の扱いも違う）。
+
+#### 価格基準は `price`（終値）。`extremePrice` は採らない
+
+1. ネックライン（`nlAvg` / `b.price`）が**終値から作られている**。終値由来の線に高安を
+   突き合わせるのは #178 項目 4 / `spreadRatio` と同じ**基準混在**
+2. `findBreakoutIdx` が**終値**でネックライン割れを判定する。
+   `ReversalStructureInput.necklinePrice` の「ゲートとブレイク判定は同じ値を使う」に揃う
+3. **`extremePrice` 基準では triple の誤側が 0 件**（Phase 1 1-3 章）＝ゲートが no-op になる
+
+#### 検査する点（double だけ 2 点）
+
+| type | `pivots` | 検査する点 | 除く点 |
+|---|---|---|---|
+| `triple_*` | `[a, b, c]` | **3 点すべて** | — |
+| `double_*` | `[a, b, c]` | `[0]` と `[2]` | `b` = **ネックラインの定義点そのもの**（`necklinePrice = b.price`） |
+
+**double の `b` を渡すと `deviation === 0` で必ず失格になる**（等号は失格）。実測でもそうで、
+落ちた `double_bottom` 285-287-288 の中間構成点 287 はネックライン 12,536,893 と終値が完全一致する。
+
+**中間の主構成点は除外していない。** Phase 1 は「誤側に来るのは実質、構成点列の最後の 1 点だけ」と
+実測したが、それは emit された候補だけを見た母集団の話で、**本ゲートは第2構成点が誤側の構造も
+実際に落としている**（実データ B の `triple_top` 204-**211**-219）。
+
+#### 理由コード
+
+`peak_spread_vs_height_excess` / `valley_spread_vs_height_excess` に倣い **side ごとに分ける**
+（`view=debug` の **reason 横断合計行**（#193 / PR #194）で「山がネックラインを割った」と
+「谷がネックラインを超えた」——符号が逆の 2 つの破綻——が 1 つの数字に潰れないため）:
+
+| side | コード |
+|---|---|
+| top | `peaks_below_neckline` |
+| bottom | `valleys_above_neckline` |
+
+`details` には**どの点がどれだけ外れたかを 1 点ずつ**載せる
+（`necklinePrice` / `offenders[].idx` / `.price` / `.deviation` / `.deviationPct` / `maxDeviation`）。
+strict / relaxed で同じコードを使う（閾値を持たないので緩める余地が無い。
+`validateLevelSpread` / `validatePatternSize` と同じ扱い）。
+
+#### 検出結果
+
+- **940 ケースで −60（1,943 → 1,883）。Phase 1 4 章の試算と完全一致**
+  （`double_top` 0 / `double_bottom` −4 / `triple_top` −44 / `triple_bottom` −12）。
+  検出器層の生の行数 −112 と構造単位 −16（`double_bottom` −2 / `triple_top` −12 /
+  `triple_bottom` −2）も Phase 1 の予測どおり。
+- **H&S 系は 1 件も動かない**（`head_and_shoulders` 166 / `inverse_head_and_shoulders` 162 が
+  据え置き）。wedge / triangle / pennant / `double_top` も全件据え置き。
+- **#218 Phase 2 の型間排他（`meta.reduction.tripleHsExcluded`）は 25 のまま**。
+  2 つのゲートは別の構造を落としている——排他が落とす `triple_bottom` 242-249-272 の 3 谷は
+  ネックラインの **−87,023.5 / −231,137.5 / −93,795.5** で全点が正しい側にあり、
+  本ゲートが落とす `triple_top` 219-223-232 は出力に残る H&S と主構成点を 1 点も共有しない。
+- 落ちたのは**価格系列上 6 構造**（すべて実データ B）。うち 4 つが Phase 1 の測った
+  「emit される誤側構造」で、残る 2 つはベースラインでは `confidence_below_min` /
+  `near_completion` で `data.patterns` に届いていなかったもの。
+- 棄却理由の帰属: **155 候補が `accepted` から**、**33 候補が `confidence_below_min` から**
+  本コードへ移る（後者は #199 候補 1 で confidence ゲートが最後尾へ移ったための横取り。
+  `data.patterns` には影響しない）。
+- 実データ `1hour` スナップショットは **13 件 → 12 件**。消えたのは `triple_top` 219-223-232
+  （conf 0.70。山3 がネックラインより 3,273.5 円下）の 1 件だけで、残り 12 件は全フィールド不変。
+- ライブ実例は動くので、**同型のケースを合成 fixture と凍結済み実データの 2 通りで固定した**
+  （`tests/patterns/neckline-side-triple-double.test.ts`）。合成側では
+  **`triple_top` が落ちて `double_top` が残る**ことまで固定してあり、二重出力の解消が回帰する。
+
+詳細は `docs/internal/neckline-side-gate-216.md`。
 
 ### Changed（triple と H&S の型間排他を入れた。#218 Phase 2）
 

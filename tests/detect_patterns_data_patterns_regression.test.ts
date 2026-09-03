@@ -17,6 +17,7 @@
  * | #204 Phase 2 | H&S の整合度を多軸化し、`scoreComponents` が付いて `confidence` が変わった。**`globalDedup` の代表が入れ替わり、H&S 4 件のうち 3 件が別の構造になった** |
  * | #199 候補 2 | triple の `duration` を暦日基準（`periodScoreDays`）からバー数基準（`periodScoreBars`）に移した。triple 2 件の `confidence` と `rankPatterns` の並びが変わった |
  * | #218 Phase 2 | `triple_*` と H&S 系が主構成点を 2 点以上共有していたら triple を落とす型間排他を入れた。**本ベースラインで初めて件数が動く**（14 → 13。`triple_bottom` 1 件の純減） |
+ * | #216 Phase 2 | `triple_*` / `double_*` の主構成点がネックラインの誤った側にあったら落とす構造ゲートを入れた（13 → 12。`triple_top` 1 件の純減） |
  *
  * **#206 では更新していない**（`MIN_CONFIDENCE` から未配線の 4 エントリを消しただけで、
  * `data.patterns` は 940 ケース全件で完全一致。行を足す必要が無かった）。
@@ -135,6 +136,27 @@
  * 得点の順序が変われば**別の `range` を持つ候補が残る**。
  * つまり `confidence` だけでなく `range` / `structureRange` / `pivots` / `breakoutTarget` /
  * `targetReachedPct` も連動して変わる（本ベースラインの差分の大半はこれ）。
+ *
+ * ## #216 Phase 2 時点のスナップショットの中身
+ *
+ * **2 度目の件数変動**（13 → 12）。消えたのは `triple_top` 219-223-**232**（conf 0.70）
+ * 1 件だけで、**残り 12 件は全フィールド不変**（差分は純粋な削除 101 行のみ。
+ * `globalDedup` の代表入れ替わりも起きていない）。
+ *
+ * | 落ちた triple | ネックライン | 誤った側の主構成点 | 逸脱量 |
+ * |---|---:|---|---:|
+ * | `triple_top` 219-223-**232**（conf 0.70） | 12,285,548.5 | 山3（idx 232 / 終値 12,282,275） | **−3,273.5 円**（0.027%） |
+ *
+ * これは #216 Phase 1 が issue 本文の実例として実測したその構造で、**山3 がネックラインを
+ * 割っている**——水平なレジスタンスに 3 回当たった形として読めない。**H&S 系は 1 件も
+ * 動いていない**（本 PR は triple / double にしかゲートを配線していない。H&S は #211 の
+ * 外挿クランプの是非が決まってから別 PR）。
+ *
+ * **#218 Phase 2 の型間排他（`meta.reduction.tripleHsExcluded`）は 1 のまま**。
+ * 本ゲートが落とした `triple_top` 219-223-232 は排他の対象ではなく（出力に残る 2 件の
+ * `head_and_shoulders` と主構成点を 1 点も共有しない）、排他が落とす
+ * `triple_bottom` 242-249-272 は 3 谷ともネックラインの正しい側にある——**2 つのゲートは
+ * 別の構造を落としている。**
  */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -155,7 +177,7 @@ function stripStructureDiagram(patterns: ReadonlyArray<Record<string, unknown>>)
 	});
 }
 
-describe('detect_patterns: data.patterns の実データスナップショット（issue #200 起点。#202 / #199 / #208 / #210 / #204 / #199 候補 2 / #218 で更新）', () => {
+describe('detect_patterns: data.patterns の実データスナップショット（issue #200 起点。#202 / #199 / #208 / #210 / #204 / #199 候補 2 / #218 / #216 で更新）', () => {
 	it('btc_jpy 1hour（デフォルトオプション）で data.patterns が構造図の svg/title を除きベースラインと一致する', async () => {
 		const candles = buildBtcJpy1hour202608Candles();
 		vi.mocked(analyzeIndicators).mockResolvedValueOnce(

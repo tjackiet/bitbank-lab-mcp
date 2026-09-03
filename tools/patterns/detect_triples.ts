@@ -12,8 +12,10 @@ import { averageDefinedAxes, breakoutQualityScore, retracementScore } from './sc
 import {
 	levelSpreadDetailsFrom,
 	levelSpreadMetrics,
+	necklineSideDetailsFrom,
 	type ReversalSide,
 	validateLevelSpread,
+	validateMainPointsNecklineSide,
 	validatePatternSize,
 } from './structural.js';
 import type { Pivot } from './swing.js';
@@ -317,6 +319,28 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 			continue;
 		}
 
+		// 主構成点とネックラインの位置関係（issue #216 Phase 2）。**`validateLevelSpread` の直後**
+		// ——配置の理由は `validatePatternSize` の docstring（「既存の棄却検査をすべて通過した後」）と
+		// 同じで、固有の理由コードを持つ候補の `reason` を横取りしないため。判定の実体と根拠は
+		// `validateMainPointsNecklineSide` の docstring が単一ソース。
+		//
+		// **3 山 / 3 谷の全点を検査する**（`pivots` の [a, b, c] そのもの）。Phase 1 は
+		// 「誤側に来るのは実質、構成点列の最後の 1 点だけ」と実測したが、それは emit された
+		// 候補だけを見た母集団の話で、**本ゲートは第2構成点が誤側の構造も実際に落としている**
+		// （実データ B の `triple_top` 204-**211**-219。あちらでは `confidence_below_min` が
+		// 先に拾っていた）。中間点を除外する理由が無く、除外すると条件が複雑になる。
+		const strictTopSide = validateMainPointsNecklineSide('top', [a, b, c], nlAvg);
+		if (strictTopSide.reason) {
+			pcand({
+				type: 'triple_top',
+				accepted: false,
+				reason: strictTopSide.reason,
+				idxs: [a.idx, b.idx, c.idx],
+				details: necklineSideDetailsFrom(nlAvg, strictTopSide.offenders),
+			});
+			continue;
+		}
+
 		const structureGate = buildStructureGate(gate);
 
 		// ネックライン下抜けを検出（c.idx 以降、最大 MAX_BARS_FROM_EXTREMUM バー）
@@ -544,6 +568,20 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 			continue;
 		}
 
+		// 主構成点とネックラインの位置関係（issue #216 Phase 2）。**`validateLevelSpread` の直後**
+		// ——配置の理由は `findStrictTripleTop` の同じ箇所のコメントを参照。
+		const strictBottomSide = validateMainPointsNecklineSide('bottom', [a, b, c], nlAvg);
+		if (strictBottomSide.reason) {
+			pcand({
+				type: 'triple_bottom',
+				accepted: false,
+				reason: strictBottomSide.reason,
+				idxs: [a.idx, b.idx, c.idx],
+				details: necklineSideDetailsFrom(nlAvg, strictBottomSide.offenders),
+			});
+			continue;
+		}
+
 		const structureGate = buildStructureGate(gate);
 
 		// ネックライン上抜けを検出（c.idx 以降、最大 MAX_BARS_FROM_EXTREMUM バー）
@@ -753,6 +791,23 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 			continue;
 		}
 
+		// 主構成点とネックラインの位置関係（issue #216 Phase 2）。**`validateLevelSpread` の直後**
+		// ——配置の理由は `findStrictTripleTop` の同じ箇所のコメントを参照。
+		// **strict と同じ検査を relaxed にも掛ける**（`validateLevelSpread` と同じ理由——strict が
+		// その種別を 0 件にすると relaxed が同じ 3 山を拾い直すため、strict にだけ入れても素通りする）。
+		// 理由コードに `_relaxed` を付けないのも `validateLevelSpread` / `validatePatternSize` と同じ扱い。
+		const relaxedTopSide = validateMainPointsNecklineSide('top', [a, b, c], nlAvg);
+		if (relaxedTopSide.reason) {
+			pcand({
+				type: 'triple_top',
+				accepted: false,
+				reason: relaxedTopSide.reason,
+				idxs: [a.idx, b.idx, c.idx],
+				details: necklineSideDetailsFrom(nlAvg, relaxedTopSide.offenders),
+			});
+			continue;
+		}
+
 		const structureGate = buildStructureGate(gate);
 
 		// ネックライン下抜け検出
@@ -944,6 +999,20 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 				reason: relaxedBottomSpreadReason,
 				idxs: [a.idx, b.idx, c.idx],
 				details: levelSpreadDetailsFrom(relaxedBottomSpread, tolTriple),
+			});
+			continue;
+		}
+
+		// 主構成点とネックラインの位置関係（issue #216 Phase 2）。**`validateLevelSpread` の直後**
+		// ——配置の理由は `findStrictTripleTop` の同じ箇所のコメントを参照。
+		const relaxedBottomSide = validateMainPointsNecklineSide('bottom', [a, b, c], nlAvg);
+		if (relaxedBottomSide.reason) {
+			pcand({
+				type: 'triple_bottom',
+				accepted: false,
+				reason: relaxedBottomSide.reason,
+				idxs: [a.idx, b.idx, c.idx],
+				details: necklineSideDetailsFrom(nlAvg, relaxedBottomSide.offenders),
 			});
 			continue;
 		}

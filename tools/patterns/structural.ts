@@ -748,6 +748,153 @@ export function levelSpreadDetailsFrom(m: LevelSpreadMetrics, levelTolerancePct:
 }
 
 /**
+ * 主構成点がネックラインの**誤った側**にある場合の理由コード（issue #216 Phase 2）。
+ *
+ * {@link PatternLevelSpreadRejectReason} / {@link PatternLevelDiffRejectReason} と同じく
+ * **side ごとに分けてある。** `view=debug` の **`▼ reason 横断合計`（type を畳んで reason だけで
+ * 合算する行。issue #193 / PR #194）** で top 側と bottom 側が 1 つの数字に潰れると、
+ * 「山がネックラインを割った」と「谷がネックラインを超えた」——**符号が逆の 2 つの破綻**が
+ * 区別できなくなる。
+ *
+ * 名前は「点が線のどちら側にあるか」をそのまま読む形にしてある（`_excess` 系のように
+ * 「量が閾値を超えた」ではない——{@link validateMainPointsNecklineSide} には閾値が無い）。
+ */
+export type MainPointNecklineSideRejectReason =
+	/** top: 主構成点（山）のいずれかがネックライン以下 */
+	| 'peaks_below_neckline'
+	/** bottom: 主構成点（谷）のいずれかがネックライン以上 */
+	| 'valleys_above_neckline';
+
+/** 誤った側にあった主構成点 1 点の診断値。`view=debug` の `details.offenders` に載る。 */
+export interface MainPointNecklineSideOffender {
+	/** 構成点のバー添字 */
+	idx: number;
+	/** 構成点の `price`（終値）。基準の根拠は {@link validateMainPointsNecklineSide} の docstring */
+	price: number;
+	/**
+	 * ネックラインからの逸脱量。`top: neckline − price` / `bottom: price − neckline` で、
+	 * **正なら誤った側**（0 は「上/下」のどちらでもないので同じく失格。#216 Phase 1 の
+	 * 逸脱量の定義と符号を揃えてあるが、**0 を数えるかどうかだけが違う**——あちらは計測なので
+	 * 同値を除いており、こちらは「より上にある」ことを要求するゲートなので同値も落とす）。
+	 */
+	deviation: number;
+}
+
+/** {@link validateMainPointsNecklineSide} の戻り値。 */
+export interface MainPointNecklineSideResult {
+	/** 失格理由。すべての主構成点が正しい側にあれば `null` */
+	reason: MainPointNecklineSideRejectReason | null;
+	/** 誤った側にあった点（`reason` が `null` なら空配列）。**全主構成点を検査した結果の全件** */
+	offenders: MainPointNecklineSideOffender[];
+}
+
+/**
+ * 主構成点とネックラインの位置関係の検査（issue #216 Phase 2）。
+ *
+ * `validateReversalStructure` に渡るのは構成点列の**先頭 2 点（`first` / `mid`）だけ**で、
+ * それ以降の主構成点——double の第2構成点、triple の第2 / 第3構成点——は
+ * **一度もネックラインと比較されていなかった**。その結果、
+ * **「山3 がネックラインより下にある `triple_top`」が整合度 0.95 で出力されていた**
+ * （実例: btc_jpy `1hour`、ネックライン 12,741,832 に対し山3 が 12,725,937 で −15,895）。
+ * 3 つの山のうち 1 つが支持線を割っている形は、水平なレジスタンスに 3 回当たった形として
+ * 読めない。#131 の「構造として成立しない形は減点ではなく hard reject」の系列。
+ *
+ * ## 検査内容
+ *
+ * | side | 要求 |
+ * |---|---|
+ * | `top` | すべての主構成点が `price > necklinePrice` |
+ * | `bottom` | すべての主構成点が `price < necklinePrice` |
+ *
+ * **等号は失格**（`price === necklinePrice` は「より上」でも「より下」でもない）。
+ * ネックラインの真上に乗った山は、その山だけパターン高さが 0 という意味なので通さない。
+ *
+ * ## 価格基準は `price`（終値）。`extremePrice` は採らない
+ *
+ * 1. **ネックラインが終値から作られている。** triple の `nlAvg` は 2 つの中間構成点の
+ *    `price` の平均、double の `necklinePrice` は中間構成点の `price` そのもの。
+ *    終値由来の線に高安を突き合わせるのは #178 項目 4 / `spreadRatio` と同じ**基準混在**。
+ * 2. **ブレイク判定が終値。** `findBreakoutIdx` は終値で `necklinePrice` の突破を見る。
+ *    {@link ReversalStructureInput.necklinePrice} の docstring が要求する
+ *    「ゲートとブレイク判定は同じ値を使う」に揃う。
+ * 3. **`extremePrice` 基準では triple の誤側が 0 件**（#216 Phase 1 の 1-3 章）＝
+ *    ゲートが no-op になる。ヒゲは定義上、山なら上・谷なら下へ伸びるので、
+ *    高安で測ると「誤った側」がほぼ消える。
+ *
+ * ## 許容幅（つまみ）を置かない
+ *
+ * #216 Phase 1 の結論 4 が根拠。**`double` / `triple` の逸脱量は最小がパターン高さの 2.96%**
+ * （絶対額 2,147〜20,213 円）で**ゼロから離れている**。`inverse_head_and_shoulders` の
+ * 最小 0.012%（31 円）のようなゼロ近傍の集団は triple / double には無いので、
+ * **閾値を置かずにゼロ許容で切れる**。
+ *
+ * ## 適用範囲は triple / double のみ（H&S 系には配線しない）
+ *
+ * H&S 系は**構造ゲートにスカラーを渡し、ブレイク判定には傾きつきの線**を使う
+ * （右肩は線の定義 2 点の外側にあるため外挿がかかる）。同じ構造がスカラー基準では
+ * 「上に外れ」、線基準では「下に収まる」という反転が実際に起きており、
+ * **#211（`necklineAt` の外挿クランプ）の是非が決まるまで基準を決められない**
+ * （#216 Phase 1 の結論 2 / 3）。triple / double のネックラインは**水平スカラー**なので
+ * 線として評価しても同じ値になり、この依存が無い。
+ *
+ * ## 呼び出し位置
+ *
+ * **各検出経路の「既存の棄却検査をすべて通過した後」**——{@link validateLevelSpread} /
+ * {@link validateLevelDiff} よりも後ろ。理由は {@link validatePatternSize} の docstring と
+ * 同じで、前に置くと固有の理由コードを持つ候補の `reason` を横取りする。
+ *
+ * **`necklinePrice` が有限でない場合は素通しする**（`reason: null`）。判定材料が無い候補を
+ * 落とすと、この検査が意図していない理由で検出が減る（{@link exceedsLevelSpread} と同じ扱い）。
+ * 主構成点側の `price` が有限でない点は**検査から除く**（落とさない）——同じ理由。
+ */
+export function validateMainPointsNecklineSide(
+	side: ReversalSide,
+	mainPoints: ReadonlyArray<Pick<Pivot, 'idx' | 'price'>>,
+	necklinePrice: number,
+): MainPointNecklineSideResult {
+	if (!Number.isFinite(necklinePrice)) return { reason: null, offenders: [] };
+	const offenders: MainPointNecklineSideOffender[] = [];
+	for (const p of mainPoints) {
+		if (!Number.isFinite(p.price)) continue;
+		const deviation = side === 'top' ? necklinePrice - p.price : p.price - necklinePrice;
+		if (deviation >= 0) offenders.push({ idx: p.idx, price: p.price, deviation });
+	}
+	if (offenders.length === 0) return { reason: null, offenders };
+	return { reason: side === 'top' ? 'peaks_below_neckline' : 'valleys_above_neckline', offenders };
+}
+
+/**
+ * {@link validateMainPointsNecklineSide} で落ちた候補の診断値。`view=debug` の `details` に載せる。
+ *
+ * **どの点がどれだけ外れたかを 1 点ずつ出す**（issue #216 Phase 2 の要件）。件数だけでは
+ * 「最後の 1 点が僅かに割った」のか「3 点とも大きく割った」のかが読めず、
+ * ゼロ許容という判断（許容幅を置かない根拠は {@link validateMainPointsNecklineSide} の
+ * docstring）を後から見直せない。
+ *
+ * `deviationPct` はネックライン水準に対する比。**パターン高さ相対ではない**——高さは
+ * この検査が受け取らない値（主構成点とネックラインしか見ない）なので、
+ * ここで別の量を持ち込むと `levelSpreadDetailsFrom` の `spreadRatio` と紛らわしくなる。
+ * 分母のクランプ（`Math.max(1, …)`）は `relDiff` / `levelSpreadMetrics` と同じ慣行。
+ */
+export function necklineSideDetailsFrom(
+	necklinePrice: number,
+	offenders: ReadonlyArray<MainPointNecklineSideOffender>,
+): Record<string, unknown> {
+	return {
+		necklinePrice,
+		offenders: offenders.map((o) => ({
+			idx: o.idx,
+			price: o.price,
+			deviation: o.deviation,
+			deviationPct: o.deviation / Math.max(1, Math.abs(necklinePrice)),
+		})),
+		// 呼び出しは `reason !== null`（= `offenders` が非空）のときだけだが、空配列で
+		// `Math.max()` を呼ぶと `-Infinity` が `details` に載るので明示的に潰す。
+		maxDeviation: offenders.length ? Math.max(...offenders.map((o) => o.deviation)) : null,
+	};
+}
+
+/**
  * 反転パターンのサイズ検査（issue #138 欠陥 2-2）。不合格理由 or `null` を返す。
  *
  * `points` は**構成点を時系列順に並べた交互列**で、両端が主構成点（`side='top'`
