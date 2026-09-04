@@ -357,8 +357,14 @@ function buildHsScore(opts: {
 	shoulderIdxs: readonly [number, number];
 	headIdx: number;
 	/**
-	 * 頭の突出判定に使ったのと同じ閾値。strict は `headProminencePct`、
-	 * relaxed は `headProminencePct × factors.head`。
+	 * `headProminence` 軸の採点に使う閾値。**strict / relaxed とも `headProminencePct`**
+	 * （= strict のゲート）を渡す。
+	 *
+	 * relaxed は**ゲート**を `headProminencePct × factors.head` まで緩めるが、**採点**は緩めない
+	 * （issue #227 Phase 2）。緩めた側の閾値で採点すると「実効 0.33% のゲートをぎりぎり超えた構造」も
+	 * 「strict の 0.83% を超えた構造」も同じように加点され、**緩めたことが整合度に反映されない**。
+	 * strict のゲートで採点すれば、突出が strict の要求に届かない構造は
+	 * `clamp01(1 - gate / prominence)` が 0 に落ちる（軸が消えるのではなく 0 点になる）。
 	 */
 	headProminenceGate: number;
 	/** 突破足時点のネックライン値（`necklineAt(neckline, breakoutIdx)`） */
@@ -1381,15 +1387,17 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 					? omittedTargetReach('no_target')
 					: computeTargetReach(candles, breakoutIdx, completion.breakout.price, hsRelTarget, 'down', hsRelHeight);
 			const hsRelPrecedingTrend = buildPrecedingTrend(candles, trend, p0.idx);
-			// 整合度（issue #204 Phase 2）。strict と同じ軸構成で、**閾値だけ経路のものを渡す**
-			// ——頭の突出ゲートは `headProminencePct × factors.head`。`× 0.95` の relaxed ペナルティは
-			// 据え置き（Phase 1 実測で relaxed は 940 ケース中 accepted 0 件のため効果を測れない）。
+			// 整合度（issue #204 Phase 2）。strict と同じ軸構成・**同じ閾値**で採点する。
+			// 頭の突出は**ゲートだけ** `headProminencePct × factors.head` に緩め、**採点は strict の
+			// `headProminencePct`** で行う（issue #227 Phase 2。理由は `buildHsScore` の
+			// `headProminenceGate` の docstring）。`× 0.95` の relaxed ペナルティは据え置き
+			// ——段別にする案は段1 の accepted が実測で 0 件のままで、効果を測れないため見送った。
 			const { components: scoreComponents, base } = buildHsScore({
 				shoulders: [p0.price, p4.price],
 				headPrice: p2.price,
 				shoulderIdxs: [p0.idx, p4.idx],
 				headIdx: p2.idx,
-				headProminenceGate: headProminencePct * factors.head,
+				headProminenceGate: headProminencePct,
 				necklinePrice: necklineAt(neckline, breakoutIdx),
 				breakoutClose: completion.breakout?.price ?? Number.NaN,
 				patternHeight: hsRelHeight,
@@ -1629,7 +1637,7 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 				headPrice: p2.price,
 				shoulderIdxs: [p0.idx, p4.idx],
 				headIdx: p2.idx,
-				headProminenceGate: headProminencePct * factors.head,
+				headProminenceGate: headProminencePct,
 				necklinePrice: necklineAt(neckline, breakoutIdx),
 				breakoutClose: completion.breakout?.price ?? Number.NaN,
 				patternHeight: ihsRelHeight,
