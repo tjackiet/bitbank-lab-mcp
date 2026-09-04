@@ -207,6 +207,23 @@ function patternRowKeys(text: string): Set<string> {
 	return keys;
 }
 
+/**
+ * pivot 明細行の識別キー（`役割ラベル@表示日時`）。issue #234 で `triple_*` / H&S 系にも
+ * 出るようになった `   - 山1: 2026-09-01 高値 …` 形式の行を拾う。
+ *
+ * **キーに価格を含めない。** 価格の書式（`終値 X / 高値 Y（判定は高値基準）` と
+ * `高値 Y（判定は高値基準）`）は `formatPivotPrices` の分岐で変わるので、
+ * 書式を変えただけで落ちる脆いテストになる。役割ラベルと点の同定（日時）で足りる。
+ */
+function pivotRowKeys(text: string): Set<string> {
+	const keys = new Set<string>();
+	for (const line of text.split('\n')) {
+		const m = line.trim().match(/^-\s*(山\d?|谷\d?|左肩|頭|右肩(?:\(暫定\))?|谷（頭後）|山（頭後）):\s+(\S+)/u);
+		if (m) keys.add(`${m[1]}@${m[2]}`);
+	}
+	return keys;
+}
+
 /** `lower` の要素が全て `upper` にあることを検証する（欠けているものを失敗メッセージに出す）。 */
 function expectSupersetOf(upper: Set<string>, lower: Set<string>, label: string): void {
 	const missing = [...lower].filter((element) => !upper.has(element));
@@ -320,28 +337,127 @@ const DEBUG_CANDIDATES: DebugCandidate[] = [
 /** relaxed フォールバック由来の provenance（#191 B）。既定フィクスチャの 7 件のうち先頭 2 件に付ける。 */
 const RELAXED_TAG = 'relaxed_double_x1.3';
 
+/**
+ * 反転系 4 件（issue #234）。既定の 7 件（double 2 型）に**追加**する形で使う——
+ * 既存 7 件の type / confidence / 並びに依存した assert が多数あり、差し替えると
+ * 本 issue と無関係な失敗を撒くため。
+ *
+ * 4 件の内訳は「完成 5 点」と「形成中 4 点」を triple / H&S で 1 件ずつ:
+ *
+ * | type | status | 点数 | `pivots` の並び |
+ * |---|---|--:|---|
+ * | `triple_top` | completed | 5 | `[山1, 谷1, 山2, 谷2, 山3]` |
+ * | `triple_bottom` | forming | 4 | `[谷1, 山1, 谷2, 山2]`（5 点版の先頭 4 つ） |
+ * | `head_and_shoulders` | forming | 4 | `[左肩, 頭, 谷（頭後）, 右肩]` — **頭が 2 番目** |
+ * | `inverse_head_and_shoulders` | completed | 5 | `[左肩, 山1, 頭, 山2, 右肩]` |
+ *
+ * `kind` は production と同じ並びにしてある。形成中 H&S だけ `H, H, L, H` で
+ * 左肩と頭が同じ `kind` になる（`kind` から役割を導けないことの現物）。
+ *
+ * `confidence` は既定 7 件の最小（0.78）より下げて**末尾に並ぶ**ようにしてある
+ * ——`detailed` の上限 5 件は既定 7 件の側で埋まり、反転系は `full` にだけ出る。
+ * 0.6 以上に保っているのは低 confidence の ⚠️ 行を混ぜないため（規約 3 の検証対象である
+ * 注記行の集合が本 issue と無関係に増えるのを避ける）。
+ *
+ * `structureRange` / `confirmation` / `precedingTrend` を持たせないのは既定 7 件と同じ理由
+ * （持たせると期間行が分岐し `patternRowKeys` が使う `- 期間: A ~ B` 行が出なくなる）。
+ */
+const REVERSAL_PIVOT_KINDS = {
+	triple_top: ['H', 'L', 'H', 'L', 'H'],
+	triple_bottom: ['L', 'H', 'L', 'H'],
+	head_and_shoulders: ['H', 'H', 'L', 'H'],
+	inverse_head_and_shoulders: ['L', 'H', 'L', 'H', 'L'],
+} as const satisfies Record<string, readonly ('H' | 'L')[]>;
+
+/** 反転系 4 件の `pivots` の idx。既定 7 件（pivots 無し）と衝突しない帯に置く。 */
+const REVERSAL_PIVOT_IDXS = {
+	triple_top: [100, 110, 120, 130, 140],
+	triple_bottom: [150, 160, 170, 180],
+	head_and_shoulders: [200, 210, 220, 230],
+	inverse_head_and_shoulders: [250, 260, 270, 280, 290],
+} as const satisfies Record<keyof typeof REVERSAL_PIVOT_KINDS, readonly number[]>;
+
+const REVERSAL_STATUS = {
+	triple_top: 'completed',
+	triple_bottom: 'forming',
+	head_and_shoulders: 'forming',
+	inverse_head_and_shoulders: 'completed',
+} as const satisfies Record<keyof typeof REVERSAL_PIVOT_KINDS, string>;
+
+type ReversalType = keyof typeof REVERSAL_PIVOT_KINDS;
+const REVERSAL_TYPES = Object.keys(REVERSAL_PIVOT_KINDS) as ReversalType[];
+
+/** pivot の idx → isoTime。`buildIdxToIso` が読むのは `meta.debug.swings` だけなので、そこに載せる。 */
+function reversalSwingIso(idx: number): string {
+	// 03:00Z（JST 12:00）に置いて、既定 tz でも UTC でも暦日がずれないようにする。
+	return new Date(Date.UTC(2026, 2, 1, 3) + idx * 86_400_000).toISOString();
+}
+
+function reversalPatterns() {
+	return REVERSAL_TYPES.map((type, i) => ({
+		type,
+		confidence: 0.7 - i * 0.02,
+		timeframe: '1day' as const,
+		timeframeLabel: '日足',
+		range: {
+			start: dayjs.utc('2026-03-01T00:00:00Z').add(i, 'day').toISOString(),
+			end: dayjs.utc('2026-03-20T00:00:00Z').add(i, 'day').toISOString(),
+		},
+		status: REVERSAL_STATUS[type],
+		pivots: REVERSAL_PIVOT_IDXS[type].map((idx, j) => ({
+			idx,
+			price: 10_000_000 + idx * 1_000,
+			kind: REVERSAL_PIVOT_KINDS[type][j],
+			extremePrice: 10_000_000 + idx * 1_000,
+		})),
+	}));
+}
+
+/** 反転系 4 件の pivot を日付解決させるための swing 群（`meta.debug.swings` に足す）。 */
+function reversalSwings() {
+	return REVERSAL_TYPES.flatMap((type) =>
+		REVERSAL_PIVOT_IDXS[type].map((idx, j) => ({
+			kind: REVERSAL_PIVOT_KINDS[type][j],
+			idx,
+			price: 10_000_000 + idx * 1_000,
+			isoTime: reversalSwingIso(idx),
+		})),
+	);
+}
+
 // 戻り値を上流ツールの出力型で縛る。手書きフィクスチャが production の shape から
 // 黙って drift すると、この層（ツール横断の契約検証）の assert が全て素通りするため。
-function patternsFixture(opts: { relaxed?: number; candidates?: DebugCandidate[] } = {}): PatternsFixture {
+function patternsFixture(
+	opts: { relaxed?: number; candidates?: DebugCandidate[]; reversals?: boolean } = {},
+): PatternsFixture {
 	const relaxed = opts.relaxed ?? 0;
 	const candidates = opts.candidates ?? [];
-	const swings = [{ ...DEBUG_SWING }];
+	// 反転系 4 件（#234）は**追加**。既定 7 件はそのまま残すので、既存の assert は一切動かない。
+	const extra = opts.reversals ? reversalPatterns() : [];
+	const swings = [{ ...DEBUG_SWING }, ...(opts.reversals ? reversalSwings() : [])];
+	const total = PATTERN_COUNT + extra.length;
 	return {
 		ok: true,
 		summary: 'ok',
 		data: {
-			patterns: Array.from({ length: PATTERN_COUNT }, (_, i) => ({
-				type: i % 2 === 0 ? 'double_top' : 'double_bottom',
-				confidence: 0.9 - i * 0.02,
-				timeframe: '1day',
-				timeframeLabel: '日足',
-				range: {
-					start: dayjs.utc('2026-01-01T00:00:00Z').add(i, 'day').toISOString(),
-					end: dayjs.utc('2026-01-20T00:00:00Z').add(i, 'day').toISOString(),
-				},
-				status: 'completed',
-				...(i < relaxed ? { _fallback: RELAXED_TAG } : {}),
-			})),
+			patterns: [
+				// `as const` は #234 で反転系の spread を足したときに要るようになった——配列リテラルが
+				// union の spread になると `PatternsFixture` からの文脈型が効かず、`type` /
+				// `status` / `timeframe` が `string` に広がって代入不能になる。値は不変。
+				...Array.from({ length: PATTERN_COUNT }, (_, i) => ({
+					type: (i % 2 === 0 ? 'double_top' : 'double_bottom') as 'double_top' | 'double_bottom',
+					confidence: 0.9 - i * 0.02,
+					timeframe: '1day' as const,
+					timeframeLabel: '日足',
+					range: {
+						start: dayjs.utc('2026-01-01T00:00:00Z').add(i, 'day').toISOString(),
+						end: dayjs.utc('2026-01-20T00:00:00Z').add(i, 'day').toISOString(),
+					},
+					status: 'completed' as const,
+					...(i < relaxed ? { _fallback: RELAXED_TAG } : {}),
+				})),
+				...extra,
+			],
 			overlays: { ranges: [] },
 			warnings: [],
 			statistics: {},
@@ -349,7 +465,7 @@ function patternsFixture(opts: { relaxed?: number; candidates?: DebugCandidate[]
 		meta: {
 			pair: 'btc_jpy',
 			type: '1day',
-			count: PATTERN_COUNT,
+			count: total,
 			// `スキャン範囲` 行の元データ。bars は runPatterns の limit=180 とわざと食い違わせている
 			// ——ヘッダの `{limit}本から` は要求本数であってスキャン本数ではない、という現状を隠さないため。
 			scan: { start: '2025-07-21T00:00:00.000Z', end: '2026-01-26T00:00:00.000Z', bars: 190 },
@@ -374,7 +490,7 @@ function patternsFixture(opts: { relaxed?: number; candidates?: DebugCandidate[]
 				lifecycleExcluded: 0,
 				tripleHsExcluded: 1,
 				tripleHsCandidateCount: 2,
-				output: PATTERN_COUNT,
+				output: total,
 			},
 			warning: '取得層: 180本中20本が欠損しています',
 			warnings: ['計算層: スイング検出に必要なバー数が不足しています'],
@@ -393,7 +509,10 @@ function patternsFixture(opts: { relaxed?: number; candidates?: DebugCandidate[]
 	};
 }
 
-const runPatterns = (view: string, opts: { relaxed?: number; candidates?: DebugCandidate[] } = {}) => {
+const runPatterns = (
+	view: string,
+	opts: { relaxed?: number; candidates?: DebugCandidate[]; reversals?: boolean } = {},
+) => {
 	vi.mocked(detectPatterns).mockResolvedValue(patternsFixture(opts));
 	return detectPatternsTool.handler({ pair: 'btc_jpy', type: '1day', limit: 180, view });
 };
@@ -760,6 +879,115 @@ describe('階梯上の view の content は下位 view の上位集合（§3-2 �
 		expect(keys.full.size).toBe(PATTERN_COUNT);
 		expectSupersetOf(keys.detailed, keys.summary, 'detailed ⊇ summary（パターン行）');
 		expectSupersetOf(keys.full, keys.detailed, 'full ⊇ detailed（パターン行）');
+	});
+
+	// ── issue #234: triple / H&S の pivot 明細行 ────────────
+	// 明細行は `full` / `debug` にしか出ない（＝上位 view への「追加」）。規約 §2 で追加は許容、
+	// 削除は禁止なので、ここで見るのは「full が detailed / summary の上位集合のままか」と
+	// 「追加された行が正しい役割ラベルで出ているか」の 2 点。
+
+	/** 反転系 4 件それぞれの期待ラベル（`pivots` の並びと 1:1）。 */
+	const EXPECTED_PIVOT_ROLES: Record<ReversalType, readonly string[]> = {
+		triple_top: ['山1', '谷1', '山2', '谷2', '山3'],
+		triple_bottom: ['谷1', '山1', '谷2', '山2'],
+		// **完成版 5 点の先頭 4 つ（左肩 / 谷1 / 頭 / 谷2）ではない。** 形成中は頭が 2 番目に来る。
+		head_and_shoulders: ['左肩', '頭', '谷（頭後）', '右肩(暫定)'],
+		inverse_head_and_shoulders: ['左肩', '山1', '頭', '山2', '右肩'],
+	};
+
+	/** `pivotRowKeys` と同じ形（`役割ラベル@表示日時`）の期待キー集合。 */
+	function expectedPivotKeys(type: ReversalType): Set<string> {
+		// swing の isoTime は 03:00Z（JST 12:00）なので、既定 tz でも暦日は UTC 日付と同じ。
+		return new Set(
+			EXPECTED_PIVOT_ROLES[type].map(
+				(role, j) => `${role}@${reversalSwingIso(REVERSAL_PIVOT_IDXS[type][j]).slice(0, 10)}`,
+			),
+		);
+	}
+
+	it('detect_patterns: triple / H&S の pivot 明細行が full に出る（issue #234）', async () => {
+		const byView = await collectContentByView(['full'] as const, (view) => runPatterns(view, { reversals: true }));
+		const full = byView.get('full') as string;
+		const keys = pivotRowKeys(full);
+
+		for (const type of REVERSAL_TYPES) {
+			expectSupersetOf(keys, expectedPivotKeys(type), `full の pivot 明細（${type}）`);
+		}
+		// 価格も出ている（idx の日時だけでは LLM が検算できない。本 issue の目的）
+		const headIso = reversalSwingIso(REVERSAL_PIVOT_IDXS.triple_top[0]).slice(0, 10);
+		expect(full).toContain(`   - 山1: ${headIso} 高値 10,100,000円（判定は高値基準）`);
+	});
+
+	it('detect_patterns: 形成中 H&S の 2 番目は「頭」（5 点版の「谷1」を流用していない。issue #234）', async () => {
+		const byView = await collectContentByView(['full'] as const, (view) => runPatterns(view, { reversals: true }));
+		const full = byView.get('full') as string;
+
+		// 形成中 4 点の 2 点目（idx 210）。ここが「谷1」になっていたら頭を谷と誤表示している。
+		const secondPointDate = reversalSwingIso(REVERSAL_PIVOT_IDXS.head_and_shoulders[1]).slice(0, 10);
+		expect(full).toContain(`   - 頭: ${secondPointDate} `);
+		expect(full).not.toContain(`   - 谷1: ${secondPointDate} `);
+
+		// 3 点目は頭の**後ろ**の谷。完成版なら 3 点目が「頭」なので、ここも並びの違いが出る箇所。
+		const thirdPointDate = reversalSwingIso(REVERSAL_PIVOT_IDXS.head_and_shoulders[2]).slice(0, 10);
+		expect(full).toContain(`   - 谷（頭後）: ${thirdPointDate} `);
+		expect(full).not.toContain(`   - 頭: ${thirdPointDate} `);
+
+		// 対照: **完成 5 点**の逆 H&S は 2 点目が「山1」・3 点目が「頭」。同じ H&S 系でも
+		// 点数で並びが変わることを 1 テスト内で並べて固定する（表引きの鍵が (type, 点数) である根拠）。
+		const invIdxs = REVERSAL_PIVOT_IDXS.inverse_head_and_shoulders;
+		expect(full).toContain(`   - 山1: ${reversalSwingIso(invIdxs[1]).slice(0, 10)} `);
+		expect(full).toContain(`   - 頭: ${reversalSwingIso(invIdxs[2]).slice(0, 10)} `);
+	});
+
+	it('detect_patterns: pivot 明細行のキー集合が summary ⊆ detailed ⊆ full（追加は許容・削除は禁止）', async () => {
+		const byView = await collectContentByView(['summary', 'detailed', 'full'] as const, (view) =>
+			runPatterns(view, { reversals: true }),
+		);
+		const keys = {
+			summary: pivotRowKeys(byView.get('summary') as string),
+			detailed: pivotRowKeys(byView.get('detailed') as string),
+			full: pivotRowKeys(byView.get('full') as string),
+		};
+
+		// summary / detailed は pivot 明細を出さない view（= 空集合）。full にだけ全 18 点が出る。
+		expect(keys.summary.size).toBe(0);
+		expect(keys.detailed.size).toBe(0);
+		expect(keys.full.size).toBe(REVERSAL_TYPES.reduce((n, t) => n + REVERSAL_PIVOT_IDXS[t].length, 0));
+		expectSupersetOf(keys.detailed, keys.summary, 'detailed ⊇ summary（pivot 明細行）');
+		expectSupersetOf(keys.full, keys.detailed, 'full ⊇ detailed（pivot 明細行）');
+	});
+
+	it('detect_patterns: 反転系 4 件を足しても定型要素とパターン行は summary ⊆ detailed ⊆ full', async () => {
+		const byView = await collectContentByView(['summary', 'detailed', 'full'] as const, (view) =>
+			runPatterns(view, { reversals: true }),
+		);
+		const [summary, detailed, full] = [byView.get('summary'), byView.get('detailed'), byView.get('full')] as string[];
+
+		expectSupersetOf(fixedElements(detailed), fixedElements(summary), 'detailed ⊇ summary（定型要素）');
+		expectSupersetOf(fixedElements(full), fixedElements(detailed), 'full ⊇ detailed（定型要素）');
+
+		const keys = {
+			summary: patternRowKeys(summary),
+			detailed: patternRowKeys(detailed),
+			full: patternRowKeys(full),
+		};
+		expect(keys.summary.size).toBe(0);
+		expect(keys.detailed.size).toBe(5);
+		expect(keys.full.size).toBe(PATTERN_COUNT + REVERSAL_TYPES.length);
+		expectSupersetOf(keys.detailed, keys.summary, 'detailed ⊇ summary（パターン行）');
+		expectSupersetOf(keys.full, keys.detailed, 'full ⊇ detailed（パターン行）');
+	});
+
+	it('detect_patterns: debug は反転系を足してもパターン明細（pivot 行を含む）を出さない（階梯外）', async () => {
+		// `formatPatternLine` の明細行の出力条件は `full` と `debug` で同じだが、`debug` view は
+		// そもそも `formatPatternLine` を呼ばない（出力の置換。§3-2 規約 3）。#234 で明細行を
+		// 増やしたことが `debug` の中身を変えていないことをここで固定する。
+		// **`formatPatternLine(…, 'debug', …)` 単体が明細行を出すこと**は
+		// tests/detectPatternsViewsHandler.test.ts 側で見ている。
+		const byView = await collectContentByView(['debug'] as const, (view) => runPatterns(view, { reversals: true }));
+		const debug = byView.get('debug') as string;
+		expect(pivotRowKeys(debug).size).toBe(0);
+		expect(patternRowKeys(debug).size).toBe(0);
 	});
 
 	it('detect_patterns: 取得層 / 計算層の ⚠️ 注記行が detailed / full でも残る', async () => {

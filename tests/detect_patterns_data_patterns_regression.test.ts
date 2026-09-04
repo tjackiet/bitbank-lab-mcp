@@ -35,6 +35,14 @@
  * 1 件も含まない**（H&S 系 4 / wedge 4 / triangle 4）ので差分が出ない。triple の実データ回帰は
  * `tests/detect_patterns_triple_neckline_pivots_btcjpy.test.ts`（実データ B × `includeForming`）が持つ）。
  *
+ * **#234 でも更新していない**（`content` の pivot 明細行を `triple_*` / H&S 系にも出すように
+ * した表示層のみの変更。`src/handlers/detectPatternsViewsHandler.ts` の役割ラベル表引きだけを
+ * 触っており、検出ロジックにも `data.patterns` のどのフィールドにも手が入っていない。
+ * 本 fixture は `data.patterns` だけを凍結していて `content` を含まないので差分も出ない。
+ * 明細行の実データ以外の回帰は `tests/detectPatternsViewsHandler.test.ts`（役割ラベルの
+ * 表引き。形成中 H&S の「頭」が 2 番目に来る非対称を含む）と
+ * `tests/view-content-superset.test.ts`（規約 3: `full` が `detailed` の上位集合のまま）が持つ）。
+ *
  * **#224 症状 1 でも更新していない**（`meta.reduction` に `tripleHsCandidateCount` を足し、
  * 「検出内訳:」行に `（比較対象 H&S 無し）` の注記を付けた申告のみの変更。判定ロジックは
  * 触っておらず `data.patterns` は不変。本 fixture は `data.patterns` だけを凍結していて

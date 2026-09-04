@@ -1442,6 +1442,208 @@ describe('formatPatternLine', () => {
 	});
 });
 
+// ── pivot 明細行（issue #234） ──
+
+describe('formatPatternLine: pivot 明細行の役割ラベル（issue #234）', () => {
+	/** idx → isoTime。`buildIdxToIso` が読むのは `meta.debug.swings` だけなので、そこだけ埋める。 */
+	function metaWithIdx(idxs: readonly number[]) {
+		return {
+			...emptyMeta,
+			debug: {
+				...emptyMeta.debug,
+				// idx を 2026-09-01 からの日数として置く。**時刻は 03:00Z（JST 12:00）**
+				// ——00:00Z 前後だと既定 tz（JST）で暦日が 1 日ずれ、期待値が読みにくくなる。
+				swings: idxs.map((idx) => ({
+					kind: 'H',
+					idx,
+					price: 100,
+					isoTime: new Date(Date.UTC(2026, 8, 1, 3) + idx * 86_400_000).toISOString(),
+				})),
+			},
+		};
+	}
+
+	/** `   - <ラベル>: …` 行のラベルだけを出現順に取り出す。 */
+	function pivotRoleOrder(text: string): string[] {
+		const roles: string[] = [];
+		for (const line of text.split('\n')) {
+			const m = line.match(/^\s*-\s*(山\d?|谷\d?|左肩|頭|右肩(?:\(暫定\))?|谷（頭後）|山（頭後）):\s/u);
+			if (m) roles.push(m[1]);
+		}
+		return roles;
+	}
+
+	/** 完成済み反転系の 5 点（`kind` は type ごとに differ するので呼び出し側が渡す）。 */
+	function fivePivots(kinds: readonly ('H' | 'L')[]) {
+		return kinds.map((kind, i) => ({
+			idx: i * 10,
+			price: 100 + i,
+			kind,
+			extremePrice: 100 + i,
+		}));
+	}
+
+	const FIVE_IDXS = [0, 10, 20, 30, 40];
+
+	// ── triple: 完成 5 点 / 形成中 4 点 ──
+
+	it('triple_top（完成 5 点）は 山1 / 谷1 / 山2 / 谷2 / 山3 を順に出す', () => {
+		const p = makePattern({ type: 'triple_top', status: 'completed', pivots: fivePivots(['H', 'L', 'H', 'L', 'H']) });
+		const text = formatPatternLine(p, 0, 'full', metaWithIdx(FIVE_IDXS));
+		expect(pivotRoleOrder(text)).toEqual(['山1', '谷1', '山2', '谷2', '山3']);
+		// idx の日時と価格が両方出る（LLM が content だけで検算できることが本 issue の目的）
+		expect(text).toContain('山1: 2026-09-01 高値 100円（判定は高値基準）');
+		expect(text).toContain('山3: 2026-10-11 高値 104円（判定は高値基準）');
+	});
+
+	it('triple_top（形成中 4 点）は 5 点版の先頭 4 つと同じラベルで、山3 を出さない', () => {
+		const p = makePattern({
+			type: 'triple_top',
+			status: 'forming',
+			pivots: fivePivots(['H', 'L', 'H', 'L']).slice(0, 4),
+		});
+		const text = formatPatternLine(p, 0, 'full', metaWithIdx([0, 10, 20, 30]));
+		expect(pivotRoleOrder(text)).toEqual(['山1', '谷1', '山2', '谷2']);
+		expect(text).not.toContain('山3');
+	});
+
+	it('triple_bottom（完成 5 点 / 形成中 4 点）は 谷1 / 山1 / 谷2 / 山2 / 谷3 の並び', () => {
+		const completed = makePattern({
+			type: 'triple_bottom',
+			status: 'completed',
+			pivots: fivePivots(['L', 'H', 'L', 'H', 'L']),
+		});
+		expect(pivotRoleOrder(formatPatternLine(completed, 0, 'full', metaWithIdx(FIVE_IDXS)))).toEqual([
+			'谷1',
+			'山1',
+			'谷2',
+			'山2',
+			'谷3',
+		]);
+
+		const forming = makePattern({
+			type: 'triple_bottom',
+			status: 'forming',
+			pivots: fivePivots(['L', 'H', 'L', 'H']).slice(0, 4),
+		});
+		expect(pivotRoleOrder(formatPatternLine(forming, 0, 'full', metaWithIdx([0, 10, 20, 30])))).toEqual([
+			'谷1',
+			'山1',
+			'谷2',
+			'山2',
+		]);
+	});
+
+	// ── H&S: 完成 5 点 / 形成中 4 点（並びが違う） ──
+
+	it('head_and_shoulders（完成 5 点）は 左肩 / 谷1 / 頭 / 谷2 / 右肩', () => {
+		const p = makePattern({
+			type: 'head_and_shoulders',
+			status: 'completed',
+			pivots: fivePivots(['H', 'L', 'H', 'L', 'H']),
+		});
+		const text = formatPatternLine(p, 0, 'full', metaWithIdx(FIVE_IDXS));
+		expect(pivotRoleOrder(text)).toEqual(['左肩', '谷1', '頭', '谷2', '右肩']);
+	});
+
+	it('head_and_shoulders（形成中 4 点）は 2 番目を「頭」と出す（5 点版の「谷1」を流用しない）', () => {
+		// 早期形成パス（tools/patterns/detect_hs.ts）の 4 点は
+		// `[左肩, 頭, 谷（頭後）, 右肩]` で **kind は H, H, L, H**。
+		// 完成版 5 点の先頭 4 つ（左肩 / 谷1 / 頭 / 谷2）を流用すると頭が「谷1」になる。
+		const p = makePattern({
+			type: 'head_and_shoulders',
+			status: 'forming',
+			pivots: fivePivots(['H', 'H', 'L', 'H']).slice(0, 4),
+		});
+		const text = formatPatternLine(p, 0, 'full', metaWithIdx([0, 10, 20, 30]));
+		expect(pivotRoleOrder(text)).toEqual(['左肩', '頭', '谷（頭後）', '右肩(暫定)']);
+		// 回帰の本体: 2 番目が「谷1」になっていないこと
+		expect(text).not.toContain('谷1');
+	});
+
+	it('inverse_head_and_shoulders（完成 5 点 / 形成中 4 点）も同じ非対称を持つ', () => {
+		const completed = makePattern({
+			type: 'inverse_head_and_shoulders',
+			status: 'completed',
+			pivots: fivePivots(['L', 'H', 'L', 'H', 'L']),
+		});
+		expect(pivotRoleOrder(formatPatternLine(completed, 0, 'full', metaWithIdx(FIVE_IDXS)))).toEqual([
+			'左肩',
+			'山1',
+			'頭',
+			'山2',
+			'右肩',
+		]);
+
+		const forming = makePattern({
+			type: 'inverse_head_and_shoulders',
+			status: 'forming',
+			pivots: fivePivots(['L', 'L', 'H', 'L']).slice(0, 4),
+		});
+		const formingText = formatPatternLine(forming, 0, 'full', metaWithIdx([0, 10, 20, 30]));
+		expect(pivotRoleOrder(formingText)).toEqual(['左肩', '頭', '山（頭後）', '右肩(暫定)']);
+		expect(formingText).not.toContain('山1');
+	});
+
+	// ── view / 既存型の据え置き ──
+
+	it('debug でも triple / H&S の pivot 明細が出る（full と同じ条件。:1045 は変えていない）', () => {
+		const p = makePattern({
+			type: 'head_and_shoulders',
+			status: 'completed',
+			pivots: fivePivots(['H', 'L', 'H', 'L', 'H']),
+		});
+		expect(pivotRoleOrder(formatPatternLine(p, 0, 'debug', metaWithIdx(FIVE_IDXS)))).toEqual([
+			'左肩',
+			'谷1',
+			'頭',
+			'谷2',
+			'右肩',
+		]);
+	});
+
+	it('summary / detailed では triple / H&S の pivot 明細を出さない（既存の view 条件のまま）', () => {
+		const p = makePattern({ type: 'triple_top', status: 'completed', pivots: fivePivots(['H', 'L', 'H', 'L', 'H']) });
+		for (const view of ['summary', 'detailed'] as const) {
+			expect(pivotRoleOrder(formatPatternLine(p, 0, view, metaWithIdx(FIVE_IDXS))), `view=${view}`).toEqual([]);
+		}
+	});
+
+	it('double_top / double_bottom の表示は不変（先頭 3 点のまま。pivots が 5 点でも 3 行）', () => {
+		const dt = makePattern({ type: 'double_top', status: 'completed', pivots: fivePivots(['H', 'L', 'H', 'L', 'H']) });
+		expect(pivotRoleOrder(formatPatternLine(dt, 0, 'full', metaWithIdx(FIVE_IDXS)))).toEqual(['山1', '谷', '山2']);
+
+		const db = makePattern({
+			type: 'double_bottom',
+			status: 'completed',
+			pivots: fivePivots(['L', 'H', 'L', 'H', 'L']),
+		});
+		expect(pivotRoleOrder(formatPatternLine(db, 0, 'full', metaWithIdx(FIVE_IDXS)))).toEqual(['谷1', '山', '谷2']);
+	});
+
+	it('表に無い型（wedge 等）は pivot 明細を 1 行も出さない', () => {
+		const p = makePattern({
+			type: 'falling_wedge',
+			status: 'completed',
+			pivots: fivePivots(['H', 'L', 'H', 'L', 'H']),
+		});
+		expect(pivotRoleOrder(formatPatternLine(p, 0, 'full', metaWithIdx(FIVE_IDXS)))).toEqual([]);
+	});
+
+	it('idx→isoTime が引けない点も行は落とさず日付だけ n/a にする（後続のラベルがずれない）', () => {
+		// `meta.debug.swings` に載っていない idx（= 日付が引けない点）があっても、
+		// 行ごと落とすとラベルと点の対応が 1 つずれる。日付だけ n/a にして行は出す。
+		const p = makePattern({
+			type: 'triple_top',
+			status: 'completed',
+			pivots: fivePivots(['H', 'L', 'H', 'L', 'H']),
+		});
+		const text = formatPatternLine(p, 0, 'full', metaWithIdx([0, 10, 20, 30]));
+		expect(pivotRoleOrder(text)).toEqual(['山1', '谷1', '山2', '谷2', '山3']);
+		expect(text).toContain('山3: n/a');
+	});
+});
+
 // ── formatSummaryView ──
 
 describe('formatSummaryView', () => {
