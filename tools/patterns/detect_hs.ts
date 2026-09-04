@@ -208,13 +208,22 @@ type NecklinePt = { x: number; y: number };
  * 頭の真下（`necklineProjectionHeight`）も頭が 2 定義点の**内側**にあるので恒等で、
  * パターン高さはクランプの前後で変わらない。
  *
- * `i` が非有限なら丸めをすり抜けて `NaN` を返す（`necklineAtOr` の fallback には畳まれるが、
- * 添字の妥当性は呼び出し側で担保する。`necklineProjectionTarget` の docstring を参照）。
+ * **`i` が非有限なら `NaN`**（`necklineAtOr` はこれを fallback に畳む）。丸めより手前で弾くのは、
+ * `Math.min` / `Math.max` が `±Infinity` を端点へ丸めてしまい、**壊れた添字に対して端点の `y` という
+ * もっともらしい有限値**を返すため（CodeRabbit の指摘。PR #239 レビュー。クランプ導入前は
+ * `±Infinity` がそのまま伝播して fallback に落ちていた）。`b.x === a.x` の退化ケースより手前に
+ * 置くのは、「添字が壊れているなら水準を出さない」を経路によらず一定にするため。
+ *
+ * 添字の妥当性そのものは呼び出し側で担保する（`necklineProjectionTarget` の docstring を参照）。
+ * export しているのは**この非有限ガードとクランプを直接テストするため**——2 つの export
+ * （`necklineProjectionTarget` / `necklineProjectionHeight`）はどちらも添字を先に検査するので、
+ * それら経由では非有限の経路に到達できない。
  */
-function necklineAt(neckline: NecklinePt[] | undefined, i: number): number {
+export function necklineAt(neckline: NecklinePt[] | undefined, i: number): number {
 	if (!Array.isArray(neckline) || neckline.length < 2) return NaN;
 	const [a, b] = neckline;
 	if (!(Number.isFinite(a?.x) && Number.isFinite(b?.x) && Number.isFinite(a?.y) && Number.isFinite(b?.y))) return NaN;
+	if (!Number.isFinite(i)) return NaN;
 	if (b.x === a.x) return a.y;
 	// 定義点の区間へ丸める（#211）。`a.x < b.x` は現行 4 経路すべてで成り立つが、
 	// 順序に依存しない形にしておく（逆順で張られたら外挿ではなく常に片端へ潰れるため）。
@@ -263,8 +272,8 @@ export function necklineProjectionTarget(args: {
 }): number | undefined {
 	const { neckline, anchorIdx, direction, fallbackNecklinePrice } = args;
 	// **添字は fallback の対象外**。`fallbackNecklinePrice` は「`neckline` の張り方が壊れている」
-	// ときの代表水準であって、添字が壊れているときの代替ではない。`necklineAt` は `i` を検査せず
-	// NaN をそのまま計算に通すので、先に弾かないと `at()` が fallback に畳んで
+	// ときの代表水準であって、添字が壊れているときの代替ではない。`necklineAt` は非有限の `i` に
+	// NaN を返し、`necklineAtOr` がそれを fallback に畳むので、ここで先に弾かないと
 	// **もっともらしい target を返してしまう**（本来は undefined を返すべき入力）。
 	if (!Number.isFinite(anchorIdx)) return undefined;
 	const height = necklineProjectionHeight(args);

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dayjs } from '../../lib/datetime.js';
 import { getDefaultToleranceForTf, getSizeThresholdsForTf } from '../../tools/patterns/config.js';
-import { detectHeadAndShoulders, necklineProjectionTarget } from '../../tools/patterns/detect_hs.js';
+import { detectHeadAndShoulders, necklineAt, necklineProjectionTarget } from '../../tools/patterns/detect_hs.js';
 import { linearRegressionWithR2 } from '../../tools/patterns/regression.js';
 import type { Pivot } from '../../tools/patterns/swing.js';
 import type { CandleData, DetectContext } from '../../tools/patterns/types.js';
@@ -1908,69 +1908,52 @@ describe('detectHeadAndShoulders: ネックライン射影の高さ基準（issu
  * 無いので、**定義点の区間の外では直近の定義点の `y` で頭打ちにする**。
  *
  * クランプは `necklineAt` の 1 箇所に入れてあり、3 消費者（ブレイク検出 / スコアリングの
- * `necklinePrice` / ターゲット投影）すべてに同時に効く。ここでは module-private な
- * `necklineAt` の代わりに、それを直に通す唯一の export である `necklineProjectionTarget` の
- * **投影の起点**で振る舞いを固定する（高さ側は頭が定義点の内側なのでクランプ不変）。
+ * `necklinePrice` / ターゲット投影）すべてに同時に効く。`necklineAt` を export しているのは
+ * ここで**非有限ガードを直接叩くため**——`necklineProjectionTarget` /
+ * `necklineProjectionHeight` はどちらも添字を先に検査するので、それら経由では到達できない。
  *
  * 検出器を通した効果（ブレイクが消える / `confidence` が動く）の回帰は
  * `tests/detect_patterns_data_patterns_regression.test.ts` と本ファイルの #208 の節が持つ。
  */
 describe('necklineAt の外挿クランプ（issue #211）', () => {
-	/** 傾き +4/30 本。頭 idx=30 の真下は 87 なので高さは 130 - 87 = 43（クランプ不変）。 */
+	/** 傾き +4/30 本（15 本目 85 → 45 本目 89）。 */
 	const sloped = [
 		{ x: 15, y: 85 },
 		{ x: 45, y: 89 },
 	];
 
-	/** `anchorIdx` だけを動かして投影の起点を測る（他は #208 のテストと同じ形）。 */
-	function targetAt(anchorIdx: number, neckline: ReadonlyArray<{ x: number; y: number }> = sloped) {
-		return necklineProjectionTarget({
-			neckline: [...neckline],
-			anchorIdx,
-			headIdx: 30,
-			headPrice: 130,
-			direction: 'down',
-			fallbackNecklinePrice: 87,
-		});
-	}
-
 	it('定義点の内側は内挿のまま（クランプは恒等）', () => {
-		// nlAt(30) = 87 → target = round(87 - 43) = 44
-		expect(targetAt(30)).toBe(44);
-		// nlAt(20) = 85.667 → target = round(85.667 - 43) = 43
-		expect(targetAt(20)).toBe(43);
+		expect(necklineAt(sloped, 15)).toBe(85);
+		expect(necklineAt(sloped, 30)).toBe(87);
+		expect(necklineAt(sloped, 45)).toBe(89);
 	});
 
 	it('右端より後ろは右端の値で頭打ちになる（外挿しない）', () => {
-		// nlAt(45) = 89 → target = round(89 - 43) = 46
-		expect(targetAt(45)).toBe(46);
-		expect(targetAt(46)).toBe(46);
-		expect(targetAt(65)).toBe(46);
-		expect(targetAt(100000)).toBe(46);
-		// 無クランプなら nlAt(65) = 89 + 4/30 * 20 = 91.667 → round(91.667 - 43) = 49 だった。
-		expect(targetAt(65)).not.toBe(49);
+		expect(necklineAt(sloped, 46)).toBe(89);
+		expect(necklineAt(sloped, 65)).toBe(89);
+		expect(necklineAt(sloped, 100000)).toBe(89);
+		// 無クランプなら nlAt(65) = 89 + 4/30 * 20 = 91.667 だった。
+		expect(necklineAt(sloped, 65)).not.toBeCloseTo(91.667, 3);
 	});
 
 	it('左端より手前は左端の値で頭打ちになる（外挿しない）', () => {
-		// nlAt(15) = 85 → target = round(85 - 43) = 42
-		expect(targetAt(15)).toBe(42);
-		expect(targetAt(14)).toBe(42);
-		expect(targetAt(0)).toBe(42);
-		expect(targetAt(-100000)).toBe(42);
-		// 無クランプなら nlAt(0) = 85 - 4/30 * 15 = 83 → round(83 - 43) = 40 だった。
-		expect(targetAt(0)).not.toBe(40);
+		expect(necklineAt(sloped, 14)).toBe(85);
+		expect(necklineAt(sloped, 0)).toBe(85);
+		expect(necklineAt(sloped, -100000)).toBe(85);
+		// 無クランプなら nlAt(0) = 85 - 4/30 * 15 = 83 だった。
+		expect(necklineAt(sloped, 0)).not.toBe(83);
 	});
 
 	it('定義点が逆順に並んでいても区間へ丸める（片端へ潰れない）', () => {
 		// 現行 4 経路は `p1.idx < p3.idx` を守るが、順序に依存しない実装であることを固定する。
-		// 順序前提のクランプ（`min(max(i, a.x), b.x)`）だと右側外挿で左端 85 に潰れ 42 になる。
+		// 順序前提のクランプ（`min(max(i, a.x), b.x)`）だと右側外挿で左端 85 に潰れる。
 		const reversed = [
 			{ x: 45, y: 89 },
 			{ x: 15, y: 85 },
 		];
-		expect(targetAt(30, reversed)).toBe(44);
-		expect(targetAt(65, reversed)).toBe(46);
-		expect(targetAt(0, reversed)).toBe(42);
+		expect(necklineAt(reversed, 30)).toBe(87);
+		expect(necklineAt(reversed, 65)).toBe(89);
+		expect(necklineAt(reversed, 0)).toBe(85);
 	});
 
 	it('水平ネックラインではクランプが恒等（relaxed 経路の値は動かない）', () => {
@@ -1978,18 +1961,8 @@ describe('necklineAt の外挿クランプ（issue #211）', () => {
 			{ x: 15, y: 85 },
 			{ x: 45, y: 85 },
 		];
-		// 頭の真下も 85 なので高さは 45。どこを起点にしても round(85 - 45) = 40。
-		for (const idx of [0, 15, 30, 45, 65, 100000]) {
-			expect(
-				necklineProjectionTarget({
-					neckline: flat,
-					anchorIdx: idx,
-					headIdx: 30,
-					headPrice: 130,
-					direction: 'down',
-					fallbackNecklinePrice: 85,
-				}),
-			).toBe(40);
+		for (const idx of [-100000, 0, 15, 30, 45, 65, 100000]) {
+			expect(necklineAt(flat, idx)).toBe(85);
 		}
 	});
 
@@ -1998,31 +1971,85 @@ describe('necklineAt の外挿クランプ（issue #211）', () => {
 			{ x: 30, y: 85 },
 			{ x: 30, y: 89 },
 		];
-		// 頭の真下も 85 → 高さ 45。起点も 85 なので target = round(85 - 45) = 40。
-		expect(targetAt(65, degenerate)).toBe(40);
-		expect(targetAt(0, degenerate)).toBe(40);
+		expect(necklineAt(degenerate, 0)).toBe(85);
+		expect(necklineAt(degenerate, 30)).toBe(85);
+		expect(necklineAt(degenerate, 65)).toBe(85);
 	});
 
-	it('逆 H&S（上方向）でも同じく右端で頭打ちになる', () => {
-		// 山1 (15,113) → 山2 (45,118)。nlAt(30) = 115.5 → 高さ = 115.5 - 70 = 45.5。
-		const nl = [
-			{ x: 15, y: 113 },
-			{ x: 45, y: 118 },
+	// 非有限の添字は丸めより**手前**で弾く（CodeRabbit の指摘。PR #239 レビュー）。
+	// `Math.min` / `Math.max` は `±Infinity` を端点へ丸めるので、ガードが無いと
+	// 壊れた添字に対して端点の `y`（89 / 85）という**もっともらしい有限値**が返り、
+	// `necklineAtOr` の fallback にも畳まれなくなる。クランプ導入前は `±Infinity` が
+	// そのまま伝播して fallback に落ちていたので、これはクランプが持ち込んだ退行。
+	it('添字が非有限なら NaN（±Infinity が端点へ丸められない）', () => {
+		expect(necklineAt(sloped, Number.POSITIVE_INFINITY)).toBeNaN();
+		expect(necklineAt(sloped, Number.NEGATIVE_INFINITY)).toBeNaN();
+		expect(necklineAt(sloped, Number.NaN)).toBeNaN();
+	});
+
+	it('x が退化したネックラインでも非有限の添字は NaN（経路で扱いを変えない）', () => {
+		const degenerate = [
+			{ x: 30, y: 85 },
+			{ x: 30, y: 89 },
 		];
-		const up = (anchorIdx: number) =>
+		expect(necklineAt(degenerate, Number.POSITIVE_INFINITY)).toBeNaN();
+		expect(necklineAt(degenerate, Number.NaN)).toBeNaN();
+	});
+
+	it('ネックラインが 2 点未満 / 定義点が非有限なら NaN', () => {
+		expect(necklineAt(undefined, 30)).toBeNaN();
+		expect(necklineAt([{ x: 15, y: 85 }], 30)).toBeNaN();
+		expect(
+			necklineAt(
+				[
+					{ x: Number.NaN, y: 85 },
+					{ x: 45, y: 89 },
+				],
+				30,
+			),
+		).toBeNaN();
+		expect(
+			necklineAt(
+				[
+					{ x: 15, y: 85 },
+					{ x: 45, y: Number.NaN },
+				],
+				30,
+			),
+		).toBeNaN();
+	});
+
+	// クランプが**投影の起点まで届いている**こと（消費者 3）。値そのものの固定は上の
+	// `necklineAt` 直叩きが持つので、ここは伝播の確認に絞る。
+	it('ターゲット投影の起点までクランプが届く（H&S / 逆 H&S）', () => {
+		// 頭 idx=30 の真下は 87（内挿。クランプ不変）→ 高さ = 130 - 87 = 43。
+		// 起点は nlAt(65) = 89 に頭打ちになるので target = round(89 - 43) = 46。
+		expect(
 			necklineProjectionTarget({
-				neckline: nl,
-				anchorIdx,
+				neckline: sloped,
+				anchorIdx: 65,
+				headIdx: 30,
+				headPrice: 130,
+				direction: 'down',
+				fallbackNecklinePrice: 87,
+			}),
+		).toBe(46);
+
+		// 山1 (15,113) → 山2 (45,118)。nlAt(30) = 115.5 → 高さ = 115.5 - 70 = 45.5。
+		// 起点は nlAt(65) = 118 → target = round(118 + 45.5) = 164。
+		expect(
+			necklineProjectionTarget({
+				neckline: [
+					{ x: 15, y: 113 },
+					{ x: 45, y: 118 },
+				],
+				anchorIdx: 65,
 				headIdx: 30,
 				headPrice: 70,
 				direction: 'up',
 				fallbackNecklinePrice: 115.5,
-			});
-		// nlAt(45) = 118 → round(118 + 45.5) = 164
-		expect(up(45)).toBe(164);
-		expect(up(65)).toBe(164);
-		// 無クランプなら nlAt(65) = 121.333 → round(121.333 + 45.5) = 167 だった。
-		expect(up(65)).not.toBe(167);
+			}),
+		).toBe(164);
 	});
 });
 
