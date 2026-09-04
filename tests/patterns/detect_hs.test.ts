@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dayjs } from '../../lib/datetime.js';
 import { getDefaultToleranceForTf, getSizeThresholdsForTf } from '../../tools/patterns/config.js';
-import { detectHeadAndShoulders, necklineProjectionTarget } from '../../tools/patterns/detect_hs.js';
+import { detectHeadAndShoulders, necklineAt, necklineProjectionTarget } from '../../tools/patterns/detect_hs.js';
 import { linearRegressionWithR2 } from '../../tools/patterns/regression.js';
 import type { Pivot } from '../../tools/patterns/swing.js';
 import type { CandleData, DetectContext } from '../../tools/patterns/types.js';
@@ -1673,32 +1673,34 @@ describe('detectHeadAndShoulders: ネックライン射影の高さ基準（issu
 	}
 
 	it('strict H&S: 高さは頭の真下、投影の起点はブレイク足', () => {
-		// nlAt(30) = 85 → 高さ = 130 - 85 = 45
-		// nlAt(65) = 89.667 → target = round(89.667 - 45) = 45
-		// 旧実装（高さもブレイク足時点）は round(89.667 - (130 - 89.667)) = 49 だった。
+		// nlAt(30) = 85（内挿。クランプ不変）→ 高さ = 130 - 85 = 45
+		// nlAt(65) = 87（#211 のクランプで谷2 の 87 に頭打ち。無クランプなら 89.667 だった）
+		//   → target = round(87 - 45) = 42
+		// 旧実装（高さもブレイク足時点）は round(87 - (130 - 87)) = 44 になる。
 		const { candles, pivots } = buildSlopedHsWithBreakout();
 		const ctx = buildCtx({ candles, pivots });
 		const result = detectHeadAndShoulders(ctx);
 
 		const hs = result.patterns.find((p) => p.type === 'head_and_shoulders');
 		expect(hs?.breakoutBarIndex).toBe(65);
-		expect(hs?.breakoutTarget).toBe(45);
-		expect(hs?.breakoutTarget).not.toBe(49);
+		expect(hs?.breakoutTarget).toBe(42);
+		expect(hs?.breakoutTarget).not.toBe(44);
 		expect(hs?.targetMethod).toBe('neckline_projection');
 	});
 
 	it('strict Inverse H&S: 高さは頭の真下、投影の起点はブレイク足', () => {
-		// nlAt(30) = 115.5 → 高さ = 115.5 - 70 = 45.5
-		// nlAt(65) = 121.333 → target = round(121.333 + 45.5) = 167
-		// 旧実装は round(121.333 + (121.333 - 70)) = 173 だった。
+		// nlAt(30) = 115.5（内挿。クランプ不変）→ 高さ = 115.5 - 70 = 45.5
+		// nlAt(65) = 118（#211 のクランプで山2 の 118 に頭打ち。無クランプなら 121.333 だった）
+		//   → target = round(118 + 45.5) = 164
+		// 旧実装は round(118 + (118 - 70)) = 166 になる。
 		const { candles, pivots } = buildSlopedIhsWithBreakout();
 		const ctx = buildCtx({ candles, pivots });
 		const result = detectHeadAndShoulders(ctx);
 
 		const ihs = result.patterns.find((p) => p.type === 'inverse_head_and_shoulders');
 		expect(ihs?.breakoutBarIndex).toBe(65);
-		expect(ihs?.breakoutTarget).toBe(167);
-		expect(ihs?.breakoutTarget).not.toBe(173);
+		expect(ihs?.breakoutTarget).toBe(164);
+		expect(ihs?.breakoutTarget).not.toBe(166);
 		expect(ihs?.targetMethod).toBe('neckline_projection');
 	});
 
@@ -1716,9 +1718,10 @@ describe('detectHeadAndShoulders: ネックライン射影の高さ基準（issu
 
 	it('forming H&S: 投影の起点は最終構成点（暫定右肩）で、高さは頭の真下', () => {
 		// ネックライン (20,88) → (45,90)、傾き +2/25 本。
-		// nlAt(30) = 88.8 → 高さ = 135 - 88.8 = 46.2
-		// 暫定右肩 idx=65 → nlAt(65) = 91.6 → target = round(91.6 - 46.2) = 45
-		// 旧実装（左端 88 を高さにも起点にも使用）は round(88 - (135 - 88)) = 41 だった。
+		// nlAt(30) = 88.8（内挿。クランプ不変）→ 高さ = 135 - 88.8 = 46.2
+		// 暫定右肩 idx=65 → nlAt(65) = 90（#211 のクランプで右端 90 に頭打ち。無クランプなら 91.6）
+		//   → target = round(90 - 46.2) = 44
+		// 旧実装（左端 88 を高さにも起点にも使用）は round(88 - (135 - 88)) = 41 だった（クランプ後も同じ）。
 		const total = 66;
 		const candles: CandleData[] = Array.from({ length: total }, (_, i) => mkCandle(total - i, 90, 95, 85, 90));
 		candles[5] = mkCandle(total - 5, 99, 100, 97, 99);
@@ -1745,7 +1748,7 @@ describe('detectHeadAndShoulders: ネックライン射影の高さ基準（issu
 		const result = detectHeadAndShoulders(ctx);
 
 		const forming = result.patterns.find((p) => p.type === 'head_and_shoulders' && p.status === 'forming');
-		expect(forming?.breakoutTarget).toBe(45);
+		expect(forming?.breakoutTarget).toBe(44);
 		expect(forming?.breakoutTarget).not.toBe(41);
 	});
 
@@ -1898,6 +1901,159 @@ describe('detectHeadAndShoulders: ネックライン射影の高さ基準（issu
 });
 
 /**
+ * `necklineAt` の外挿クランプ（issue #211 Phase 2）。
+ *
+ * ネックラインは `p1` / `p3` の 2 点でしか定義されていない。その外側の値は「教科書の直線を
+ * 伸ばしたらこうなるはず」というモデル上の仮定であって、実際のサポート / レジスタンスの根拠が
+ * 無いので、**定義点の区間の外では直近の定義点の `y` で頭打ちにする**。
+ *
+ * クランプは `necklineAt` の 1 箇所に入れてあり、3 消費者（ブレイク検出 / スコアリングの
+ * `necklinePrice` / ターゲット投影）すべてに同時に効く。`necklineAt` を export しているのは
+ * ここで**非有限ガードを直接叩くため**——`necklineProjectionTarget` /
+ * `necklineProjectionHeight` はどちらも添字を先に検査するので、それら経由では到達できない。
+ *
+ * 検出器を通した効果（ブレイクが消える / `confidence` が動く）の回帰は
+ * `tests/detect_patterns_data_patterns_regression.test.ts` と本ファイルの #208 の節が持つ。
+ */
+describe('necklineAt の外挿クランプ（issue #211）', () => {
+	/** 傾き +4/30 本（15 本目 85 → 45 本目 89）。 */
+	const sloped = [
+		{ x: 15, y: 85 },
+		{ x: 45, y: 89 },
+	];
+
+	it('定義点の内側は内挿のまま（クランプは恒等）', () => {
+		expect(necklineAt(sloped, 15)).toBe(85);
+		expect(necklineAt(sloped, 30)).toBe(87);
+		expect(necklineAt(sloped, 45)).toBe(89);
+	});
+
+	it('右端より後ろは右端の値で頭打ちになる（外挿しない）', () => {
+		expect(necklineAt(sloped, 46)).toBe(89);
+		expect(necklineAt(sloped, 65)).toBe(89);
+		expect(necklineAt(sloped, 100000)).toBe(89);
+		// 無クランプなら nlAt(65) = 89 + 4/30 * 20 = 91.667 だった。
+		expect(necklineAt(sloped, 65)).not.toBeCloseTo(91.667, 3);
+	});
+
+	it('左端より手前は左端の値で頭打ちになる（外挿しない）', () => {
+		expect(necklineAt(sloped, 14)).toBe(85);
+		expect(necklineAt(sloped, 0)).toBe(85);
+		expect(necklineAt(sloped, -100000)).toBe(85);
+		// 無クランプなら nlAt(0) = 85 - 4/30 * 15 = 83 だった。
+		expect(necklineAt(sloped, 0)).not.toBe(83);
+	});
+
+	it('定義点が逆順に並んでいても区間へ丸める（片端へ潰れない）', () => {
+		// 現行 4 経路は `p1.idx < p3.idx` を守るが、順序に依存しない実装であることを固定する。
+		// 順序前提のクランプ（`min(max(i, a.x), b.x)`）だと右側外挿で左端 85 に潰れる。
+		const reversed = [
+			{ x: 45, y: 89 },
+			{ x: 15, y: 85 },
+		];
+		expect(necklineAt(reversed, 30)).toBe(87);
+		expect(necklineAt(reversed, 65)).toBe(89);
+		expect(necklineAt(reversed, 0)).toBe(85);
+	});
+
+	it('水平ネックラインではクランプが恒等（relaxed 経路の値は動かない）', () => {
+		const flat = [
+			{ x: 15, y: 85 },
+			{ x: 45, y: 85 },
+		];
+		for (const idx of [-100000, 0, 15, 30, 45, 65, 100000]) {
+			expect(necklineAt(flat, idx)).toBe(85);
+		}
+	});
+
+	it('2 定義点の x が同じなら区間が退化するので常に a.y（0 除算を作らない）', () => {
+		const degenerate = [
+			{ x: 30, y: 85 },
+			{ x: 30, y: 89 },
+		];
+		expect(necklineAt(degenerate, 0)).toBe(85);
+		expect(necklineAt(degenerate, 30)).toBe(85);
+		expect(necklineAt(degenerate, 65)).toBe(85);
+	});
+
+	// 非有限の添字は丸めより**手前**で弾く（CodeRabbit の指摘。PR #239 レビュー）。
+	// `Math.min` / `Math.max` は `±Infinity` を端点へ丸めるので、ガードが無いと
+	// 壊れた添字に対して端点の `y`（89 / 85）という**もっともらしい有限値**が返り、
+	// `necklineAtOr` の fallback にも畳まれなくなる。クランプ導入前は `±Infinity` が
+	// そのまま伝播して fallback に落ちていたので、これはクランプが持ち込んだ退行。
+	it('添字が非有限なら NaN（±Infinity が端点へ丸められない）', () => {
+		expect(necklineAt(sloped, Number.POSITIVE_INFINITY)).toBeNaN();
+		expect(necklineAt(sloped, Number.NEGATIVE_INFINITY)).toBeNaN();
+		expect(necklineAt(sloped, Number.NaN)).toBeNaN();
+	});
+
+	it('x が退化したネックラインでも非有限の添字は NaN（経路で扱いを変えない）', () => {
+		const degenerate = [
+			{ x: 30, y: 85 },
+			{ x: 30, y: 89 },
+		];
+		expect(necklineAt(degenerate, Number.POSITIVE_INFINITY)).toBeNaN();
+		expect(necklineAt(degenerate, Number.NaN)).toBeNaN();
+	});
+
+	it('ネックラインが 2 点未満 / 定義点が非有限なら NaN', () => {
+		expect(necklineAt(undefined, 30)).toBeNaN();
+		expect(necklineAt([{ x: 15, y: 85 }], 30)).toBeNaN();
+		expect(
+			necklineAt(
+				[
+					{ x: Number.NaN, y: 85 },
+					{ x: 45, y: 89 },
+				],
+				30,
+			),
+		).toBeNaN();
+		expect(
+			necklineAt(
+				[
+					{ x: 15, y: 85 },
+					{ x: 45, y: Number.NaN },
+				],
+				30,
+			),
+		).toBeNaN();
+	});
+
+	// クランプが**投影の起点まで届いている**こと（消費者 3）。値そのものの固定は上の
+	// `necklineAt` 直叩きが持つので、ここは伝播の確認に絞る。
+	it('ターゲット投影の起点までクランプが届く（H&S / 逆 H&S）', () => {
+		// 頭 idx=30 の真下は 87（内挿。クランプ不変）→ 高さ = 130 - 87 = 43。
+		// 起点は nlAt(65) = 89 に頭打ちになるので target = round(89 - 43) = 46。
+		expect(
+			necklineProjectionTarget({
+				neckline: sloped,
+				anchorIdx: 65,
+				headIdx: 30,
+				headPrice: 130,
+				direction: 'down',
+				fallbackNecklinePrice: 87,
+			}),
+		).toBe(46);
+
+		// 山1 (15,113) → 山2 (45,118)。nlAt(30) = 115.5 → 高さ = 115.5 - 70 = 45.5。
+		// 起点は nlAt(65) = 118 → target = round(118 + 45.5) = 164。
+		expect(
+			necklineProjectionTarget({
+				neckline: [
+					{ x: 15, y: 113 },
+					{ x: 45, y: 118 },
+				],
+				anchorIdx: 65,
+				headIdx: 30,
+				headPrice: 70,
+				direction: 'up',
+				fallbackNecklinePrice: 115.5,
+			}),
+		).toBe(164);
+	});
+});
+
+/**
  * 完成済み H&S の整合度サブスコア（issue #204 Phase 2）。
  *
  * 旧実装は 4 経路すべてが `(tolMargin + symmetry + per) / 3` で、`tolMargin` と `symmetry` が
@@ -1906,9 +2062,11 @@ describe('detectHeadAndShoulders: ネックライン射影の高さ基準（issu
  */
 describe('detectHeadAndShoulders: 整合度の多軸化（issue #204）', () => {
 	/** `detect_hs.ts` の `necklineAt` と同じ内挿（非 export なのでテスト側に置く）。 */
+	/** `detect_hs.ts` の `necklineAt` と同じ式（定義点の外側はクランプする。#211）。 */
 	function nlAt(neckline: ReadonlyArray<{ x: number; y: number }>, i: number): number {
 		const [a, b] = neckline;
-		return a.y + ((b.y - a.y) * (i - a.x)) / (b.x - a.x);
+		const clampedI = Math.min(Math.max(a.x, b.x), Math.max(Math.min(a.x, b.x), i));
+		return a.y + ((b.y - a.y) * (clampedI - a.x)) / (b.x - a.x);
 	}
 
 	it('完成済み H&S は scoreComponents を出し、triple 用の levelMargin は含まない', () => {

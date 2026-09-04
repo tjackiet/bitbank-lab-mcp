@@ -190,12 +190,45 @@ const HS_BREAKOUT_MAX_BARS = 30;
 
 type NecklinePt = { x: number; y: number };
 
-function necklineAt(neckline: NecklinePt[] | undefined, i: number): number {
+/**
+ * ネックライン（2 定義点で張る直線）の `i` 本目の水準。
+ *
+ * **定義点の外側は外挿しない**（issue #211）。`i` を `[min(a.x, b.x), max(a.x, b.x)]` へ丸めてから
+ * 内挿するので、区間の外では直近の定義点の `y` で頭打ちになる。ネックラインは `p1` / `p3` の
+ * 2 点でしか定義されておらず、その外側の値は「教科書の直線を伸ばしたらこうなるはず」という
+ * モデル上の仮定であって、実際のサポート / レジスタンスの根拠が無いため。
+ *
+ * クランプは**この関数 1 箇所**で掛ける。消費者は 3 系統（ブレイク検出 `findHsBreakoutIdx`、
+ * スコアリングの `necklinePrice`、ターゲット投影 `necklineProjectionTarget`）あるが、
+ * すべて `necklineAt` / `necklineAtOr` を経由しており、消費者ごとにクランプ有無を分けると
+ * 組み合わせ 8 通りをテストしないと挙動を保証できなくなる（#211 Phase 1 の計測 3 で、
+ * ブレイク検出をクランプするかどうかでスコアリング側の効果の向きが反転することを確認済み）。
+ *
+ * 水平ネックライン（`a.y === b.y`。relaxed 経路と一部の forming 経路）ではクランプは恒等。
+ * 頭の真下（`necklineProjectionHeight`）も頭が 2 定義点の**内側**にあるので恒等で、
+ * パターン高さはクランプの前後で変わらない。
+ *
+ * **`i` が非有限なら `NaN`**（`necklineAtOr` はこれを fallback に畳む）。丸めより手前で弾くのは、
+ * `Math.min` / `Math.max` が `±Infinity` を端点へ丸めてしまい、**壊れた添字に対して端点の `y` という
+ * もっともらしい有限値**を返すため（CodeRabbit の指摘。PR #239 レビュー。クランプ導入前は
+ * `±Infinity` がそのまま伝播して fallback に落ちていた）。`b.x === a.x` の退化ケースより手前に
+ * 置くのは、「添字が壊れているなら水準を出さない」を経路によらず一定にするため。
+ *
+ * 添字の妥当性そのものは呼び出し側で担保する（`necklineProjectionTarget` の docstring を参照）。
+ * export しているのは**この非有限ガードとクランプを直接テストするため**——2 つの export
+ * （`necklineProjectionTarget` / `necklineProjectionHeight`）はどちらも添字を先に検査するので、
+ * それら経由では非有限の経路に到達できない。
+ */
+export function necklineAt(neckline: NecklinePt[] | undefined, i: number): number {
 	if (!Array.isArray(neckline) || neckline.length < 2) return NaN;
 	const [a, b] = neckline;
 	if (!(Number.isFinite(a?.x) && Number.isFinite(b?.x) && Number.isFinite(a?.y) && Number.isFinite(b?.y))) return NaN;
+	if (!Number.isFinite(i)) return NaN;
 	if (b.x === a.x) return a.y;
-	return a.y + ((b.y - a.y) * (i - a.x)) / (b.x - a.x);
+	// 定義点の区間へ丸める（#211）。`a.x < b.x` は現行 4 経路すべてで成り立つが、
+	// 順序に依存しない形にしておく（逆順で張られたら外挿ではなく常に片端へ潰れるため）。
+	const clampedI = Math.min(Math.max(a.x, b.x), Math.max(Math.min(a.x, b.x), i));
+	return a.y + ((b.y - a.y) * (clampedI - a.x)) / (b.x - a.x);
 }
 
 // ── Helper: ネックライン射影ターゲット ──
@@ -212,8 +245,9 @@ function necklineAt(neckline: NecklinePt[] | undefined, i: number): number {
  * 下方向 H&S の target がブレイク終値より 39,079 円**上**に着地し、`targetReached` が
  * ブレイク直後に無条件で立っていた。
  *
- * `necklineAt` のクランプ有無は**変えない**——ブレイク検出（`findHsBreakoutIdx`）が同じ関数を
- * 使っており、クランプを入れると検出結果そのものが動くため（別 issue）。
+ * `necklineAt` は #211 で**全消費者を統一してクランプした**（定義点の外側では直近の定義点の `y` で
+ * 頭打ちになる）。ブレイク検出（`findHsBreakoutIdx`）・スコアリングの `necklinePrice` も同じ関数を
+ * 通るので、投影の起点だけがクランプされる／されないという食い違いは起きない。
  *
  * 高さが 0 以下（外挿したネックラインが頭を追い越した）場合は **target を出さない**。
  * `validateHorizontalNeckline` が |谷1 − 谷2| <= `HS_NECKLINE_MAX_PCT` を課しており、頭は
@@ -238,8 +272,8 @@ export function necklineProjectionTarget(args: {
 }): number | undefined {
 	const { neckline, anchorIdx, direction, fallbackNecklinePrice } = args;
 	// **添字は fallback の対象外**。`fallbackNecklinePrice` は「`neckline` の張り方が壊れている」
-	// ときの代表水準であって、添字が壊れているときの代替ではない。`necklineAt` は `i` を検査せず
-	// NaN をそのまま計算に通すので、先に弾かないと `at()` が fallback に畳んで
+	// ときの代表水準であって、添字が壊れているときの代替ではない。`necklineAt` は非有限の `i` に
+	// NaN を返し、`necklineAtOr` がそれを fallback に畳むので、ここで先に弾かないと
 	// **もっともらしい target を返してしまう**（本来は undefined を返すべき入力）。
 	if (!Number.isFinite(anchorIdx)) return undefined;
 	const height = necklineProjectionHeight(args);

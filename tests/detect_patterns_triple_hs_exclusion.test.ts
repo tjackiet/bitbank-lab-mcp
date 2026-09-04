@@ -73,22 +73,27 @@ describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）
 		// 山3（idx 232 / 終値 12,282,275）がネックライン 12,285,548.5 より 3,273.5 円下で、
 		// **検出器層の `peaks_below_neckline` がここへ到達する前に落としている。**
 		// この件数は本 issue のゲートではなく #216 Phase 2 のゲートが決めている。
+		//
+		// **`head_and_shoulders` 2 件は #211（`necklineAt` の外挿クランプ）で消えた**——これも
+		// 本段の対象外で、ブレイクが右肩より後ろの外挿に依存していたため `near_completion` に
+		// 落ち、既定 `includeForming: false` で除かれている。逆 H&S 2 件は残るので、本段が
+		// 落とす `triple_bottom` 242-249-272（共有点 249 / 272）の前提は変わらない。
 		expect(Object.fromEntries([...byType].sort())).toEqual({
 			falling_wedge: 2,
-			head_and_shoulders: 2,
 			inverse_head_and_shoulders: 2,
 			rising_wedge: 2,
 			triangle_ascending: 4,
 		});
-		expect(res.meta.count).toBe(12);
+		expect(res.meta.count).toBe(10);
 	});
 
 	it('meta.reduction に新しい段が載り、waterfall が成立する', async () => {
 		const res = await run();
 		const r = res.meta.reduction as Record<string, number>;
 		expect(r.tripleHsExcluded).toBe(1);
-		// 既定呼び出しでは H&S 系 4 件（H&S 2 / 逆 H&S 2）が出力に残り、それが比較対象になる（#224 症状 1）。
-		expect(r.tripleHsCandidateCount).toBe(4);
+		// 既定呼び出しでは H&S 系 2 件（逆 H&S 2。#211 のクランプで `head_and_shoulders` 2 件が
+		// `near_completion` に落ちた）が出力に残り、それが比較対象になる（#224 症状 1）。
+		expect(r.tripleHsCandidateCount).toBe(2);
 		expect(r.dedupMerged + r.currentFiltered + r.lifecycleExcluded + r.tripleHsExcluded + r.output).toBe(r.detected);
 		expect(r.output).toBe(res.meta.count);
 	});

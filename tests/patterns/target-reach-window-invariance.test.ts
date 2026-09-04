@@ -165,10 +165,17 @@ describe('targetReachedPct は系列の末尾に依存しない（issue #210 (3)
 		expect(
 			omitted.map((p) => [p.type, (p.pivots as Array<{ idx: number }>).map((q) => q.idx).join('-'), p.breakoutTarget]),
 		).toEqual([
-			['inverse_head_and_shoulders', '242-245-249-265-272', 12643525],
-			['inverse_head_and_shoulders', '20-26-42-106-109', 10277171],
-			['inverse_head_and_shoulders', '15-18-42-106-109', 10296129],
-			['inverse_head_and_shoulders', '3-9-42-106-109', 10297337],
+			// #211（`necklineAt` の外挿クランプ）で 4 件 → 7 件に増えた。投影の起点が
+			// 定義点の右端に頭打ちになるぶん `target` がブレイク終値へ寄り、`|target - breakoutPrice|`
+			// が退化判定に掛かる構造が増える（＝**進捗を出さない**側に倒れる。無クランプ時に
+			// 外挿で分母を水増ししていた構造が正体を現した形）。
+			['inverse_head_and_shoulders', '242-245-249-265-272', 12558124],
+			['inverse_head_and_shoulders', '230-232-249-265-272', 12602209],
+			['inverse_head_and_shoulders', '225-232-249-265-272', 12602209],
+			['inverse_head_and_shoulders', '230-232-249-283-285', 12888440],
+			['inverse_head_and_shoulders', '20-26-42-106-109', 10279567],
+			['inverse_head_and_shoulders', '15-18-42-106-109', 10302900],
+			['inverse_head_and_shoulders', '3-9-42-106-109', 10304386],
 		]);
 		for (const q of omitted) {
 			// breakoutTarget は出る（target の算出式は #210 の対象外）。進捗系だけが消える。
