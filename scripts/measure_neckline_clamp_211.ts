@@ -56,9 +56,9 @@
  *
  * ## `eth_jpy` / `xrp_jpy` / `sol_jpy`（issue の実害 4 件）について
  *
- * これらの系列はリポジトリに fixture が無く、**本実行環境は `public.bitbank.cc` への
- * 送信が組織のエグレスポリシーで拒否される**（CONNECT が 403）ため取得できない。
- * 系列を持っている環境で測れるように `--extra <file.json>` を用意してある。JSON の形は:
+ * これらの系列はリポジトリに fixture が無く、ライブ取得が要る（サンドボックス等、外部への
+ * 送信が塞がれた環境では取得できない）。取得できる環境で測れるように `--extra <file.json>`
+ * を用意してある。JSON の形は:
  *
  * ```json
  * [{ "label": "sol_jpy_1day", "tf": "1day",
@@ -66,6 +66,30 @@
  * ```
  *
  * 各系列は**標準コーパスにプールせず個別の表**に出す（#219 の教訓）。
+ *
+ * ### `--extra` の入力の作り方（ネットワークのある環境で）
+ *
+ * `detect_patterns` は `analyze_indicators(pair, tf, limit)` の `chart.candles` から
+ * `chart.meta.pastBuffer` 本（指標 warmup）を落とした配列をスキャンする。**同じ窓**を渡すため、
+ * 既存の `analyze_indicators_cli.ts` の出力をそのまま整形する（新しい取得コードは足さない）:
+ *
+ * ```bash
+ * for pair in eth_jpy xrp_jpy sol_jpy; do
+ *   for tf in 1hour 4hour 1day; do
+ *     npx tsx scripts/analyze_indicators_cli.ts "$pair" "$tf" 365 > "/tmp/n211/raw_${pair}_${tf}.json"
+ *     jq --arg label "${pair}_${tf}" --arg tf "$tf" '
+ *       (.data.chart.meta.pastBuffer // 0) as $pb
+ *       | [{ label: $label, tf: $tf,
+ *            candles: [ .data.chart.candles[$pb:][] | {isoTime, open, high, low, close} ] }]
+ *     ' "/tmp/n211/raw_${pair}_${tf}.json" > "/tmp/n211/series_${pair}_${tf}.json"
+ *   done
+ * done
+ * jq -s 'add' /tmp/n211/series_*.json > /tmp/n211/extra.json
+ * ```
+ *
+ * `limit = 365` は `detect_patterns` のスキーマ上限で、`btc_jpy` の 2 つの fixture と同じ条件。
+ * **窓は取得時刻に依存する**ので、過去の探索を再現したい場合は `candles` の末尾を切ること
+ * （`btc_jpy_1hour_2026_08` fixture が末尾を固定しているのと同じ理由）。
  */
 
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -736,6 +760,13 @@ function section1(rows: Row[], h: string): string {
 			'（定義点 `p1`〜`p3` は頭を挟むので、隣接ピボット間隔の最小値の 2 倍が下限になる。' +
 			'issue 本文の「`minBarsBetweenSwings` で割る」は 1 ギャップぶんの数え方で、`1hour` の 1.25%/本 は実際には 0.05 / 4）。' +
 			`本集合に現れた上界: ${bounds.map((b) => `${(b * 100).toFixed(4)}%/本`).join(' / ')}。`,
+	);
+	out.push('');
+	out.push(
+		'**この上界が課されるのは strict / relaxed の 5 点窓だけ。** `detect_hs.ts` が ' +
+			'`validateHorizontalNeckline`（水平度）と `minDist`（定義点の最小間隔）を呼ぶのは窓の列挙 4 箇所のみで、' +
+			'**forming 経路はどちらも通らない**（ネックラインは先行谷 / 先行山 → 頭後の谷 / 山を直に結ぶ）。' +
+			'したがって forming の行は上界比が 1 を超えうる——実データで 1.855（定義点間隔 3 本 / 理論最小 8 本）を観測している。',
 	);
 	const negative = sloped.filter((r) => r.relSlopePerBar < 0).length;
 	out.push('');
