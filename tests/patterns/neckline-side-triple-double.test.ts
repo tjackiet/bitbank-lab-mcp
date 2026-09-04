@@ -17,7 +17,7 @@
  *    （double の主構成点は 2 点ともネックラインより上。二重出力はこれで解消する）
  * 4. 凍結済み実データ（`btc_jpy_1hour_2026_08`）に**同じ形が実在する**こと。
  *    top / bottom、triple / double の 4 通りすべてを実データの候補で押さえる
- * 5. **H&S 系には配線していない**こと（#211 の外挿クランプの是非が決まるまで別 PR）
+ * 5. **H&S 系には配線していない**こと（`*_neckline` の棄却理由が H&S 系に 1 件も出ない）
  *
  * **形成中経路は対象外**（別式・別構造で、ネックラインの引き方も暫定構成点の扱いも違う）。
  * 4 の実データケースが `view=debug` の候補を見るのは、落ちた候補が `data.patterns` に
@@ -329,13 +329,20 @@ describe('同じ形が凍結済み実データにも存在する（issue #216 Ph
 		]);
 	});
 
-	it('H&S 系には配線していない（1hour の 4 件が据え置き）', async () => {
-		// #211（`necklineAt` の外挿クランプ）の是非が決まるまで別 PR。H&S は構造ゲートに
-		// スカラーを渡しブレイク判定には傾きつきの線を使うため、同じ構造がスカラー基準では
-		// 「上に外れ」線基準では「下に収まる」という反転が実際に起きている（#216 Phase 1 結論 3）。
+	it('H&S 系には配線していない（1hour の H&S 系に `*_neckline` の棄却が 1 件も無い）', async () => {
+		// 本ゲート（主構成点とネックラインの位置関係）は triple / double にしか配線していない。
+		// H&S は構造ゲートにスカラーを渡しブレイク判定には傾きつきの線を使うため、同じ構造が
+		// スカラー基準では「上に外れ」線基準では「下に収まる」という反転が実際に起きている
+		// （#216 Phase 1 結論 3）。この反転の扱いは #216 の H&S 側で別途決める。
+		//
+		// 件数は **#211（`necklineAt` の外挿クランプ）で 4 → 2 に減った**。本ゲートが落としたのでは
+		// なく、`head_and_shoulders` 265-272-294-313-322 / 204-249-294-313-322 の 2 件の
+		// ブレイクが外挿頼みで、クランプで `near_completion` に落ちて既定オプションから消えたため
+		// （下の `*_neckline` 棄却 0 件がそれを裏づける）。件数の内訳は
+		// `tests/detect_patterns_data_patterns_regression.test.ts` の #211 の節にある。
 		const { patterns, candidates } = await detectDebug(buildBtcJpy1hour202608Candles(), '1hour');
 		const hs = patterns.filter((p) => String(p.type).includes('head_and_shoulders'));
-		expect(hs).toHaveLength(4);
+		expect(hs).toHaveLength(2);
 		expect(
 			candidates.some((c) => String(c.type).includes('head_and_shoulders') && c.reason?.endsWith('_neckline')),
 		).toBe(false);

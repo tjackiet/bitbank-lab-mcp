@@ -1,7 +1,11 @@
 /**
- * issue #211 Phase 1: `necklineAt`（`tools/patterns/detect_hs.ts:193`）の**無クランプ外挿**が
+ * issue #211 Phase 1: `necklineAt`（`tools/patterns/detect_hs.ts`）の**無クランプ外挿**が
  * 3 系統の消費者にどれだけ効いているかを**計測だけ**するスクリプト。
  * `detect_hs.ts` は 1 行も変更しない（クランプ版は実行時に生成した複製に対してだけ効く）。
+ *
+ * **Phase 2（#211）で本番の `necklineAt` にクランプが入った。** 現行 `main` で走らせると
+ * 注入するクランプが冪等な no-op になり、どの変異も `base`（= 本番）と一致する。
+ * 以下の記述で「無クランプ」と書いてあるのは Phase 1 時点（#238 マージ時点）の本番挙動を指す。
  *
  * 実行:
  *
@@ -144,8 +148,16 @@ function __clampIdx211(neckline: NecklinePt[] | undefined, i: number): number {
 }
 `;
 
-/** ヘルパを差し込むアンカー（`necklineAt` の定義の直後）。 */
-const HELPER_ANCHOR = '\treturn a.y + ((b.y - a.y) * (i - a.x)) / (b.x - a.x);\n}\n';
+/**
+ * ヘルパを差し込むアンカー（`necklineAt` の定義の直後）。
+ *
+ * **#211 Phase 2 で `necklineAt` 自体がクランプするようになったため、この行は
+ * `clampedI` 版になっている。** 本スクリプトを Phase 2 以降の `main` で走らせると、
+ * 注入する `__clampIdx211` は冪等な no-op になり、全変異が `base` と一致する
+ * （＝クランプの冪等性の検算にはなるが、Phase 1 の差分は出ない）。
+ * Phase 1 の数値は #238 マージ時点（クランプ導入前）の `main` で取得したもの。
+ */
+const HELPER_ANCHOR = '\treturn a.y + ((b.y - a.y) * (clampedI - a.x)) / (b.x - a.x);\n}\n';
 
 function mutationsFor(flags: ClampFlags): Mutation[] {
 	const out: Mutation[] = [];
@@ -378,7 +390,13 @@ function buildCtx(spec: CaseSpec): DetectContext {
 
 type NecklinePt = { x: number; y: number };
 
-/** `detect_hs.ts` の `necklineAt` と**同じ式**（複製せず値を再現するためだけに使う）。 */
+/**
+ * `detect_hs.ts` の `necklineAt` の**無クランプ時の式**（複製せず値を再現するためだけに使う）。
+ *
+ * Phase 2 以降の `necklineAt` は内部でクランプするので**本物とは一致しない**。ここは
+ * 「無クランプならいくつだったか」を Phase 1 と同じ式で再現する対照用として残してある
+ * （`clampIdxLocal` を通した呼び出しがクランプ後の値になる）。
+ */
 function necklineAtLocal(neckline: NecklinePt[], i: number): number {
 	const [a, b] = neckline;
 	if (b.x === a.x) return a.y;

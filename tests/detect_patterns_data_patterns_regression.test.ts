@@ -18,6 +18,7 @@
  * | #199 候補 2 | triple の `duration` を暦日基準（`periodScoreDays`）からバー数基準（`periodScoreBars`）に移した。triple 2 件の `confidence` と `rankPatterns` の並びが変わった |
  * | #218 Phase 2 | `triple_*` と H&S 系が主構成点を 2 点以上共有していたら triple を落とす型間排他を入れた。**本ベースラインで初めて件数が動く**（14 → 13。`triple_bottom` 1 件の純減） |
  * | #216 Phase 2 | `triple_*` / `double_*` の主構成点がネックラインの誤った側にあったら落とす構造ゲートを入れた（13 → 12。`triple_top` 1 件の純減） |
+ * | #211 Phase 2 | `necklineAt` の外挿を定義点の区間へクランプした。**H&S 系 4 件が 2 件に減り、うち 1 件は別の構造に入れ替わった**（12 → 10） |
  *
  * **#206 では更新していない**（`MIN_CONFIDENCE` から未配線の 4 エントリを消しただけで、
  * `data.patterns` は 940 ケース全件で完全一致。行を足す必要が無かった）。
@@ -196,6 +197,24 @@
  * `head_and_shoulders` と主構成点を 1 点も共有しない）、排他が落とす
  * `triple_bottom` 242-249-272 は 3 谷ともネックラインの正しい側にある——**2 つのゲートは
  * 別の構造を落としている。**
+ *
+ * ## #211 Phase 2 時点のスナップショットの中身
+ *
+ * **3 度目の件数変動（12 → 10）で、H&S 系だけが動いた更新**。`necklineAt` が定義点
+ * （`p1` / `p3`）の外側を外挿しなくなったので、右肩より後ろのブレイク判定・スコアリング・
+ * ターゲット投影がすべて「直近の定義点の `y`」で頭打ちになる。
+ * **wedge 4 件 / triangle 4 件（H&S 系以外の 6 エントリ）は全フィールド不変。**
+ *
+ * | before（5 点 idx / conf / status） | after | 何が起きたか |
+ * |---|---|---|
+ * | `head_and_shoulders` 265-272-294-313-322 / 0.85 / `completed`（ブレイク足 330） | **出力から消える** | 傾き +7,513 円/本 のネックラインを右肩（idx 322）から 8 本外挿してようやく成立していたブレイクが、クランプで消えた（`status` → `near_completion`。既定 `includeForming: false` で落ちる） |
+ * | `head_and_shoulders` 204-249-294-313-322 / 0.69 / `completed`（同 330） | **出力から消える** | 同上（同じブレイク足を共有する別窓） |
+ * | `inverse_head_and_shoulders` 3-9-42-118-137 / 0.80 | `inverse_head_and_shoulders` **3-9-42-147-154** / **0.78**（`range` は同一） | `globalDedup` の代表入れ替わり。`breakoutTarget` 10,561,346 → **10,575,328** |
+ * | `inverse_head_and_shoulders` 230-232-249-265-272 / 0.74 | 同じ構造 / **0.77** | `breakoutTarget` 12,636,233 → **12,602,209**。分母 \|target − ブレイク価格\| が退化域に入り、進捗系を出さず `targetProgressOmittedReason: 'degenerate_target_distance'` を申告する側へ倒れた（#210 のガード） |
+ *
+ * 消えた 2 件は #211 が問題にした形そのもの——**ブレイクの成立が外挿量に依存していた**。
+ * 実データ B 全体では、傾きのある H&S 系 122 構造のうち 28 件が同じ理由で
+ * `completed` → `near_completion` に落ちる（#238 の Phase 1 計測）。
  */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -216,7 +235,7 @@ function stripStructureDiagram(patterns: ReadonlyArray<Record<string, unknown>>)
 	});
 }
 
-describe('detect_patterns: data.patterns の実データスナップショット（issue #200 起点。#202 / #199 / #208 / #210 / #204 / #199 候補 2 / #218 / #216 で更新）', () => {
+describe('detect_patterns: data.patterns の実データスナップショット（issue #200 起点。#202 / #199 / #208 / #210 / #204 / #199 候補 2 / #218 / #216 / #211 で更新）', () => {
 	it('btc_jpy 1hour（デフォルトオプション）で data.patterns が構造図の svg/title を除きベースラインと一致する', async () => {
 		const candles = buildBtcJpy1hour202608Candles();
 		vi.mocked(analyzeIndicators).mockResolvedValueOnce(
