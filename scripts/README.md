@@ -53,6 +53,7 @@ npm run stat -- --last 7d
 |---|---|
 | `measure_relaxed_fallback_227.ts` | `detect_hs.ts` の relaxed フォールバック（`RELAXED_FACTORS`）が標準コーパス 800 ＋ 実データ B 96 でどれだけ発火・accepted になるかを段別に計測し、段2 の係数スイープ・`headProminence` 軸の strict 採点試算を Markdown で出す（issue #227 Phase 1。コードは変えない） |
 | `measure_triple_target_reach_228.ts` | `detect_triples.ts` の完成済み 4 経路に `computeTargetReach` を配線したうえで、`target-reach.ts` の 3 定数（退化ガード比 / 上限 pct / 走査窓バー数）が triple でも妥当かを 940 ケースで計測して Markdown で出す（issue #228。定数は変えない）。結果は `docs/internal/triple-target-reach-228.md` |
+| `measure_neckline_clamp_211.ts` | `necklineAt`（`detect_hs.ts`）の**無クランプ外挿**が 3 系統の消費者（ブレイク検出 / `buildHsScore` の `necklinePrice` / ターゲット投影の起点）にどれだけ効いているかを標準コーパス 800 ＋ 実データ B 96 で計測し、消費者ごとに個別の表を Markdown で出す（issue #211 Phase 1。`detect_hs.ts` は変えず、実行時に生成したクランプ版の複製と比較する） |
 
 ```bash
 npx tsx scripts/measure_relaxed_fallback_227.ts                  # Markdown を stdout へ
@@ -60,6 +61,9 @@ npx tsx scripts/measure_relaxed_fallback_227.ts --json out.json  # 生データ�
 
 npx tsx scripts/measure_triple_target_reach_228.ts               # 同上
 npx tsx scripts/measure_triple_target_reach_228.ts --json out.json
+
+npx tsx scripts/measure_neckline_clamp_211.ts                     # 同上
+npx tsx scripts/measure_neckline_clamp_211.ts --extra extra.json  # 追加の実データ系列を系列ごとに測る
 ```
 
 ## バックテスト
