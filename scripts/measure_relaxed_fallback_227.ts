@@ -53,8 +53,10 @@
  */
 
 import { writeFileSync } from 'node:fs';
+import { dayjs } from '../lib/datetime.js';
 import { buildBtcJpy2026Candles } from '../tests/fixtures/btc_jpy_1day_2026.js';
 import { buildBtcJpy1hour202608Candles } from '../tests/fixtures/btc_jpy_1hour_2026_08.js';
+import { BTC_JPY_1HOUR_2026_09_START, buildBtcJpy1hour202609Candles } from '../tests/fixtures/btc_jpy_1hour_2026_09.js';
 import * as synth from '../tests/fixtures/synthetic_pattern_candles.js';
 import { getSizeThresholdsForTf, resolveParams } from '../tools/patterns/config.js';
 import { detectHeadAndShoulders } from '../tools/patterns/detect_hs.js';
@@ -88,12 +90,19 @@ const SWEEP_STEP = 0.01;
 type HsType = 'head_and_shoulders' | 'inverse_head_and_shoulders';
 const HS_TYPES: readonly HsType[] = ['head_and_shoulders', 'inverse_head_and_shoulders'];
 
-type Group = 'synthetic' | 'realA' | 'realB';
+type Group = 'synthetic' | 'realA' | 'realB' | 'realC';
+/** 分布・ヒストグラムの列に出す group（順序も表の列順）。 */
+const REPORT_GROUPS: readonly Group[] = ['synthetic', 'realA', 'realB', 'realC'];
 
 interface Series {
 	group: Group;
 	name: string;
 	candles: Candle[];
+	/**
+	 * 元 fixture の先頭から数えた、この系列の先頭バーの添字。**部分窓のときだけ非 0**
+	 * （窓ローカルの idx にこれを足すと fixture の idx になる）。窓を切っていない系列は未指定 = 0。
+	 */
+	idxOffset?: number;
 }
 
 interface CaseOpts {
@@ -123,6 +132,8 @@ interface CallResult {
 	swingDepth: number | undefined;
 	opts: CaseOpts;
 	type: HsType;
+	/** `series` が部分窓のときの元 fixture 上のオフセット（`Series.idxOffset`）。窓を跨いで同じ構造を畳むのに使う */
+	idxOffset: number;
 	strictCount: number;
 	/** relaxed が accepted になった pattern（無ければ null） */
 	relaxed: RelaxedHit | null;
@@ -188,8 +199,57 @@ const OPTS8: CaseOpts[] = Array.from({ length: 8 }, (_, b) => ({
 	includeInvalid: (b & 4) !== 0,
 }));
 
-/** 標準コーパス 800（合成 704 + 実データ A 96）と実データ B 96 を組む。実データ A / B は別配列で返す（プールしない）。 */
-function buildCorpus(): { standard: CaseSpec[]; realB: CaseSpec[] } {
+/**
+ * 実データ C の窓長スイープで使う窓の本数（= `detect_patterns` の `limit`）。
+ *
+ * **窓の左端が relaxed の発火可否を決める。** relaxed は strict が対象 type を 1 件も返さなかった
+ * ときにだけ走るので、同じ構造を含んでいても窓を広げて strict が別の H&S を拾えば relaxed は
+ * 評価されない。実データ B（`1hour`）の strict 0 件率が 0.0% で #227 のライブ実例を再現できなかった
+ * のはこれが理由なので、窓長を軸として掃く。
+ *
+ * `365 - 120 = 245` の窓（左端 `2026-08-30T14:00:00.000Z`）が**ライブ実行時のスキャン窓の左端と
+ * 一致**し、構成点の窓ローカル idx が #227 本文の `[29, 36, 39, 43, 48]` に揃う。
+ */
+const REAL_C_WINDOW_LENGTHS = [60, 90, 120, 150, 200, 250, 300, 365] as const;
+
+/**
+ * #227 のライブ実行時のスキャン窓の左端（実データ C の fixture 上の添字）。
+ * この左端の窓では 5 点の窓ローカル idx が本文の `[29, 36, 39, 43, 48]` に一致する。
+ */
+const LIVE_WINDOW_OFFSET_227 = 245;
+
+/** #227 本文のライブ実例の構成点（実データ C の fixture 上の添字）。 */
+const LIVE_PIVOTS_227 = [274, 281, 284, 288, 293] as const;
+
+/** 窓長スイープの系列名。`structureKey` はこのサフィックスを落として窓を跨いで構造を畳む。 */
+function realCWindowName(n: number): string {
+	return `btc_jpy_1hour_2026_09@last${n}`;
+}
+
+/** 実データ C の末尾 N 本の窓 × `swingDepth` 4 種 × オプション 8 通り。時間足はネイティブの `1hour` 固定。 */
+function buildRealCWindows(full: Series): CaseSpec[] {
+	const out: CaseSpec[] = [];
+	for (const n of REAL_C_WINDOW_LENGTHS) {
+		const offset = full.candles.length - n;
+		if (offset < 0) throw new Error(`窓長 ${n} が系列長 ${full.candles.length} を超えている`);
+		const series: Series = {
+			group: 'realC',
+			name: realCWindowName(n),
+			candles: full.candles.slice(offset),
+			idxOffset: offset,
+		};
+		for (const swingDepth of [undefined, 2, 3, 6]) {
+			for (const opts of OPTS8) out.push({ series, tf: '1hour', swingDepth, opts });
+		}
+	}
+	return out;
+}
+
+/**
+ * 標準コーパス 800（合成 704 + 実データ A 96）・実データ B 96・実データ C 96 と、
+ * 実データ C の窓長スイープ 256 を組む。**実データ A / B / C はプールしない**（#219 の教訓）。
+ */
+function buildCorpus(): { standard: CaseSpec[]; realB: CaseSpec[]; realC: CaseSpec[]; realCWindows: CaseSpec[] } {
 	const standard: CaseSpec[] = [];
 	for (const [name, build] of SYNTHETIC_BUILDERS) {
 		const series: Series = { group: 'synthetic', name, candles: build() as Candle[] };
@@ -214,8 +274,18 @@ function buildCorpus(): { standard: CaseSpec[]; realB: CaseSpec[] } {
 		}
 		return out;
 	};
+	const realC: Series = {
+		group: 'realC',
+		name: 'btc_jpy_1hour_2026_09',
+		candles: buildBtcJpy1hour202609Candles() as Candle[],
+	};
 	standard.push(...realCases(realA));
-	return { standard, realB: realCases(realB) };
+	return {
+		standard,
+		realB: realCases(realB),
+		realC: realCases(realC),
+		realCWindows: buildRealCWindows(realC),
+	};
 }
 
 // ── ハーネス（detect_patterns.ts と同じ ctx の組み方） ──
@@ -312,6 +382,7 @@ function runCase(spec: CaseSpec): CallResult[] {
 			swingDepth: spec.swingDepth,
 			opts: spec.opts,
 			type,
+			idxOffset: spec.series.idxOffset ?? 0,
 			strictCount: strict.length,
 			relaxed: relaxed.length === 1 ? toHit(relaxed[0], type, ctx.headProminencePct) : null,
 			fallbackCandidates,
@@ -399,9 +470,17 @@ function distRow(label: string, values: number[], asPct = false): string {
 
 const DIST_HEADER = '| 対象 | n | min | p25 | p50 | p75 | p95 | max |\n|---|---:|---:|---:|---:|---:|---:|---:|';
 
-/** 構造単位のキー `(系列, tf, type, idx)`。オプション 8 通り × swingDepth の重複を畳む */
+/**
+ * 構造単位のキー `(系列, tf, type, fixture 上の idx)`。オプション 8 通り × `swingDepth` の重複を畳む。
+ *
+ * 実データ C の窓長スイープは同じ構造を窓長ごとに拾いうるので、**系列名から `@lastN` を落とし、
+ * idx を `idxOffset` で fixture 上の添字に直してから**畳む（そうしないと計測 2 の分布で同一構造を
+ * 窓の数だけ重複計上する）。窓を切っていない系列は `idxOffset = 0` かつサフィックスも無いので不変。
+ */
 function structureKey(r: CallResult): string {
-	return `${r.series}|${r.tf}|${r.type}|${r.relaxed?.indices.join('-') ?? ''}`;
+	const base = r.series.replace(/@last\d+$/, '');
+	const idx = r.relaxed?.indices.map((i) => i + r.idxOffset).join('-') ?? '';
+	return `${base}|${r.tf}|${r.type}|${idx}`;
 }
 
 /** `(系列, tf, swingDepth, type)` のキー。オプション 8 通りの重複を畳むときに使う。 */
@@ -489,6 +568,35 @@ function fireByTf(title: string, results: CallResult[], nativeTf: string): strin
 	return lines.join('\n');
 }
 
+/**
+ * 実データ C の窓長スイープの表。**窓長 = `detect_patterns` の `limit`** で、窓は末尾から N 本。
+ * 左端が変わると strict が拾う構造が変わり、relaxed の発火可否そのものが変わる。
+ */
+function windowTable(title: string, results: CallResult[]): string {
+	const lines: string[] = [`#### ${title}`, ''];
+	lines.push(
+		'| 窓長 | 窓の左端 (UTC) | type | 呼び出し | strict 0 件 | strict 0 件率 | 段1 accepted | 段2 accepted | relaxed 不発 |',
+	);
+	lines.push('|---:|---|---|---:|---:|---:|---:|---:|---:|');
+	for (const n of REAL_C_WINDOW_LENGTHS) {
+		const name = realCWindowName(n);
+		const rows = results.filter((r) => r.series === name);
+		const offset = rows[0]?.idxOffset ?? 0;
+		const left = dayjs.utc(BTC_JPY_1HOUR_2026_09_START).add(offset, 'hour').toISOString();
+		for (const type of HS_TYPES) {
+			const st = tallyFire(rows.filter((r) => r.type === type));
+			const t1 = tagFor(type, RELAXED_FACTORS[0].tag);
+			const t2 = tagFor(type, RELAXED_FACTORS[1].tag);
+			// 左端が #227 のライブ実行と一致する窓を目印にする
+			const mark = offset === LIVE_WINDOW_OFFSET_227 ? ' ←ライブ実例と同じ左端' : '';
+			lines.push(
+				`| ${n} | \`${left}\`${mark} | \`${type}\` | ${st.calls} | ${st.strict0} | ${st.calls ? fmtPct(st.strict0 / st.calls, 1) : '—'} | ${st.byTag[t1] ?? 0} | ${st.byTag[t2] ?? 0} | ${st.relaxedNone} |`,
+			);
+		}
+	}
+	return lines.join('\n');
+}
+
 // ── 計測 4: headProminence 軸を strict 閾値で採点し直す試算 ──
 
 const HS_AXES = ['symmetry', 'headProminence', 'timeSymmetry', 'retracement', 'breakoutQuality', 'duration'] as const;
@@ -545,10 +653,10 @@ interface SelfCheckRow {
  * `k` で選べる（`k = 0.5` → 段1 `0.6g' = 1.2×突出率` は落ち、段2 `0.4g' = 0.8×突出率` が通る。
  * `k = 0.7` → 段1 が通る）。
  */
-function selfCheck(standard: CaseSpec[], realB: CaseSpec[]): SelfCheckRow[] {
+function selfCheck(standard: CaseSpec[], realB: CaseSpec[], realC: CaseSpec[]): SelfCheckRow[] {
 	const rows: SelfCheckRow[] = [];
 	const pick = (name: string, tf: string, sd: number | undefined) =>
-		[...standard, ...realB].find(
+		[...standard, ...realB, ...realC].find(
 			(c) => c.series.name === name && c.tf === tf && c.swingDepth === sd && !c.opts.includeForming,
 		) as CaseSpec;
 	const targets: Array<{ spec: CaseSpec; type: HsType }> = [
@@ -558,6 +666,8 @@ function selfCheck(standard: CaseSpec[], realB: CaseSpec[]): SelfCheckRow[] {
 		{ spec: pick('btc_jpy_1day_2026', '4hour', 3), type: 'head_and_shoulders' },
 		{ spec: pick('btc_jpy_1hour_2026_08', '1hour', undefined), type: 'head_and_shoulders' },
 		{ spec: pick('btc_jpy_1hour_2026_08', '1hour', undefined), type: 'inverse_head_and_shoulders' },
+		{ spec: pick('btc_jpy_1hour_2026_09', '1hour', undefined), type: 'head_and_shoulders' },
+		{ spec: pick('btc_jpy_1hour_2026_09', '1hour', undefined), type: 'inverse_head_and_shoulders' },
 	];
 	for (const { spec, type } of targets) {
 		const strictRes = detectHeadAndShoulders(buildCtx(spec));
@@ -599,10 +709,12 @@ function main() {
 	const jsonPath = jsonIdx >= 0 ? process.argv[jsonIdx + 1] : undefined;
 	if (jsonIdx >= 0 && !jsonPath) throw new Error('--json には出力先パスが必要です');
 
-	const { standard, realB } = buildCorpus();
+	const { standard, realB, realC, realCWindows } = buildCorpus();
 	const stdResults = standard.flatMap(runCase);
 	const bResults = realB.flatMap(runCase);
-	const all = [...stdResults, ...bResults];
+	const cResults = realC.flatMap(runCase);
+	const cWinResults = realCWindows.flatMap(runCase);
+	const all = [...stdResults, ...bResults, ...cResults, ...cWinResults];
 
 	// 検算: `_fallback` 付き pattern と `fallback_relaxed` accepted 候補の件数が一致する
 	const candMismatch = all.filter((r) => (r.relaxed ? 1 : 0) !== r.fallbackCandidates);
@@ -611,7 +723,10 @@ function main() {
 	out.push('# issue #227 Phase 1: relaxed フォールバックの計測結果');
 	out.push('');
 	out.push(
-		`- 標準コーパス: ${standard.length} ケース（合成 ${standard.filter((c) => c.series.group === 'synthetic').length} + 実データ A ${standard.filter((c) => c.series.group === 'realA').length}）、実データ B: ${realB.length} ケース。呼び出しはケース × 2 type`,
+		`- 標準コーパス: ${standard.length} ケース（合成 ${standard.filter((c) => c.series.group === 'synthetic').length} + 実データ A ${standard.filter((c) => c.series.group === 'realA').length}）、実データ B: ${realB.length} ケース、実データ C: ${realC.length} ケース ＋ 実データ C の窓長スイープ ${realCWindows.length} ケース。呼び出しはケース × 2 type`,
+	);
+	out.push(
+		'- **実データ A / B / C はプールしない**（#219）。実データ C（`btc_jpy_1hour_2026_09`）は #227 のライブ実例を含む窓で、実データ B とは期間が異なる別 fixture（重複 184 本は全値一致を確認済み）',
 	);
 	out.push(
 		'- 呼び出しの延べ数はオプション 8 通りを含む（検出器に届くのは `includeForming` だけなので、同一設定の 4 反復を含む。#204 / #206 と単位を揃えるため）。重複を畳んだ数字は「構造」列と組単位の集計を見る',
@@ -628,10 +743,39 @@ function main() {
 	out.push('');
 	out.push('| ケース | 実際の relaxed | 再現 f | 再現結果 | 一致 |');
 	out.push('|---|---|---:|---|---|');
-	for (const row of selfCheck(standard, realB)) {
+	for (const row of selfCheck(standard, realB, realC)) {
 		out.push(
 			`| ${row.label} | ${row.realTag} | ${Number.isNaN(row.emuF) ? '—' : row.emuF.toFixed(2)} | ${row.emuTag} | ${row.match ? 'OK' : '**NG**'} |`,
 		);
+	}
+	out.push('');
+
+	// ── #227 のライブ実例の再現検算 ──
+	out.push('### #227 のライブ実例の再現');
+	out.push('');
+	out.push(
+		`実データ C の fixture 上の構成点 \`${LIVE_PIVOTS_227.join(', ')}\`（#227 本文の \`[29, 36, 39, 43, 48]\` に対応。` +
+			`左端 idx ${LIVE_WINDOW_OFFSET_227} = 窓長 ${365 - LIVE_WINDOW_OFFSET_227} の窓）を relaxed が実際に拾ったかを、窓長スイープの結果から直接照合する。`,
+	);
+	out.push('');
+	const liveWanted = LIVE_PIVOTS_227.join('-');
+	const liveHits = cWinResults.filter(
+		(r) => r.relaxed && r.relaxed.indices.map((i) => i + r.idxOffset).join('-') === liveWanted,
+	);
+	if (liveHits.length === 0) {
+		out.push('**この 5 点を構成点とする relaxed accepted は 0 件**（どの窓長でも拾われなかった）。');
+	} else {
+		const byWindow = new Map<string, CallResult[]>();
+		for (const r of liveHits) byWindow.set(r.series, [...(byWindow.get(r.series) ?? []), r]);
+		out.push('| 系列（窓） | swingDepth | type | 段 | tag | status | 突出率 | strict gate | 比 | conf | 延べ |');
+		out.push('|---|---|---|---:|---|---|---:|---:|---:|---:|---:|');
+		for (const [name, rs] of byWindow) {
+			const h = rs[0].relaxed as RelaxedHit;
+			const sds = [...new Set(rs.map((x) => x.swingDepth ?? 'auto'))].join('/');
+			out.push(
+				`| \`${name}\` | ${sds} | \`${rs[0].type}\` | ${h.stage} | \`${h.tag}\` | ${h.status ?? '—'} | ${fmtPct(h.prominence, 3)} | ${fmtPct(h.gate, 2)} | ${h.ratio.toFixed(3)} | ${h.confidence} | ${rs.length} |`,
+			);
+		}
 	}
 	out.push('');
 
@@ -659,13 +803,26 @@ function main() {
 		),
 	);
 	out.push('');
-	out.push(fireTable('実データ B 96（`btc_jpy` 1hour。別建て）', bResults));
+	out.push(fireTable('実データ B 96（`btc_jpy` 1hour 2026-08。別建て）', bResults));
+	out.push('');
+	out.push(fireTable('実データ C 96（`btc_jpy` 1hour 2026-09。別建て。365 本を 1 窓として渡した場合）', cResults));
+	out.push('');
+	out.push(
+		fireTable(
+			'実データ C の窓長スイープ 256（`1hour` × 窓長 8 種 × `swingDepth` 4 種 × オプション 8 通り）',
+			cWinResults,
+		),
+	);
+	out.push('');
+	out.push(windowTable('実データ C: 窓長別（窓長 = `detect_patterns` の `limit`）', cWinResults));
 	out.push('');
 
 	// ── 5 ──
 	out.push('## 計測 5: 実データ A / B を native のまま時間足別に見る');
 	out.push('');
-	out.push(fireByTf('実データ B（`btc_jpy` 1hour 365 本）', bResults, '1hour'));
+	out.push(fireByTf('実データ B（`btc_jpy` 1hour 365 本 2026-08）', bResults, '1hour'));
+	out.push('');
+	out.push(fireByTf('実データ C（`btc_jpy` 1hour 365 本 2026-09）', cResults, '1hour'));
 	out.push('');
 	out.push(
 		fireByTf(
@@ -696,14 +853,21 @@ function main() {
 	if (byStructure.size === 0) {
 		out.push('relaxed accepted は 0 件。');
 	} else {
-		out.push('| group | 系列 | tf | swingDepth | type | 段 | 5 点 idx | status | 突出率 | gate | 比 | conf | 延べ |');
-		out.push('|---|---|---|---|---|---:|---|---|---:|---:|---:|---:|---:|');
+		out.push(
+			'`5 点 idx` は**窓ローカル**の添字、`fixture idx` は元 fixture 上の添字（部分窓のみ。`idxOffset` を足したもの）。',
+		);
+		out.push('');
+		out.push(
+			'| group | 系列 | tf | swingDepth | type | 段 | 5 点 idx | fixture idx | status | 突出率 | gate | 比 | conf | 延べ |',
+		);
+		out.push('|---|---|---|---|---|---:|---|---|---|---:|---:|---:|---:|---:|');
 		for (const [, rs] of byStructure) {
 			const r = rs[0];
 			const h = r.relaxed as RelaxedHit;
 			const sds = [...new Set(rs.map((x) => x.swingDepth ?? 'auto'))].join('/');
+			const abs = r.idxOffset === 0 ? '—' : h.indices.map((i) => i + r.idxOffset).join('-');
 			out.push(
-				`| ${r.group} | ${r.series} | ${r.tf} | ${sds} | \`${r.type}\` | ${h.stage} | ${h.indices.join('-')} | ${h.status ?? '—'} | ${fmtPct(h.prominence, 3)} | ${fmtPct(h.gate, 2)} | ${h.ratio.toFixed(3)} | ${h.confidence} | ${rs.length} |`,
+				`| ${r.group} | ${r.series} | ${r.tf} | ${sds} | \`${r.type}\` | ${h.stage} | ${h.indices.join('-')} | ${abs} | ${h.status ?? '—'} | ${fmtPct(h.prominence, 3)} | ${fmtPct(h.gate, 2)} | ${h.ratio.toFixed(3)} | ${h.confidence} | ${rs.length} |`,
 			);
 		}
 	}
@@ -717,7 +881,7 @@ function main() {
 	out.push(`段2 accepted: 延べ ${stage2.length} 件 / 構造 ${stage2Structures.length} 件。`);
 	out.push('');
 	out.push(DIST_HEADER);
-	for (const group of ['synthetic', 'realA', 'realB'] as const) {
+	for (const group of REPORT_GROUPS) {
 		const xs = stage2Structures.filter((r) => r.group === group);
 		out.push(
 			distRow(
@@ -747,7 +911,7 @@ function main() {
 	// 段2 の係数スイープ（strict 0 件の (系列, tf, swingDepth, type) ごとに 1 回）
 	const strict0Combos = new Map<string, { spec: CaseSpec; type: HsType; calls: number; real: RelaxedHit | null }>();
 	const specByCombo = new Map<string, CaseSpec>();
-	for (const spec of [...standard, ...realB]) {
+	for (const spec of [...standard, ...realB, ...realC, ...realCWindows]) {
 		for (const type of HS_TYPES)
 			specByCombo.set(comboKey({ series: spec.series.name, tf: spec.tf, swingDepth: spec.swingDepth, type }), spec);
 	}
@@ -851,7 +1015,7 @@ function main() {
 	const poolBy: Record<string, number[]> = {};
 	const poolAllBy: Record<string, number[]> = {};
 	const seenCombo = new Set<string>();
-	for (const spec of [...standard, ...realB]) {
+	for (const spec of [...standard, ...realB, ...realC, ...realCWindows]) {
 		for (const type of HS_TYPES) {
 			const k = comboKey({ series: spec.series.name, tf: spec.tf, swingDepth: spec.swingDepth, type });
 			if (seenCombo.has(k)) continue;
@@ -865,14 +1029,14 @@ function main() {
 	out.push('strict 0 件の組のみ（relaxed が実際に評価する窓）:');
 	out.push('');
 	out.push(DIST_HEADER);
-	for (const group of ['synthetic', 'realA', 'realB'] as const) {
+	for (const group of REPORT_GROUPS) {
 		for (const type of HS_TYPES) out.push(distRow(`${group} \`${type}\``, poolBy[`${group}|${type}`] ?? []));
 	}
 	out.push('');
 	out.push('全組（strict が通っている組も含む参考値）:');
 	out.push('');
 	out.push(DIST_HEADER);
-	for (const group of ['synthetic', 'realA', 'realB'] as const) {
+	for (const group of REPORT_GROUPS) {
 		for (const type of HS_TYPES) out.push(distRow(`${group} \`${type}\``, poolAllBy[`${group}|${type}`] ?? []));
 	}
 	out.push('');
@@ -880,20 +1044,18 @@ function main() {
 	out.push('');
 	const bins = Array.from({ length: 20 }, (_, i) => i * 0.05);
 	out.push(
-		`| 比の区間 | ${['synthetic', 'realA', 'realB'].flatMap((g) => HS_TYPES.map((t) => `${g} ${t === 'head_and_shoulders' ? 'H&S' : '逆H&S'}`)).join(' | ')} |`,
+		`| 比の区間 | ${REPORT_GROUPS.flatMap((g) => HS_TYPES.map((t) => `${g} ${t === 'head_and_shoulders' ? 'H&S' : '逆H&S'}`)).join(' | ')} |`,
 	);
-	out.push(`|---|${'---:|'.repeat(6)}`);
+	out.push(`|---|${'---:|'.repeat(REPORT_GROUPS.length * HS_TYPES.length)}`);
 	const binCount = (xs: number[], lo: number, hi: number) => xs.filter((x) => x >= lo && x < hi).length;
 	for (const lo of bins) {
 		const hi = lo + 0.05;
-		const cells = (['synthetic', 'realA', 'realB'] as const).flatMap((g) =>
-			HS_TYPES.map((t) => binCount(poolAllBy[`${g}|${t}`] ?? [], lo, hi)),
-		);
+		const cells = REPORT_GROUPS.flatMap((g) => HS_TYPES.map((t) => binCount(poolAllBy[`${g}|${t}`] ?? [], lo, hi)));
 		const mark = lo >= 0.3 && lo < 0.6 ? '**' : '';
 		out.push(`| ${mark}[${lo.toFixed(2)}, ${hi.toFixed(2)})${mark} | ${cells.join(' | ')} |`);
 	}
 	out.push(
-		`| ≥ 1.00 | ${(['synthetic', 'realA', 'realB'] as const).flatMap((g) => HS_TYPES.map((t) => (poolAllBy[`${g}|${t}`] ?? []).filter((x) => x >= 1).length)).join(' | ')} |`,
+		`| ≥ 1.00 | ${REPORT_GROUPS.flatMap((g) => HS_TYPES.map((t) => (poolAllBy[`${g}|${t}`] ?? []).filter((x) => x >= 1).length)).join(' | ')} |`,
 	);
 	out.push('');
 
