@@ -54,6 +54,8 @@ npm run stat -- --last 7d
 | `measure_relaxed_fallback_227.ts` | `detect_hs.ts` の relaxed フォールバック（`RELAXED_FACTORS`）が標準コーパス 800 ＋ 実データ B 96 でどれだけ発火・accepted になるかを段別に計測し、段2 の係数スイープ・`headProminence` 軸の strict 採点試算を Markdown で出す（issue #227 Phase 1。コードは変えない） |
 | `measure_triple_target_reach_228.ts` | `detect_triples.ts` の完成済み 4 経路に `computeTargetReach` を配線したうえで、`target-reach.ts` の 3 定数（退化ガード比 / 上限 pct / 走査窓バー数）が triple でも妥当かを 940 ケースで計測して Markdown で出す（issue #228。定数は変えない）。結果は `docs/internal/triple-target-reach-228.md` |
 
+| `scan_hs_216.ts` | `detect_patterns` を H&S / 逆H&S に絞り `view=full` で複数ペア × 複数時間足に順に当て、各ペアの `検出経路:` 行だけを出す。**strict が 1 件以上出たペアで打ち切り**、そのペアの `content[0].text` を全文出す（#216 の外挿線 vs 水平基準の実害例収集用。コードは変えない） |
+
 ```bash
 npx tsx scripts/measure_relaxed_fallback_227.ts                  # Markdown を stdout へ
 npx tsx scripts/measure_relaxed_fallback_227.ts --json out.json  # 生データも保存
@@ -78,3 +80,12 @@ npx tsx scripts/run_backtest_e2e.ts rsi
 | スクリプト | 説明 |
 |---|---|
 | `cli-utils.ts` | CLI 共通ユーティリティ。`parseArgs` (引数パース)、`intArg` (整数引数取得)、`runCli` (エントリポイントラッパー) を提供 |
+
+```bash
+# 既定: eth,xrp,sol,doge,ltc,bcc を 1hour → 4hour → 1day の順
+npx tsx scripts/scan_hs_216.ts
+npx tsx scripts/scan_hs_216.ts --pairs=eth_jpy,xrp_jpy --types=1hour --limit=365
+```
+
+`--limit` は既定 90（スキャン窓の本数）。**1hour で 0 件が続くときは先に `--limit` を上げること**——
+既定の 90 本は「形成中〜完成直後」を見る窓で、数日前に完成した H&S は窓の外に落ちて静かに 0 件になる。
