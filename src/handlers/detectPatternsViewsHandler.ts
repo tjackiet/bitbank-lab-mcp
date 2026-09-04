@@ -984,6 +984,49 @@ function formatPivotPrices(pv: Pivot): string {
 }
 
 /**
+ * pivot 明細行の役割ラベル表（issue #234）。キーは **`type` と `pivots.length` の組**。
+ *
+ * **`kind` から役割を導出してはいけない。** 形成中 H&S の 4 点は `H, H, L, H`（逆 H&S は
+ * `L, L, H, L`）で左肩と頭が同じ `kind` になり、`kind` だけでは 2 点を区別できない。
+ *
+ * 点数ごとに別エントリを置いているのは、**形成中 H&S の 4 点配列が完成版 5 点配列の
+ * 先頭 4 点ではない**ため（`tools/patterns/detect_hs.ts` の早期形成パス）。
+ * 完成版は `[左肩, 谷1, 頭, 谷2, 右肩]` だが、形成中は `[左肩, 頭, 谷（頭後）, 右肩]` で
+ * **頭が 2 番目に来る**（先行谷 `preHeadValley` は `pivots` に載らず debug の `points` にだけ出る）。
+ * 5 点版のラベルを先頭 4 つ流用すると頭を「谷1」と誤表示する。
+ *
+ * triple は逆に素直で、形成中 4 点（`tools/patterns/detect_triples.ts`）は完成版 5 点
+ * `[a, v1, b, v2, c]` の先頭 4 点と同じ並び（3 点目のピークが未確定で末尾が無いだけ）。
+ * それでも**表を先頭切り詰めで導出せず 4 点版を明記する**——H&S と同じ表を引く以上、
+ * 「切り詰めれば済む」という前提をコードに埋め込まないため。
+ */
+const PIVOT_ROLE_LABELS: Readonly<Record<string, readonly string[]>> = {
+	'triple_top:5': ['山1', '谷1', '山2', '谷2', '山3'],
+	'triple_top:4': ['山1', '谷1', '山2', '谷2'],
+	'triple_bottom:5': ['谷1', '山1', '谷2', '山2', '谷3'],
+	'triple_bottom:4': ['谷1', '山1', '谷2', '山2'],
+	'head_and_shoulders:5': ['左肩', '谷1', '頭', '谷2', '右肩'],
+	'head_and_shoulders:4': ['左肩', '頭', '谷（頭後）', '右肩(暫定)'],
+	'inverse_head_and_shoulders:5': ['左肩', '山1', '頭', '山2', '右肩'],
+	'inverse_head_and_shoulders:4': ['左肩', '頭', '山（頭後）', '右肩(暫定)'],
+};
+
+/**
+ * `(type, pivots.length)` → pivot 明細行の役割ラベル配列。該当が無ければ `null`
+ * （＝明細行を 1 行も出さない）。
+ *
+ * **double 2 型だけは点数で引かない。** 従来から「`pivots.length >= 3` なら先頭 3 点」で
+ * 出しており（形成中 double_top は 2 点なので元々出ない）、点数を鍵にすると
+ * `pivots` の構成が変わった瞬間に表示が黙って消える。issue #234 は triple / H&S を
+ * 足す変更なので、double の表示は完全に据え置く。
+ */
+function pivotRoleLabels(type: string, pivotCount: number): readonly string[] | null {
+	if (type === 'double_top') return ['山1', '谷', '山2'];
+	if (type === 'double_bottom') return ['谷1', '山', '谷2'];
+	return PIVOT_ROLE_LABELS[`${type}:${pivotCount}`] ?? null;
+}
+
+/**
  * `data.patterns[i]` 1 件を content 用の複数行テキストに整形する（summary / detailed / full / debug 共通）。
  * `価格範囲` は `pivots` 全点の min / max（反転系はネックライン定義点を含む。#224 症状 3）、
  * 形成中 triple の暫定注記は `status === 'forming'` で判定する（`pivots.length` には依存しない）。
@@ -1040,14 +1083,16 @@ export function formatPatternLine(
 
 	const idxToIso = buildIdxToIso(meta);
 
-	// pivot detail lines (full/debug + double_top/double_bottom)
+	// pivot detail lines（full / debug。triple 2 型 / H&S 2 型 × {4,5} 点 + double 2 型。issue #234）
 	const pivotLines: string[] = [];
 	if ((view === 'full' || view === 'debug') && Array.isArray(p?.pivots) && p.pivots.length >= 3) {
 		const pivs = p.pivots;
-		const roleLabels =
-			p.type === 'double_top' ? ['山1', '谷', '山2'] : p.type === 'double_bottom' ? ['谷1', '山', '谷2'] : null;
+		const roleLabels = pivotRoleLabels(String(p?.type ?? ''), pivs.length);
+		// **`pivs.length` ではなく `roleLabels.length` で回す。** 表引きに失敗した型
+		// （`roleLabels === null`）は 1 行も出さずに抜ける——ラベル配列と実際の点数が
+		// 食い違ったまま添字で引くと、別の役割のラベルを黙って貼ることになる。
 		if (roleLabels) {
-			for (let i = 0; i < 3; i++) {
+			for (let i = 0; i < roleLabels.length; i++) {
 				const pv = pivs[i];
 				if (!pv) continue;
 				const d = idxToIso[Number(pv.idx)] || '';
