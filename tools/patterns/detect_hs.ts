@@ -19,9 +19,11 @@ import {
 	HS_NECKLINE_MAX_PCT,
 	HS_SHOULDER_MAX_PCT,
 	isSameLevel,
+	necklineSideDetailsFromAt,
 	type PriorTrendResult,
 	type ReversalSide,
 	validateHorizontalNeckline,
+	validateMainPointsAgainstNecklineAt,
 	validatePatternSize,
 	validatePriorTrend,
 } from './structural.js';
@@ -812,6 +814,28 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 				if (!gate) continue;
 				const structureGate = buildStructureGate(gate);
 
+				// 主構成点とネックラインの位置関係（issue #216 Phase 2 の H&S 分）。**`applyReversalGate` の直後**
+				// ——配置の理由は `validatePatternSize` の docstring（「既存の棄却検査をすべて通過した後」）と
+				// 同じで、固有の理由コードを持つ候補の `reason` を横取りしないため。判定の実体と根拠は
+				// `validateMainPointsAgainstNecklineAt` の docstring が単一ソース。
+				//
+				// **検査するのは `[p0, p2, p4]`（左肩・頭・右肩）だけ。** `p1` / `p3` はネックラインの
+				// 定義点そのものなので、渡すと自分自身と比較する検査になり無意味（`deviation === 0` で
+				// 必ず失格する）。基準は**ブレイク検出・スコアリング・ターゲット投影と同じ `necklineAt`**
+				// で、肩は #211 のクランプにより「近い方の定義点の水準」と比較される。
+				const nlAt = (i: number): number => necklineAt(neckline, i);
+				const necklineSide = validateMainPointsAgainstNecklineAt('bottom', [p0, p2, p4], nlAt);
+				if (necklineSide.reason) {
+					debugCandidates.push({
+						type: 'inverse_head_and_shoulders',
+						accepted: false,
+						reason: necklineSide.reason,
+						details: necklineSideDetailsFromAt(nlAt, necklineSide.offenders),
+						indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+					});
+					continue;
+				}
+
 				// 右肩後のネックライン上抜けを確認する。
 				const breakoutIdx = findHsBreakoutIdx(candles, neckline, p4.idx, 'above');
 				const completion = buildHsCompletionFields(candles, breakoutIdx, 'up', end);
@@ -1021,6 +1045,22 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 				});
 				if (!gate) continue;
 				const structureGate = buildStructureGate(gate);
+
+				// 主構成点とネックラインの位置関係（issue #216 Phase 2 の H&S 分）。
+				// 判定の実体・基準・配置の理由は `validateMainPointsAgainstNecklineAt` の docstring が単一ソース。
+				// 検査するのは `[p0, p2, p4]` だけ（`p1` / `p3` はネックラインの定義点そのもの）。
+				const nlAt = (i: number): number => necklineAt(neckline, i);
+				const necklineSide = validateMainPointsAgainstNecklineAt('top', [p0, p2, p4], nlAt);
+				if (necklineSide.reason) {
+					debugCandidates.push({
+						type: 'head_and_shoulders',
+						accepted: false,
+						reason: necklineSide.reason,
+						details: necklineSideDetailsFromAt(nlAt, necklineSide.offenders),
+						indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+					});
+					continue;
+				}
 
 				// 右肩後のネックライン下抜けを確認する。
 				const breakoutIdx = findHsBreakoutIdx(candles, neckline, p4.idx, 'below');
@@ -1278,6 +1318,22 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 			if (!gate) continue;
 			const structureGate = buildStructureGate(gate);
 
+			// 主構成点とネックラインの位置関係（issue #216 Phase 2 の H&S 分）。
+			// 判定の実体・基準・配置の理由は `validateMainPointsAgainstNecklineAt` の docstring が単一ソース。
+			// 検査するのは `[p0, p2, p4]` だけ（`p1` / `p3` はネックラインの定義点そのもの）。
+			const nlAt = (i: number): number => necklineAt(neckline, i);
+			const necklineSide = validateMainPointsAgainstNecklineAt('top', [p0, p2, p4], nlAt);
+			if (necklineSide.reason) {
+				debugCandidates.push({
+					type: 'head_and_shoulders',
+					accepted: false,
+					reason: necklineSide.reason,
+					details: necklineSideDetailsFromAt(nlAt, necklineSide.offenders),
+					indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+				});
+				continue;
+			}
+
 			// 右肩後のネックライン下抜けを確認する。
 			const breakoutIdx = findHsBreakoutIdx(candles, neckline, p4.idx, 'below');
 			const completion = buildHsCompletionFields(candles, breakoutIdx, 'down', end);
@@ -1503,6 +1559,22 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 			});
 			if (!gate) continue;
 			const structureGate = buildStructureGate(gate);
+
+			// 主構成点とネックラインの位置関係（issue #216 Phase 2 の H&S 分）。
+			// 判定の実体・基準・配置の理由は `validateMainPointsAgainstNecklineAt` の docstring が単一ソース。
+			// 検査するのは `[p0, p2, p4]` だけ（`p1` / `p3` はネックラインの定義点そのもの）。
+			const nlAt = (i: number): number => necklineAt(neckline, i);
+			const necklineSide = validateMainPointsAgainstNecklineAt('bottom', [p0, p2, p4], nlAt);
+			if (necklineSide.reason) {
+				debugCandidates.push({
+					type: 'inverse_head_and_shoulders',
+					accepted: false,
+					reason: necklineSide.reason,
+					details: necklineSideDetailsFromAt(nlAt, necklineSide.offenders),
+					indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+				});
+				continue;
+			}
 
 			// 右肩後のネックライン上抜けを確認する。
 			const breakoutIdx = findHsBreakoutIdx(candles, neckline, p4.idx, 'above');
