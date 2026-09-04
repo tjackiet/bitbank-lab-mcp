@@ -1,4 +1,4 @@
-import { dayjs, resolveTz } from './datetime.js';
+import { dayjs, isIntradayType, resolveTz, toIsoWithTz } from './datetime.js';
 
 export interface PatternDiagramData {
 	svg: string;
@@ -64,6 +64,32 @@ function formatDateShort(iso: string | undefined, tz: string | undefined): strin
 }
 
 /**
+ * 構造図に出す 1 点の日時表示（issue #233）。
+ *
+ * intraday（1hour 等）では `M/D` だけだと 24 本が同じラベルに潰れ、5 つのピボットが
+ * すべて「9/1」になってどの点がどの足かを特定できなかった（実データで
+ * `head_and_shoulders` / `triple_top` の 2 例で再現）。本文側
+ * （`detectPatternsViewsHandler.ts` の `toDateOrTime`）は既に時刻まで出しており、
+ * 構造図だけが取り残されていた。`src/schema/patterns.ts` の `tz` description は
+ * 構造図を明示的に対象へ含めているので、契約側は元から時刻表示を約束している。
+ *
+ * - intraday: `M/D HH:mm`
+ * - 日足以上 / `type` 未指定: `M/D`（従来どおり。表示形式を変えない）
+ *
+ * 時間足の分類は `lib/datetime.ts` の `isIntradayType` を使う（本文側と同一実装。
+ * ここで集合を持ち直すと 2 箇所が黙ってずれる）。
+ */
+function formatDateTime(iso: string | undefined, tz: string | undefined, type: string | undefined): string {
+	if (!iso) return '';
+	const short = formatDateShort(iso, tz);
+	if (!type || !isIntradayType(type)) return short;
+	const ms = Date.parse(iso);
+	if (!Number.isFinite(ms)) return short;
+	const withTz = toIsoWithTz(ms, resolveTz(tz)); // 'YYYY-MM-DDTHH:mm:ss'
+	return withTz ? `${short} ${withTz.slice(11, 16)}` : short;
+}
+
+/**
  * `artifact.identifier` 専用。**tz を通さない**（issue #200: identifier は表示ではなく
  * 成果物の ID なので、tz 対応で値を変えるとスナップショット等が動く。触らないこと）。
  */
@@ -90,7 +116,7 @@ export function generatePatternDiagram(
 	pivots: Array<{ idx: number; price: number; kind: 'H' | 'L'; date?: string }>,
 	neckline: { price: number },
 	range: { start: string; end: string },
-	options?: { isForming?: boolean; tz?: string },
+	options?: { isForming?: boolean; tz?: string; type?: string },
 ): PatternDiagramData {
 	// tz 対応方式（issue #200 要件 F-2、2 案のうち (a) を選択）:
 	// 検出層（detect_doubles / detect_triples / detect_hs / detect_wedges）は既に
@@ -103,9 +129,13 @@ export function generatePatternDiagram(
 	// (a) は既存の `PatternDiagramData` / `structureDiagram` スキーマを一切変えずに直せるため、
 	// こちらを採用した。
 	const tz = options?.tz;
+	// 時間足（issue #233）。intraday のときだけラベルに時刻（HH:mm）を足すための表示専用値で、
+	// 図の形状・座標・ネックライン計算には一切使わない。`tz` と同じく `ctx.type` を配線するだけ。
+	// 未指定時は従来どおり `M/D` になるので、渡さない呼び出し元の出力は 1 バイトも変わらない。
+	const type = options?.type;
 	const startDate = formatDateIsoShort(range.start);
 	const identifier = `${patternType}-diagram-${startDate}`;
-	const title = `${getPatternLabel(patternType)}構造図 (${formatDateShort(range.start, tz)}-${formatDateShort(range.end, tz)})`;
+	const title = `${getPatternLabel(patternType)}構造図 (${formatDateTime(range.start, tz, type)}-${formatDateTime(range.end, tz, type)})`;
 	const dashed = options?.isForming ? '5,5' : '';
 
 	if (patternType === 'double_bottom') {
@@ -114,9 +144,9 @@ export function generatePatternDiagram(
 		const pk = pivots.find((p) => p.kind === 'H');
 		const rest = pivots.filter((p) => p.kind === 'L' && p !== v1);
 		const v2 = rest.length ? rest[0] : undefined;
-		const valley1Date = formatDateShort(v1?.date, tz);
-		const peakDate = formatDateShort(pk?.date, tz);
-		const valley2Date = formatDateShort(v2?.date, tz);
+		const valley1Date = formatDateTime(v1?.date, tz, type);
+		const peakDate = formatDateTime(pk?.date, tz, type);
+		const valley2Date = formatDateTime(v2?.date, tz, type);
 		const necklinePrice = Math.round(neckline.price).toLocaleString('ja-JP');
 		const svg = `<svg width="600" height="300" xmlns="http://www.w3.org/2000/svg">
   <rect width="600" height="300" fill="#f8f9fa"/>
@@ -131,7 +161,7 @@ export function generatePatternDiagram(
   <text x="250" y="80" text-anchor="middle" fill="#333" font-size="14">山: ${peakDate}</text>
   <circle cx="350" cy="250" r="6" fill="#3b82f6"/>
   <text x="350" y="280" text-anchor="middle" fill="#333" font-size="14">谷: ${valley2Date}</text>
-  <text x="300" y="30" text-anchor="middle" fill="#111" font-size="14">${getPatternLabel(patternType)} (${formatDateShort(range.start, tz)}-${formatDateShort(range.end, tz)})</text>
+  <text x="300" y="30" text-anchor="middle" fill="#111" font-size="14">${getPatternLabel(patternType)} (${formatDateTime(range.start, tz, type)}-${formatDateTime(range.end, tz, type)})</text>
 </svg>`;
 		return { svg, artifact: { identifier, title } };
 	}
@@ -142,9 +172,9 @@ export function generatePatternDiagram(
 		const vl = pivots.find((p) => p.kind === 'L');
 		const rest = pivots.filter((p) => p.kind === 'H' && p !== p1);
 		const p2 = rest.length ? rest[0] : undefined;
-		const peak1Date = formatDateShort(p1?.date, tz);
-		const valleyDate = formatDateShort(vl?.date, tz);
-		const peak2Date = formatDateShort(p2?.date, tz);
+		const peak1Date = formatDateTime(p1?.date, tz, type);
+		const valleyDate = formatDateTime(vl?.date, tz, type);
+		const peak2Date = formatDateTime(p2?.date, tz, type);
 		const necklinePrice = Math.round(neckline.price).toLocaleString('ja-JP');
 		const svg = `<svg width="600" height="300" xmlns="http://www.w3.org/2000/svg">
   <rect width="600" height="300" fill="#f8f9fa"/>
@@ -159,7 +189,7 @@ export function generatePatternDiagram(
   <text x="250" y="235" text-anchor="middle" fill="#333" font-size="14">谷: ${valleyDate}</text>
   <circle cx="350" cy="70" r="6" fill="#3b82f6"/>
   <text x="350" y="55" text-anchor="middle" fill="#333" font-size="14">山: ${peak2Date}</text>
-  <text x="300" y="30" text-anchor="middle" fill="#111" font-size="14">${getPatternLabel(patternType)} (${formatDateShort(range.start, tz)}-${formatDateShort(range.end, tz)})</text>
+  <text x="300" y="30" text-anchor="middle" fill="#111" font-size="14">${getPatternLabel(patternType)} (${formatDateTime(range.start, tz, type)}-${formatDateTime(range.end, tz, type)})</text>
 </svg>`;
 		return { svg, artifact: { identifier, title } };
 	}
@@ -171,11 +201,11 @@ export function generatePatternDiagram(
 		const head = pivots[2];
 		const peak2 = pivots[3];
 		const rightShoulder = pivots[4];
-		const lsDate = formatDateShort(leftShoulder?.date, tz);
-		const p1Date = formatDateShort(peak1?.date, tz);
-		const headDate = formatDateShort(head?.date, tz);
-		const p2Date = formatDateShort(peak2?.date, tz);
-		const rsDate = formatDateShort(rightShoulder?.date, tz);
+		const lsDate = formatDateTime(leftShoulder?.date, tz, type);
+		const p1Date = formatDateTime(peak1?.date, tz, type);
+		const headDate = formatDateTime(head?.date, tz, type);
+		const p2Date = formatDateTime(peak2?.date, tz, type);
+		const rsDate = formatDateTime(rightShoulder?.date, tz, type);
 		// ネックライン水準は呼び出し側の値をそのまま出す（issue #226。上の docstring を参照）。
 		// strict 経路は `(peak1 + peak2) / 2` を渡してくるので、この経路の出力は 1 バイトも変わらない。
 		// **SVG 内の `<!-- Neckline (peaks average) -->` は据え置く**——strict の SVG を byte 単位で
@@ -203,7 +233,7 @@ export function generatePatternDiagram(
   <text x="400" y="65" text-anchor="middle" fill="#333" font-size="14">山2: ${p2Date}</text>
   <circle cx="500" cy="180" r="6" fill="#3b82f6"/>
   <text x="500" y="205" text-anchor="middle" fill="#333" font-size="14">右肩: ${rsDate}</text>
-  <text x="300" y="20" text-anchor="middle" fill="#111" font-size="14">${getPatternLabel(patternType)} (${formatDateShort(range.start, tz)}-${formatDateShort(range.end, tz)})</text>
+  <text x="300" y="20" text-anchor="middle" fill="#111" font-size="14">${getPatternLabel(patternType)} (${formatDateTime(range.start, tz, type)}-${formatDateTime(range.end, tz, type)})</text>
 </svg>`;
 		return { svg, artifact: { identifier, title } };
 	}
@@ -215,11 +245,11 @@ export function generatePatternDiagram(
 		const head = pivots[2];
 		const valley2 = pivots[3];
 		const rightShoulder = pivots[4];
-		const lsDate = formatDateShort(leftShoulder?.date, tz);
-		const v1Date = formatDateShort(valley1?.date, tz);
-		const headDate = formatDateShort(head?.date, tz);
-		const v2Date = formatDateShort(valley2?.date, tz);
-		const rsDate = formatDateShort(rightShoulder?.date, tz);
+		const lsDate = formatDateTime(leftShoulder?.date, tz, type);
+		const v1Date = formatDateTime(valley1?.date, tz, type);
+		const headDate = formatDateTime(head?.date, tz, type);
+		const v2Date = formatDateTime(valley2?.date, tz, type);
+		const rsDate = formatDateTime(rightShoulder?.date, tz, type);
 		// ネックライン水準は呼び出し側の値をそのまま出す（issue #226。上の docstring を参照）。
 		// strict 経路は `(valley1 + valley2) / 2` を渡してくるので、この経路の出力は 1 バイトも変わらない。
 		// **SVG 内の `<!-- Neckline (valleys average) -->` は据え置く**——理由は逆 H&S 側と同じ。
@@ -246,7 +276,7 @@ export function generatePatternDiagram(
   <text x="400" y="245" text-anchor="middle" fill="#333" font-size="14">谷2: ${v2Date}</text>
   <circle cx="500" cy="120" r="6" fill="#3b82f6"/>
   <text x="500" y="105" text-anchor="middle" fill="#333" font-size="14">右肩: ${rsDate}</text>
-  <text x="300" y="20" text-anchor="middle" fill="#111" font-size="14">${getPatternLabel(patternType)} (${formatDateShort(range.start, tz)}-${formatDateShort(range.end, tz)})</text>
+  <text x="300" y="20" text-anchor="middle" fill="#111" font-size="14">${getPatternLabel(patternType)} (${formatDateTime(range.start, tz, type)}-${formatDateTime(range.end, tz, type)})</text>
 </svg>`;
 		return { svg, artifact: { identifier, title } };
 	}
@@ -258,11 +288,11 @@ export function generatePatternDiagram(
 		const valley2 = pivots[2];
 		const peak2 = pivots[3];
 		const valley3 = pivots[4];
-		const v1Date = formatDateShort(valley1?.date, tz);
-		const p1Date = formatDateShort(peak1?.date, tz);
-		const v2Date = formatDateShort(valley2?.date, tz);
-		const p2Date = formatDateShort(peak2?.date, tz);
-		const v3Date = formatDateShort(valley3?.date, tz);
+		const v1Date = formatDateTime(valley1?.date, tz, type);
+		const p1Date = formatDateTime(peak1?.date, tz, type);
+		const v2Date = formatDateTime(valley2?.date, tz, type);
+		const p2Date = formatDateTime(peak2?.date, tz, type);
+		const v3Date = formatDateTime(valley3?.date, tz, type);
 		const nlVal = ((peak1?.price ?? 0) + (peak2?.price ?? 0)) / 2;
 		const necklinePrice = Math.round(nlVal).toLocaleString('ja-JP');
 		const svg = `<svg width="600" height="300" xmlns="http://www.w3.org/2000/svg">
@@ -281,7 +311,7 @@ export function generatePatternDiagram(
   <circle cx="250" cy="250" r="6" fill="#3b82f6"/><text x="250" y="275" text-anchor="middle" fill="#333" font-size="14">谷2: ${v2Date}</text>
   <circle cx="335" cy="120" r="6" fill="#3b82f6"/><text x="335" y="105" text-anchor="middle" fill="#333" font-size="14">山2: ${p2Date}</text>
   <circle cx="420" cy="250" r="6" fill="#3b82f6"/><text x="420" y="275" text-anchor="middle" fill="#333" font-size="14">谷3: ${v3Date}</text>
-  <text x="300" y="20" text-anchor="middle" fill="#111" font-size="14">${getPatternLabel(patternType)} (${formatDateShort(range.start, tz)}-${formatDateShort(range.end, tz)})</text>
+  <text x="300" y="20" text-anchor="middle" fill="#111" font-size="14">${getPatternLabel(patternType)} (${formatDateTime(range.start, tz, type)}-${formatDateTime(range.end, tz, type)})</text>
 </svg>`;
 		return { svg, artifact: { identifier, title } };
 	}
@@ -293,11 +323,11 @@ export function generatePatternDiagram(
 		const peak2 = pivots[2];
 		const valley2 = pivots[3];
 		const peak3 = pivots[4];
-		const p1Date = formatDateShort(peak1?.date, tz);
-		const v1Date = formatDateShort(valley1?.date, tz);
-		const p2Date = formatDateShort(peak2?.date, tz);
-		const v2Date = formatDateShort(valley2?.date, tz);
-		const p3Date = formatDateShort(peak3?.date, tz);
+		const p1Date = formatDateTime(peak1?.date, tz, type);
+		const v1Date = formatDateTime(valley1?.date, tz, type);
+		const p2Date = formatDateTime(peak2?.date, tz, type);
+		const v2Date = formatDateTime(valley2?.date, tz, type);
+		const p3Date = formatDateTime(peak3?.date, tz, type);
 		const nlVal = ((valley1?.price ?? 0) + (valley2?.price ?? 0)) / 2;
 		const necklinePrice = Math.round(nlVal).toLocaleString('ja-JP');
 		const svg = `<svg width="600" height="300" xmlns="http://www.w3.org/2000/svg">
@@ -316,7 +346,7 @@ export function generatePatternDiagram(
   <circle cx="250" cy="80" r="6" fill="#3b82f6"/><text x="250" y="65" text-anchor="middle" fill="#333" font-size="14">山2: ${p2Date}</text>
   <circle cx="335" cy="210" r="6" fill="#3b82f6"/><text x="335" y="235" text-anchor="middle" fill="#333" font-size="14">谷2: ${v2Date}</text>
   <circle cx="420" cy="80" r="6" fill="#3b82f6"/><text x="420" y="65" text-anchor="middle" fill="#333" font-size="14">山3: ${p3Date}</text>
-  <text x="300" y="20" text-anchor="middle" fill="#111" font-size="14">${getPatternLabel(patternType)} (${formatDateShort(range.start, tz)}-${formatDateShort(range.end, tz)})</text>
+  <text x="300" y="20" text-anchor="middle" fill="#111" font-size="14">${getPatternLabel(patternType)} (${formatDateTime(range.start, tz, type)}-${formatDateTime(range.end, tz, type)})</text>
 </svg>`;
 		return { svg, artifact: { identifier, title } };
 	}
@@ -324,8 +354,8 @@ export function generatePatternDiagram(
 	if (patternType === 'falling_wedge') {
 		// テンプレート図（600x300）。上側/下側の収束ライン、主要タッチ、アペックス、上抜け矢印を描画
 		// 傾きや位置はサンプル配置（視覚的分かりやすさ優先）
-		const startShort = formatDateShort(range.start, tz);
-		const endShort = formatDateShort(range.end, tz);
+		const startShort = formatDateTime(range.start, tz, type);
+		const endShort = formatDateTime(range.end, tz, type);
 		// 主要タッチポイント（間引き想定、固定配置）
 		const touchPoints = [
 			{ x: 100, y: 80 },
@@ -364,8 +394,8 @@ export function generatePatternDiagram(
 
 	if (patternType === 'rising_wedge') {
 		// テンプレート図（600x300）。上側/下側の収束ライン、主要タッチ、アペックス、下抜け矢印を描画
-		const startShort = formatDateShort(range.start, tz);
-		const endShort = formatDateShort(range.end, tz);
+		const startShort = formatDateTime(range.start, tz, type);
+		const endShort = formatDateTime(range.end, tz, type);
 		const touchPoints = [
 			{ x: 100, y: 240 },
 			{ x: 200, y: 220 },

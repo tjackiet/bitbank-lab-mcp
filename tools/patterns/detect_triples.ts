@@ -402,7 +402,7 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 			],
 			{ price: nlAvg },
 			{ start, end: rangeEnd },
-			{ tz: ctx.tz },
+			{ tz: ctx.tz, type: ctx.type },
 		);
 		const ttAvgPeak = (a.price + b.price + c.price) / 3;
 		const ttTarget = Math.round(nlAvg - (ttAvgPeak - nlAvg));
@@ -651,7 +651,7 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 			],
 			{ price: nlAvg },
 			{ start, end: rangeEnd },
-			{ tz: ctx.tz },
+			{ tz: ctx.tz, type: ctx.type },
 		);
 		const tbAvgValley = (a.price + b.price + c.price) / 3;
 		const tbTarget = Math.round(nlAvg + (nlAvg - tbAvgValley));
@@ -894,7 +894,7 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 			],
 			{ price: nlAvg },
 			{ start, end: rangeEnd },
-			{ tz: ctx.tz },
+			{ tz: ctx.tz, type: ctx.type },
 		);
 		const ttRelAvgPeak = (a.price + b.price + c.price) / 3;
 		const ttRelTarget = Math.round(nlAvg - (ttRelAvgPeak - nlAvg));
@@ -1115,7 +1115,7 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 			],
 			{ price: nlAvg },
 			{ start, end: rangeEnd },
-			{ tz: ctx.tz },
+			{ tz: ctx.tz, type: ctx.type },
 		);
 		const tbRelAvgValley = (a.price + b.price + c.price) / 3;
 		const tbRelTarget = Math.round(nlAvg + (nlAvg - tbRelAvgValley));

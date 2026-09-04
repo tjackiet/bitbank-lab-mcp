@@ -479,6 +479,7 @@ function findRelaxedDoubleTop(
 	pcand: Pcand,
 	sizeThresholds: SizeThresholds,
 	tz: string | undefined,
+	type: string,
 ): PatternEntry | null {
 	const tolRelax = tolerancePct * factor;
 	const nearRelaxed = (x: number, y: number) => Math.abs(x - y) <= Math.max(x, y) * tolRelax;
@@ -618,7 +619,7 @@ function findRelaxedDoubleTop(
 			],
 			{ price: necklinePrice },
 			{ start, end },
-			{ tz },
+			{ tz, type },
 		);
 		const dtRelTarget = Math.round(necklinePrice - (dtRelAvgPeak - necklinePrice));
 		// ブレイク足の終値が非有限なら**理由を名乗って**畳む（#224 症状 2）。
@@ -670,6 +671,7 @@ function findRelaxedDoubleBottom(
 	pcand: Pcand,
 	sizeThresholds: SizeThresholds,
 	tz: string | undefined,
+	type: string,
 ): PatternEntry | null {
 	const tolRelax = tolerancePct * factor;
 	const nearRelaxed = (x: number, y: number) => Math.abs(x - y) <= Math.max(x, y) * tolRelax;
@@ -810,7 +812,7 @@ function findRelaxedDoubleBottom(
 			],
 			{ price: necklinePrice },
 			{ start, end },
-			{ tz },
+			{ tz, type },
 		);
 		const dbRelTarget = Math.round(necklinePrice + (necklinePrice - dbRelAvgValley));
 		// ブレイク足の終値が非有限なら**理由を名乗って**畳む（#224 症状 2）。
@@ -1493,7 +1495,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					],
 					{ price: necklinePrice },
 					{ start, end },
-					{ tz: ctx.tz },
+					{ tz: ctx.tz, type: ctx.type },
 				);
 				const dtTarget = Math.round(necklinePrice - (dtAvgPeak - necklinePrice));
 				// ブレイク足の終値が非有限なら**理由を名乗って**畳む（#224 症状 2）。
@@ -1670,7 +1672,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					],
 					{ price: necklinePrice },
 					{ start, end },
-					{ tz: ctx.tz },
+					{ tz: ctx.tz, type: ctx.type },
 				);
 				const dbTarget = Math.round(necklinePrice + (necklinePrice - dbAvgValley));
 				// ブレイク足の終値が非有限なら**理由を名乗って**畳む（#224 症状 2）。
@@ -1729,6 +1731,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					pcand,
 					ctx.sizeThresholds,
 					ctx.tz,
+					ctx.type,
 				);
 				if (result) {
 					push(patterns, result);
@@ -1745,6 +1748,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					pcand,
 					ctx.sizeThresholds,
 					ctx.tz,
+					ctx.type,
 				);
 				if (result) {
 					push(patterns, result);
