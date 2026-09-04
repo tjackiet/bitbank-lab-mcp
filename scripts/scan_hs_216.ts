@@ -44,11 +44,45 @@ function strictCount(routeLine: string | null): number | null {
 	return null;
 }
 
+/** `structuredContent.data.patterns[]` の生値のうち、pivot の検算に要る分だけ。 */
+interface PatternRaw {
+	type?: string;
+	confidence?: number;
+	pivots?: Array<{ idx?: number; price?: number; kind?: string; extremePrice?: number }>;
+	neckline?: Array<{ x?: number; y?: number }>;
+}
+
+/**
+ * pivot の**丸めていない**価格を出す（`--json`）。
+ *
+ * content の pivot 明細行は `formatPivotPrices` が `Math.round` で円単位に丸めるため
+ * （4 view すべて。`view=debug` にしても変わらない）、XRP のような低位価格帯では
+ * 丸め幅 ±0.5円 が 0.2% 相当になり、外挿線と水平基準の上下判定が確定できなくなる。
+ * 生値は `structuredContent.data.patterns[].pivots[].price` にしか無いのでここで出す。
+ *
+ * `price` は終値、`extremePrice` は極値判定に使った high / low（issue #125）。
+ */
+function printRawPivots(patterns: PatternRaw[] | undefined): void {
+	if (!Array.isArray(patterns) || patterns.length === 0) {
+		console.log('\n----- 生値 pivots: data.patterns が空 -----');
+		return;
+	}
+	console.log('\n----- 生値 pivots（丸め無し。price=終値 / extremePrice=判定に使った高安） -----');
+	for (const [i, p] of patterns.entries()) {
+		console.log(`\n${i + 1}. ${p.type} (${p.confidence})`);
+		console.log(`   neckline: ${JSON.stringify(p.neckline)}`);
+		for (const pv of p.pivots ?? []) {
+			console.log(`   idx=${pv.idx} kind=${pv.kind} price=${pv.price} extremePrice=${pv.extremePrice}`);
+		}
+	}
+}
+
 async function main(): Promise<void> {
 	const { flags } = parseArgs();
 	const pairs = typeof flags.pairs === 'string' ? flags.pairs.split(',') : DEFAULT_PAIRS;
 	const types = typeof flags.types === 'string' ? flags.types.split(',') : DEFAULT_TYPES;
 	const limit = typeof flags.limit === 'string' ? Number(flags.limit) : undefined;
+	const json = flags.json === true;
 
 	for (const type of types) {
 		console.log(`\n===== type=${type} =====`);
@@ -69,6 +103,7 @@ async function main(): Promise<void> {
 				ok?: boolean;
 				content?: Array<{ type: string; text?: string }>;
 				summary?: string;
+				structuredContent?: { data?: { patterns?: PatternRaw[] } };
 			};
 
 			const text = res?.content?.[0]?.text;
@@ -88,6 +123,7 @@ async function main(): Promise<void> {
 			if (strict >= 1) {
 				console.log(`\n----- HIT: ${pair} ${type}（strict ${strict} 件）content 全文 -----\n`);
 				console.log(text);
+				if (json) printRawPivots(res.structuredContent?.data?.patterns);
 				return;
 			}
 		}

@@ -85,7 +85,13 @@ npx tsx scripts/run_backtest_e2e.ts rsi
 # 既定: eth,xrp,sol,doge,ltc,bcc を 1hour → 4hour → 1day の順
 npx tsx scripts/scan_hs_216.ts
 npx tsx scripts/scan_hs_216.ts --pairs=eth_jpy,xrp_jpy --types=1hour --limit=365
+npx tsx scripts/scan_hs_216.ts --json   # HIT 時に pivot の生値も出す
 ```
+
+`--json` は `structuredContent.data.patterns[].pivots[]` を丸めずに出す。content の pivot 明細行は
+`formatPivotPrices` が `Math.round` で円単位に丸める（**4 view すべて。`view=debug` でも変わらない**）ため、
+XRP のような低位価格帯では丸め幅 ±0.5円 が 0.2% 相当になり、外挿線と水平基準の上下判定が確定できない。
+`idx` も出るのでバー数を日時からの換算ではなく idx 差で厳密に取れる。
 
 `--limit` は既定 90（スキャン窓の本数）。**1hour で 0 件が続くときは先に `--limit` を上げること**——
 既定の 90 本は「形成中〜完成直後」を見る窓で、数日前に完成した H&S は窓の外に落ちて静かに 0 件になる。
