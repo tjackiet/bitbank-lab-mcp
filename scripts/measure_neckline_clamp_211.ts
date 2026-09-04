@@ -1059,10 +1059,30 @@ function measurementBlock(label: string, rows: Row[], level: string): string {
 	].join('\n');
 }
 
+/**
+ * `--json` / `--extra` の値を**計測を始める前に**取り出す。
+ *
+ * 値の検証を後回しにすると、`--json` は 1,184 ケース走り切った後の `writeFileSync(undefined)` で
+ * 落ちて生データを取り逃がし、`--extra --json out.json` は `--json` を入力パスとして読みにいく。
+ * どちらも「フラグの次が値」という前提が崩れた場合なので、パース時に弾く。
+ *
+ * @throws 値が無い、または次が別のフラグだった場合
+ */
+function flagValue(argv: string[], flag: string): string | undefined {
+	const i = argv.indexOf(flag);
+	if (i < 0) return undefined;
+	const value = argv[i + 1];
+	if (value === undefined || value.startsWith('--')) {
+		throw new Error(`${flag} にはファイルパスが必要（受け取った値: ${value ?? 'なし'}）`);
+	}
+	return value;
+}
+
 async function main(): Promise<void> {
 	const argv = process.argv.slice(2);
-	const jsonFlag = argv.indexOf('--json');
-	const extraFlag = argv.indexOf('--extra');
+	// **検出器を 1 回も走らせる前に**両方の値を確定させる（後段で落とすと計測をやり直しになる）。
+	const jsonPath = flagValue(argv, '--json');
+	const extraPath = flagValue(argv, '--extra');
 
 	const detectors = {} as Record<VariantName, Detector>;
 	for (const name of VARIANT_NAMES) detectors[name] = await loadVariant(VARIANTS[name]);
@@ -1073,8 +1093,8 @@ async function main(): Promise<void> {
 	const realBRows = await runAll(realB, detectors, audit);
 
 	const extras: Array<{ name: string; rows: Row[] }> = [];
-	if (extraFlag >= 0) {
-		for (const s of buildExtraCorpus(argv[extraFlag + 1])) {
+	if (extraPath !== undefined) {
+		for (const s of buildExtraCorpus(extraPath)) {
 			extras.push({ name: s.name, rows: await runAll(s.cases, detectors, audit) });
 		}
 	}
@@ -1133,8 +1153,8 @@ async function main(): Promise<void> {
 
 	const text = md.join('\n');
 	process.stdout.write(`${text}\n`);
-	if (jsonFlag >= 0) {
-		writeFileSync(argv[jsonFlag + 1], JSON.stringify({ standardRows, realBRows, extras, audit }, null, 2));
+	if (jsonPath !== undefined) {
+		writeFileSync(jsonPath, JSON.stringify({ standardRows, realBRows, extras, audit }, null, 2));
 	}
 }
 
