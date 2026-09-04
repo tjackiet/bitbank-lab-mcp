@@ -66,6 +66,14 @@ import type { CandleData } from './types.js';
  *
  * **時間足別のテーブルにしない。** バー数のまま持つ（`HS_BREAKOUT_MAX_BARS` と同じ扱い）。
  * 時間足別テーブルの流用は #198 で事故になっている。
+ *
+ * **triple を配線した後の実測（#228。940 ケース / 完成済み triple 13 構造）でも 60 のまま。**
+ * triple の構成バー数（`periodScoreBars` の入力）は実データ B ネイティブで 30〜42（p50 36）、
+ * 補助スイープ込みで 23〜42。ブレイク足の後ろに取れる足数は実データ B で p50 84 本あり、
+ * **60 本ぶんの先が揃う構造が 100%（2/2、補助スイープ込みで 11/11）**。初到達までのバー数は
+ * 実データ B の全構造で **0 本**（ブレイク足自身の high が target を越えている）ので、
+ * 窓を伸ばしても縮めても `targetReached` は動かない。合成 fixture 側は系列がブレイクの
+ * 3 本先で終わるため 0%（2 件とも）だが、こちらは窓ではなく fixture の長さの制約。
  */
 export const TARGET_REACH_MAX_BARS = 60;
 
@@ -90,6 +98,27 @@ export const TARGET_REACH_MAX_BARS = 60;
  *
  * 意味としては「**ブレイク足の終値が既に想定値幅の 85% 以上を走り終えている**」状態で、
  * 残り 15% の消化を『ターゲット到達』と名乗らせない、ということ。
+ *
+ * ## triple も同じ族だが、**この閾値には掛からない**（#228 の実測）
+ *
+ * `triple_*` は H&S / doubles と同じ `neckline_projection`（＝分母が潰れうる側）なので、
+ * #228 で完成済み 4 経路を配線するにあたり **triple 固有の分布を測り直した**
+ * （同じ族だから同じ値でよい、は仮説。無検証の流用は #198 で事故になっている）。
+ * 940 ケース・完成済み triple 13 構造の実測:
+ *
+ * | | 比の min | p50 | max | 発火 |
+ * |---|---:|---:|---:|---:|
+ * | 実データ B ネイティブ（1hour） | 0.8160 | 0.9191 | 1.0222 | **0 / 2** |
+ * | 合成 fixture | 0.8807 | 0.8807 | 0.8807 | **0 / 2** |
+ * | 全母集団（構造単位） | 0.8160 | 1.0222 | 3.9681 | **0 / 13** |
+ *
+ * **下側の裾が H&S / doubles と別物**——あちらは 0.0033 まで落ちるのに、triple は 0.82 を
+ * 下回る構造が 1 つも無い。閾値を上げていっても **0.82 まで除外が 0 件**で、そこから先も
+ * 残る `targetReachedPct` の最大値（623%）は動かない（0.82 / 0.89 / 1.03 で除外が
+ * 5 / 7 / 12 件と増えるだけ）。**H&S / doubles で見えた「0.12 の膝」に相当するものが
+ * triple には無い**ので、triple 用に別の値を置く根拠が無く、0.15 をそのまま使う。
+ * 実データ A（1day）は完成済み triple が **0 件**（#227 Phase 1 と同じ）なので 1day 側の
+ * 材料は無い——「1day でも問題ない」ではなく「1day では測れていない」と読むこと。
  */
 export const MIN_TARGET_DISTANCE_HEIGHT_RATIO = 0.15;
 
@@ -100,6 +129,10 @@ export const MIN_TARGET_DISTANCE_HEIGHT_RATIO = 0.15;
  * 最大 1,572%（`falling_wedge`。比は 1.0 なので**本当に高さの 15 倍動いた**行）で、
  * 上限に当たるのは 32 行 / 構造単位 1 件。本質的な対策ではなく、
  * 上の 2 つをすり抜けた場合の安全網として置く。
+ *
+ * **triple を配線した後も上限に当たる行は 0**（#228。940 ケース / 完成済み triple 13 構造）。
+ * `targetReachedPct` の最大は実データ B ネイティブで 289%、補助スイープ（1min ラベル）の
+ * 外れ値を入れても 623% で、桁が飛ぶ行が無い。安全網としての位置づけは変わらない。
  */
 export const TARGET_REACHED_PCT_CAP = 999;
 
@@ -147,7 +180,7 @@ export interface TargetReachInfo {
  * |---|---:|---:|---|
  * | `not_broken_out` | 2,625 | **547** | `head_and_shoulders` 266 / `inverse_head_and_shoulders` 245 / `triple_top` 9 / `double_bottom` 8 / `triple_bottom` 8 / `triangle_ascending` 4 / `rising_wedge` 3 / `falling_wedge` 2 / `triangle_symmetrical` 2 |
  * | `degenerate_target_distance` | 278 | 60 | `inverse_head_and_shoulders` 59 / `double_bottom` 1（#210 から不変） |
- * | `not_computed_by_detector` | 72 | 13 | `triple_bottom` 11 / `triple_top` 2 |
+ * | `not_computed_by_detector` | 72 → **0** | 13 → **0** | `triple_bottom` 11 / `triple_top` 2 だったが、**#228 の配線で全件が進捗を出す側に移った** |
  * | `no_target` | 0 | **0** | — |
  * | `invalid_breakout_price` | 0 | **0** | — |
  * | `no_bars_after_breakout` | 0 | **0** | — |
@@ -172,8 +205,10 @@ export interface TargetReachInfo {
  * `undefined` 経路に名前を付けただけで、判定を 1 つも変えていない）。
  *
  * 各コードの意味は Zod 側の `.describe()` が単一ソース（`src/schema/patterns.ts`）。
- * `not_computed_by_detector` の現在の対象は `detect_triples.ts` の完成済み 4 経路
- * （strict / relaxed × top / bottom）だけで、**配線は #224 のフォローアップとして別 issue で扱う**。
+ * **`not_computed_by_detector` を返す経路は #228 で無くなった**（`detect_triples.ts` の完成済み
+ * 4 経路が `computeTargetReach` を呼ぶようになり、上表の 13 構造はすべて進捗を出す側に移った）。
+ * enum からは消していない——公開スキーマの出力フィールドの値なので削除は破壊的変更で、
+ * かつ同じ実装ギャップが別の検出器で見つかったときの受け皿が要る。
  */
 export type TargetReachOmissionReason = TargetProgressOmittedReason;
 

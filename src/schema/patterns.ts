@@ -827,11 +827,11 @@ export const DetectedPatternSchema = z.object({
 			`ネックラインから投影する H&S / doubles で、ブレイク足がネックラインから値幅ぶん` +
 			`走り切っているときに起きる（issue #210 (2)）。(ii)——分母はブレイク価格と target だけで決まるので` +
 			`足が増えても変わらない。\n` +
-			`- 'not_computed_by_detector' = **構造の性質ではなく triple 系検出器の未配線。** ` +
-			`detect_triples.ts の完成済み 4 経路（strict / relaxed × top / bottom）はブレイク足・target・` +
-			`パターン高さが揃っているのに computeTargetReach を呼んでいない（標準コーパス 940 ケースで` +
-			` 13 構造）。**配線は issue #224 のフォローアップとして別 issue で扱う**——` +
-			`配線されたらこのコードは出なくなり、代わりに進捗が出る。(iii)`,
+			`- 'not_computed_by_detector' = **構造の性質ではなく検出器の未配線。** ` +
+			`**現在このコードを返す経路は無い**（issue #228 で detect_triples.ts の完成済み 4 経路` +
+			`（strict / relaxed × top / bottom）に computeTargetReach を配線したため）。` +
+			`値は enum に残してあるが、これは公開スキーマの出力フィールドで、値の削除は外部クライアントへの` +
+			`破壊的変更になるため（#228）。同じ実装ギャップが別の検出器で見つかったときの受け皿として使う。(iii)`,
 	),
 	// 用語正規化ラベル（neckline フィールドが何を指すかをパターン種別ごとに明示）
 	trendlineLabel: z.string().optional(),

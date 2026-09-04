@@ -19,8 +19,13 @@
  *
  * ## なぜ「実データで」なのか
  *
- * 合成 fixture では `not_computed_by_detector`（完成済み triple）に到達しない。
  * ライブ実例が出た系列（実データ B = `btc_jpy` 1hour）を**ネイティブの時間足のまま**使う。
+ * `detect_patterns` をツール境界で叩く 3 本は、`globalDedup` や #218 の排他を通った後の
+ * 実際の `data.patterns` / content を見たいので実データでしか組めない。
+ *
+ * **#228 まで、完成済み triple は `not_computed_by_detector` を名乗る唯一の経路だった**
+ * （合成 fixture では到達しない、と本 docstring は書いていた）。配線後はそのコードを
+ * 返す経路が無くなったので、下 2 本のテストは「復活しないこと」を押さえる側に変わっている。
  */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -45,6 +50,7 @@ import { detectSwingPoints, type Pivot } from '../../tools/patterns/swing.js';
 import type { CandleData, DetectContext, PatternEntry } from '../../tools/patterns/types.js';
 import { asMockResult, assertOk } from '../_assertResult.js';
 import { buildBtcJpy1hour202608Candles } from '../fixtures/btc_jpy_1hour_2026_08.js';
+import { buildCompletedTripleTopCandles } from '../fixtures/synthetic_pattern_candles.js';
 
 /**
  * `detect_patterns.ts` と同じ組み方の triple 用 `DetectContext`
@@ -52,10 +58,10 @@ import { buildBtcJpy1hour202608Candles } from '../fixtures/btc_jpy_1hour_2026_08
  * 実効パラメータは**ハードコードせず `config.ts` から解決する**——手書きすると
  * 時間軸オート表を変えたときにテストだけ古い値で通り続ける。
  */
-function buildTripleCtx(): DetectContext {
-	const candles = buildBtcJpy1hour202608Candles() as CandleData[];
-	const { swingDepth, minBarsBetweenSwings } = getDefaultParamsForTf('1hour');
-	const tol = getDefaultToleranceForTf('1hour');
+function buildTripleCtxFor(candles: CandleData[], tf: string, swingDepthOverride?: number): DetectContext {
+	const auto = getDefaultParamsForTf(tf);
+	const swingDepth = swingDepthOverride ?? auto.swingDepth;
+	const tol = getDefaultToleranceForTf(tf);
 	const pivots = detectSwingPoints(candles, { swingDepth });
 	return {
 		candles,
@@ -63,18 +69,23 @@ function buildTripleCtx(): DetectContext {
 		allPeaks: pivots.filter((p: Pivot) => p.kind === 'H'),
 		allValleys: pivots.filter((p: Pivot) => p.kind === 'L'),
 		tolerancePct: tol,
-		headProminencePct: getHeadProminenceForTf('1hour'),
-		sizeThresholds: getSizeThresholdsForTf('1hour'),
-		minDist: minBarsBetweenSwings,
+		headProminencePct: getHeadProminenceForTf(tf),
+		sizeThresholds: getSizeThresholdsForTf(tf),
+		minDist: auto.minBarsBetweenSwings,
 		want: new Set(['triple_top', 'triple_bottom']),
 		includeForming: false,
 		debugCandidates: [],
-		type: '1hour',
+		type: tf,
 		swingDepth,
 		near: (a: number, b: number) => Math.abs(a - b) <= Math.max(a, b) * tol,
 		pct: (a: number, b: number) => ((b - a) / Math.max(1, a)) * 100,
 		lrWithR2: (pts) => linearRegressionWithR2(pts),
 	};
+}
+
+/** ライブ実例（実データ B = `btc_jpy` 1hour）の ctx。 */
+function buildTripleCtx(): DetectContext {
+	return buildTripleCtxFor(buildBtcJpy1hour202608Candles() as CandleData[], '1hour');
 }
 
 const TARGET_PRICE_LABEL = '   - ターゲット価格: ';
@@ -95,7 +106,8 @@ async function run(opts: Parameters<typeof detectPatterns>[3]) {
 }
 
 // `includeForming` の有無で母集団が入れ替わる（未ブレイクのパターンは既定では出ない）ので
-// 両方回す。**片方だけだと `not_broken_out` か `not_computed_by_detector` のどちらかを見逃す。**
+// 両方回す。**片方だけだと未ブレイク（`not_broken_out`）と完成済み（進捗が出る）のどちらかを
+// 見逃す**——#228 以前は後者が `not_computed_by_detector` を名乗る側だった。
 const OPTION_SETS = [
 	{ label: '既定（完成済みのみ）', opts: {} },
 	{ label: 'includeForming=true', opts: { includeForming: true } },
@@ -161,26 +173,47 @@ describe('breakoutTarget を出したら進捗か理由を必ず名乗る（issu
 		}
 	});
 
-	it('ライブ実例（完成済み triple）が理由を名乗る: not_computed_by_detector', () => {
-		// issue #224 症状 2 のライブ実例そのもの。`detect_triples.ts` の完成済み経路は
-		// ブレイク足・target・パターン高さが揃っているのに `computeTargetReach` を呼んでいない。
-		// **値は出さないまま理由だけを申告する**（配線は #224 のフォローアップ）。
-		//
-		// **検出器を直接呼ぶ**（`data.patterns` は見ない）。完成済み triple は `globalDedup` と
-		// #218 の triple×H&S 排他を通ると代表を取れないことがあり、**得点式が変われば
-		// 出力から消える**——`tests/patterns/target-reach-window-invariance.test.ts` が
-		// 同じ理由で対象を検出器層に移したのと同じ配慮。
+	/**
+	 * **#225 で入れたときは `not_computed_by_detector` を期待するテストだった**
+	 * （`detect_triples.ts` の完成済み経路がブレイク足・target・パターン高さを揃えながら
+	 * `computeTargetReach` を一度も呼んでおらず、値を出さないまま理由だけを申告していた）。
+	 * #228 でその配線が入ったので、**同じライブ実例で期待値を進捗が出る側に更新**した。
+	 * テストそのものを消していないのは、これが issue #224 症状 2 のライブ実例——LLM が
+	 * 「理由はこの出力からは分からないので、推測は避けます」と答えた実際の系列——だからで、
+	 * **この 1 件が黙ったら #224 の受け入れ条件が壊れている**という関門の役割は変わらない。
+	 *
+	 * **検出器を直接呼ぶ**（`data.patterns` は見ない）。完成済み triple は `globalDedup` と
+	 * #218 の triple×H&S 排他を通ると代表を取れないことがあり、**得点式が変われば
+	 * 出力から消える**——`tests/patterns/target-reach-window-invariance.test.ts` が
+	 * 同じ理由で対象を検出器層に移したのと同じ配慮。
+	 */
+	it('ライブ実例（完成済み triple）が進捗を出す: #228 の配線後', () => {
 		const patterns = detectTriples(buildTripleCtx()).patterns as unknown as Array<Record<string, unknown>>;
 		const completed = patterns.filter((p) => p.status === 'completed');
 		expect(completed.length).toBeGreaterThan(0);
-		for (const t of completed) {
-			expect(t.targetProgressOmittedReason).toBe('not_computed_by_detector');
-			expect(t.targetReachedPct).toBeUndefined();
-			expect(t.targetReached).toBeUndefined();
-			// `breakoutTarget` は据え置き（#224 は target の算出式を変えない）。
-			expect(t.breakoutTarget).toEqual(expect.any(Number));
-		}
-		// content の文言は**データ条件（測れない）ではなく「算出していない」側**で言う。
+		// **分岐で書かない**（`if` の中に `expect` を置くと、条件が偽になった日に空虚に通る）。
+		// 形だけを写し取って**全件を 1 回の等値比較**にかける。この窓では退化ガードが 1 件も
+		// 発火しない（#228 の実測: 比の下限 0.8160 に対し閾値 0.15）ので、期待値は全件同じ形。
+		const shapes = completed.map((t) => ({
+			omittedReason: t.targetProgressOmittedReason,
+			pct: typeof t.targetReachedPct,
+			reached: typeof t.targetReached,
+			// `targetReachedDate` は extremum の足に `isoTime` があるときだけなので形に含めない。
+			reachedPrice: typeof t.targetReachedPrice,
+			// `breakoutTarget` は据え置き（#228 は target の算出式を変えない）。
+			breakoutTarget: typeof t.breakoutTarget,
+		}));
+		expect(shapes).toEqual(
+			completed.map(() => ({
+				// **配線前に名乗っていたコード（`not_computed_by_detector`）はもう出ない。**
+				omittedReason: undefined,
+				pct: 'number',
+				reached: 'boolean',
+				reachedPrice: 'number',
+				breakoutTarget: 'number',
+			})),
+		);
+		// content には進捗率の行が出る（配線前の「出力なし（…算出していないため…）」ではない）。
 		const line = formatPatternLine(
 			completed[0] as unknown as PatternEntry,
 			0,
@@ -189,8 +222,23 @@ describe('breakoutTarget を出したら進捗か理由を必ず名乗る（issu
 			'Asia/Tokyo',
 			'1hour',
 		);
-		expect(line).toContain('ターゲット進捗: 出力なし（この検出器がターゲット進捗を算出していないため');
+		expect(line).toContain('ターゲット進捗: ');
+		expect(line).not.toContain('この検出器がターゲット進捗を算出していないため');
 		expect(line).not.toContain('not_computed_by_detector');
+	});
+
+	it('完成済み triple の 4 経路が理由コード not_computed_by_detector を返さない（#228 の配線の回帰）', () => {
+		// 上のテストはライブ実例 1 系列の期待値。こちらは**理由コードが復活しないこと**だけを
+		// コーパス側（合成 fixture の完成済み triple。strict top 経路）でも押さえる。
+		const candles = buildCompletedTripleTopCandles() as CandleData[];
+		const patterns = detectTriples(buildTripleCtxFor(candles, '1day', 2)).patterns as unknown as Array<
+			Record<string, unknown>
+		>;
+		const completed = patterns.filter((p) => p.status === 'completed');
+		expect(completed.length).toBeGreaterThan(0);
+		expect(
+			completed.map((t) => ({ omittedReason: t.targetProgressOmittedReason, pct: typeof t.targetReachedPct })),
+		).toEqual(completed.map(() => ({ omittedReason: undefined, pct: 'number' })));
 	});
 
 	it('未ブレイクのパターンは not_broken_out を名乗る（最多の経路）', async () => {

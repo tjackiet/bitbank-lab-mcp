@@ -19,7 +19,7 @@ import {
 	validatePatternSize,
 } from './structural.js';
 import type { Pivot } from './swing.js';
-import { omittedTargetReach, targetReachFields } from './target-reach.js';
+import { computeTargetReach, omittedTargetReach, targetReachFields } from './target-reach.js';
 import type { CandleData, DeduplicablePattern, DetectContext, DetectResult, PatternScoreBreakdown } from './types.js';
 import { pushCand } from './types.js';
 
@@ -417,11 +417,16 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 					},
 					breakout: { idx: breakoutIdx, price: breakoutPrice },
 					breakoutBarIndex: breakoutIdx,
-					// **本検出器は進捗を算出していない。** ブレイク足も target もパターン高さも
-					// 揃っているが `computeTargetReach` を一度も呼んでいないので、`breakoutTarget` が
-					// 出る一方で進捗行だけが消えていた（issue #224 症状 2 のライブ実例がこれ）。
-					// 値を出さないまま**理由だけを申告する**——配線は #224 のフォローアップ。
-					...targetReachFields(omittedTargetReach('not_computed_by_detector')),
+					// ターゲット進捗（issue #228 で配線）。ブレイク足・target・パターン高さが揃っている
+					// 完成済み経路なので `computeTargetReach` をそのまま呼ぶ。**入力不正のガードは
+					// 呼び先が持つ**——ブレイク足の終値が欠損していれば `invalid_breakout_price`、
+					// `|target − breakoutPrice|` が高さに対して潰れていれば `degenerate_target_distance` を
+					// 呼び先が理由コードで名乗るので、ここで `Number.isFinite` を重ねない
+					// （doubles が重ねているのは `breakoutPrice` 相当を完成判定の外で組んでいるため）。
+					// 配線前は `not_computed_by_detector` を名乗っていた（#224 症状 2 のライブ実例がこれ）。
+					...targetReachFields(
+						computeTargetReach(candles, breakoutIdx, breakoutPrice, ttTarget, 'down', ttAvgPeak - nlAvg),
+					),
 					breakoutDate: rangeEnd,
 					breakoutDirection: 'down' as const,
 					outcome: 'success' as const,
@@ -666,11 +671,16 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 					},
 					breakout: { idx: breakoutIdx, price: breakoutPrice },
 					breakoutBarIndex: breakoutIdx,
-					// **本検出器は進捗を算出していない。** ブレイク足も target もパターン高さも
-					// 揃っているが `computeTargetReach` を一度も呼んでいないので、`breakoutTarget` が
-					// 出る一方で進捗行だけが消えていた（issue #224 症状 2 のライブ実例がこれ）。
-					// 値を出さないまま**理由だけを申告する**——配線は #224 のフォローアップ。
-					...targetReachFields(omittedTargetReach('not_computed_by_detector')),
+					// ターゲット進捗（issue #228 で配線）。ブレイク足・target・パターン高さが揃っている
+					// 完成済み経路なので `computeTargetReach` をそのまま呼ぶ。**入力不正のガードは
+					// 呼び先が持つ**——ブレイク足の終値が欠損していれば `invalid_breakout_price`、
+					// `|target − breakoutPrice|` が高さに対して潰れていれば `degenerate_target_distance` を
+					// 呼び先が理由コードで名乗るので、ここで `Number.isFinite` を重ねない
+					// （doubles が重ねているのは `breakoutPrice` 相当を完成判定の外で組んでいるため）。
+					// 配線前は `not_computed_by_detector` を名乗っていた（#224 症状 2 のライブ実例がこれ）。
+					...targetReachFields(
+						computeTargetReach(candles, breakoutIdx, breakoutPrice, tbTarget, 'up', nlAvg - tbAvgValley),
+					),
 					breakoutDate: rangeEnd,
 					breakoutDirection: 'up' as const,
 					outcome: 'success' as const,
@@ -909,11 +919,16 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 					},
 					breakout: { idx: breakoutIdx, price: breakoutPrice },
 					breakoutBarIndex: breakoutIdx,
-					// **本検出器は進捗を算出していない。** ブレイク足も target もパターン高さも
-					// 揃っているが `computeTargetReach` を一度も呼んでいないので、`breakoutTarget` が
-					// 出る一方で進捗行だけが消えていた（issue #224 症状 2 のライブ実例がこれ）。
-					// 値を出さないまま**理由だけを申告する**——配線は #224 のフォローアップ。
-					...targetReachFields(omittedTargetReach('not_computed_by_detector')),
+					// ターゲット進捗（issue #228 で配線）。ブレイク足・target・パターン高さが揃っている
+					// 完成済み経路なので `computeTargetReach` をそのまま呼ぶ。**入力不正のガードは
+					// 呼び先が持つ**——ブレイク足の終値が欠損していれば `invalid_breakout_price`、
+					// `|target − breakoutPrice|` が高さに対して潰れていれば `degenerate_target_distance` を
+					// 呼び先が理由コードで名乗るので、ここで `Number.isFinite` を重ねない
+					// （doubles が重ねているのは `breakoutPrice` 相当を完成判定の外で組んでいるため）。
+					// 配線前は `not_computed_by_detector` を名乗っていた（#224 症状 2 のライブ実例がこれ）。
+					...targetReachFields(
+						computeTargetReach(candles, breakoutIdx, breakoutPrice, ttRelTarget, 'down', ttRelAvgPeak - nlAvg),
+					),
 					breakoutDate: rangeEnd,
 					breakoutDirection: 'down' as const,
 					outcome: 'success' as const,
@@ -1130,11 +1145,16 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 					},
 					breakout: { idx: breakoutIdx, price: breakoutPrice },
 					breakoutBarIndex: breakoutIdx,
-					// **本検出器は進捗を算出していない。** ブレイク足も target もパターン高さも
-					// 揃っているが `computeTargetReach` を一度も呼んでいないので、`breakoutTarget` が
-					// 出る一方で進捗行だけが消えていた（issue #224 症状 2 のライブ実例がこれ）。
-					// 値を出さないまま**理由だけを申告する**——配線は #224 のフォローアップ。
-					...targetReachFields(omittedTargetReach('not_computed_by_detector')),
+					// ターゲット進捗（issue #228 で配線）。ブレイク足・target・パターン高さが揃っている
+					// 完成済み経路なので `computeTargetReach` をそのまま呼ぶ。**入力不正のガードは
+					// 呼び先が持つ**——ブレイク足の終値が欠損していれば `invalid_breakout_price`、
+					// `|target − breakoutPrice|` が高さに対して潰れていれば `degenerate_target_distance` を
+					// 呼び先が理由コードで名乗るので、ここで `Number.isFinite` を重ねない
+					// （doubles が重ねているのは `breakoutPrice` 相当を完成判定の外で組んでいるため）。
+					// 配線前は `not_computed_by_detector` を名乗っていた（#224 症状 2 のライブ実例がこれ）。
+					...targetReachFields(
+						computeTargetReach(candles, breakoutIdx, breakoutPrice, tbRelTarget, 'up', nlAvg - tbRelAvgValley),
+					),
 					breakoutDate: rangeEnd,
 					breakoutDirection: 'up' as const,
 					outcome: 'success' as const,
