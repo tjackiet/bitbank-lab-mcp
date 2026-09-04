@@ -64,6 +64,72 @@
 | 49 | #224 症状 2 | target 進捗を出さなかった**全経路**に理由コードを付けた。`computeTargetReach` の戻り値型と `targetReachFields` の引数型から `undefined` を外し、**理由を書かずに畳む書き方を typecheck で潰した** | **変わらない**（940 ケース全件で `data.patterns` が完全一致。足したのは出力専用フィールド `targetProgressOmittedReason` と content の 1 行だけ） |
 | 51 | #228 | triple の**完成済み 4 経路**（strict / relaxed × top / bottom）に `computeTargetReach` を配線した。#224 症状 2 が理由コード `not_computed_by_detector` で「値を出さないまま理由だけ申告する」形に留めていたものの解消。`target-reach.ts` の 3 定数は **triple 固有の分布を測ったうえで据え置き** | **判定は変わらない**（940 ケースで `detectTriples()` の 200 パターンが target 進捗系 5 キーを除いてバイト単位で完全一致。増えるのは `targetReachedPct` / `targetReached` / `targetReachedDate` / `targetReachedPrice` の 4 フィールドだけ） |
 | 50 | #224 症状 3 | `triple_*` の `pivots` に**ネックライン定義点 v1 / v2 を含めた**（完成済み 4 経路は 3 → 5 点、形成中 2 経路は 2 → 4 点。並びは構造図と同じ）。H&S（p1 / p3）/ double（b）は既に含んでおり、triple だけが例外だった | **判定は変わらない**（940 ケース全件で件数・`confidence` / `status` / `neckline` / `breakoutTarget` / `aftermath` / `meta.reduction.tripleHsExcluded` が完全一致。動くのは `triple_top` 68 件 / `triple_bottom` 71 件の `pivots` と content の `価格範囲` 行だけで、**他の 13 type は 1 バイトも動かない**。`bear_flag` はコーパスに 0 件で、実測で動いたと確認できたのは出現した 12 type） |
+| 52 | #227 Phase 2 | relaxed フォールバックの `headProminence` 軸を、**緩めた側のゲート**（`headProminencePct × factors.head`）ではなく **strict のゲート**で採点するようにした。**ゲートは緩いまま（`RELAXED_FACTORS` は 1 つも変えていない）、点数だけ正直にする。** 段2 を削る案は Phase 1 で膝が観測できず却下 | **件数は変わらない**（1,248 ケースで延べ 4,070 → 4,070。追加 0 / 削除 0、type × コーパス 53 組すべて件数差 0）。動くのは実データ C の窓長スイープの `head_and_shoulders`（`relaxed_hs_x2.0_0.4`）**24 行の `confidence` と `scoreComponents` だけ** |
+
+### Changed（relaxed の頭の突出を strict の閾値で採点する。#227 Phase 2）
+
+`tools/patterns/detect_hs.ts` の relaxed 完成済み 2 経路（H&S / 逆 H&S）が `buildHsScore` に
+渡す `headProminenceGate` は **`headProminencePct × factors.head`**、つまり**緩めた側の閾値**
+だった。`headProminence` 軸は `clamp01(1 − gate / prominence)` なので、これは「緩めたゲートに
+対してどれだけ余裕があるか」を採点していたことになる——**緩めたこと自体が整合度に反映されない。**
+
+実データで確認できた症状は 2 つ:
+
+- ライブ実行で、頭の突出が strict の要求（`1hour` = 0.83%）の **58%（0.484%）**しかない構造が、
+  段2 `x2.0_0.4` でだけ拾われて整合度 **0.79**（「標準的な形状」帯）で出力された。
+  `headProminence` 軸には **0.3135 点**が入っていた。strict のゲートで測れば
+  `1 − 0.0083 / 0.00484` は負で、**0 点**が正しい。
+- 同じ構造でも**緩い段で拾われたほうが高い点数**になる逆転があった（陽性対照で段1 = 0.65 /
+  段2 = 0.66）。緩い段ほど gate が小さく、同じ突出でも「余裕」が大きく見えるため。
+  strict 固定で採点すると両方 **0.62** に揃う。
+
+**`RELAXED_FACTORS` は 1 つも変えていない。** ゲート判定（`factors.head` を掛ける側）は
+そのままで、採点だけを strict の閾値に固定した。issue が挙げた 4 択のうち「段2（`head: 0.4`）を
+削る」を採らなかったのは、Phase 1 の再計測で**膝が観測できなかった**ため——係数 `head` を
+0.30〜0.58 で動かしても通過集合が完全に一定で、0.59 で 0 に落ちるだけ。これは「ゼロから離れた
+集団」ではなく**標本 1 点によるステップ**で、`0.4` の非恣意性の根拠にはならない（#214 の
+非恣意性テストの意味では不合格）。「`× 0.95` のペナルティを段別にする」案は、段1 の accepted が
+2,496 呼び出しで **0 件**のため効果を測る母数が無く見送った。
+
+#### Phase 1 の再計測で新しく分かったこと
+
+1 回目の Phase 1（PR #232）は relaxed accepted が**全項目 0 件**で、ライブ実例を再現できなかった。
+原因は実例が実データ B（`btc_jpy_1hour_2026_08`、2026-08-12〜08-28）の**期間の外**にあったこと。
+新しく実データ C（`tests/fixtures/btc_jpy_1hour_2026_09.ts`、2026-08-20〜09-04 の 365 本）を足して
+測り直した結果、**relaxed の発火可否を決めているのは窓の左端（= `limit`）だった**:
+
+| 窓長（= `limit`） | 窓の左端 (UTC) | `head_and_shoulders` strict 0 件率 | 段2 accepted |
+|---:|---|---:|---:|
+| 60 / 90 | `09-02 02:00` / `08-31 20:00` | 100.0% | 0（5 点が窓に揃わない） |
+| **120** | **`08-30 14:00`（ライブと同じ左端）** | **100.0%** | **24** |
+| 150 以上 | `08-29 08:00` 以前 | 0.0% | 0（strict が拾うので評価されない） |
+
+**実データ C も「365 本を 1 窓」で渡すかぎり 0 件**で、実データ B と同じ結果になる。
+relaxed は**連続する 5 ピボット**しか見ない（strict は `enumerateHsWindows` で非連続の組も見る）
+ため、窓を広げるほど間に別のピボットが挟まって 5 点が連続しなくなる。
+**`limit` を軸として掃かないとこの経路は評価できない**、というのが方法論上の教訓
+（#219 の「実データをプールしない」と同じ種類の話）。
+
+窓長 120 の窓で再現した構造は、issue #227 本文のライブ実例と**全項目一致**した
+（段2 `relaxed_hs_x2.0_0.4` / 構成点の窓ローカル idx `[29, 36, 39, 43, 48]` / 突出 0.484% / 整合度 0.79）。
+
+#### `data.patterns` への影響
+
+6 検出器 → `globalDedup` → ライフサイクル絞り込み → 型間排他（#218）→ `rankPatterns` まで通し、
+1,248 ケースの `data.patterns` 相当を**配列まるごと**（rank 順・全フィールド）突き合わせた。
+
+- **件数は 1 件も動かない**（延べ 4,070 → 4,070。追加 0 / 削除 0。type × コーパス 53 組すべて件数差 0）
+- 動くのは実データ C の窓長スイープの `head_and_shoulders`（`relaxed_hs_x2.0_0.4`）**24 行**だけで、
+  そこも **`confidence` と `scoreComponents` のみ**。合成 / 実データ A / 実データ B / 実データ C（365 本）は
+  全 type・全経路で **0 行**
+- 件数が動かないのは、ゲートを変えていないことに加え、H&S 系には `MIN_CONFIDENCE` が配線されて
+  いない（#206）ため confidence で切られないから。`FORMING_MIN_CONFIDENCE`（0.5）は形成中経路のもので、
+  今回触った完成済み relaxed 経路には掛からない
+- `tests/fixtures/detect_patterns_1hour_data_patterns_baseline.json` は**更新していない**
+  （実データ B が対象で、含まれる H&S 系 4 件はすべて strict 経路。回帰テストは無改変で通る）
+
+実測ログ: `docs/internal/relaxed-fallback-overreach-227.md`。
+計測スクリプト: `scripts/measure_relaxed_fallback_227.ts`（実データ C 96 と窓長スイープ 256 を追加）。
 
 ### Fixed（triple の完成済み 4 経路に target 進捗を配線した。#228）
 
