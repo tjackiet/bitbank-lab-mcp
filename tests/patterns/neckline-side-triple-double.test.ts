@@ -17,7 +17,9 @@
  *    （double の主構成点は 2 点ともネックラインより上。二重出力はこれで解消する）
  * 4. 凍結済み実データ（`btc_jpy_1hour_2026_08`）に**同じ形が実在する**こと。
  *    top / bottom、triple / double の 4 通りすべてを実データの候補で押さえる
- * 5. **H&S 系には配線していない**こと（`*_neckline` の棄却理由が H&S 系に 1 件も出ない）
+ * 5. **H&S 系の配線（#216 の H&S 分）がこの fixture の既定オプションの出力を変えない**こと
+ *    ——H&S 側は別関数（`validateMainPointsAgainstNecklineAt`）で、回帰は
+ *    `neckline-side-hs.test.ts` が持つ
  *
  * **形成中経路は対象外**（別式・別構造で、ネックラインの引き方も暫定構成点の扱いも違う）。
  * 4 の実データケースが `view=debug` の候補を見るのは、落ちた候補が `data.patterns` に
@@ -43,7 +45,9 @@ type Candidate = {
 	details?: {
 		necklinePrice?: number;
 		maxDeviation?: number | null;
-		offenders?: Array<{ idx: number; price: number; deviation: number; deviationPct: number }>;
+		// `necklinePrice` は**線基準版（H&S）だけ**が offender ごとに持つ（#216 の H&S 分）。
+		// スカラー版（triple / double）はトップレベルに 1 つ持つだけなので省略可能にしてある。
+		offenders?: Array<{ idx: number; price: number; deviation: number; deviationPct: number; necklinePrice?: number }>;
 	};
 };
 
@@ -329,22 +333,35 @@ describe('同じ形が凍結済み実データにも存在する（issue #216 Ph
 		]);
 	});
 
-	it('H&S 系には配線していない（1hour の H&S 系に `*_neckline` の棄却が 1 件も無い）', async () => {
-		// 本ゲート（主構成点とネックラインの位置関係）は triple / double にしか配線していない。
-		// H&S は構造ゲートにスカラーを渡しブレイク判定には傾きつきの線を使うため、同じ構造が
-		// スカラー基準では「上に外れ」線基準では「下に収まる」という反転が実際に起きている
-		// （#216 Phase 1 結論 3）。この反転の扱いは #216 の H&S 側で別途決める。
+	it('H&S 側の配線（#216 の H&S 分）を入れても 1hour の H&S 系は 2 件のまま', async () => {
+		// **本ファイルが検証するスカラー版ゲート（`validateMainPointsNecklineSide`）は
+		// triple / double にしか配線していない。** H&S 系には #216 の H&S 分で
+		// **別関数**（`validateMainPointsAgainstNecklineAt`。点ごとに `necklineAt` を評価する
+		// 線基準）を配線してあり、そちらの回帰は `neckline-side-hs.test.ts` が持つ。
+		// ここで固定するのは「H&S 側の配線がこの fixture の既定オプションの出力を動かさない」
+		// ——本 PR（#223）が主張した triple / double の変化と混ざらないこと。
 		//
-		// 件数は **#211（`necklineAt` の外挿クランプ）で 4 → 2 に減った**。本ゲートが落としたのでは
-		// なく、`head_and_shoulders` 265-272-294-313-322 / 204-249-294-313-322 の 2 件の
-		// ブレイクが外挿頼みで、クランプで `near_completion` に落ちて既定オプションから消えたため
-		// （下の `*_neckline` 棄却 0 件がそれを裏づける）。件数の内訳は
+		// 件数は **#211（`necklineAt` の外挿クランプ）で 4 → 2 に減った**。どちらのゲートが
+		// 落としたのでもなく、`head_and_shoulders` 265-272-294-313-322 / 204-249-294-313-322 の
+		// 2 件のブレイクが外挿頼みで、クランプで `near_completion` に落ちて既定オプションから
+		// 消えたため。件数の内訳は
 		// `tests/detect_patterns_data_patterns_regression.test.ts` の #211 の節にある。
+		//
+		// 既定パラメータで落ちる H&S 系は逆 H&S 225-232-249-265-272 の 1 件だけで、
+		// これは `globalDedup` の代表ではないので `data.patterns` の件数に出ない。
 		const { patterns, candidates } = await detectDebug(buildBtcJpy1hour202608Candles(), '1hour');
 		const hs = patterns.filter((p) => String(p.type).includes('head_and_shoulders'));
 		expect(hs).toHaveLength(2);
+		// スカラー版の理由コードは triple / double からしか出ない。
 		expect(
-			candidates.some((c) => String(c.type).includes('head_and_shoulders') && c.reason?.endsWith('_neckline')),
+			candidates.some(
+				(c) =>
+					String(c.type).includes('head_and_shoulders') &&
+					c.reason?.endsWith('_neckline') &&
+					// 線基準版は同じ理由コードを使う（`view=debug` の出力形を揃えるため）。
+					// スカラー版と区別できるのは details の形——offender ごとに necklinePrice を持つ。
+					c.details?.offenders?.every((o) => !('necklinePrice' in o)),
+			),
 		).toBe(false);
 	});
 });

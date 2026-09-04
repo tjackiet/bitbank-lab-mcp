@@ -895,6 +895,117 @@ export function necklineSideDetailsFrom(
 }
 
 /**
+ * 主構成点とネックラインの位置関係の検査（**線基準**。issue #216 Phase 2 の H&S 分）。
+ *
+ * {@link validateMainPointsNecklineSide} の**線バージョン**。判定の意味・理由コード・
+ * 「等号は失格」「閾値を置かない」は同じで、**比較相手がスカラー 1 つではなく点ごとの値**
+ * である点だけが違う。triple / double のネックラインは水平スカラーなので 1 つの値で足りたが、
+ * **H&S の strict 経路のネックラインは傾きを持つ**（`p1` / `p3` の 2 点で張る直線）ため、
+ * 主構成点ごとにその点の `idx` で線を評価した値と比べる必要がある。
+ *
+ * ## 別関数にしてある理由
+ *
+ * `validateMainPointsNecklineSide` はスカラー 1 つを受け取る設計で、既に triple / double の
+ * 4 経路ずつに配線されている。**シグネチャ・テスト・`view=debug` の出力形を一切変えない**ため、
+ * スカラー版はそのまま残して線版を足した。戻り値・理由コード・offender の型は
+ * **同じものを再利用する**（`view=debug` の出力形を triple / double と H&S で揃えるため）。
+ *
+ * ## `necklineAt` は呼び出し側が渡す（依存の向きを崩さない）
+ *
+ * 本ファイルは `regression.js` / `swing.js` にしか依存しておらず、`detect_hs.ts` が
+ * 本ファイルを使う**片方向**の関係になっている。`necklineAt` は `detect_hs.ts` の関数なので、
+ * ここから import すると循環する。**関数として受け取る**ことでこの向きを保つ。
+ *
+ * ## 肩は「外挿した線」ではなく「近い方の定義点の水準」と比較される（#211 の設計）
+ *
+ * `detect_hs.ts` の `necklineAt` は #211 で定義点の区間 `[p1.idx, p3.idx]` へクランプされている。
+ * H&S の主構成点 `[p0, p2, p4]` をこの関数で評価すると、実質的な比較相手はこうなる:
+ *
+ * | 主構成点 | `idx` の位置 | `necklineAt` の実質的な意味 |
+ * |---|---|---|
+ * | 左肩 (p0) | `p1.idx` より前（区間の外） | クランプで `p1.y` に頭打ち＝**谷1 の水準と比較** |
+ * | 頭 (p2) | `p1.idx`〜`p3.idx` の内側 | **真の内挿値**（傾きを反映） |
+ * | 右肩 (p4) | `p3.idx` より後（区間の外） | クランプで `p3.y` に頭打ち＝**谷2 の水準と比較** |
+ *
+ * **つまり肩だけが「線」ではなく「近い方の定義点の水準」と比較され、頭だけが真の内挿値で
+ * 評価される。この非対称性は実装ミスではなく #211 の設計そのもの**（定義点の外側の値は
+ * 「教科書の直線を伸ばしたらこうなるはず」というモデル上の仮定で、実際のサポート /
+ * レジスタンスの根拠が無い）。基準を 1 つに揃えるために、ブレイク検出・スコアリング・
+ * ターゲット投影と**同じ `necklineAt`** をそのまま使う——ここだけ別の基準を作らない。
+ *
+ * ## 許容幅（つまみ）を置かない
+ *
+ * `docs/internal/hs-neckline-side-216.md`（#216 Phase 1 の H&S 分・`necklineAt` 基準での再計測）
+ * が根拠。**逸脱量の最小はパターン高さの 1.504%（絶対額 3,857 円）で、0〜1.5% は空。**
+ * #211 より前の基準（スカラー水準）で見えていた「逆 H&S の最小 0.012%（31 円）」という
+ * ゼロ張り付きは**この基準では再現しない**ので、triple / double と同じくゼロ許容で切れる。
+ *
+ * ## 呼び出し位置・素通しの扱い
+ *
+ * {@link validateMainPointsNecklineSide} と同じ。**各検出経路の「既存の棄却検査をすべて
+ * 通過した後」**に置き、`necklineAt` が有限を返さない点と `price` が有限でない点は
+ * **検査から除く**（落とさない）。スカラー版が `necklinePrice` 非有限で候補ごと素通しするのに
+ * 対し、こちらは**点ごとに除く**——線は点ごとに値が違うので、1 点が評価できないことは
+ * 他の点の判定材料が無いことを意味しない。
+ *
+ * @param necklineAt 点の `idx` を受け取ってその位置のネックライン水準を返す関数
+ *   （`detect_hs.ts` の `necklineAt(neckline, idx)` を束縛して渡す）
+ */
+export function validateMainPointsAgainstNecklineAt(
+	side: ReversalSide,
+	mainPoints: ReadonlyArray<Pick<Pivot, 'idx' | 'price'>>,
+	necklineAt: (idx: number) => number,
+): MainPointNecklineSideResult {
+	const offenders: MainPointNecklineSideOffender[] = [];
+	for (const p of mainPoints) {
+		if (!Number.isFinite(p.price)) continue;
+		const level = necklineAt(p.idx);
+		if (!Number.isFinite(level)) continue;
+		const deviation = side === 'top' ? level - p.price : p.price - level;
+		if (deviation >= 0) offenders.push({ idx: p.idx, price: p.price, deviation });
+	}
+	if (offenders.length === 0) return { reason: null, offenders };
+	return { reason: side === 'top' ? 'peaks_below_neckline' : 'valleys_above_neckline', offenders };
+}
+
+/**
+ * {@link validateMainPointsAgainstNecklineAt} で落ちた候補の診断値。`view=debug` の `details` に載せる。
+ *
+ * {@link necklineSideDetailsFrom} の線バージョン。**offender ごとに `necklinePrice` を持つ**のが
+ * 唯一の違いで、`offenders` / `maxDeviation` というトップレベルの形は揃えてある。
+ *
+ * **トップレベルの `necklinePrice` は出さない。** 線には「1 つの水準」が存在せず、
+ * 代表値を 1 つ選んで載せると「その値と比較した」と誤読される（実際の比較相手は点ごとに違う）。
+ * 点ごとの水準は各 offender の `necklinePrice` に出るので、
+ * **`view=debug` から「どの点がどの水準と比べられたか」が読み取れる。**
+ *
+ * `deviationPct` の定義（その点のネックライン水準に対する比。**パターン高さ相対ではない**）と
+ * 分母のクランプは {@link necklineSideDetailsFrom} と同じ。
+ *
+ * @param necklineAt {@link validateMainPointsAgainstNecklineAt} に渡したのと**同じ関数**を渡すこと
+ *   （別の関数を渡すと `deviation` と `necklinePrice` が別々の線を指す）
+ */
+export function necklineSideDetailsFromAt(
+	necklineAt: (idx: number) => number,
+	offenders: ReadonlyArray<MainPointNecklineSideOffender>,
+): Record<string, unknown> {
+	return {
+		offenders: offenders.map((o) => {
+			const necklinePrice = necklineAt(o.idx);
+			return {
+				idx: o.idx,
+				price: o.price,
+				necklinePrice,
+				deviation: o.deviation,
+				deviationPct: o.deviation / Math.max(1, Math.abs(necklinePrice)),
+			};
+		}),
+		// `necklineSideDetailsFrom` と同じ理由で空配列を明示的に潰す（`-Infinity` を載せない）。
+		maxDeviation: offenders.length ? Math.max(...offenders.map((o) => o.deviation)) : null,
+	};
+}
+
+/**
  * 反転パターンのサイズ検査（issue #138 欠陥 2-2）。不合格理由 or `null` を返す。
  *
  * `points` は**構成点を時系列順に並べた交互列**で、両端が主構成点（`side='top'`

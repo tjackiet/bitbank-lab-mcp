@@ -29,6 +29,11 @@ Phase 1 の 1-3 章でも `triple` / `double` の件数は **4 基準すべて�
 **形成中経路も対象外。** 別式・別構造（ネックラインの引き方も暫定構成点の扱いも違う）で、
 Phase 1 も本文の母集団から外して参考値に分けている。
 
+> **その後（#211 マージ後）**: `necklineAt` が全消費者の単一基準になったので保留が解消し、
+> H&S 系にも**別関数**（`validateMainPointsAgainstNecklineAt`。点ごとに `necklineAt` を評価する
+> 線基準）を配線した。再計測と実装の記録は [`hs-neckline-side-216.md`](./hs-neckline-side-216.md)。
+> **本 PR が入れたスカラー版（`validateMainPointsNecklineSide`）と本ログの数値は変わっていない。**
+
 ## 価格基準は `price`（終値）。`extremePrice` は採らない
 
 1. **ネックラインが終値から作られている。** `nlAvg` は中間構成点の `price`（終値）の平均。

@@ -55,6 +55,15 @@
  * （実データ B のライブ実例＋合成 fixture）が持ち、実データのパイプライン回帰は
  * `tests/detect_patterns_triple_neckline_pivots_btcjpy.test.ts` が持つ）。
  *
+ * **#216 Phase 2 の H&S 分でも更新していない**（H&S 系の完成済み 4 経路に主構成点 ×
+ * ネックラインの位置関係ゲート（線基準の `validateMainPointsAgainstNecklineAt`）を配線した変更。
+ * 896 ケースの実測では `data.patterns` が延べ 1,424 → 1,404 と動くが、**動くのは
+ * `swingDepth: 2` / `4hour` のケースだけ**で、本 fixture の条件（実データ B × `1hour` ×
+ * 既定オプション・既定 `swingDepth`）では 12 件が全フィールド一致する。既定パラメータで
+ * 落ちる H&S 系は逆 H&S 225-232-249-265-272（左肩がネックラインより 14,401 円上）の 1 件だけで、
+ * これは `globalDedup` の代表ではないため出力に出ていなかった。実測ログは
+ * `docs/internal/hs-neckline-side-216.md`、回帰は `tests/patterns/neckline-side-hs.test.ts` が持つ）。
+ *
  * **#224 症状 1 でも更新していない**（`meta.reduction` に `tripleHsCandidateCount` を足し、
  * 「検出内訳:」行に `（比較対象 H&S 無し）` の注記を付けた申告のみの変更。判定ロジックは
  * 触っておらず `data.patterns` は不変。本 fixture は `data.patterns` だけを凍結していて
