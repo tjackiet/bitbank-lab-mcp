@@ -312,6 +312,11 @@ const runFlow = (view: string, bucketsN = 2) => {
  *   `- 期間: A ~ B` 行が出なくなる。
  */
 const PATTERN_COUNT = 7;
+/**
+ * 縮小段の `detected`（既定 7 件のときの値）。各段の減算合計 4（-2 dedup / -1 current /
+ * -0 lifecycle / -1 triple×H&S）を引くと `PATTERN_COUNT` になる = production の不変条件を満たす。
+ */
+const REDUCTION_DETECTED_BASE = 11;
 /** `debug` view が `【Swings】` に描画するスイング（1 本だけ入れて行の有無を検証可能にする）。 */
 const DEBUG_SWING = { kind: 'H', idx: 3, price: 100, isoTime: '2026-01-05T00:00:00.000Z' } as const;
 
@@ -436,6 +441,12 @@ function patternsFixture(
 	const extra = opts.reversals ? reversalPatterns() : [];
 	const swings = [{ ...DEBUG_SWING }, ...(opts.reversals ? reversalSwings() : [])];
 	const total = PATTERN_COUNT + extra.length;
+	// **`detected` も一緒に上げる。** 縮小段は `detected - 各段の減算 === output` が
+	// production の不変条件で、`output` だけ増やすと「11 detected から 4 件引いて 11 出力」という
+	// 実際には起きない waterfall になる。矛盾したまま置くと、この層（ツール横断の契約検証）が
+	// 応答契約の回帰を隠す側に回る。各段の減算値は据え置き（0 のとき省く / 省かない分岐を
+	// 1 フィクスチャで見ている構成を壊さないため）。
+	const detected = REDUCTION_DETECTED_BASE + extra.length;
 	return {
 		ok: true,
 		summary: 'ok',
@@ -480,11 +491,12 @@ function patternsFixture(
 			visualization_hints: { preferred_style: 'line', highlight_patterns: [] },
 			// 縮小段の内訳行の元データ（issue #200 要件 E / #218 で 1 段追加）。11 detected → -2 dedup
 			// → -1 current → -0 lifecycle → -1 triple×H&S 排他 → 7 output（PATTERN_COUNT と一致）。
+			// `reversals` を足した場合は `detected` / `output` が同数ずつ増えて等式が保たれる。
 			// `currentFiltered` を 0 超にして「0 のとき省く」分岐と両方を 1 フィクスチャで確認できる
 			// ようにしてあり、`lifecycleExcluded` は 0 のまま（0 でも省かない側）に残してある。
 			// `tripleHsCandidateCount`（#224 症状 1）は 1 以上 = 排他を実際に比較した側。
 			reduction: {
-				detected: 11,
+				detected,
 				dedupMerged: 2,
 				currentFiltered: 1,
 				lifecycleExcluded: 0,
@@ -965,6 +977,13 @@ describe('階梯上の view の content は下位 view の上位集合（§3-2 �
 
 		expectSupersetOf(fixedElements(detailed), fixedElements(summary), 'detailed ⊇ summary（定型要素）');
 		expectSupersetOf(fixedElements(full), fixedElements(detailed), 'full ⊇ detailed（定型要素）');
+
+		// フィクスチャの縮小段が production の不変条件（`detected - 各段の減算 === output`）を
+		// 満たしていること。ここが崩れていると「反転系を足した」フィクスチャ自体が
+		// production では起きない応答になり、以下の包含検証の土台が信用できなくなる。
+		expect(reductionLines(summary)).toEqual([
+			`${REDUCTION_LABEL}: 検出 15件 → 重複統合 -2 → 現在時点フィルタ -1 → ライフサイクル除外 -0 → triple×H&S排他 -1 → 出力 11件`,
+		]);
 
 		const keys = {
 			summary: patternRowKeys(summary),
