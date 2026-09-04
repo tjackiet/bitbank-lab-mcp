@@ -14,6 +14,7 @@
 
 import { toolDef } from '../src/handlers/detectPatternsHandler.js';
 import { DETECTION_ROUTE_LABEL } from '../src/handlers/detectPatternsViewsHandler.js';
+import { DetectPatternsInputSchema } from '../src/schemas.js';
 import { parseArgs, runCli } from './cli-utils.js';
 
 const DEFAULT_PAIRS = ['eth_jpy', 'xrp_jpy', 'sol_jpy', 'doge_jpy', 'ltc_jpy', 'bcc_jpy'];
@@ -52,13 +53,23 @@ async function main(): Promise<void> {
 	for (const type of types) {
 		console.log(`\n===== type=${type} =====`);
 		for (const pair of pairs) {
-			const res = (await toolDef.handler({
+			// **必ず Zod を通してから handler に渡す。** server.ts は inputSchema で parse してから
+			// handler を呼ぶので、ここで直接呼ぶと既定値（limit=90 等）が入らない。
+			// limit が undefined のままだとヘッダの `${limit ?? count}本から` が
+			// パターン件数に化けて「3本から3件を検出」のような嘘の行が出る
+			// （detectPatternsHandler.ts:103。スキャン自体は下流の既定で 90 本走るので気づきにくい）。
+			const input = DetectPatternsInputSchema.parse({
 				pair,
 				type,
 				...(limit == null ? {} : { limit }),
 				patterns: ['head_and_shoulders', 'inverse_head_and_shoulders'],
 				view: 'full',
-			} as never)) as { ok?: boolean; content?: Array<{ type: string; text?: string }>; summary?: string };
+			});
+			const res = (await toolDef.handler(input as never)) as {
+				ok?: boolean;
+				content?: Array<{ type: string; text?: string }>;
+				summary?: string;
+			};
 
 			const text = res?.content?.[0]?.text;
 			if (typeof text !== 'string') {
