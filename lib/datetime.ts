@@ -183,6 +183,23 @@ export function parseIso8601(value: string): dayjs.Dayjs | null {
 }
 
 /**
+ * 日足未満（intraday）の時間足。
+ * 暦日だけで表示すると足の位置が特定できず「直近◯時間がスキャンされていない」という
+ * 誤読を招く（issue #200 の誤読の直接原因）ため、これらは時刻まで表示する。
+ *
+ * issue #233: 元は `tools/patterns/period.ts` にあったが、`lib/pattern-diagrams.ts`
+ * （構造図）からも必要になったため `lib/` へ移した。`lib/` → `tools/` の逆方向依存を
+ * 作らないための移動で、時間足の分類という土台的な判定は `lib/` 側が定位置。
+ * `tools/patterns/period.ts` は互換のため re-export している。
+ */
+const INTRADAY_TYPES = new Set(['1min', '5min', '15min', '30min', '1hour', '4hour', '8hour', '12hour']);
+
+/** 時間足が日足未満（= 表示に時刻まで含めるべき）か。 */
+export function isIntradayType(type: string): boolean {
+	return INTRADAY_TYPES.has(type);
+}
+
+/**
  * ISO日付文字列を "M/D(曜日)" 形式に変換
  * 例: "2026-04-09T00:00:00Z" → "4/9(木)"
  * @param isoDate ISO8601 日付文字列

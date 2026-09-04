@@ -14,7 +14,7 @@
  * `src/handlers/detectPatternsViewsHandler.ts`（view 用）に重複していたため、ここへ寄せている。
  */
 
-import { formatDateInTz, resolveTz, toIsoWithTz } from '../../lib/datetime.js';
+import { formatDateInTz, isIntradayType, resolveTz, toIsoWithTz } from '../../lib/datetime.js';
 
 /** 検出器に渡した足のレンジ。`meta.scan` と同じ形で、start / end は UTC ISO 文字列。 */
 export interface ScanRange {
@@ -29,16 +29,13 @@ interface RangedPattern {
 }
 
 /**
- * 日足未満（intraday）の時間足。
- * 暦日だけで表示すると足の位置が特定できず「直近◯時間がスキャンされていない」という
- * 誤読を招く（今回の誤読の直接原因）ため、これらは時刻まで表示する。
+ * 時間足が日足未満（= スキャン範囲を時刻まで表示すべき）か。
+ *
+ * 実体は `lib/datetime.ts`（issue #233 で移動）。構造図（`lib/pattern-diagrams.ts`）からも
+ * 必要になり、`lib/` → `tools/` の逆方向依存を避けるため。既存の import パス
+ * （`from '../../tools/patterns/period.js'`）を壊さないよう、ここから re-export する。
  */
-const INTRADAY_TYPES = new Set(['1min', '5min', '15min', '30min', '1hour', '4hour', '8hour', '12hour']);
-
-/** 時間足が日足未満（= スキャン範囲を時刻まで表示すべき）か。 */
-export function isIntradayType(type: string): boolean {
-	return INTRADAY_TYPES.has(type);
-}
+export { isIntradayType } from '../../lib/datetime.js';
 
 const toTs = (s?: string | null): number => (s ? Date.parse(s) : Number.NaN);
 

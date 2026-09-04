@@ -794,7 +794,7 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 					],
 					{ price: nlAvg },
 					{ start, end: rangeEnd },
-					{ tz: ctx.tz },
+					{ tz: ctx.tz, type: ctx.type },
 				);
 				// 投影の起点はブレイク日（または右肩日）時点のネックライン値。**高さは頭の真下**で測る（#208）。
 				const targetAnchorIdx = breakoutIdx >= 0 ? breakoutIdx : p4.idx;
@@ -1004,7 +1004,7 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 					],
 					{ price: nlAvg },
 					{ start, end: rangeEnd },
-					{ tz: ctx.tz },
+					{ tz: ctx.tz, type: ctx.type },
 				);
 				// 投影の起点はブレイク日（または右肩日）時点のネックライン値。**高さは頭の真下**で測る（#208）。
 				const targetAnchorIdx = breakoutIdx >= 0 ? breakoutIdx : p4.idx;
@@ -1262,7 +1262,7 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 				// 2 定義点の平均を渡していたため、構造図だけが他と食い違っていた。
 				{ price: nlY },
 				{ start, end: rangeEnd },
-				{ tz: ctx.tz },
+				{ tz: ctx.tz, type: ctx.type },
 			);
 			// nlY は水平ネックラインの y。頭の真下でもブレイク時点でも同値なので、`necklineProjectionTarget`
 			// を通しても値は変わらない（#208 が揃えたのは**基準の名乗り**で、relaxed の値は不変）。
@@ -1488,7 +1488,7 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 				// 2 定義点の平均を渡していたため、構造図だけが他と食い違っていた。
 				{ price: nlY },
 				{ start, end: rangeEnd },
-				{ tz: ctx.tz },
+				{ tz: ctx.tz, type: ctx.type },
 			);
 			// nlY は水平ネックラインの y。頭の真下でもブレイク時点でも同値なので、`necklineProjectionTarget`
 			// を通しても値は変わらない（#208 が揃えたのは**基準の名乗り**で、relaxed の値は不変）。

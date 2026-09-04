@@ -434,6 +434,7 @@ function buildRegressionEntry(
 	useSmoothed: boolean,
 	debugCandidates: CandDebugEntry[],
 	tz: string | undefined,
+	type: string,
 ): DeduplicablePattern | null {
 	const start = candles[startIdx]?.isoTime;
 	const theoreticalEnd = candles[endIdx]?.isoTime;
@@ -505,7 +506,7 @@ function buildRegressionEntry(
 	}));
 	let diagram: PatternDiagramData | undefined;
 	try {
-		diagram = generatePatternDiagram(wedgeType, pivForDiagram, { price: 0 }, { start, end }, { tz });
+		diagram = generatePatternDiagram(wedgeType, pivForDiagram, { price: 0 }, { start, end }, { tz, type });
 	} catch {
 		/* noop */
 	}
@@ -786,6 +787,7 @@ function detectRegressionWedges(
 			useSmoothed,
 			debugCandidates,
 			ctx.tz,
+			ctx.type,
 		);
 		if (entry) patterns.push(entry);
 	}
