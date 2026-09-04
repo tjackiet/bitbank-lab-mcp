@@ -2188,6 +2188,34 @@ describe('detectHeadAndShoulders: 整合度の多軸化（issue #204）', () => 
 		expect(hs?.scoreComponents?.headProminence).toBe(0);
 	});
 
+	it('逆 H&S の relaxed も突出の採点は strict の閾値で行う（#227 Phase 2）', () => {
+		// left=100 / right=105 で strict の肩判定が落ち、relaxed 第 1 段が拾う（H&S 側と同じ組み方）。
+		const { candles, pivots } = buildInverseHS({ leftShoulder: 100, rightShoulder: 105, head: 70 });
+		const ihs = detectHeadAndShoulders(buildCtx({ candles, pivots, tolerancePct: 0.04 })).patterns.find(
+			(p) => p.type === 'inverse_head_and_shoulders',
+		);
+		expect(ihs?._fallback).toMatch(/relaxed_ihs/);
+		expect(ihs?.scoreComponents?.headProminence).toBeDefined();
+		// 逆 H&S の突出は `1 − 頭 / min(肩)` = 1 − 70/100 = 0.30。ゲートは relaxed で
+		// 0.04 × 0.6 = 0.024 まで緩むが、採点は strict の 0.04 で行う。
+		const prominence = 1 - 70 / 100;
+		expect(ihs?.scoreComponents?.headProminence).toBeCloseTo(1 - 0.04 / prominence, 4);
+		expect(ihs?.scoreComponents?.headProminence).not.toBeCloseTo(1 - 0.024 / prominence, 3);
+	});
+
+	it('逆 H&S も relaxed のゲートは通るが strict の突出に届かなければ headProminence が 0 点（#227 Phase 2）', () => {
+		// 突出 0.30 に対し strict のゲートを 0.4 に上げる。strict では落ちるが relaxed 第 1 段
+		// （0.4 × 0.6 = 0.24）は通る。
+		const { candles, pivots } = buildInverseHS({ leftShoulder: 100, rightShoulder: 105, head: 70 });
+		const ihs = detectHeadAndShoulders(
+			buildCtx({ candles, pivots, tolerancePct: 0.04, headProminencePct: 0.4 }),
+		).patterns.find((p) => p.type === 'inverse_head_and_shoulders');
+		expect(ihs?._fallback).toMatch(/relaxed_ihs/);
+		// strict のゲートに届かない入力であることを固定する
+		expect(1 - 70 / 100).toBeLessThan(0.4);
+		expect(ihs?.scoreComponents?.headProminence).toBe(0);
+	});
+
 	it('肩の相対差が同じでも形が違えば confidence が変わる（rd の 1 次式が崩れている）', () => {
 		// 両方とも肩は 100 / 100（rd = 0）。旧実装では `tolMargin` も `symmetry` も rd だけで決まり、
 		// `per` も同じなので **confidence は完全に一致していた**。
