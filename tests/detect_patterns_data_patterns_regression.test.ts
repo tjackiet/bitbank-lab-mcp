@@ -43,6 +43,17 @@
  * 表引き。形成中 H&S の「頭」が 2 番目に来る非対称を含む）と
  * `tests/view-content-superset.test.ts`（規約 3: `full` が `detailed` の上位集合のまま）が持つ）。
  *
+ * **#228 でも更新していない**（`detect_triples.ts` の完成済み 4 経路（strict / relaxed ×
+ * top / bottom）に `computeTargetReach` を配線し、`targetProgressOmittedReason:
+ * 'not_computed_by_detector'` を実際の進捗値に置き換えた変更。**動くのは target 進捗系
+ * 4 フィールドだけ**で、判定ロジックには手が入っていない——940 ケースの実測で
+ * `detectTriples()` が返す 200 パターンが、進捗系 5 キーを除いて**バイト単位で完全一致**した
+ * （`scripts/measure_triple_target_reach_228.ts` と同じコーパス）。本 fixture は #216 / #218 以降
+ * triple を 1 件も含まない（H&S 系 4 / wedge 4 / triangle 4）ので、そもそも差分が出る余地が無い。
+ * triple の完成済み経路の回帰は `tests/patterns/target-progress-declared.test.ts`
+ * （実データ B のライブ実例＋合成 fixture）が持ち、実データのパイプライン回帰は
+ * `tests/detect_patterns_triple_neckline_pivots_btcjpy.test.ts` が持つ）。
+ *
  * **#224 症状 1 でも更新していない**（`meta.reduction` に `tripleHsCandidateCount` を足し、
  * 「検出内訳:」行に `（比較対象 H&S 無し）` の注記を付けた申告のみの変更。判定ロジックは
  * 触っておらず `data.patterns` は不変。本 fixture は `data.patterns` だけを凍結していて

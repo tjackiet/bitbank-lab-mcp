@@ -52,10 +52,14 @@ npm run stat -- --last 7d
 | スクリプト | 説明 |
 |---|---|
 | `measure_relaxed_fallback_227.ts` | `detect_hs.ts` の relaxed フォールバック（`RELAXED_FACTORS`）が標準コーパス 800 ＋ 実データ B 96 でどれだけ発火・accepted になるかを段別に計測し、段2 の係数スイープ・`headProminence` 軸の strict 採点試算を Markdown で出す（issue #227 Phase 1。コードは変えない） |
+| `measure_triple_target_reach_228.ts` | `detect_triples.ts` の完成済み 4 経路に `computeTargetReach` を配線したうえで、`target-reach.ts` の 3 定数（退化ガード比 / 上限 pct / 走査窓バー数）が triple でも妥当かを 940 ケースで計測して Markdown で出す（issue #228。定数は変えない）。結果は `docs/internal/triple-target-reach-228.md` |
 
 ```bash
 npx tsx scripts/measure_relaxed_fallback_227.ts                  # Markdown を stdout へ
 npx tsx scripts/measure_relaxed_fallback_227.ts --json out.json  # 生データも保存
+
+npx tsx scripts/measure_triple_target_reach_228.ts               # 同上
+npx tsx scripts/measure_triple_target_reach_228.ts --json out.json
 ```
 
 ## バックテスト

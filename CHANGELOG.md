@@ -62,7 +62,70 @@
 | 47 | #218 Phase 2 | `triple_*` と H&S 系が**主構成点を 2 点以上共有**していたら triple を落とす型間排他を入れた。**閾値を 1 つも導入していない**（Phase 1 が深さ比の hard gate 案を実測で否定したため、確かな根拠がある二重出力だけを直した） | **減る**（940 ケースで `triple_bottom` −25 / 1,968 → 1,943。**他の 13 type は 1 件も動かない**） |
 | 48 | #216 Phase 2 | `triple_*` / `double_*` の**主構成点がすべてネックラインの正しい側にある**ことを要求する構造ゲートを入れた。**閾値（許容幅）を 1 つも導入していない**（Phase 1 の実測で逸脱量がゼロから離れているため）。H&S 系は #211 待ちで触っていない | **減る**（940 ケースで −60 / 1,943 → 1,883。`triple_top` −44 / `triple_bottom` −12 / `double_bottom` −4。**H&S 系を含む他の 10 type は 1 件も動かない**） |
 | 49 | #224 症状 2 | target 進捗を出さなかった**全経路**に理由コードを付けた。`computeTargetReach` の戻り値型と `targetReachFields` の引数型から `undefined` を外し、**理由を書かずに畳む書き方を typecheck で潰した** | **変わらない**（940 ケース全件で `data.patterns` が完全一致。足したのは出力専用フィールド `targetProgressOmittedReason` と content の 1 行だけ） |
+| 51 | #228 | triple の**完成済み 4 経路**（strict / relaxed × top / bottom）に `computeTargetReach` を配線した。#224 症状 2 が理由コード `not_computed_by_detector` で「値を出さないまま理由だけ申告する」形に留めていたものの解消。`target-reach.ts` の 3 定数は **triple 固有の分布を測ったうえで据え置き** | **判定は変わらない**（940 ケースで `detectTriples()` の 200 パターンが target 進捗系 5 キーを除いてバイト単位で完全一致。増えるのは `targetReachedPct` / `targetReached` / `targetReachedDate` / `targetReachedPrice` の 4 フィールドだけ） |
 | 50 | #224 症状 3 | `triple_*` の `pivots` に**ネックライン定義点 v1 / v2 を含めた**（完成済み 4 経路は 3 → 5 点、形成中 2 経路は 2 → 4 点。並びは構造図と同じ）。H&S（p1 / p3）/ double（b）は既に含んでおり、triple だけが例外だった | **判定は変わらない**（940 ケース全件で件数・`confidence` / `status` / `neckline` / `breakoutTarget` / `aftermath` / `meta.reduction.tripleHsExcluded` が完全一致。動くのは `triple_top` 68 件 / `triple_bottom` 71 件の `pivots` と content の `価格範囲` 行だけで、**他の 13 type は 1 バイトも動かない**。`bear_flag` はコーパスに 0 件で、実測で動いたと確認できたのは出現した 12 type） |
+
+### Fixed（triple の完成済み 4 経路に target 進捗を配線した。#228）
+
+`tools/patterns/detect_triples.ts` の完成済み 4 経路（strict / relaxed × top / bottom）は
+ブレイク足・`breakoutTarget`・パターン高さがすべて揃っているのに **`computeTargetReach` を
+一度も呼んでいなかった**。#224 症状 2 はそこに理由コード `not_computed_by_detector` を
+付けて「値を出さないまま理由だけを申告する」形に留めていた（配線は数値が動くため別 issue）。
+本エントリはその配線で、**申告を消す側の作業**。
+
+```text
+before: - ターゲット価格: 12,644,737円（ネックライン投影）
+        - ターゲット進捗: 出力なし（この検出器がターゲット進捗を算出していないため…）
+after:  - ターゲット価格: 12,644,737円（ネックライン投影）
+        - ターゲット進捗: 289%（ブレイク後60本以内に到達）
+```
+
+#### 定数は測ってから据え置いた（流用していない）
+
+`target-reach.ts` の 3 定数は **H&S / doubles の実測で決めた値**（#210）。triple は同じ
+`neckline_projection` の族（分母が潰れる側）だが、**同じ族だから同じ値でよいは仮説**なので、
+配線した状態で 940 ケースを回して triple の行だけを測った
+（`scripts/measure_triple_target_reach_228.ts` / 実測ログは `docs/internal/triple-target-reach-228.md`）。
+
+| 定数 | 現行値 | triple での実測 | 判断 |
+|---|---:|---|---|
+| `MIN_TARGET_DISTANCE_HEIGHT_RATIO` | 0.15 | 比 `\|target − breakoutPrice\| / patternHeight` の**下限が 0.8160**（H&S / doubles は 0.0033 まで落ちる）。発火 **0 / 13 構造** | **据え置き**。triple では no-op |
+| `TARGET_REACHED_PCT_CAP` | 999 | 上限に当たる行 **0**。最大は実データ B ネイティブ 289% / 補助スイープ 623% | **据え置き** |
+| `TARGET_REACH_MAX_BARS` | 60 | 構成バー数 23〜42（実データ B ネイティブ p50 36）。60 本先が揃う構造が実データ B で **100%**。初到達までのバー数は全構造 **0 本** | **据え置き** |
+
+**triple 側に「膝」は無い。** H&S / doubles では閾値 0.12 を越えたところで残る `targetReachedPct` の
+最大値が 13,928% → 817% に落ちた（それが 0.15 を選んだ根拠）。triple は閾値を 0.82 / 0.89 / 1.03 と
+上げて構造を 5 / 7 / 12 件除外しても、**残る最大値は 623% のまま動かない**——除外しても何も
+改善しないので、triple 用に別の値を置く根拠が無い。
+
+**実データ A（`btc_jpy` 1day）は完成済み triple が 0 件**（#227 Phase 1 と同じ）。
+1day 側は「問題なし」ではなく**「材料が無い」**。実データ A / B はプールせずネイティブのまま
+個別に見ている（#219）。
+
+**配線したのは 4 経路だが、本コーパスで走ったのは strict 2 経路だけ**（13 構造すべてが
+`_fallback` 無し）。relaxed は同 type の strict が 0 件のときしか走らず、本コーパスでは
+1 度も accept しない（#204 / #227 と同じ結論）。relaxed 2 経路は strict と同一の呼び出し形
+（同じ引数の組み方）でしか担保していない。
+
+#### `not_computed_by_detector` は enum に残す
+
+配線後、このコードを返す経路は無くなった（`grep` で確認したうえで他に使っている箇所も無い）。
+それでも `TargetProgressOmittedReasonEnum` から**削除しない**——`targetProgressOmittedReason` は
+公開スキーマの出力フィールドで、値の削除は外部クライアントへの破壊的変更になる
+（`.claude/rules/tools.md` の `view` enum 削除規約と同種の懸念）。`.describe()` に
+「現在このコードを返す経路は無い」と明記するに留めた。
+
+#### 判定フィールドは動いていない
+
+配線前後で `detectTriples()` の出力を 940 ケース全件ダンプし、target 進捗系 5 キーを除いて
+比較した結果、**200 パターンがバイト単位で完全一致**。件数・`pivots`・`confidence`・`status`・
+`breakoutTarget`・`neckline`・`structureGate` は不変で、増えるのは進捗系 4 フィールドだけ。
+既定オプションの回帰ベースライン（`tests/fixtures/detect_patterns_1hour_data_patterns_baseline.json`）は
+#216 / #218 以降 triple を 1 件も含まないため**更新していない**（理由は当該テストの docstring に追記）。
+
+回帰は `tests/patterns/target-progress-declared.test.ts`。#224 症状 2 のライブ実例を見ていた
+テストは削除せず、**期待値を進捗が出る側に更新**したうえで「配線前は理由を名乗っていた」履歴を
+docstring に残し、`not_computed_by_detector` が復活しないことを合成 fixture 側でも押さえた。
 
 ### Fixed（`triple_*` の `pivots` にネックライン定義点を含める。#224 症状 3）
 
@@ -175,6 +238,11 @@
 **配線は #224 のフォローアップとして別 issue で扱う**。値を測る変更は
 `targetReachedPct` の分布・cap 到達・分母の退化を #210 と同じ密度で実測する必要があり、
 本 PR の「数値は 1 つも動かさない」を壊すため。
+
+> **その後 #228 で配線済み**（索引 51）。`not_computed_by_detector` を返す経路は無くなったが、
+> **enum からは削除していない**——公開スキーマの出力フィールドの値なので削除は破壊的変更になる。
+
+
 
 #### 配線した経路（22 箇所。issue の表の 12 箇所＋実測で見つかった 10 箇所）
 
