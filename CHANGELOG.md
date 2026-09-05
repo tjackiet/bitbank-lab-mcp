@@ -66,6 +66,72 @@
 | 50 | #224 症状 3 | `triple_*` の `pivots` に**ネックライン定義点 v1 / v2 を含めた**（完成済み 4 経路は 3 → 5 点、形成中 2 経路は 2 → 4 点。並びは構造図と同じ）。H&S（p1 / p3）/ double（b）は既に含んでおり、triple だけが例外だった | **判定は変わらない**（940 ケース全件で件数・`confidence` / `status` / `neckline` / `breakoutTarget` / `aftermath` / `meta.reduction.tripleHsExcluded` が完全一致。動くのは `triple_top` 68 件 / `triple_bottom` 71 件の `pivots` と content の `価格範囲` 行だけで、**他の 13 type は 1 バイトも動かない**。`bear_flag` はコーパスに 0 件で、実測で動いたと確認できたのは出現した 12 type） |
 | 52 | #227 Phase 2 | relaxed フォールバックの `headProminence` 軸を、**緩めた側のゲート**（`headProminencePct × factors.head`）ではなく **strict のゲート**で採点するようにした。**ゲートは緩いまま（`RELAXED_FACTORS` は 1 つも変えていない）、点数だけ正直にする。** 段2 を削る案は Phase 1 で膝が観測できず却下 | **件数は変わらない**（1,248 ケースで延べ 4,070 → 4,070。追加 0 / 削除 0、type × コーパス 53 組すべて件数差 0）。動くのは実データ C の窓長スイープの `head_and_shoulders`（`relaxed_hs_x2.0_0.4`）**24 行の `confidence` と `scoreComponents` だけ** |
 | 53 | #242 PR 1/2 | `double_*` の**完成済み 4 経路**に「最終構成点（山2 / 谷2）とネックライン突破バーの**間**に同種のピボットがあれば `invalid`」という経路検証を足した。**閾値を 1 つも導入していない**（水準を問わない 0/1 判定）。triple / H&S への配線は PR 2 | 実データ C で**減る**（992 ケースで `double_top` 延べ −16 / **1 構造**。標準コーパス・実データ B は 0 件。**増加 0**） |
+| 54 | #242 PR 2/2 | 同じ経路検証を `triple_*` / H&S 系の**完成済み 4 経路ずつ**へ配線し、あわせて double にしかなかった**谷（山）ゾーン再進入チェック**（`detectTroughZoneReentry`）を triple / H&S へ横展開した（#131 → #138 の構造ゲート横展開から漏れていた分の回収） | 実データ C で**減る**（`head_and_shoulders` 延べ −56 / `triple_top` −12。標準コーパスは **type 別の増減 0** で 20 行が入れ替わり、実データ B は 0 件。**増加 0**） |
+
+### Changed（triple / H&S に経路検証とゾーン再進入チェックを横展開する。#242 PR 2/2）
+
+PR 1 が double に入れた経路検証（`peak_after_last_pivot` / `trough_after_last_pivot`）を
+`triple_top` / `triple_bottom` / `head_and_shoulders` / `inverse_head_and_shoulders` の
+**完成済み 4 経路ずつ**へ配線した。あわせて、**double にしか無かった谷（山）ゾーン再進入
+チェック**（`detectTroughZoneReentry` / `re_entered_trough_zone`）を triple / H&S へ横展開した。
+これで issue #242 は完了する。
+
+#### 再進入チェックは #138 の横展開から漏れていた
+
+`reversal-gate.ts` の冒頭が書いているとおり、構造ゲート（`validateReversalStructure`）は
+#131 → #138 で double から triple / H&S へ横展開された。**再進入チェックはその横展開に
+含まれていなかった**——結果として triple / H&S は「最終構成点の後に 4 つ目の山や 2 つ目の
+右肩を作っても、窓内のどこかでネックラインを割れば `completed`」という状態で、
+double にあった 25% ゾーンの安全弁すらゼロだった。
+
+配線は新しい共通関数 `applyPostBreakoutGates`（`tools/patterns/reversal-gate.ts`）1 本で、
+2 つの検査を **double と同じ順（再進入 → 経路）** で適用する。判定ロジックは持たない
+（`structural.ts` の純粋関数を呼ぶだけ）。`first` / `mid` は `reversal-gate.ts` 冒頭の
+注記どおり**構成点列の先頭 2 点**（triple なら 山1 / 谷1、H&S なら 左肩 / 谷1）。
+
+置き場所は各経路の「既存の棄却検査をすべて通過し、ブレイクが確定した直後」
+（triple は `confidence_below_min` の直後、H&S は `buildHsCompletionFields` の直後）。
+**形成中経路は触っていない**（ブレイクが無いので経路が定義できず、最終構成点も暫定値）。
+
+#### 実測（`docs/internal/reversal-breakout-path-242.md`。PR 1 と同じ計測）
+
+| コーパス | accepted（ゲート無し） | 経路ゲート | 再進入の横展開 |
+|---|---:|---|---|
+| 標準 800 | 404 | 404（**type 別の増減 0**。20 行が入れ替わり） | 404（同上。8 行が入れ替わり） |
+| 実データ B 96 | 372 | 372（差分 0） | 372（差分 0） |
+| 実データ C 96 | 400 | **332**（`head_and_shoulders` 56 → 0 / `triple_top` 12 → 0） | 400（差分 0） |
+
+**増えた type は無い。** 標準コーパスの入れ替わりは `findStrictInverseHS` が肩の組を
+総当たりするため——1 つ落ちると同じ頭・同じ谷を共有する**別の右肩の窓**が `globalDedup` を
+勝ち抜く（`…-53-56` → `…-53-80` のように右肩だけが 1 つ後ろにずれる）。**新しい形が
+生まれているのではなく、同じ構造の右肩の取り方が動いている。**
+
+実データ B は「間に同種ピボットがある構造」が 7 件あるのに `data.patterns` の差分が 0
+——いずれも `globalDedup` で既に別のパターンに負けており、検出器から消しても出力が
+変わらない構造だった。
+
+**棄却理由の帰属が変わる候補は 0 件**（PR 1 と同じく、ゲートを各経路の最後に置き、
+計測の記録位置をそこに一致させてある）。
+
+#### 落ちた候補に `accepted: true` の成功エントリを積まない
+
+triple / H&S の完成済み経路は `patterns.push` の直後に `accepted: true` の候補を積む。
+ゲートが `invalid` にした構造でこれを積むと、`view=debug` に**同じ構成点の成功行と棄却行が
+並ぶ**。ゲートが当たった候補では成功エントリを積まないようにした
+（`prior_trend_insufficient_data` のような**注記つきの `accepted: true`** はゲートより前で
+積まれる情報行なのでそのまま）。
+
+#### 既存フィクスチャを 2 つ直した
+
+- `buildInverseHsWithBreakout`（`tests/patterns/detect_hs.test.ts`）は右肩 100 の後の
+  非ピボット足を全部 `close=90`（**両肩より下**）に置いており、右肩が持っていない形だった。
+  再進入チェックが `invalid` にするので、右肩からブレイクまでの経路を素直な上昇に直した
+  （この fixture が見たいのはブレイク確認とターゲット進捗）。
+- `tests/detect_patterns_meta_schema_parity.test.ts` の `buildNoisyCandles` は H&S の 6 軸
+  `scoreComponents` を踏む唯一の入力だったが、その H&S（23-31-44-51-59）も右肩の 2 本後に
+  肩ゾーンへ戻るため `invalid` になり、`globalDedup` が同じ 5 点の形成中 H&S を勝たせる。
+  **完成済み H&S 専用のフィクスチャを足して**役割を分けた（ノイズ列側は `breakout` /
+  `_method` の担当に絞る）。
 
 ### Changed（double の「最終構成点 → ブレイク」経路を検証する。#242 PR 1/2）
 

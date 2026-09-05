@@ -13,7 +13,7 @@ import { generatePatternDiagram } from '../../lib/pattern-diagrams.js';
 import { patternBarRange } from './bar-thresholds.js';
 import { finalizeConf, periodScoreDays } from './helpers.js';
 import { clamp01, relDev } from './regression.js';
-import { applyReversalGate, buildStructureGate } from './reversal-gate.js';
+import { applyPostBreakoutGates, applyReversalGate, buildStructureGate } from './reversal-gate.js';
 import { averageDefinedAxes, breakoutQualityScore, retracementScore } from './scoring.js';
 import {
 	HS_NECKLINE_MAX_PCT,
@@ -846,6 +846,25 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 				const breakoutIdx = findHsBreakoutIdx(candles, neckline, p4.idx, 'above');
 				const completion = buildHsCompletionFields(candles, breakoutIdx, 'up', end);
 				if (!completion) continue;
+				// 最終構成点（右肩） → ブレイクの経路検証 と 肩ゾーン再進入の横展開（issue #242）。
+				// ブレイクが確定している経路でだけ掛ける（`near_completion` は最終構成点 → ブレイクの
+				// 経路が定義できない）。`first` / `mid` の取り方は上の `applyReversalGate` と同じで、
+				// **構成点列の先頭 2 点**（左肩 p0 / 谷1 p1。本ファイル冒頭ではなく `reversal-gate.ts` 冒頭の注記）。
+				const postGate =
+					breakoutIdx >= 0
+						? applyPostBreakoutGates({
+								candles,
+								pivots,
+								side: 'bottom',
+								first: p0,
+								mid: p1,
+								last: p4,
+								breakoutIdx,
+								type: 'inverse_head_and_shoulders',
+								indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+								debugCandidates,
+							})
+						: null;
 				const rangeEnd = completion.rangeEnd;
 				const diagram = generatePatternDiagram(
 					'inverse_head_and_shoulders',
@@ -918,6 +937,8 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 					...(completion.breakoutDate ? { breakoutDate: completion.breakoutDate } : {}),
 					...(completion.breakoutDirection ? { breakoutDirection: completion.breakoutDirection } : {}),
 					...(completion.outcome ? { outcome: completion.outcome } : {}),
+					// #242 のゲートが当たったら `completed` を上書きして `invalid` にする。
+					...postGate,
 					...(ihsPrecedingTrend ? { precedingTrend: ihsPrecedingTrend } : {}),
 					pivots: [p0, p1, p2, p3, p4],
 					neckline,
@@ -930,18 +951,21 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 					structureDiagram: diagram,
 				});
 				found = true;
-				debugCandidates.push({
-					type: 'inverse_head_and_shoulders',
-					accepted: true,
-					indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
-					points: [
-						{ role: 'left_shoulder', idx: p0.idx, price: p0.price, isoTime: candles[p0.idx]?.isoTime },
-						{ role: 'peak1', idx: p1.idx, price: p1.price, isoTime: candles[p1.idx]?.isoTime },
-						{ role: 'head', idx: p2.idx, price: p2.price, isoTime: candles[p2.idx]?.isoTime },
-						{ role: 'peak2', idx: p3.idx, price: p3.price, isoTime: candles[p3.idx]?.isoTime },
-						{ role: 'right_shoulder', idx: p4.idx, price: p4.price, isoTime: candles[p4.idx]?.isoTime },
-					],
-				});
+				// #242 のゲートで `invalid` になった候補に `accepted: true` を積まない
+				// （同じ構造に成功と棄却の 2 行が並ぶと `view=debug` が読めなくなる）。
+				if (!postGate)
+					debugCandidates.push({
+						type: 'inverse_head_and_shoulders',
+						accepted: true,
+						indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+						points: [
+							{ role: 'left_shoulder', idx: p0.idx, price: p0.price, isoTime: candles[p0.idx]?.isoTime },
+							{ role: 'peak1', idx: p1.idx, price: p1.price, isoTime: candles[p1.idx]?.isoTime },
+							{ role: 'head', idx: p2.idx, price: p2.price, isoTime: candles[p2.idx]?.isoTime },
+							{ role: 'peak2', idx: p3.idx, price: p3.price, isoTime: candles[p3.idx]?.isoTime },
+							{ role: 'right_shoulder', idx: p4.idx, price: p4.price, isoTime: candles[p4.idx]?.isoTime },
+						],
+					});
 			}
 		} else {
 			const reason = !shouldersNear
@@ -1072,6 +1096,25 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 				const breakoutIdx = findHsBreakoutIdx(candles, neckline, p4.idx, 'below');
 				const completion = buildHsCompletionFields(candles, breakoutIdx, 'down', end);
 				if (!completion) continue;
+				// 最終構成点（右肩） → ブレイクの経路検証 と 肩ゾーン再進入の横展開（issue #242）。
+				// ブレイクが確定している経路でだけ掛ける（`near_completion` は最終構成点 → ブレイクの
+				// 経路が定義できない）。`first` / `mid` の取り方は上の `applyReversalGate` と同じで、
+				// **構成点列の先頭 2 点**（左肩 p0 / 谷1 p1。本ファイル冒頭ではなく `reversal-gate.ts` 冒頭の注記）。
+				const postGate =
+					breakoutIdx >= 0
+						? applyPostBreakoutGates({
+								candles,
+								pivots,
+								side: 'top',
+								first: p0,
+								mid: p1,
+								last: p4,
+								breakoutIdx,
+								type: 'head_and_shoulders',
+								indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+								debugCandidates,
+							})
+						: null;
 				const rangeEnd = completion.rangeEnd;
 				const diagram = generatePatternDiagram(
 					'head_and_shoulders',
@@ -1141,6 +1184,8 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 					...(completion.breakoutDate ? { breakoutDate: completion.breakoutDate } : {}),
 					...(completion.breakoutDirection ? { breakoutDirection: completion.breakoutDirection } : {}),
 					...(completion.outcome ? { outcome: completion.outcome } : {}),
+					// #242 のゲートが当たったら `completed` を上書きして `invalid` にする。
+					...postGate,
 					...(hsPrecedingTrend ? { precedingTrend: hsPrecedingTrend } : {}),
 					pivots: [p0, p1, p2, p3, p4],
 					neckline,
@@ -1151,18 +1196,21 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 					structureDiagram: diagram,
 				});
 				found = true;
-				debugCandidates.push({
-					type: 'head_and_shoulders',
-					accepted: true,
-					indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
-					points: [
-						{ role: 'left_shoulder', idx: p0.idx, price: p0.price, isoTime: candles[p0.idx]?.isoTime },
-						{ role: 'valley1', idx: p1.idx, price: p1.price, isoTime: candles[p1.idx]?.isoTime },
-						{ role: 'head', idx: p2.idx, price: p2.price, isoTime: candles[p2.idx]?.isoTime },
-						{ role: 'valley2', idx: p3.idx, price: p3.price, isoTime: candles[p3.idx]?.isoTime },
-						{ role: 'right_shoulder', idx: p4.idx, price: p4.price, isoTime: candles[p4.idx]?.isoTime },
-					],
-				});
+				// #242 のゲートで `invalid` になった候補に `accepted: true` を積まない
+				// （同じ構造に成功と棄却の 2 行が並ぶと `view=debug` が読めなくなる）。
+				if (!postGate)
+					debugCandidates.push({
+						type: 'head_and_shoulders',
+						accepted: true,
+						indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+						points: [
+							{ role: 'left_shoulder', idx: p0.idx, price: p0.price, isoTime: candles[p0.idx]?.isoTime },
+							{ role: 'valley1', idx: p1.idx, price: p1.price, isoTime: candles[p1.idx]?.isoTime },
+							{ role: 'head', idx: p2.idx, price: p2.price, isoTime: candles[p2.idx]?.isoTime },
+							{ role: 'valley2', idx: p3.idx, price: p3.price, isoTime: candles[p3.idx]?.isoTime },
+							{ role: 'right_shoulder', idx: p4.idx, price: p4.price, isoTime: candles[p4.idx]?.isoTime },
+						],
+					});
 			}
 		} else {
 			const reason = !shouldersNear
@@ -1344,6 +1392,25 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 			const breakoutIdx = findHsBreakoutIdx(candles, neckline, p4.idx, 'below');
 			const completion = buildHsCompletionFields(candles, breakoutIdx, 'down', end);
 			if (!completion) continue;
+			// 最終構成点（右肩） → ブレイクの経路検証 と 肩ゾーン再進入の横展開（issue #242）。
+			// ブレイクが確定している経路でだけ掛ける（`near_completion` は最終構成点 → ブレイクの
+			// 経路が定義できない）。`first` / `mid` の取り方は上の `applyReversalGate` と同じで、
+			// **構成点列の先頭 2 点**（左肩 p0 / 谷1 p1。本ファイル冒頭ではなく `reversal-gate.ts` 冒頭の注記）。
+			const postGate =
+				breakoutIdx >= 0
+					? applyPostBreakoutGates({
+							candles,
+							pivots,
+							side: 'top',
+							first: p0,
+							mid: p1,
+							last: p4,
+							breakoutIdx,
+							type: 'head_and_shoulders',
+							indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+							debugCandidates,
+						})
+					: null;
 			const rangeEnd = completion.rangeEnd;
 			const diagram = generatePatternDiagram(
 				'head_and_shoulders',
@@ -1406,12 +1473,15 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 				durationScore: periodScoreDays(start, end),
 			});
 			const confidence = finalizeConf(base * 0.95, 'head_and_shoulders');
-			debugCandidates.push({
-				type: 'head_and_shoulders',
-				accepted: true,
-				reason: 'fallback_relaxed',
-				indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
-			});
+			// #242 のゲートで `invalid` になった候補に `accepted: true` を積まない
+			// （同じ構造に成功と棄却の 2 行が並ぶと `view=debug` が読めなくなる）。
+			if (!postGate)
+				debugCandidates.push({
+					type: 'head_and_shoulders',
+					accepted: true,
+					reason: 'fallback_relaxed',
+					indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+				});
 			return {
 				type: 'head_and_shoulders',
 				confidence,
@@ -1425,6 +1495,8 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 				...(completion.breakoutDate ? { breakoutDate: completion.breakoutDate } : {}),
 				...(completion.breakoutDirection ? { breakoutDirection: completion.breakoutDirection } : {}),
 				...(completion.outcome ? { outcome: completion.outcome } : {}),
+				// #242 のゲートが当たったら `completed` を上書きして `invalid` にする。
+				...postGate,
 				...(hsRelPrecedingTrend ? { precedingTrend: hsRelPrecedingTrend } : {}),
 				pivots: [p0, p1, p2, p3, p4],
 				neckline,
@@ -1588,6 +1660,25 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 			const breakoutIdx = findHsBreakoutIdx(candles, neckline, p4.idx, 'above');
 			const completion = buildHsCompletionFields(candles, breakoutIdx, 'up', end);
 			if (!completion) continue;
+			// 最終構成点（右肩） → ブレイクの経路検証 と 肩ゾーン再進入の横展開（issue #242）。
+			// ブレイクが確定している経路でだけ掛ける（`near_completion` は最終構成点 → ブレイクの
+			// 経路が定義できない）。`first` / `mid` の取り方は上の `applyReversalGate` と同じで、
+			// **構成点列の先頭 2 点**（左肩 p0 / 谷1 p1。本ファイル冒頭ではなく `reversal-gate.ts` 冒頭の注記）。
+			const postGate =
+				breakoutIdx >= 0
+					? applyPostBreakoutGates({
+							candles,
+							pivots,
+							side: 'bottom',
+							first: p0,
+							mid: p1,
+							last: p4,
+							breakoutIdx,
+							type: 'inverse_head_and_shoulders',
+							indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+							debugCandidates,
+						})
+					: null;
 			const rangeEnd = completion.rangeEnd;
 			const diagram = generatePatternDiagram(
 				'inverse_head_and_shoulders',
@@ -1646,12 +1737,15 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 				durationScore: periodScoreDays(start, end),
 			});
 			const confidence = finalizeConf(base * 0.95, 'inverse_head_and_shoulders');
-			debugCandidates.push({
-				type: 'inverse_head_and_shoulders',
-				accepted: true,
-				reason: 'fallback_relaxed',
-				indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
-			});
+			// #242 のゲートで `invalid` になった候補に `accepted: true` を積まない
+			// （同じ構造に成功と棄却の 2 行が並ぶと `view=debug` が読めなくなる）。
+			if (!postGate)
+				debugCandidates.push({
+					type: 'inverse_head_and_shoulders',
+					accepted: true,
+					reason: 'fallback_relaxed',
+					indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+				});
 			return {
 				type: 'inverse_head_and_shoulders',
 				confidence,
@@ -1665,6 +1759,8 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 				...(completion.breakoutDate ? { breakoutDate: completion.breakoutDate } : {}),
 				...(completion.breakoutDirection ? { breakoutDirection: completion.breakoutDirection } : {}),
 				...(completion.outcome ? { outcome: completion.outcome } : {}),
+				// #242 のゲートが当たったら `completed` を上書きして `invalid` にする。
+				...postGate,
 				...(ihsRelPrecedingTrend ? { precedingTrend: ihsRelPrecedingTrend } : {}),
 				pivots: [p0, p1, p2, p3, p4],
 				neckline,

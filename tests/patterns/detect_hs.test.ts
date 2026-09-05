@@ -209,6 +209,15 @@ function buildInverseHsWithBreakout(opts?: {
 	candles[30] = mkCandle(total - 30, hd + 1, hd + 3, hd, hd + 1);
 	candles[45] = mkCandle(total - 45, p2 - 1, p2, p2 - 3, p2 - 1);
 	candles[60] = mkCandle(total - 60, rs + 1, rs + 3, rs, rs + 1);
+	// 右肩（idx 60）からブレイクまでの経路を**肩の水準より上**に通す（issue #242）。
+	// 全バー close=90 のままだと右肩 100 より下を這う形になり、#242 の「肩ゾーン再進入」で
+	// `invalid` になる——右肩が持っていないのだから判定としては正しい。この fixture が見たいのは
+	// ブレイク確認とターゲット進捗なので、経路そのものは素直な上昇にしておく。
+	// 上限はブレイク閾値 115 × 1.015 = 116.725 未満（ここで先に抜けてしまわないため）。
+	for (let i = 61; i < breakIdx; i++) {
+		const c = 106 + (i - 61) * 3;
+		candles[i] = mkCandle(total - i, c - 1, c + 2, c - 3, c);
+	}
 	for (let i = breakIdx; i < total; i++) {
 		candles[i] = mkCandle(total - i, breakClose - 2, breakClose + 3, breakClose - 5, breakClose);
 	}
