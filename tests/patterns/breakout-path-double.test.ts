@@ -14,6 +14,8 @@
  * 4. 凍結済み実データ（`btc_jpy_1hour_2026_09` = 実データ C）に**同じ形が実在**し、そこでも落ちること
  * 5. **起票時のライブ実例そのもの**（実データ D の `limit=72` 窓）で `double_top` が落ち、
  *    `triangle_ascending`（`status: invalid`）だけが残ること
+ * 6. relaxed 経路が、経路ゲートで `invalid` になった候補で**走査を打ち切らない**こと
+ *    （`H-L-H-L-H` で先頭の候補が落ちても、後ろの成立した候補を返す）
  *
  * **既定（`includeInvalid: false`）では `data.patterns` から消える**ので、消えた理由は
  * `view=debug` の候補（`reason: 'peak_after_last_pivot'`）に残す。`re_entered_trough_zone` は
@@ -289,5 +291,67 @@ describe('起票時のライブ実例そのもの（issue #242・実データ D 
 		const { patterns, candidates } = await liveWindow({ includeInvalid: true });
 		expect(patterns.every((p) => p.invalidReason !== 're_entered_trough_zone')).toBe(true);
 		expect(candidates.every((c) => c.reason !== 're_entered_trough_zone')).toBe(true);
+	});
+});
+
+describe('relaxed 経路は invalid になった候補で走査を打ち切らない（issue #242 のレビュー指摘）', () => {
+	/**
+	 * relaxed フォールバックは**最初に組み上がった候補を返してその場で走査を終える**。
+	 * 経路ゲートが終端 status を付ける候補もそのまま返していたため、`H-L-H-L-H` のように
+	 * 候補が重なる列で**先頭の候補が `invalid` になると後ろの成立した候補まで失われて**いた。
+	 * relaxed は同 type の strict が 0 件のときだけ走るので、そのとき検出結果は 0 件になる。
+	 *
+	 * ## 系列（`swingDepth: 3` / `tolerancePct: 0.02` を明示）
+	 *
+	 * | 役割 | idx | 終値 |
+	 * |---|---:|---:|
+	 * | 先行安値 | 4 | 96 |
+	 * | H0 | 9 | 130 |
+	 * | L1 | 13 | 112 |
+	 * | H2 | 17 | 127 |
+	 * | L3 | 21 | 115 |
+	 * | H4 | 25 | 124 |
+	 * | ネックライン下抜け（両候補とも） | 29 | 108 |
+	 *
+	 * - 候補1 `[9, 13, 17]`: 最終構成点 17 とブレイク 29 の間に **H4（idx 25）**がある → `invalid`
+	 * - 候補2 `[17, 21, 25]`: 最終構成点 25 とブレイク 29 の間にピボットは無い → **成立**
+	 *
+	 * **`tolerancePct: 0.02` を明示するのは relaxed 経路を踏ませるため。** 隣接する山の相対差は
+	 * 2.31% / 2.36% で、strict の `near`（2%）は落ちるが relaxed（2% × 1.3 = 2.6%）は通る。
+	 * 既定値（1day 4% / 1hour 5%）では `DOUBLE_LEVEL_MAX_PCT`（3%）が律速して strict と relaxed の
+	 * 実効閾値が一致するため、**relaxed 経路そのものに到達できない**（計測でも relaxed の
+	 * 母集団は 4 コーパスすべて 0 件）。
+	 */
+	const NESTED_DOUBLE_TOPS = [
+		100, 99, 98, 97, 96, 102, 110, 118, 126, 130, 124, 120, 116, 112, 117, 121, 125, 127, 124, 120, 117, 115, 118, 121,
+		123, 124, 121, 118, 115, 108, 104, 100, 98, 96,
+	];
+
+	async function relaxed(opts: Record<string, unknown> = {}) {
+		return detectDebug(toCandles(NESTED_DOUBLE_TOPS), { tolerancePct: 0.02, ...opts });
+	}
+
+	it('先頭の候補が invalid でも、後ろの成立した候補を completed で返す', async () => {
+		const { patterns } = await relaxed();
+		const doubles = patterns.filter((p) => p.type === 'double_top');
+		expect(doubles).toHaveLength(1);
+		expect(mainIdxs(doubles[0])).toEqual([17, 21, 25]);
+		expect(doubles[0].status).toBeUndefined();
+		expect(doubles[0]._fallback).toBe('relaxed_double_x1.3');
+	});
+
+	it('落ちた先頭の候補は view=debug に理由コード付きで残る', async () => {
+		const { candidates } = await relaxed();
+		const hit = candidates.find((c) => c.type === 'double_top' && c.reason === 'peak_after_last_pivot');
+		expect(hit).toBeDefined();
+		expect(hit?.indices).toEqual([9, 13, 17]);
+		expect(hit?.details).toMatchObject({ lastPivotIdx: 17, breakoutIdx: 29, offenderIdx: 25 });
+	});
+
+	it('1 件だけ返す契約は変わらない（invalid の候補は data.patterns に出さない）', async () => {
+		const { patterns } = await relaxed({ includeInvalid: true });
+		const doubles = patterns.filter((p) => p.type === 'double_top');
+		expect(doubles).toHaveLength(1);
+		expect(mainIdxs(doubles[0])).toEqual([17, 21, 25]);
 	});
 });

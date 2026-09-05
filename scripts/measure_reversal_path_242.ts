@@ -51,6 +51,7 @@
  * 実データ D（`btc_jpy_1hour_2026_09_05`）が未追加の環境では自動的に省略する。
  */
 
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -60,11 +61,8 @@ import { buildBtcJpy1hour202608Candles } from '../tests/fixtures/btc_jpy_1hour_2
 import { buildBtcJpy1hour202609Candles } from '../tests/fixtures/btc_jpy_1hour_2026_09.js';
 import * as synth from '../tests/fixtures/synthetic_pattern_candles.js';
 import { getSizeThresholdsForTf, resolveParams } from '../tools/patterns/config.js';
-import { detectDoubles } from '../tools/patterns/detect_doubles.js';
-import { detectHeadAndShoulders } from '../tools/patterns/detect_hs.js';
 import { detectPennantsFlags } from '../tools/patterns/detect_pennants.js';
 import { detectTriangles } from '../tools/patterns/detect_triangles.js';
-import { detectTriples } from '../tools/patterns/detect_triples.js';
 import { globalDedup } from '../tools/patterns/helpers.js';
 import { excludeTriplesSharingHsMainPoints } from '../tools/patterns/mutual-exclusion.js';
 import { linearRegressionWithR2, near as nearFn, pct as pctFn } from '../tools/patterns/regression.js';
@@ -344,22 +342,94 @@ type Detector = (ctx: DetectContext) => { patterns: DeduplicablePattern[] };
 
 const TMP_DIR = mkdtempSync(join(tmpdir(), 'reversal-path-242-'));
 
+/**
+ * 検出器のソースを読む既定のリビジョン。**#242 の実装が入る前の `main`**（PR #241 のマージ）。
+ *
+ * ## 作業ツリーから読んではいけない理由
+ *
+ * `gate='off'` が無効化するのは**注入したフックだけ**で、複製元のソースが本番のゲート
+ * （`checkBreakoutPath` / `applyPostBreakoutGates`）を持っていればベースライン自体が
+ * 既にゲート済みになる。その状態で走らせると差分は常に 0 になり、**「ゲートを入れると
+ * 何が消えるか」を測ったことにならないのに数字だけは出てしまう**——最も危険な壊れ方。
+ *
+ * そこで既定では `git show <rev>:<path>` でこのリビジョンのソースを読む。
+ * `--baseline-rev <rev>` で明示指定でき、`--baseline-rev worktree` を渡したときだけ
+ * 作業ツリーを読む（実装後の冪等性の検算用。**その場合は差分が 0 になるのが正しい**）。
+ */
+const DEFAULT_BASELINE_REV = 'b49a08e';
+
+/** 本番のゲートが入っているソースを検出するための印。 */
+const PRODUCTION_GATE_MARKERS = ['checkBreakoutPath', 'applyPostBreakoutGates'];
+
+/**
+ * 検出器のソースを取り出す。`rev === 'worktree'` 以外は `git show` で当該リビジョンから読む。
+ *
+ * @throws リビジョンが解決できない場合（メッセージに理由と対処を書く）
+ */
+function readDetectorSource(rev: string, file: string): string {
+	if (rev === 'worktree') return readFileSync(join(ROOT, 'tools/patterns', file), 'utf8');
+	try {
+		return execFileSync('git', ['show', `${rev}:tools/patterns/${file}`], {
+			cwd: ROOT,
+			encoding: 'utf8',
+			maxBuffer: 64 * 1024 * 1024,
+		});
+	} catch (e) {
+		const detail = e instanceof Error ? e.message.split('\n')[0] : String(e);
+		throw new Error(
+			`ベースラインのリビジョン '${rev}' から tools/patterns/${file} を読めない（${detail}）。` +
+				'--baseline-rev で #242 実装前のリビジョンを指定するか、' +
+				'冪等性の検算をしたい場合だけ --baseline-rev worktree を渡すこと。',
+		);
+	}
+}
+
+/** 同じベースラインから作る 2 組の検出器。 */
+interface Variants {
+	/** 記録フック + 試算用ゲートを注入した版（計測に使う） */
+	hooked: Record<DetectorKey, Detector>;
+	/**
+	 * **注入していない**同一ソースの版（検算に使う）。
+	 *
+	 * ハーネスの前提は「`gate='off'` の注入版は素のソースと同じ結果を返す」。比較相手を
+	 * **作業ツリーから import した本物**にすると、ベースラインを過去のリビジョンに固定した
+	 * 時点で**必ず食い違う**（実装が入っているのだから当然）ので検算にならない。
+	 * **同じリビジョンの素の複製**と突き合わせる。
+	 */
+	pristine: Record<DetectorKey, Detector>;
+}
+
 /** 3 検出器の複製を作って読み込む。相対 import は絶対パスへ書き換える。 */
-async function loadVariants(): Promise<Record<DetectorKey, Detector>> {
+async function loadVariants(baselineRev: string): Promise<Variants> {
 	const files: Record<DetectorKey, { file: Site['file']; exportName: string }> = {
 		double: { file: 'detect_doubles.ts', exportName: 'detectDoubles' },
 		triple: { file: 'detect_triples.ts', exportName: 'detectTriples' },
 		hs: { file: 'detect_hs.ts', exportName: 'detectHeadAndShoulders' },
 	};
-	const out = {} as Record<DetectorKey, Detector>;
+	const hooked = {} as Record<DetectorKey, Detector>;
+	const pristine = {} as Record<DetectorKey, Detector>;
 	for (const [key, { file, exportName }] of Object.entries(files) as Array<
 		[DetectorKey, { file: Site['file']; exportName: string }]
 	>) {
-		let src = readFileSync(join(ROOT, 'tools/patterns', file), 'utf8');
+		let src = readDetectorSource(baselineRev, file);
+		// ベースラインが既にゲート済みなら**黙って 0 件を返さず落とす**（上の docstring）。
+		const marker = PRODUCTION_GATE_MARKERS.find((m) => src.includes(m));
+		if (marker !== undefined && baselineRev !== 'worktree') {
+			throw new Error(
+				`ベースライン '${baselineRev}' の ${file} に本番のゲート（${marker}）が入っている。` +
+					'この状態の差分は「ゲートを入れると何が消えるか」を表さない。' +
+					'--baseline-rev に #242 実装前のリビジョンを指定すること。',
+			);
+		}
 		src = src
 			.replace(/from '\.\.\/\.\.\//g, `from '${ROOT}/`)
 			.replace(/from '\.\.\//g, `from '${ROOT}/tools/`)
 			.replace(/from '\.\//g, `from '${ROOT}/tools/patterns/`);
+		const stem = file.replace('.ts', '');
+		const pristinePath = join(TMP_DIR, `${stem}_242_pristine.mts`);
+		writeFileSync(pristinePath, src);
+		pristine[key] = ((await import(pathToFileURL(pristinePath).href)) as Record<string, Detector>)[exportName];
+
 		src = HOOK_HELPER + src;
 		for (const site of SITES.filter((s) => s.file === file)) {
 			const call = `__hook242(${site.arg})`;
@@ -367,12 +437,11 @@ async function loadVariants(): Promise<Record<DetectorKey, Detector>> {
 			const insertion = site.before ? `${expr}\n${site.indent}` : `\n${site.indent}${expr}`;
 			src = inject(src, site.fn, site.anchor, insertion, site.before === true);
 		}
-		const path = join(TMP_DIR, `${file.replace('.ts', '')}_242.mts`);
-		writeFileSync(path, src);
-		const mod = (await import(pathToFileURL(path).href)) as Record<string, Detector>;
-		out[key] = mod[exportName];
+		const hookedPath = join(TMP_DIR, `${stem}_242.mts`);
+		writeFileSync(hookedPath, src);
+		hooked[key] = ((await import(pathToFileURL(hookedPath).href)) as Record<string, Detector>)[exportName];
 	}
-	return out;
+	return { hooked, pristine };
 }
 
 /** 記録シンクと設定を張って `fn` を走らせる。 */
@@ -609,7 +678,10 @@ interface Diff {
 interface Audit {
 	cases: number;
 	recs: number;
-	/** 記録フック版（gate=off）のパターン出力が本物と JSON で食い違ったケース数（0 でなければ無効） */
+	/**
+	 * 記録フック版（gate=off）のパターン出力が、**同じリビジョンの素の複製**と JSON で
+	 * 食い違ったケース数（0 でなければ以降の数値は無効）。
+	 */
 	baselineMismatch: number;
 	acceptedBase: number;
 }
@@ -634,6 +706,7 @@ const GATE_RUNS: ReadonlyArray<{ label: string; gate: GateMode; detectors: Detec
 function runCorpus(
 	cases: CaseSpec[],
 	d: Record<DetectorKey, Detector>,
+	pristine: Record<DetectorKey, Detector>,
 	audit: Audit,
 ): { rows: Row[]; runs: GateRun[] } {
 	const rows: Row[] = [];
@@ -654,18 +727,18 @@ function runCorpus(
 				optsBits,
 			});
 		}
-		// 記録フック版（gate=off）が本物と全キー一致することを毎ケース検算する。
-		const realOut = JSON.stringify([
-			detectDoubles(buildCtx(spec)).patterns,
-			detectTriples(buildCtx(spec)).patterns,
-			detectHeadAndShoulders(buildCtx(spec)).patterns,
+		// 記録フック版（gate=off）が**同じリビジョンの素の複製**と全キー一致することを毎ケース検算する。
+		const pristineOut = JSON.stringify([
+			pristine.double(buildCtx(spec)).patterns,
+			pristine.triple(buildCtx(spec)).patterns,
+			pristine.hs(buildCtx(spec)).patterns,
 		]);
 		const hookOut = JSON.stringify([
 			d.double(buildCtx(spec)).patterns,
 			d.triple(buildCtx(spec)).patterns,
 			d.hs(buildCtx(spec)).patterns,
 		]);
-		if (realOut !== hookOut) audit.baselineMismatch++;
+		if (pristineOut !== hookOut) audit.baselineMismatch++;
 
 		const baseAccepted = base.filter(isAccepted);
 		audit.acceptedBase += baseAccepted.length;
@@ -846,12 +919,17 @@ function measurementBlock(label: string, rows: Row[], runs: GateRun[], h: string
 	].join('\n');
 }
 
+/**
+ * フラグの値を**計測を始める前に**取り出す（#211 / #216 の計測スクリプトと同じ理由）。
+ *
+ * @throws 値が無い、または次が別のフラグだった場合
+ */
 function flagValue(argv: string[], flag: string): string | undefined {
 	const i = argv.indexOf(flag);
 	if (i < 0) return undefined;
 	const value = argv[i + 1];
 	if (value === undefined || value.startsWith('--')) {
-		throw new Error(`${flag} にはファイルパスが必要（受け取った値: ${value ?? 'なし'}）`);
+		throw new Error(`${flag} には値が必要（受け取った値: ${value ?? 'なし'}）`);
 	}
 	return value;
 }
@@ -862,11 +940,16 @@ const { detectWedges: detectWedgesRef } = await import('../tools/patterns/detect
 async function main(): Promise<void> {
 	const argv = process.argv.slice(2);
 	const jsonPath = flagValue(argv, '--json');
-	const detectors = await loadVariants();
+	const baselineRev = flagValue(argv, '--baseline-rev') ?? DEFAULT_BASELINE_REV;
+	const detectors = await loadVariants(baselineRev);
 	const corpora = await buildCorpus();
 
 	const audit: Audit = { cases: 0, recs: 0, baselineMismatch: 0, acceptedBase: 0 };
-	const results = corpora.map((c) => ({ label: c.label, n: c.cases.length, ...runCorpus(c.cases, detectors, audit) }));
+	const results = corpora.map((c) => ({
+		label: c.label,
+		n: c.cases.length,
+		...runCorpus(c.cases, detectors.hooked, detectors.pristine, audit),
+	}));
 
 	const md: string[] = [];
 	md.push('# 反転パターンの「最終構成点 → ブレイク」経路（issue #242 Phase 1）');
@@ -880,15 +963,16 @@ async function main(): Promise<void> {
 	md.push('');
 	md.push('| 項目 | 値 |');
 	md.push('|---|---:|');
+	md.push(`| ベースラインのリビジョン | \`${baselineRev}\` |`);
 	md.push(`| ケース数 | ${audit.cases} |`);
 	md.push(`| ゲート位置に到達した候補（延べ） | ${audit.recs} |`);
-	md.push(`| **記録フック版が本物の検出器と食い違ったケース** | **${audit.baselineMismatch}** |`);
+	md.push(`| **記録フック版が素の複製と食い違ったケース** | **${audit.baselineMismatch}** |`);
 	md.push(`| accepted 合計（ゲート無し） | ${audit.acceptedBase} |`);
 	md.push('');
 	md.push(
 		audit.baselineMismatch === 0
-			? '記録フック版は全ケースで本物の 3 検出器と JSON 全キー一致した。以降の差分はすべて注入したゲートによるもの。'
-			: '**記録フック版が本物と食い違っている。以降の数値は無効。**',
+			? '記録フック版は全ケースで**同じリビジョンの素の 3 検出器**と JSON 全キー一致した。以降の差分はすべて注入したゲートによるもの。'
+			: '**記録フック版が素の複製と食い違っている。以降の数値は無効。**',
 	);
 	md.push('');
 	md.push(
