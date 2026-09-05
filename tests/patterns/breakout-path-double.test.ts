@@ -11,7 +11,9 @@
  * 2. **同じ形から中間の山だけを取り除いた対照系列は accepted のまま**であること
  *    ——ゲートが「山2 の後にピボットがあるか」だけを見ていて、他の理由で落ちていないことの検算
  * 3. bottom 側（`trough_after_last_pivot`）が符号反転で同じ挙動になること
- * 4. 凍結済み実データ（`btc_jpy_1hour_2026_09`）に**同じ形が実在**し、そこでも落ちること
+ * 4. 凍結済み実データ（`btc_jpy_1hour_2026_09` = 実データ C）に**同じ形が実在**し、そこでも落ちること
+ * 5. **起票時のライブ実例そのもの**（実データ D の `limit=72` 窓）で `double_top` が落ち、
+ *    `triangle_ascending`（`status: invalid`）だけが残ること
  *
  * **既定（`includeInvalid: false`）では `data.patterns` から消える**ので、消えた理由は
  * `view=debug` の候補（`reason: 'peak_after_last_pivot'`）に残す。`re_entered_trough_zone` は
@@ -26,6 +28,10 @@ vi.mock('../../tools/analyze_indicators.js', () => ({ default: vi.fn() }));
 import analyzeIndicators from '../../tools/analyze_indicators.js';
 import detectPatterns from '../../tools/detect_patterns.js';
 import { buildBtcJpy1hour202609Candles } from '../fixtures/btc_jpy_1hour_2026_09.js';
+import {
+	BTC_JPY_1HOUR_2026_09_05_ISSUE_WINDOW,
+	buildBtcJpy1hour20260905Candles,
+} from '../fixtures/btc_jpy_1hour_2026_09_05.js';
 import { makeCandle } from '../fixtures/synthetic_pattern_candles.js';
 
 type Candle = { isoTime: string; open: number; high: number; low: number; close: number; volume: number };
@@ -196,5 +202,92 @@ describe('同じ形が凍結済み実データにも存在する（issue #242・
 		const hit = candidates.find((c) => c.reason === 'peak_after_last_pivot' && c.indices?.join('-') === '174-177-184');
 		expect(hit).toBeDefined();
 		expect(hit?.details).toMatchObject({ lastPivotIdx: 184, breakoutIdx: 198, offenderIdx: 194 });
+	});
+});
+
+describe('起票時のライブ実例そのもの（issue #242・実データ D の limit=72 窓）', () => {
+	/**
+	 * issue #242 の再現手順は `detect_patterns('btc_jpy', '1hour', 72)` を 2026-09-05 に
+	 * 実行したもの。その窓（`2026-09-02T04:00Z` 〜 `2026-09-05T03:00Z`）は実データ D の
+	 * idx 288〜359 にあたる（`BTC_JPY_1HOUR_2026_09_05_ISSUE_WINDOW`）。
+	 * **issue 本文の idx に一律 +288 すると実データ D の idx** になるので、本 describe の
+	 * 期待値は issue 本文と同じ idx（窓の中の相対 idx）で書ける。
+	 *
+	 * | 役割 | idx | UTC | 終値 | 高安 |
+	 * |---|---:|---|---:|---:|
+	 * | 山1 | 41 | 09-03 21:00 | 12,718,980 | 12,807,555 |
+	 * | 谷（ネックライン） | 46 | 09-04 02:00 | 12,617,594 | 12,588,132 |
+	 * | 山2（最終構成点） | 50 | 09-04 06:00 | 12,639,245 | 12,800,000 |
+	 * | **再上昇の H ピボット** | **55** | **09-04 11:00** | **12,711,037** | **12,731,234** |
+	 * | ブレイク確認 | 56 | 09-04 12:00 | 12,396,727 | |
+	 */
+	async function liveWindow(opts: Record<string, unknown> = {}) {
+		const { start, end } = BTC_JPY_1HOUR_2026_09_05_ISSUE_WINDOW;
+		const candles = buildBtcJpy20260905Window(start, end);
+		vi.mocked(analyzeIndicators).mockResolvedValueOnce(
+			asMockResult({ ok: true, summary: 'ok', data: { chart: { candles } } }),
+		);
+		const res = await detectPatterns('btc_jpy', '1hour', candles.length, { view: 'debug', ...opts });
+		assertOk(res);
+		const meta = res.meta as
+			| { debug?: { candidates?: Candidate[]; swings?: Array<Record<string, unknown>> } }
+			| undefined;
+		return {
+			patterns: res.data.patterns as Array<Record<string, unknown>>,
+			candidates: meta?.debug?.candidates ?? [],
+			swings: meta?.debug?.swings ?? [],
+		};
+	}
+
+	function buildBtcJpy20260905Window(start: number, end: number): Candle[] {
+		return buildBtcJpy1hour20260905Candles().slice(start, end);
+	}
+
+	it('スイング列が issue 本文と一致する（窓の切り出しの検算）', async () => {
+		const { swings } = await liveWindow({ includeInvalid: true, includeForming: true });
+		const around = swings
+			.filter((s) => Number(s.idx) >= 41 && Number(s.idx) <= 58)
+			.map((s) => `${s.kind}${s.idx}@${s.price}`);
+		// issue 本文の `== swings ==` そのもの。
+		expect(around).toEqual(['H41@12718980', 'L46@12617594', 'H50@12639245', 'H55@12711037', 'L58@12343265']);
+	});
+
+	it('double_top は既定で出ない（受け入れ条件）', async () => {
+		const { patterns } = await liveWindow();
+		expect(patterns.filter((p) => p.type === 'double_top')).toHaveLength(0);
+	});
+
+	it('includeInvalid: true で peak_after_last_pivot として出て、triangle_ascending invalid は残る', async () => {
+		const { patterns } = await liveWindow({ includeInvalid: true });
+
+		const doubles = patterns.filter((p) => p.type === 'double_top');
+		expect(doubles).toHaveLength(1);
+		expect(doubles[0]).toMatchObject({ status: 'invalid', invalidReason: 'peak_after_last_pivot' });
+		expect(mainIdxs(doubles[0])).toEqual([41, 46, 50]);
+
+		// 値動きの正しい読みはこちら（#242 本文）。**本ゲートで消えていないことを固定する。**
+		const asc = patterns.filter((p) => p.type === 'triangle_ascending');
+		expect(asc).toHaveLength(1);
+		expect(asc[0].status).toBe('invalid');
+	});
+
+	it('view=debug の候補に issue 本文と同じ「間のピボット」が載る', async () => {
+		const { candidates } = await liveWindow();
+		const hit = candidates.find((c) => c.type === 'double_top' && c.reason === 'peak_after_last_pivot');
+		expect(hit).toBeDefined();
+		expect(hit?.indices).toEqual([41, 46, 50]);
+		expect(hit?.details).toEqual({
+			lastPivotIdx: 50,
+			breakoutIdx: 56,
+			offenderIdx: 55,
+			offenderPrice: 12_711_037,
+			offenderExtremePrice: 12_731_234,
+		});
+	});
+
+	it('既存の再進入チェックでは拾えない（ゾーン下限に 0.3% 届かない配置）', async () => {
+		const { patterns, candidates } = await liveWindow({ includeInvalid: true });
+		expect(patterns.every((p) => p.invalidReason !== 're_entered_trough_zone')).toBe(true);
+		expect(candidates.every((c) => c.reason !== 're_entered_trough_zone')).toBe(true);
 	});
 });
