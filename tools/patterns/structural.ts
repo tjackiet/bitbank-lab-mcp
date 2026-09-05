@@ -1277,3 +1277,95 @@ export function detectTroughZoneReentry(input: TroughZoneReentryInput): TroughZo
 	}
 	return { reentered: false, level };
 }
+
+/** 最終構成点 → ブレイクの経路検証の不合格理由コード。**種別を跨いで同じ語を使う**（issue #242）。 */
+export type BreakoutPathRejectReason = 'peak_after_last_pivot' | 'trough_after_last_pivot';
+
+export interface BreakoutPathInput {
+	/** 走査対象のピボット列（`detectSwingPoints` の戻り値。並び順は仮定しない） */
+	pivots: ReadonlyArray<Pivot>;
+	/** 最終構成点の idx（double なら山2 / 谷2、triple なら山3 / 谷3、H&S なら右肩） */
+	lastPivotIdx: number;
+	/** ネックライン突破バーの idx */
+	breakoutIdx: number;
+	side: ReversalSide;
+}
+
+export interface BreakoutPathResult {
+	/** 同種ピボットが区間内に 1 つでもあれば `true`（= 不合格） */
+	found: boolean;
+	/** `found` のときの理由コード */
+	reason?: BreakoutPathRejectReason;
+	/** 見つかった同種ピボットのうち**最も左のもの**（複数あっても 1 つだけ返す） */
+	pivot?: Pivot;
+}
+
+/**
+ * 最終構成点からネックライン突破バーまでの**経路**を検証する（issue #242）。
+ *
+ * 区間 `(lastPivotIdx, breakoutIdx)`（**両端を含まない**）に**同種のピボット**
+ * （`side='top'` なら `kind='H'`、`'bottom'` なら `'L'`）が 1 つでもあれば不合格。
+ *
+ * ## なぜ要るか
+ *
+ * 反転パターンの「完成」は、最終構成点を付けた後に**そのままネックラインを割る**ことで成立する。
+ * 途中でもう 1 つ山（谷）を作ってから割るのは、2 点（3 点）で反転したのではなく**別の形**
+ * ——レンジの上限への 3 回目のタッチであったり、より大きな保ち合いの一部であったりする。
+ *
+ * ライブ実例（`btc_jpy` / `1hour` / `limit=72`、2026-09-05 実行。時刻は UTC）:
+ *
+ * | 役割 | idx | UTC | 終値 | 高安 |
+ * |---|---:|---|---:|---:|
+ * | 山1 | 41 | 09-03 21:00 | 12,718,980 | 12,807,555 |
+ * | 谷（ネックライン） | 46 | 09-04 02:00 | 12,617,594 | 12,588,132 |
+ * | 山2（最終構成点） | 50 | 09-04 06:00 | 12,639,245 | 12,800,000 |
+ * | **再上昇の H ピボット** | **55** | **09-04 11:00** | **12,711,037** | **12,731,234** |
+ * | ブレイク確認 | 56 | 09-04 12:00 | 12,396,727 | |
+ *
+ * 山2 の終値 12,639,245 から idx 55 の 12,711,037 まで、ネックライン 12,617,594 と山1 の
+ * 中間（12,668,287）を超えて**半分以上戻してから**割っている。同じ区間を `detect_triangles` が
+ * `triangle_ascending`（`status: invalid` = 下方ブレイク）として説明しており、値動きの読みは
+ * そちらが正しい。
+ *
+ * ## 水準は問わない
+ *
+ * 「同水準の第3構成点か」は見ない。**再上昇の山が第1・第2構成点より低くても、そこにピボットが
+ * ある時点で「最終構成点から直接割った」ではない。** 上の実例の idx 55 は高安基準で上 2 つより
+ * 0.6% 低く、同水準判定（{@link DOUBLE_LEVEL_MAX_PCT} 等）で拾おうとすると閾値次第で漏れる。
+ *
+ * ## 既存の {@link detectTroughZoneReentry} との関係（どちらも要る）
+ *
+ * 再進入チェックは「パターン高さの {@link TROUGH_REENTRY_FRACTION} まで**終値が**戻ったか」を
+ * 見る。上の実例ではゾーン下限 12,752,699 に対し idx 55 の終値が 0.3% 届かず、**発火しない**。
+ * 逆に、ピボットにならない 1 本だけの戻しはゾーンに入っても本関数では拾えない。
+ * **2 つは独立した検査**で、どちらか一方では上の実例も既存の実例も同時には塞げない。
+ *
+ * ## 閾値を持たない
+ *
+ * `mutual-exclusion.ts` と同じ原則で、つまみを増やさない。「ゾーン幅」「同水準の許容%」
+ * のような可変量を持ち込むと、**閾値のどちら側に落ちるかで結論が変わる**候補が生まれ、
+ * 実データ 1 件ごとに調整する誘惑が残る。ここは「区間に同種ピボットがあるか」の 0/1 だけを見る。
+ *
+ * ## 純粋関数。ピボット列の並び順は仮定しない
+ *
+ * `detectSwingPoints` は idx 昇順で返すが、本関数は早期 `break` をせず全件を走査して
+ * **最も左の該当ピボット**を返す。呼び出し側が絞り込んだ配列を渡しても結果が変わらない。
+ */
+export function detectPivotBeforeBreakout(input: BreakoutPathInput): BreakoutPathResult {
+	const { pivots, lastPivotIdx, breakoutIdx, side } = input;
+	const kind: Pivot['kind'] = side === 'top' ? 'H' : 'L';
+	let hit: Pivot | undefined;
+	for (const p of pivots) {
+		if (!p || p.kind !== kind) continue;
+		if (!Number.isFinite(p.idx)) continue;
+		// 両端は含まない。最終構成点そのもの・ブレイク足そのものは「間」ではない。
+		if (p.idx <= lastPivotIdx || p.idx >= breakoutIdx) continue;
+		if (!hit || p.idx < hit.idx) hit = p;
+	}
+	if (!hit) return { found: false };
+	return {
+		found: true,
+		reason: side === 'top' ? 'peak_after_last_pivot' : 'trough_after_last_pivot',
+		pivot: hit,
+	};
+}

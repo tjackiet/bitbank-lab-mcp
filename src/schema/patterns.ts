@@ -660,7 +660,11 @@ export const DetectedPatternSchema = z.object({
 		.describe(
 			'`status` が `invalid` / `expired` になった理由コード。' +
 				'`re_entered_trough_zone` = 第2構成点の確定後、ネックライン突破前に価格が' +
-				'谷（山）ゾーンへ戻った。`forming_expired` = 突破確認窓を過ぎた。',
+				'谷（山）ゾーンへ戻った。' +
+				'`peak_after_last_pivot` / `trough_after_last_pivot` = 最終構成点（山2 / 山3 / 右肩）と' +
+				'ネックライン突破バーの**間**に同種のピボットがあり、最終構成点から直接ネックラインを' +
+				'割っていない（水準は問わない。反転ではなく別の形——レンジ上限への 3 回目のタッチ等）。' +
+				'`forming_expired` = 突破確認窓を過ぎた。',
 		),
 	/**
 	 * 整合度（confidence）のサブスコア。issue #126 で露出。

@@ -256,13 +256,29 @@ describe('主構成点がネックラインの誤った側にある形（issue #
 		});
 	});
 
-	it('同じ 3 点の先頭 2 山から出る double_top は残る（二重出力の解消）', async () => {
-		const { patterns } = await detectDebug(buildLiveShapedCandles(), '1hour');
-		const doubles = patterns.filter((p) => p.type === 'double_top');
+	/**
+	 * **#242 で挙動が変わった**（旧: `data.patterns` に `double_top` が 1 件残る）。
+	 *
+	 * #216 のゲートは double を落とさない——double の主構成点は山1 / 山2 の 2 点だけで、
+	 * どちらもネックライン（谷1 = 96.0）より上だから。中間構成点 `b` はネックラインの
+	 * 定義点そのものなので検査に含めない（含めると deviation 0 で全 double が落ちる）。
+	 * **この結論は変わっていない**——ここで固定しているのは「`peaks_below_neckline` で
+	 * 落ちてはいない」こと。
+	 *
+	 * 一方 #242 の経路ゲートは落とす。本系列は山2（idx 17）の後にネックラインを割らずに
+	 * 山3（idx 25）を作ってから idx 27 で割っており、**最終構成点から直接割っていない**。
+	 * `status: 'invalid'` + `invalidReason: 'peak_after_last_pivot'` になるので、
+	 * 既定（`includeInvalid: false`）では `data.patterns` に出ない。
+	 */
+	it('同じ 3 点の先頭 2 山から出る double_top は #216 では落ちない（#242 で invalid になる）', async () => {
+		const { patterns, candidates } = await detectDebug(buildLiveShapedCandles(), '1hour');
+		expect(patterns.filter((p) => p.type === 'double_top')).toHaveLength(0);
+		expect(candidates.filter((c) => c.type === 'double_top' && c.reason === 'peaks_below_neckline')).toHaveLength(0);
+
+		const { patterns: withInvalid } = await detectDebug(buildLiveShapedCandles(), '1hour', { includeInvalid: true });
+		const doubles = withInvalid.filter((p) => p.type === 'double_top');
 		expect(doubles).toHaveLength(1);
-		// double の主構成点は山1 / 山2 の 2 点だけで、どちらもネックライン（谷1 = 96.0）より上。
-		// 中間構成点 `b` はネックラインの定義点そのものなので検査に含めない
-		// （含めると deviation 0 で全 double が落ちる）。
+		expect(doubles[0]).toMatchObject({ status: 'invalid', invalidReason: 'peak_after_last_pivot' });
 		expect(mainIdxs(doubles[0])).toEqual([9, 13, 17]);
 	});
 
