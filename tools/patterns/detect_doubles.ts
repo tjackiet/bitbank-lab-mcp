@@ -569,6 +569,18 @@ function findRelaxedDoubleTop(
 	const tolRelax = tolerancePct * factor;
 	const nearRelaxed = (x: number, y: number) => Math.abs(x - y) <= Math.max(x, y) * tolRelax;
 
+	/**
+	 * 終端 status（`invalid`）が付いた候補の置き場（issue #242 のレビュー指摘）。
+	 *
+	 * relaxed は**最初に組み上がった候補を返してその場で走査を終える**ので、
+	 * `H-L-H-L-H` のように候補が重なる列で先頭の候補が `invalid` になると、
+	 * **後ろにある成立した候補まで一緒に失われる**（relaxed は同 type の strict が
+	 * 0 件のときだけ走るフォールバックなので、そのとき検出結果は 0 件になる）。
+	 * 終端候補はここに退避して走査を続け、成立した候補が無かったときだけ返す。
+	 * **1 件だけ返す契約は変えない**（`??=` なので退避されるのは最初の 1 件）。
+	 */
+	let terminalFallback: PatternEntry | null = null;
+
 	for (let i = 0; i + 2 < pivots.length; i++) {
 		const a = pivots[i],
 			b = pivots[i + 1],
@@ -725,7 +737,7 @@ function findRelaxedDoubleTop(
 
 		const structureGate = buildStructureGate(gate);
 
-		return {
+		const entry: PatternEntry = {
 			type: 'double_top',
 			confidence,
 			scoreComponents,
@@ -748,8 +760,13 @@ function findRelaxedDoubleTop(
 			structureDiagram: diagram,
 			_fallback: `relaxed_double_x${factor}`,
 		};
+		if (entry.status === 'invalid') {
+			terminalFallback ??= entry;
+			continue;
+		}
+		return entry;
 	}
-	return null;
+	return terminalFallback;
 }
 
 // ── Helper: relaxed fallback ダブルボトム検索 ──
@@ -767,6 +784,18 @@ function findRelaxedDoubleBottom(
 ): PatternEntry | null {
 	const tolRelax = tolerancePct * factor;
 	const nearRelaxed = (x: number, y: number) => Math.abs(x - y) <= Math.max(x, y) * tolRelax;
+
+	/**
+	 * 終端 status（`invalid`）が付いた候補の置き場（issue #242 のレビュー指摘）。
+	 *
+	 * relaxed は**最初に組み上がった候補を返してその場で走査を終える**ので、
+	 * `H-L-H-L-H` のように候補が重なる列で先頭の候補が `invalid` になると、
+	 * **後ろにある成立した候補まで一緒に失われる**（relaxed は同 type の strict が
+	 * 0 件のときだけ走るフォールバックなので、そのとき検出結果は 0 件になる）。
+	 * 終端候補はここに退避して走査を続け、成立した候補が無かったときだけ返す。
+	 * **1 件だけ返す契約は変えない**（`??=` なので退避されるのは最初の 1 件）。
+	 */
+	let terminalFallback: PatternEntry | null = null;
 
 	for (let i = 0; i + 2 < pivots.length; i++) {
 		const a = pivots[i],
@@ -925,7 +954,7 @@ function findRelaxedDoubleBottom(
 
 		const structureGate = buildStructureGate(gate);
 
-		return {
+		const entry: PatternEntry = {
 			type: 'double_bottom',
 			confidence,
 			scoreComponents,
@@ -948,8 +977,13 @@ function findRelaxedDoubleBottom(
 			structureDiagram: diagram,
 			_fallback: `relaxed_double_x${factor}`,
 		};
+		if (entry.status === 'invalid') {
+			terminalFallback ??= entry;
+			continue;
+		}
+		return entry;
 	}
-	return null;
+	return terminalFallback;
 }
 
 // ── Helper: 形成中ダブルトップ検索 ──
