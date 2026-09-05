@@ -1251,6 +1251,17 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 	const { candles, pivots, allValleys, tolerancePct, headProminencePct, minDist, debugCandidates } = ctx;
 
+	/**
+	 * 終端 status（`invalid`）が付いた候補の置き場（issue #242 のレビュー指摘。double と同じ）。
+	 *
+	 * relaxed は**最初に組み上がった候補を返してその場で走査を終える**ので、候補が重なる列で
+	 * 先頭の候補が `invalid` になると**後ろにある成立した候補まで一緒に失われる**。relaxed は
+	 * 同 type の strict が 0 件のときだけ走るので、そのとき検出結果は 0 件になる。
+	 * 終端候補はここに退避して走査を続け、成立した候補が無かったときだけ返す。
+	 * **1 件だけ返す契約は変えない**（`??=` なので退避されるのは最初の 1 件）。
+	 */
+	let terminalFallback: DeduplicablePattern | null = null;
+
 	for (const factors of RELAXED_FACTORS) {
 		for (let i = 0; i < pivots.length - 4; i++) {
 			const p0 = pivots[i],
@@ -1482,7 +1493,7 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 					reason: 'fallback_relaxed',
 					indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
 				});
-			return {
+			const entry: DeduplicablePattern = {
 				type: 'head_and_shoulders',
 				confidence,
 				scoreComponents,
@@ -1509,15 +1520,31 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 				structureDiagram: diagram,
 				_fallback: `relaxed_hs_${factors.tag}`,
 			};
+			if (entry.status === 'invalid') {
+				terminalFallback ??= entry;
+				continue;
+			}
+			return entry;
 		}
 	}
-	return null;
+	return terminalFallback;
 }
 
 // ── Helper: Relaxed Inverse H&S fallback ──
 
 function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 	const { candles, pivots, allPeaks, tolerancePct, headProminencePct, minDist, debugCandidates } = ctx;
+
+	/**
+	 * 終端 status（`invalid`）が付いた候補の置き場（issue #242 のレビュー指摘。double と同じ）。
+	 *
+	 * relaxed は**最初に組み上がった候補を返してその場で走査を終える**ので、候補が重なる列で
+	 * 先頭の候補が `invalid` になると**後ろにある成立した候補まで一緒に失われる**。relaxed は
+	 * 同 type の strict が 0 件のときだけ走るので、そのとき検出結果は 0 件になる。
+	 * 終端候補はここに退避して走査を続け、成立した候補が無かったときだけ返す。
+	 * **1 件だけ返す契約は変えない**（`??=` なので退避されるのは最初の 1 件）。
+	 */
+	let terminalFallback: DeduplicablePattern | null = null;
 
 	for (const factors of RELAXED_FACTORS) {
 		for (let i = 0; i < pivots.length - 4; i++) {
@@ -1746,7 +1773,7 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 					reason: 'fallback_relaxed',
 					indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
 				});
-			return {
+			const entry: DeduplicablePattern = {
 				type: 'inverse_head_and_shoulders',
 				confidence,
 				scoreComponents,
@@ -1773,9 +1800,14 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 				structureDiagram: diagram,
 				_fallback: `relaxed_ihs_${factors.tag}`,
 			};
+			if (entry.status === 'invalid') {
+				terminalFallback ??= entry;
+				continue;
+			}
+			return entry;
 		}
 	}
-	return null;
+	return terminalFallback;
 }
 
 // ── Helper: 形成中 H&S ──

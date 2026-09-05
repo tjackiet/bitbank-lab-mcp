@@ -130,6 +130,19 @@ triple / H&S の完成済み経路は `patterns.push` の直後に `accepted: tr
 （`prior_trend_insufficient_data` のような**注記つきの `accepted: true`** はゲートより前で
 積まれる情報行なのでそのまま）。
 
+#### relaxed 経路の走査打ち切りも同じ形で直した（PR #247 のレビュー指摘の横展開）
+
+PR #247 が double で直した「終端 status（`invalid`）が付いた候補で走査を打ち切る」問題は、
+**本 PR で終端 status を付けられるようになった triple / H&S の relaxed 4 経路にもそのまま
+当てはまる**（`findRelaxedTripleTop` / `findRelaxedTripleBottom` / `findRelaxedHS` /
+`findRelaxedInverseHS` はいずれも最初に組み上がった候補を返して走査を終える）。double と
+同じく終端候補をフォールバックに退避して走査を続けるようにした。**1 件だけ返す契約は不変。**
+
+**現行コーパスでは発火しない潜在ガード**——relaxed 経路は 4 コーパスすべてで母集団 0 件
+（relaxed は同 type の strict が 0 件のときだけ走る。#204 / #227 / #228 と同じ結論）。
+挙動そのものの回帰は double 側（`tests/patterns/breakout-path-double.test.ts`）が
+`tolerancePct: 0.02` を明示して relaxed 経路を踏ませたうえで固定している。
+
 #### 既存フィクスチャを 2 つ直した
 
 - `buildInverseHsWithBreakout`（`tests/patterns/detect_hs.test.ts`）は右肩 100 の後の

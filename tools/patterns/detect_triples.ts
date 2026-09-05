@@ -787,6 +787,17 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 	const nearTriple = (x: number, y: number) => Math.abs(x - y) / Math.max(1, Math.max(x, y)) <= tolTriple;
 	const highsOnly = pivots.filter((p) => p.kind === 'H');
 
+	/**
+	 * 終端 status（`invalid`）が付いた候補の置き場（issue #242 のレビュー指摘。double と同じ）。
+	 *
+	 * relaxed は**最初に組み上がった候補を返してその場で走査を終える**ので、候補が重なる列で
+	 * 先頭の候補が `invalid` になると**後ろにある成立した候補まで一緒に失われる**。relaxed は
+	 * 同 type の strict が 0 件のときだけ走るので、そのとき検出結果は 0 件になる。
+	 * 終端候補はここに退避して走査を続け、成立した候補が無かったときだけ返す。
+	 * **1 件だけ返す契約は変えない**（`??=` なので退避されるのは最初の 1 件）。
+	 */
+	let terminalFallback: DeduplicablePattern | null = null;
+
 	for (let i = 0; i <= highsOnly.length - 3; i++) {
 		const a = highsOnly[i],
 			b = highsOnly[i + 1],
@@ -1008,7 +1019,7 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 					// LLM が「進捗 0%」と読み違える。
 					...targetReachFields(omittedTargetReach('not_broken_out')),
 				};
-		return {
+		const entry: DeduplicablePattern = {
 			type: 'triple_top',
 			confidence,
 			scoreComponents,
@@ -1029,8 +1040,13 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 			...(diagram ? { structureDiagram: diagram } : {}),
 			_fallback: `relaxed_triple_x${factor}`,
 		};
+		if (entry.status === 'invalid') {
+			terminalFallback ??= entry;
+			continue;
+		}
+		return entry;
 	}
-	return null;
+	return terminalFallback;
 }
 
 /**
@@ -1043,6 +1059,17 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 	const tolTriple = tolerancePct * factor;
 	const nearTriple = (x: number, y: number) => Math.abs(x - y) / Math.max(1, Math.max(x, y)) <= tolTriple;
 	const lowsOnly = pivots.filter((p) => p.kind === 'L');
+
+	/**
+	 * 終端 status（`invalid`）が付いた候補の置き場（issue #242 のレビュー指摘。double と同じ）。
+	 *
+	 * relaxed は**最初に組み上がった候補を返してその場で走査を終える**ので、候補が重なる列で
+	 * 先頭の候補が `invalid` になると**後ろにある成立した候補まで一緒に失われる**。relaxed は
+	 * 同 type の strict が 0 件のときだけ走るので、そのとき検出結果は 0 件になる。
+	 * 終端候補はここに退避して走査を続け、成立した候補が無かったときだけ返す。
+	 * **1 件だけ返す契約は変えない**（`??=` なので退避されるのは最初の 1 件）。
+	 */
+	let terminalFallback: DeduplicablePattern | null = null;
 
 	for (let i = 0; i <= lowsOnly.length - 3; i++) {
 		const a = lowsOnly[i],
@@ -1255,7 +1282,7 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 					// LLM が「進捗 0%」と読み違える。
 					...targetReachFields(omittedTargetReach('not_broken_out')),
 				};
-		return {
+		const entry: DeduplicablePattern = {
 			type: 'triple_bottom',
 			confidence,
 			scoreComponents,
@@ -1276,8 +1303,13 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 			...(diagram ? { structureDiagram: diagram } : {}),
 			_fallback: `relaxed_triple_x${factor}`,
 		};
+		if (entry.status === 'invalid') {
+			terminalFallback ??= entry;
+			continue;
+		}
+		return entry;
 	}
-	return null;
+	return terminalFallback;
 }
 
 // ── Helper: 形成中 Triple Top ──
