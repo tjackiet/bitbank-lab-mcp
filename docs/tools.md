@@ -352,6 +352,15 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 | `1week` | 7 | 5 | 0.035 |
 | `1month` | 8 | 6 | 0.03 |
 
+**`swingDepth` はピボット列を通じて #242 の経路ゲートの判定も動かす。**
+`peak_after_last_pivot` / `trough_after_last_pivot` と再進入チェック（`re_entered_trough_zone`）は、
+パターンの構成点と**同じ `swingDepth` で取ったピボット列**で判定する。深さを増やすと小さな戻しは
+ピボットにならず、ゲートも発火しない。**同じ値動きで `swingDepth=3` では `invalid`、`6` では
+`completed` になりうるのは仕様**（issue #251）。実例: 実データ D（`btc_jpy` / `1hour` / 2026-09-05）の
+`double_top 329-334-338` は、既定の深さ 3 では経路上の H ピボット idx 343 が `peak_after_last_pivot` を
+立てるが、深さ 6 では idx 343 が極値にならない（`high[337] = 12,750,000` が上にある）ため
+完成済みのまま残る。この深さ依存は `tests/patterns/breakout-path-double.test.ts` が仕様として固定している。
+
 `headProminencePct`（H&S / 逆 H&S 専用。頭が両肩よりどれだけ突出すべきかの最小要求率）は
 `tolerancePct` とは**独立の専用時間軸オート表**（`getHeadProminenceForTf`）を持つ
 （issue #198。#149〜#197 は誤って `tolerancePct` の表を流用しており、`1hour` が `1day` より
@@ -542,7 +551,7 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 | `retracement_out_of_band` | 戻り率が許容帯（0.20〜0.90）の外 |
 | `re_entered_trough_zone` | 谷2 確定後、ネックライン突破前に終値が谷ゾーンへ戻った。`status=invalid` として出る |
 | `reclassified_as_triple_bottom` / `_top` | 上記に加えて同水準の第3構成点があるため、triple 側に委ねた |
-| `peak_after_last_pivot` / `trough_after_last_pivot` | 最終構成点（山2 / 谷2）とネックライン突破バーの**間**に同種のピボットがある。最終構成点から直接割っておらず、途中でもう 1 つ山（谷）を作っている。**水準は問わない**（同水準でなくても落とす）。`status=invalid` として出る（issue #242） |
+| `peak_after_last_pivot` / `trough_after_last_pivot` | 最終構成点（山2 / 谷2）とネックライン突破バーの**間**に同種のピボットがある。最終構成点から直接割っておらず、途中でもう 1 つ山（谷）を作っている。**水準は問わない**（同水準でなくても落とす）。**判定に使うピボット列は `swingDepth` に依存する**——深さを増やすと間のピボットが極値でなくなり、ゲートも発火しなくなる（上の「スイング検出パラメータは時間軸オート」の節を参照。issue #251）。`status=invalid` として出る（issue #242） |
 
 **戻り率は `extremePrice`（高安）基準で測る。** `price`（終値）基準は検出器ごとに意味が違う
 （上表）だけでなく、実データで帯の余裕が消える——BTC/JPY 日足 2026-08-03 → 08-10 の実在パターンで
@@ -582,6 +591,22 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 ローカル定数 5 本でこのパラメータを上書きしていた（`detect_triples` / `detect_hs` は当時から
 パラメータどおり）。日足の既定は 4 本・1時間足は 2 本なので、**既定パラメータでも上書きが
 起きていた**。上書きを外したので、日足で 4 本間隔の構成も検出される。
+
+### 完成済み H&S のブレイク探索窓は 30 本固定（#249）
+
+右肩からのブレイク探索窓は `HS_BREAKOUT_MAX_BARS = 30`（`tools/patterns/detect_hs.ts`）で、
+**時間足に依らない固定値**。#242 の経路ゲート（右肩とブレイクの間に同種のピボットがあれば落とす）と
+組み合わさるため、**右肩とブレイクの間にピボットが立たない形しか完成済みにならない**。1 時間足では
+30 本の間にピボットが 1 つも立たないことは既定の `swingDepth=3` ではほぼ無いので、実質
+「右肩の直後 数本以内に割った形」だけが通る。実データ B / C / D の 1hour では完成済み
+`head_and_shoulders` は **0 件**で、目視でも H&S と呼べる形は無い（#249 Phase 1 /
+[docs/internal/hs-shoulder-window-249.md](internal/hs-shoulder-window-249.md)）。**この状態は
+「0 件が正しい」として据え置く判断を採っている**（#249 案 D。窓の値も時間足別化もしない）。
+
+逆 H&S は右肩 → ブレイクが短く（#242 前の同コーパスで中央値 8 本 / max 9 本）、この組み合わせの
+影響を受けていない。また**完成済み経路にはパターン全長の上限が無い**（形成中経路には
+`getHsFormingBarParams(tf).maxBars` がある）。上限の追加は #249 案 C として保留し、
+#244（時間足別テーブル）で再検討する。
 
 ### `status` に `expired` がある
 
