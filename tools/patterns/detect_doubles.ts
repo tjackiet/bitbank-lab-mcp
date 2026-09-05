@@ -9,7 +9,9 @@ import { deduplicatePatterns, finalizeConf, periodScoreDays } from './helpers.js
 import { clamp01, relDev } from './regression.js';
 import { averageDefinedAxes, breakoutQualityScore, retracementScore } from './scoring.js';
 import {
+	type BreakoutPathRejectReason,
 	DOUBLE_LEVEL_MAX_PCT,
+	detectPivotBeforeBreakout,
 	detectTroughZoneReentry,
 	isSameLevel,
 	levelSpreadDetailsFrom,
@@ -468,6 +470,89 @@ function checkPostPivotInvalidation(opts: {
 	return { verdict: 'invalid', reason: 're_entered_trough_zone', idx: reentry.idx };
 }
 
+/** 完成済みパスの終端 status（`status` / `invalidReason` をまとめて展開するための形）。 */
+type DoubleTerminal = { status: 'invalid'; invalidReason: string };
+
+/**
+ * 最終構成点（山2 / 谷2）からネックライン突破バーまでの**経路**を検証する（issue #242）。
+ * 不合格なら `view=debug` の候補を積み、終端 status を返す。合格なら `null`。
+ *
+ * 判定の実体と根拠——なぜ水準を問わないのか、既存の {@link checkPostPivotInvalidation}
+ * （25% ゾーン再進入）で足りないのはなぜか——は `structural.ts` の
+ * {@link detectPivotBeforeBreakout} の docstring が単一ソース。
+ *
+ * ## 呼び出し位置
+ *
+ * {@link rejectByNecklineSide} の**直後**——既存の棄却検査をすべて通過し、`findBreakoutIdx` で
+ * ブレイクが確定した後。`validatePatternSize` / `applyReversalGate` の docstring の原則
+ * （固有の理由コードを持つ候補の `reason` を横取りしない）に従う。最後に置けば
+ * **「これまで accepted だった候補だけを落とす」ことが位置から保証される。**
+ *
+ * ## `re_entered_trough_zone` を横取りしない
+ *
+ * {@link checkPostPivotInvalidation} が既に `invalid` を出している候補には**本ゲートを掛けない**
+ * （呼び出し側が `post.verdict === 'ok'` のときだけ呼ぶ）。2 つの検査は独立で、どちらも当たる
+ * 候補はありうるが、**先に固有の理由が付いているならそれが診断として正しい**。
+ * `reclassified_as_triple_*` の分岐（`hasThird`）も同じ理由で本ゲートより前に残してある。
+ *
+ * ## `status: 'invalid'` で出す。候補にも理由を残す
+ *
+ * `re_entered_trough_zone` と同じ扱いで、`includeInvalid: true` なら
+ * `status: 'invalid'` + `invalidReason` として出力する。**加えて `view=debug` の候補にも積む**
+ * ——既定（`includeInvalid: false`）では `invalid` のエントリが丸ごと消えるため、
+ * 候補に残さないと「なぜ消えたか」が LLM にも利用者にも届かない。
+ *
+ * ## 理由コードに `_relaxed` 接尾辞を付けない
+ *
+ * {@link rejectByLevelDiff} / {@link rejectByNecklineSide} と同じ——本ゲートは strict / relaxed とも
+ * 同じ判定（閾値を持たないので緩める余地が無い）。
+ */
+function checkBreakoutPath(opts: {
+	pivots: ReadonlyArray<Pivot>;
+	side: ReversalSide;
+	type: 'double_top' | 'double_bottom';
+	a: Pivot;
+	b: Pivot;
+	c: Pivot;
+	breakoutIdx: number;
+	pcand: Pcand;
+}): DoubleTerminal | null {
+	const { pivots, side, type, a, b, c, breakoutIdx, pcand } = opts;
+	const res = detectPivotBeforeBreakout({ pivots, lastPivotIdx: c.idx, breakoutIdx, side });
+	if (!res.found || !res.reason) return null;
+	const outerRole = side === 'top' ? 'peak' : 'valley';
+	const midRole = side === 'top' ? 'valley' : 'peak';
+	pcand({
+		type,
+		accepted: false,
+		reason: res.reason,
+		idxs: [a.idx, b.idx, c.idx],
+		pts: [
+			{ role: `${outerRole}1`, idx: a.idx, price: a.price },
+			{ role: midRole, idx: b.idx, price: b.price },
+			{ role: `${outerRole}2`, idx: c.idx, price: c.price },
+			...(res.pivot ? [{ role: `${outerRole}_after_last`, idx: res.pivot.idx, price: res.pivot.price }] : []),
+		],
+		details: breakoutPathDetails(c.idx, breakoutIdx, res.pivot),
+	});
+	return { status: 'invalid', invalidReason: res.reason satisfies BreakoutPathRejectReason };
+}
+
+/** {@link checkBreakoutPath} の `details`。閾値を持たないゲートなので、出すのは位置と値だけ。 */
+function breakoutPathDetails(
+	lastPivotIdx: number,
+	breakoutIdx: number,
+	offender: Pivot | undefined,
+): Record<string, unknown> {
+	return {
+		lastPivotIdx,
+		breakoutIdx,
+		...(offender
+			? { offenderIdx: offender.idx, offenderPrice: offender.price, offenderExtremePrice: offender.extremePrice }
+			: {}),
+	};
+}
+
 // ── Helper: relaxed fallback ダブルトップ検索 ──
 
 function findRelaxedDoubleTop(
@@ -587,6 +672,11 @@ function findRelaxedDoubleTop(
 		}
 		if (rejectByLevelDiff('top', 'double_top', a, b, c, Math.min(tolRelax, DOUBLE_LEVEL_MAX_PCT), pcand)) continue;
 		if (rejectByNecklineSide('top', 'double_top', a, b, c, necklinePrice, pcand)) continue;
+		// 最終構成点 → ブレイクの経路検証（issue #242）。既に `invalid` が付いている候補には掛けない。
+		const pathTerminal =
+			post.verdict === 'ok'
+				? checkBreakoutPath({ pivots, side: 'top', type: 'double_top', a, b, c, breakoutIdx, pcand })
+				: null;
 
 		const start = candles[a.idx].isoTime,
 			end = candles[breakoutIdx].isoTime;
@@ -644,7 +734,9 @@ function findRelaxedDoubleTop(
 			...(structureRange ? { structureRange } : {}),
 			...(confirmation ? { confirmation } : {}),
 			...(precedingTrend ? { precedingTrend } : {}),
-			...(post.verdict === 'invalid' ? { status: 'invalid', invalidReason: post.reason } : {}),
+			...(post.verdict === 'invalid'
+				? { status: 'invalid' as const, invalidReason: post.reason }
+				: (pathTerminal ?? {})),
 			pivots: [a, b, c],
 			neckline,
 			trendlineLabel: 'ネックライン',
@@ -780,6 +872,11 @@ function findRelaxedDoubleBottom(
 		if (rejectByLevelDiff('bottom', 'double_bottom', a, b, c, Math.min(tolRelax, DOUBLE_LEVEL_MAX_PCT), pcand))
 			continue;
 		if (rejectByNecklineSide('bottom', 'double_bottom', a, b, c, necklinePrice, pcand)) continue;
+		// 最終構成点 → ブレイクの経路検証（issue #242）。既に `invalid` が付いている候補には掛けない。
+		const pathTerminal =
+			post.verdict === 'ok'
+				? checkBreakoutPath({ pivots, side: 'bottom', type: 'double_bottom', a, b, c, breakoutIdx, pcand })
+				: null;
 
 		const start = candles[a.idx].isoTime,
 			end = candles[breakoutIdx].isoTime;
@@ -837,7 +934,9 @@ function findRelaxedDoubleBottom(
 			...(structureRange ? { structureRange } : {}),
 			...(confirmation ? { confirmation } : {}),
 			...(precedingTrend ? { precedingTrend } : {}),
-			...(post.verdict === 'invalid' ? { status: 'invalid', invalidReason: post.reason } : {}),
+			...(post.verdict === 'invalid'
+				? { status: 'invalid' as const, invalidReason: post.reason }
+				: (pathTerminal ?? {})),
 			pivots: [a, b, c],
 			neckline,
 			trendlineLabel: 'ネックライン',
@@ -1465,6 +1564,11 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 				}
 				if (rejectByLevelDiff('top', 'double_top', a, b, c, levelTolerancePct, pcand)) continue;
 				if (rejectByNecklineSide('top', 'double_top', a, b, c, necklinePrice, pcand)) continue;
+				// 最終構成点 → ブレイクの経路検証（issue #242）。既に `invalid` が付いている候補には掛けない。
+				const pathTerminal =
+					post.verdict === 'ok'
+						? checkBreakoutPath({ pivots, side: 'top', type: 'double_top', a, b, c, breakoutIdx, pcand })
+						: null;
 				const start = candles[a.idx].isoTime;
 				const end = candles[breakoutIdx].isoTime;
 				if (!start || !end) continue;
@@ -1518,7 +1622,9 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					...(dtStructureRange ? { structureRange: dtStructureRange } : {}),
 					...(dtConfirmation ? { confirmation: dtConfirmation } : {}),
 					...(dtPrecedingTrend ? { precedingTrend: dtPrecedingTrend } : {}),
-					...(post.verdict === 'invalid' ? { status: 'invalid', invalidReason: post.reason } : {}),
+					...(post.verdict === 'invalid'
+						? { status: 'invalid' as const, invalidReason: post.reason }
+						: (pathTerminal ?? {})),
 					pivots: [a, b, c],
 					neckline,
 					trendlineLabel: 'ネックライン',
@@ -1642,6 +1748,11 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 				}
 				if (rejectByLevelDiff('bottom', 'double_bottom', a, b, c, levelTolerancePct, pcand)) continue;
 				if (rejectByNecklineSide('bottom', 'double_bottom', a, b, c, necklinePrice, pcand)) continue;
+				// 最終構成点 → ブレイクの経路検証（issue #242）。既に `invalid` が付いている候補には掛けない。
+				const pathTerminal =
+					post.verdict === 'ok'
+						? checkBreakoutPath({ pivots, side: 'bottom', type: 'double_bottom', a, b, c, breakoutIdx, pcand })
+						: null;
 				const start = candles[a.idx].isoTime;
 				const end = candles[breakoutIdx].isoTime;
 				if (!start || !end) continue;
@@ -1695,7 +1806,9 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					...(dbStructureRange ? { structureRange: dbStructureRange } : {}),
 					...(dbConfirmation ? { confirmation: dbConfirmation } : {}),
 					...(dbPrecedingTrend ? { precedingTrend: dbPrecedingTrend } : {}),
-					...(post.verdict === 'invalid' ? { status: 'invalid', invalidReason: post.reason } : {}),
+					...(post.verdict === 'invalid'
+						? { status: 'invalid' as const, invalidReason: post.reason }
+						: (pathTerminal ?? {})),
 					pivots: [a, b, c],
 					neckline,
 					trendlineLabel: 'ネックライン',

@@ -65,6 +65,77 @@
 | 51 | #228 | triple の**完成済み 4 経路**（strict / relaxed × top / bottom）に `computeTargetReach` を配線した。#224 症状 2 が理由コード `not_computed_by_detector` で「値を出さないまま理由だけ申告する」形に留めていたものの解消。`target-reach.ts` の 3 定数は **triple 固有の分布を測ったうえで据え置き** | **判定は変わらない**（940 ケースで `detectTriples()` の 200 パターンが target 進捗系 5 キーを除いてバイト単位で完全一致。増えるのは `targetReachedPct` / `targetReached` / `targetReachedDate` / `targetReachedPrice` の 4 フィールドだけ） |
 | 50 | #224 症状 3 | `triple_*` の `pivots` に**ネックライン定義点 v1 / v2 を含めた**（完成済み 4 経路は 3 → 5 点、形成中 2 経路は 2 → 4 点。並びは構造図と同じ）。H&S（p1 / p3）/ double（b）は既に含んでおり、triple だけが例外だった | **判定は変わらない**（940 ケース全件で件数・`confidence` / `status` / `neckline` / `breakoutTarget` / `aftermath` / `meta.reduction.tripleHsExcluded` が完全一致。動くのは `triple_top` 68 件 / `triple_bottom` 71 件の `pivots` と content の `価格範囲` 行だけで、**他の 13 type は 1 バイトも動かない**。`bear_flag` はコーパスに 0 件で、実測で動いたと確認できたのは出現した 12 type） |
 | 52 | #227 Phase 2 | relaxed フォールバックの `headProminence` 軸を、**緩めた側のゲート**（`headProminencePct × factors.head`）ではなく **strict のゲート**で採点するようにした。**ゲートは緩いまま（`RELAXED_FACTORS` は 1 つも変えていない）、点数だけ正直にする。** 段2 を削る案は Phase 1 で膝が観測できず却下 | **件数は変わらない**（1,248 ケースで延べ 4,070 → 4,070。追加 0 / 削除 0、type × コーパス 53 組すべて件数差 0）。動くのは実データ C の窓長スイープの `head_and_shoulders`（`relaxed_hs_x2.0_0.4`）**24 行の `confidence` と `scoreComponents` だけ** |
+| 53 | #242 PR 1/2 | `double_*` の**完成済み 4 経路**に「最終構成点（山2 / 谷2）とネックライン突破バーの**間**に同種のピボットがあれば `invalid`」という経路検証を足した。**閾値を 1 つも導入していない**（水準を問わない 0/1 判定）。triple / H&S への配線は PR 2 | 実データ C で**減る**（992 ケースで `double_top` 延べ −16 / **1 構造**。標準コーパス・実データ B は 0 件。**増加 0**） |
+
+### Changed（double の「最終構成点 → ブレイク」経路を検証する。#242 PR 1/2）
+
+`double_top` / `double_bottom` の**完成済み 4 経路**に、「山2（谷2）とネックライン突破バーの
+**間**に同種のピボットがあれば `status: 'invalid'`」という検査を足した。判定は
+`tools/patterns/structural.ts` の新しい純粋関数 `detectPivotBeforeBreakout` が単一ソースで、
+**triple / H&S への配線は PR 2**（issue は PR 2 がマージされるまで閉じない）。
+
+```text
+before: double_top  完成（整合度 0.83） 09-03 21:00 → 09-04 12:00
+after:  （既定では出力なし。includeInvalid: true で status=invalid / peak_after_last_pivot）
+```
+
+起票時のライブ実例（`btc_jpy` / `1hour` / 2026-09-04）は、山2（idx 50）の後に
+ネックラインを割らずに **12,711,037 まで再上昇して H ピボットを作ってから**（idx 55）
+急落して割っていた。同じ区間を `detect_triangles` は `triangle_ascending`（`status: invalid`
+= 下方ブレイク）として説明しており、値動きの読みはそちらが正しい。
+
+#### 理由コードは種別を跨いで 1 語
+
+`peak_after_last_pivot`（top）/ `trough_after_last_pivot`（bottom）。`double_` のような
+接頭辞を付けない——**double だけ直って triple / H&S が取り残される構造を作らない**
+（#131 → #138 で構造ゲートは横展開されたのに、再進入チェックだけが横展開から漏れていた
+のがまさにそれ。PR 2 で回収する）。`re_entered_trough_zone` と同じ扱いで `status: 'invalid'` +
+`invalidReason` として出力し、**加えて `view=debug` の候補にも積む**——既定
+（`includeInvalid: false`）では `invalid` のエントリが丸ごと消えるため、候補に残さないと
+「なぜ消えたか」が LLM にも利用者にも届かない。
+
+#### 閾値を 1 つも導入していない
+
+「同水準の第3構成点か」を見ない。**再上昇の山が第1・第2構成点より低くても、そこに
+ピボットがある時点で「最終構成点から直接割った」ではない。** 実例の idx 55 は高安基準で
+上 2 つより 0.6% 低く、同水準判定（`DOUBLE_LEVEL_MAX_PCT` 等）で拾おうとすると閾値次第で
+漏れる。#218 / #216 と同じ判断で、つまみを増やさない。
+
+**既存の 25% ゾーン再進入チェック（`detectTroughZoneReentry`）では塞げない。** 実例では
+ゾーン下限 12,752,699 に対し idx 55 の終値が 0.3% 届かず発火しない。逆に、ピボットに
+ならない 1 本だけの戻しはゾーンに入っても経路ゲートでは拾えない。**2 つは独立した検査**で、
+どちらか一方では両方の実例を同時には塞げない。既存の `hasThird` →
+`reclassified_as_triple_*` の分岐はそのまま残し、**新ゲートはその後ろ**に置いた
+（先に固有の理由が付いているならそれが診断として正しい）。
+
+#### 実測（実装より先に測った。`docs/internal/reversal-breakout-path-242.md`）
+
+コーパス 992 ケース（標準 800 = 合成 704 + 実データ A 96 / 実データ B 96 / 実データ C 96。
+**プールしない**。#219）で、ゲート位置に到達した候補 延べ 1,608 行・構造 100 件。
+
+| コーパス | accepted（ゲート無し） | double 経路ゲート後 | 差分 |
+|---|---:|---:|---|
+| 標準 800 | 404 | 404 | **0**（間に同種ピボットがある double は 0 構造） |
+| 実データ B 96 | 372 | 372 | **0**（同上） |
+| 実データ C 96 | 384 | 368 | **−16**（`double_top` 28 → 12。**1 構造**） |
+
+落ちる 1 構造は `btc_jpy_1hour_2026_09` / `1hour` / 構成点 174-177-184 で、山2（idx 184）と
+ブレイク（idx 198）の間に H ピボット（idx 194 / `2026-08-28T11:00Z` / 終値 12,725,937 /
+高安 12,762,331）がある——**起票時のライブ実例と同型**。**増えた type は無い**（追加 0 件）。
+
+**棄却理由の帰属が変わる候補は 0 件。** ゲートは `rejectByNecklineSide` の直後、つまり
+「既存の棄却検査をすべて通過し、`findBreakoutIdx` でブレイクが確定した直後」に置いてあり
+（`validatePatternSize` / `applyReversalGate` の docstring の原則）、計測の記録位置も
+そこに一致させてある。
+
+#### 実データ D は未追加
+
+**2026-09-05T03:00Z 以降まで含む `btc_jpy` 1hour 365 本（実データ D）は本 PR に入っていない。**
+作業環境から `public.bitbank.cc` へ到達できず（プロキシが CONNECT を 403 で拒否）
+fixture を作れなかった。起票時のライブ実例と**同型の構造は実データ C
+（構成点 174-177-184 / 間の H ピボット 194）に実在する**ので、実データでの回帰はそちらで
+固定してある。`scripts/measure_reversal_path_242.ts` は
+`tests/fixtures/btc_jpy_1hour_2026_09_05.ts` が置かれれば自動的に 4 つ目の表を出す。
 
 ### Changed（relaxed の頭の突出を strict の閾値で採点する。#227 Phase 2）
 

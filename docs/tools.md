@@ -542,6 +542,7 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 | `retracement_out_of_band` | 戻り率が許容帯（0.20〜0.90）の外 |
 | `re_entered_trough_zone` | 谷2 確定後、ネックライン突破前に終値が谷ゾーンへ戻った。`status=invalid` として出る |
 | `reclassified_as_triple_bottom` / `_top` | 上記に加えて同水準の第3構成点があるため、triple 側に委ねた |
+| `peak_after_last_pivot` / `trough_after_last_pivot` | 最終構成点（山2 / 谷2）とネックライン突破バーの**間**に同種のピボットがある。最終構成点から直接割っておらず、途中でもう 1 つ山（谷）を作っている。**水準は問わない**（同水準でなくても落とす）。`status=invalid` として出る（issue #242） |
 
 **戻り率は `extremePrice`（高安）基準で測る。** `price`（終値）基準は検出器ごとに意味が違う
 （上表）だけでなく、実データで帯の余裕が消える——BTC/JPY 日足 2026-08-03 → 08-10 の実在パターンで
