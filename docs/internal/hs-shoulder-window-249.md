@@ -27,7 +27,7 @@
 
 | # | 結論 |
 |---|---|
-| 1 | **論点 1 は「あり」。ただし律速は肩の同水準判定でも `headProminencePct` でもなく、窓生成の谷2 の取り方。** 実データ C / D で右肩を取り直した 5 点は **`head_and_shoulders` の全 20 構造すべてが窓にならない**（C 20 / 20、D 20 / 20）。原因は `extremeBetween`——右肩を後ろへずらすと「頭と右肩の間の最安値の谷」も一緒に動くので、谷2 が別の点に差し替わる |
+| 1 | **論点 1 は「あり」。ただし律速は肩の同水準判定でも `headProminencePct` でもなく、窓生成の谷2 の取り方。** 実データ C / D では、右肩を取り直した 5 点が `head_and_shoulders` の**全構造で窓にならない**（**C 20 / 20 構造、D 20 / 20 構造の計 40 構造**。C と D は同じ値動きの別窓なので同数になる）。原因は `extremeBetween`——右肩を後ろへずらすと「頭と右肩の間の最安値の谷」も一緒に動くので、谷2 が別の点に差し替わる |
 | 2 | **形 A の右肩を 289 に取り直すと、生成される窓は `212-220-228-285-289` = 形 B そのもの。** 谷2 が 235（12,452,249）→ 285（12,358,272）に動くため。**2 構造は独立ではなく、形 A の「正しい右肩」の読みが形 B**。そして形 B は #242 のゲート（offender 300）で `invalid` |
 | 3 | **形 B の右肩を 313 に取り直すと谷2 が 285 → 297（12,234,364）に動き、accepted にはならない。** 落ち方は左肩によって 2 通り: 構造ゲートの **`no_neckline_cross_before_peak1`**（#242 のゲートより手前。左肩 212 / 208 / 198 / 139）と、**ブレイクが見つからず `near_completion`**（左肩 134 / 83 / 65 / 57 / 19 / 11 / 4）。後者はネックライン水準が谷2 = 297 の 12,234,364 まで下がり、317 の終値 12,144,136 でも 1.5% バッファ（12,050,849）に届かないため |
 | 4 | **relaxed 経路は救わない。** 取り直した 5 点が `pivots` 上で連続する構造は **0 / 78**（全コーパス）。relaxed は連続 5 点しか組まない。そもそも strict が候補を 1 件でも作った時点で relaxed は走らない（`detectHeadAndShoulders` の `found`） |
@@ -87,14 +87,21 @@ npx tsx scripts/measure_hs_shoulder_window_249.ts --baseline-rev worktree
 ベースラインに #242 の本番ゲート（`checkBreakoutPath` / `applyPostBreakoutGates`）が入っていたら
 **落ちる**——差分が常に 0 なのに数字だけ出る、という壊れ方を避けるため。
 
-計測 1 は展開した複製の `detect_hs.ts` 末尾に `export { enumerateHsWindows, extremeBetween,
-outerShoulderOk, HS_BREAKOUT_MAX_BARS, HS_MAX_SHOULDER_PAIRS };` を **1 行足すだけ**で、
-関数本体は 1 文字も変えていない。窓生成を計測用に書き写すと「測った窓」と「実装の窓」がずれても
+展開した複製の `detect_hs.ts` 末尾に `export { enumerateHsWindows, extremeBetween,
+outerShoulderOk, HS_BREAKOUT_MAX_BARS, HS_MAX_SHOULDER_PAIRS };` を、`detect_triples.ts` 末尾に
+`export { MAX_BARS_FROM_EXTREMUM };` を **1 行ずつ足すだけ**で、関数本体は 1 文字も変えていない。窓生成を計測用に書き写すと「測った窓」と「実装の窓」がずれても
 誰も気づかないため、**判定は本物を呼ぶ**。ずれていないことは 2 段で検算する:
 
-1. 展開版の `detectHeadAndShoulders` が作業ツリーの本物と JSON 全キー一致すること（全 1088 ケース。§8 の 0 章）
-2. 肩の組を分類する `classifyPair` の出力が、本物の `enumerateHsWindows` の窓列と**完全一致**すること
-   （全ケース。1 件でも食い違えばスクリプトが例外で落ちる）
+1. 展開版の `detectHeadAndShoulders` が作業ツリーの本物と JSON 全キー一致すること（全 1088 ケース）
+2. 肩の組を分類する `classifyPair` の出力が、本物の `enumerateHsWindows` の窓列と**完全一致**すること（全ケース）
+
+**どちらも 1 件でも食い違えばその場で例外を投げて止まる**（数えて表に出すだけにしない。
+食い違ったまま完走すると、Markdown も JSON も普通に出るのに中身は別の検出器の挙動になる）。
+
+各表の上限値（`HS_BREAKOUT_MAX_BARS` / `MAX_BARS_FROM_EXTREMUM` / forming の `maxBars`）は
+**その表の候補を出した検出器と同じリビジョン**から読む。計測 2 はベースライン、計測 3 は作業ツリーで、
+既定のベースラインでは両者とも同値（30 / 20）なので現在の出力は変わらないが、`--baseline-rev` に
+別の値を渡したときに上限だけが別リビジョンのものになるのを防ぐ。
 
 ## 5. 目視判定（実データ C / D の 1 時間足）
 
@@ -167,14 +174,20 @@ outerShoulderOk, HS_BREAKOUT_MAX_BARS, HS_MAX_SHOULDER_PAIRS };` を **1 行足�
 |---|---:|
 | ベースラインのリビジョン（計測 2） | `b49a08e` |
 | ケース数 | 1088 |
-| **export を足した複製が本物と食い違ったケース** | **0** |
-| `HS_BREAKOUT_MAX_BARS`（作業ツリー） | 30 |
+| `HS_BREAKOUT_MAX_BARS`（作業ツリー / ベースライン） | 30 / 30 |
+| `MAX_BARS_FROM_EXTREMUM`（作業ツリー / ベースライン） | 20 / 20 |
 | `HS_MAX_SHOULDER_PAIRS`（作業ツリー） | 5000 |
 
 ベースラインと作業ツリーで差があるファイル: `detect_doubles.ts` , `detect_hs.ts` , `detect_triples.ts` , `reversal-gate.ts` , `structural.ts`
 
-窓の列挙（`enumerateHsWindows`）と `classifyPair` の突き合わせは**全ケースで実行**しており、
-1 件でも食い違えばスクリプトが例外で落ちる（ここまで到達している時点で一致している）。
+2 つの検算は**全ケースで実行**しており、1 件でも食い違えばスクリプトが例外で落ちる
+（この表が出ている時点でどちらも一致している）。
+
+1. export を足した複製の `detectHeadAndShoulders` が作業ツリーの本物と JSON 全キー一致すること
+2. 肩の組を分類する `classifyPair` の出力が本物の `enumerateHsWindows` の窓列と完全一致すること
+
+各表の上限値（`HS_BREAKOUT_MAX_BARS` / `MAX_BARS_FROM_EXTREMUM` / forming の `maxBars`）は
+**その表の候補を出した検出器と同じリビジョン**から読む。計測 2 はベースライン、計測 3 は作業ツリー。
 
 ### 標準コーパス 800（合成 704 + 実データ A 96）（800 ケース）
 

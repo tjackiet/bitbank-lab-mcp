@@ -22,12 +22,17 @@
  * 写すと `./reversal-gate.js` / `./structural.js` が作業ツリーへ解決され、「#242 前」の実行に
  * #242 後の実装が混ざる。
  *
- * 展開先の `detect_hs.ts` には**末尾に `export { … }` の 1 行だけ**を足す
+ * 展開先の `detect_hs.ts` / `detect_triples.ts` には**末尾に `export { … }` の 1 行だけ**を足す
  * （{@link INTERNAL_EXPORTS}）。関数宣言に名前を付け直すだけで**本体は 1 文字も変えない**ので、
  * 計測 1 が `enumerateHsWindows` / `extremeBetween` / `outerShoulderOk` の**本物**を呼べる。
  * 計測用に窓生成を書き写すと「測った窓」と「実装の窓」がずれても誰も気づかない。
- * 展開版が本物と同じ結果を返すことは 0 章で毎ケース検算する（`detectHeadAndShoulders` の
- * JSON 全キー一致）。
+ * 展開版が本物と同じ結果を返すことは毎ケース検算し、**1 件でも食い違えばその場で落とす**
+ * （`detectHeadAndShoulders` の JSON 全キー一致）。
+ *
+ * **検出器と閾値は必ず同じリビジョンから読む。** 計測 2 の表はベースラインの検出器が出した
+ * 候補を並べているので、`HS_BREAKOUT_MAX_BARS` / `MAX_BARS_FROM_EXTREMUM` / forming の
+ * `maxBars` を作業ツリーから取ると、上限の表示と「上限張り付き」の判定だけが別リビジョンの
+ * ものになる（PR #253 の CodeRabbit 指摘）。
  *
  * ## 使い方
  *
@@ -52,8 +57,7 @@ import { buildBtcJpy1hour202608Candles } from '../tests/fixtures/btc_jpy_1hour_2
 import { buildBtcJpy1hour202609Candles } from '../tests/fixtures/btc_jpy_1hour_2026_09.js';
 import * as synth from '../tests/fixtures/synthetic_pattern_candles.js';
 import { getSizeThresholdsForTf, resolveParams } from '../tools/patterns/config.js';
-import { getHsFormingBarParams, detectHeadAndShoulders as realDetectHs } from '../tools/patterns/detect_hs.js';
-import { getTripleFormingBarParams } from '../tools/patterns/detect_triples.js';
+import { detectHeadAndShoulders as realDetectHs } from '../tools/patterns/detect_hs.js';
 import { linearRegressionWithR2, near as nearFn, pct as pctFn } from '../tools/patterns/regression.js';
 import { type Candle, detectSwingPoints, filterPeaks, filterValleys } from '../tools/patterns/swing.js';
 import type { CandDebugEntry, DeduplicablePattern, DetectContext } from '../tools/patterns/types.js';
@@ -91,12 +95,35 @@ interface HsInternals {
 		hiIdx: number,
 		isTop: boolean,
 	) => boolean;
+	getHsFormingBarParams: (tf: string) => { minBars: number; maxBars: number };
 	HS_BREAKOUT_MAX_BARS: number;
 	HS_MAX_SHOULDER_PAIRS: number;
 }
 
-const INTERNAL_EXPORTS =
-	'\nexport { enumerateHsWindows, extremeBetween, outerShoulderOk, HS_BREAKOUT_MAX_BARS, HS_MAX_SHOULDER_PAIRS };\n';
+/** 展開版 `detect_triples.ts` から借りる API（計測 2-b の上限値）。 */
+interface TripleInternals {
+	detectTriples: Detector;
+	getTripleFormingBarParams: (tf: string) => { minBars: number; maxBars: number };
+	MAX_BARS_FROM_EXTREMUM: number;
+}
+
+/** 1 リビジョンぶんの検出器一式。**閾値も同じリビジョンから読む**（下記の注記）。 */
+interface Patterns {
+	hs: HsInternals;
+	triples: TripleInternals;
+}
+
+/**
+ * 展開先のファイル末尾に足す export（ファイル名 → 追記する 1 行）。
+ *
+ * **`getHsFormingBarParams` / `getTripleFormingBarParams` は元から export されている**ので
+ * ここには要らない。追記するのはモジュール内で閉じていた宣言だけ。
+ */
+const INTERNAL_EXPORTS: Readonly<Record<string, string>> = {
+	'detect_hs.ts':
+		'\nexport { enumerateHsWindows, extremeBetween, outerShoulderOk, HS_BREAKOUT_MAX_BARS, HS_MAX_SHOULDER_PAIRS };\n',
+	'detect_triples.ts': '\nexport { MAX_BARS_FROM_EXTREMUM };\n',
+};
 
 /**
  * #242 の実装が入る前の `main`（PR #241 のマージ）。計測 2 のベースライン。
@@ -116,15 +143,14 @@ const TMP_DIR = mkdtempSync(join(tmpdir(), 'hs-shoulder-249-'));
  * `rev` の `tools/patterns/` を**ディレクトリごと**一時領域へ展開する
  * （`measure_double_triangle_243.ts` の同名関数と同じ流儀。PR #250 のレビュー反映版）。
  *
- * `exportInternals=true` のとき、`detect_hs.ts` の**末尾に** {@link INTERNAL_EXPORTS} を足す。
+ * {@link INTERNAL_EXPORTS} の対象ファイルには**末尾に `export { … }` を 1 行**足す。
  * 既存の宣言に名前を付け直すだけなので判定は不変で、0 章の検算がそれを毎ケース確かめる。
  *
  * @param rev リビジョン。`'worktree'` なら作業ツリーのファイルをそのまま写す
- * @param exportInternals 内部 API を export するか
  * @param requirePreGate `true` なら #242 の本番ゲートが入っていた時点で落とす
  * @returns 展開先ディレクトリの絶対パス
  */
-function materializePatternsDir(rev: string, exportInternals: boolean, requirePreGate: boolean): string {
+function materializePatternsDir(rev: string, requirePreGate: boolean): string {
 	const treeish = rev === 'worktree' ? 'HEAD' : rev;
 	let files: string[];
 	try {
@@ -147,7 +173,7 @@ function materializePatternsDir(rev: string, exportInternals: boolean, requirePr
 		throw new Error(`リビジョン '${rev}' の tools/patterns/ に .ts が 1 つも無い。`);
 	}
 
-	const dir = join(TMP_DIR, `patterns_${rev.replace(/[^a-z0-9]/gi, '')}_${exportInternals ? 'x' : 'p'}`);
+	const dir = join(TMP_DIR, `patterns_${rev.replace(/[^a-z0-9]/gi, '')}`);
 	mkdirSync(dir, { recursive: true });
 	// 拡張子 `.ts` のまま ESM として読ませるための最小マニフェスト（一時ディレクトリには親が無い）。
 	writeFileSync(join(dir, 'package.json'), '{ "type": "module" }\n');
@@ -193,23 +219,25 @@ function materializePatternsDir(rev: string, exportInternals: boolean, requirePr
 			.replace(/from '\.\.\/patterns\//g, "from './")
 			.replace(/from '\.\.\//g, `from '${ROOT}/tools/`);
 		// `from './` は書き換えない——展開先の中で解決させるのが本関数の目的。
-		writeFileSync(
-			join(dir, name),
-			exportInternals && name === 'detect_hs.ts' ? rewritten + INTERNAL_EXPORTS : rewritten,
-		);
+		writeFileSync(join(dir, name), rewritten + (INTERNAL_EXPORTS[name] ?? ''));
 	}
 	return dir;
 }
 
-async function loadHsInternals(rev: string, requirePreGate: boolean): Promise<HsInternals> {
-	const dir = materializePatternsDir(rev, true, requirePreGate);
-	return (await import(pathToFileURL(join(dir, 'detect_hs.ts')).href)) as unknown as HsInternals;
-}
-
-async function loadTripleDetector(rev: string, requirePreGate: boolean): Promise<Detector> {
-	const dir = materializePatternsDir(rev, false, requirePreGate);
-	const mod = (await import(pathToFileURL(join(dir, 'detect_triples.ts')).href)) as Record<string, Detector>;
-	return mod.detectTriples;
+/**
+ * 1 リビジョンぶんの検出器と閾値を、**同じ展開ディレクトリから**読む。
+ *
+ * 検出器と閾値（`HS_BREAKOUT_MAX_BARS` / `MAX_BARS_FROM_EXTREMUM` / forming の `maxBars`）を
+ * 別リビジョンから取ってはいけない。計測 2 の表は**ベースラインの検出器が出した候補**を
+ * 並べているので、上限を作業ツリーから取ると「上限張り付き」の判定と見出しの数字だけが
+ * 別リビジョンのものになる（PR #253 の CodeRabbit 指摘）。既定のベースラインでは両者とも
+ * 同値なので現在の出力は変わらないが、`--baseline-rev` に別の値を渡した瞬間に黙ってずれる。
+ */
+async function loadPatterns(rev: string, requirePreGate: boolean): Promise<Patterns> {
+	const dir = materializePatternsDir(rev, requirePreGate);
+	const hs = (await import(pathToFileURL(join(dir, 'detect_hs.ts')).href)) as unknown as HsInternals;
+	const triples = (await import(pathToFileURL(join(dir, 'detect_triples.ts')).href)) as unknown as TripleInternals;
+	return { hs, triples };
 }
 
 /** ベースラインと作業ツリーで実際に差があるファイル（0 章の検算に出す）。 */
@@ -806,14 +834,13 @@ async function main(): Promise<void> {
 	const revAt = argv.indexOf('--baseline-rev');
 	const baselineRev = revAt >= 0 ? argv[revAt + 1] : DEFAULT_BASELINE_REV;
 
-	const worktree = await loadHsInternals('worktree', false);
-	const baselineHs = await loadHsInternals(baselineRev, baselineRev !== 'worktree');
-	const baselineTriple = await loadTripleDetector(baselineRev, baselineRev !== 'worktree');
+	const now = await loadPatterns('worktree', false);
+	const base = await loadPatterns(baselineRev, baselineRev !== 'worktree');
+	const worktree = now.hs;
 
 	const corpora = await buildCorpus();
 	const lines: string[] = [];
 	let cases = 0;
-	let mismatches = 0;
 
 	lines.push('# 完成済み H&S の右肩の取り方と探索窓の実測（issue #249 Phase 1）', '');
 	lines.push(
@@ -827,7 +854,6 @@ async function main(): Promise<void> {
 	interface Payload {
 		baselineRev: string;
 		cases: number;
-		mismatches: number;
 		changedFiles: string[];
 		retake: RetakeRow[];
 		baselineHsBars: BarRow[];
@@ -837,7 +863,6 @@ async function main(): Promise<void> {
 	const payload: Payload = {
 		baselineRev,
 		cases: 0,
-		mismatches: 0,
 		changedFiles: changedPatternFiles(baselineRev),
 		retake: [],
 		baselineHsBars: [],
@@ -862,15 +887,24 @@ async function main(): Promise<void> {
 		for (const spec of specs) {
 			cases++;
 			// 0 章の検算: 展開版（export を足した版）が作業ツリーの本物と全キー一致すること。
+			// **数えるだけにせず、最初の 1 件で落とす**（PR #253 の CodeRabbit 指摘）。
+			// 食い違ったまま走らせると、以降の計測が「export を足したせいで変わった検出器」の
+			// 挙動を記述することになり、しかも Markdown / JSON は普通に出てしまう。
 			const dbgA: CandDebugEntry[] = [];
 			const dbgB: CandDebugEntry[] = [];
 			const a = JSON.stringify(worktree.detectHeadAndShoulders(buildCtx(spec, dbgA)));
 			const b = JSON.stringify(realDetectHs(buildCtx(spec, dbgB)));
-			if (a !== b) mismatches++;
+			if (a !== b) {
+				throw new Error(
+					`export を足した複製の detectHeadAndShoulders が本物と食い違った（${label} / ` +
+						`${spec.series.name} / ${spec.tf} / swingDepth=${sd(spec.swingDepth)} / opts=${JSON.stringify(spec.opts)}）。` +
+						'追記した export が判定を変えていないという前提が崩れているので、以降の計測は無効。',
+				);
+			}
 
 			retake.push(...collectRetakeRows(worktree, spec));
-			baseHs.push(...collectBarRows(baselineHs.detectHeadAndShoulders, spec, HS_TYPES));
-			baseTriple.push(...collectBarRows(baselineTriple, spec, TRIPLE_TYPES));
+			baseHs.push(...collectBarRows(base.hs.detectHeadAndShoulders, spec, HS_TYPES));
+			baseTriple.push(...collectBarRows(base.triples.detectTriples, spec, TRIPLE_TYPES));
 			afterHs.push(...collectBarRows(worktree.detectHeadAndShoulders, spec, HS_TYPES));
 		}
 		perCorpus.push({ label, n: specs.length, retake, baseHs, baseTriple, afterHs });
@@ -880,21 +914,30 @@ async function main(): Promise<void> {
 		payload.afterHsBars.push(...afterHs);
 	}
 	payload.cases = cases;
-	payload.mismatches = mismatches;
 
 	lines.push('## 0. ハーネスと検算', '');
 	lines.push('| 項目 | 値 |', '|---|---:|');
 	lines.push(`| ベースラインのリビジョン（計測 2） | \`${baselineRev}\` |`);
 	lines.push(`| ケース数 | ${cases} |`);
-	lines.push(`| **export を足した複製が本物と食い違ったケース** | **${mismatches}** |`);
-	lines.push(`| \`HS_BREAKOUT_MAX_BARS\`（作業ツリー） | ${worktree.HS_BREAKOUT_MAX_BARS} |`);
+	lines.push(
+		`| \`HS_BREAKOUT_MAX_BARS\`（作業ツリー / ベースライン） | ${worktree.HS_BREAKOUT_MAX_BARS} / ${base.hs.HS_BREAKOUT_MAX_BARS} |`,
+	);
+	lines.push(
+		`| \`MAX_BARS_FROM_EXTREMUM\`（作業ツリー / ベースライン） | ${now.triples.MAX_BARS_FROM_EXTREMUM} / ${base.triples.MAX_BARS_FROM_EXTREMUM} |`,
+	);
 	lines.push(`| \`HS_MAX_SHOULDER_PAIRS\`（作業ツリー） | ${worktree.HS_MAX_SHOULDER_PAIRS} |`);
 	lines.push('');
 	lines.push(
 		`ベースラインと作業ツリーで差があるファイル: ${payload.changedFiles.length === 0 ? '（なし）' : payload.changedFiles.map((f) => `\`${f}\``).join(' , ')}`,
 		'',
-		'窓の列挙（`enumerateHsWindows`）と `classifyPair` の突き合わせは**全ケースで実行**しており、',
-		'1 件でも食い違えばスクリプトが例外で落ちる（ここまで到達している時点で一致している）。',
+		'2 つの検算は**全ケースで実行**しており、1 件でも食い違えばスクリプトが例外で落ちる',
+		'（この表が出ている時点でどちらも一致している）。',
+		'',
+		'1. export を足した複製の `detectHeadAndShoulders` が作業ツリーの本物と JSON 全キー一致すること',
+		'2. 肩の組を分類する `classifyPair` の出力が本物の `enumerateHsWindows` の窓列と完全一致すること',
+		'',
+		'各表の上限値（`HS_BREAKOUT_MAX_BARS` / `MAX_BARS_FROM_EXTREMUM` / forming の `maxBars`）は',
+		'**その表の候補を出した検出器と同じリビジョン**から読む。計測 2 はベースライン、計測 3 は作業ツリー。',
 		'',
 	);
 
@@ -902,22 +945,32 @@ async function main(): Promise<void> {
 		lines.push(`## ${c.label}（${c.n} ケース）`, '');
 		lines.push('### 計測 1: 右肩を「ブレイク直前の同種ピボット」に取り直した候補の行方（#242 後）', '');
 		lines.push(...sectionRetake(c.retake));
+		// 上限はどれも**その表の候補を出した検出器と同じリビジョン**から読む（計測 2 はベースライン）。
 		lines.push('### 計測 2-a: #242 前に accepted だった完成済み H&S / 逆 H&S のバー数分布', '');
 		lines.push(
 			...sectionBarDist(
 				foldBarRows(c.baseHs),
-				worktree.HS_BREAKOUT_MAX_BARS,
-				(tf) => getHsFormingBarParams(tf).maxBars,
+				base.hs.HS_BREAKOUT_MAX_BARS,
+				(tf) => base.hs.getHsFormingBarParams(tf).maxBars,
 			),
 		);
-		lines.push('### 計測 2-b: 同じ表を triple（`MAX_BARS_FROM_EXTREMUM = 20`）で', '');
-		lines.push(...sectionBarDist(foldBarRows(c.baseTriple), 20, (tf) => getTripleFormingBarParams(tf).maxBars));
+		lines.push(
+			`### 計測 2-b: 同じ表を triple（\`MAX_BARS_FROM_EXTREMUM = ${base.triples.MAX_BARS_FROM_EXTREMUM}\`）で`,
+			'',
+		);
+		lines.push(
+			...sectionBarDist(
+				foldBarRows(c.baseTriple),
+				base.triples.MAX_BARS_FROM_EXTREMUM,
+				(tf) => base.triples.getTripleFormingBarParams(tf).maxBars,
+			),
+		);
 		lines.push('### 計測 3: #242 後に accepted で残っている完成済み H&S / 逆 H&S', '');
 		lines.push(
 			...sectionBarDist(
 				foldBarRows(c.afterHs),
 				worktree.HS_BREAKOUT_MAX_BARS,
-				(tf) => getHsFormingBarParams(tf).maxBars,
+				(tf) => worktree.getHsFormingBarParams(tf).maxBars,
 			),
 		);
 	}
