@@ -606,7 +606,7 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 逆 H&S は右肩 → ブレイクが短く（#242 前の同コーパスで中央値 8 本 / max 9 本）、この組み合わせの
 影響を受けていない。また**完成済み経路にはパターン全長の上限が無い**（形成中経路には
 `getHsFormingBarParams(tf).maxBars` がある）。上限の追加は #249 案 C として保留し、
-#244（時間足別テーブル）で再検討する。
+issue #244（時間足別テーブル）で再検討する。
 
 ### `status` に `expired` がある
 
