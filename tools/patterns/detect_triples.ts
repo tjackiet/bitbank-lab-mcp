@@ -7,7 +7,7 @@ import { MIN_CONFIDENCE } from '../patterns/config.js';
 import { patternBarRange } from './bar-thresholds.js';
 import { finalizeConf, periodScoreBars } from './helpers.js';
 import { clamp01, relDev } from './regression.js';
-import { applyReversalGate, buildStructureGate } from './reversal-gate.js';
+import { applyPostBreakoutGates, applyReversalGate, buildStructureGate } from './reversal-gate.js';
 import { averageDefinedAxes, breakoutQualityScore, retracementScore } from './scoring.js';
 import {
 	levelSpreadDetailsFrom,
@@ -387,6 +387,25 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 			continue;
 		}
 
+		// 最終構成点 → ブレイクの経路検証 と 山（谷）ゾーン再進入の横展開（issue #242）。
+		// ブレイクが確定している経路でだけ掛ける——`isCompleted` でないと「最終構成点 →
+		// ブレイク」の経路が定義できないうえ、形成中の最終構成点は暫定値になる。
+		// `first` / `mid` の取り方は上の `applyReversalGate` と同じ（構成点列の先頭 2 点）。
+		const postGate = isCompleted
+			? applyPostBreakoutGates({
+					candles,
+					pivots,
+					side: 'top',
+					first: a,
+					mid: v1,
+					last: c,
+					breakoutIdx,
+					type: 'triple_top',
+					indices: [a.idx, b.idx, c.idx],
+					debugCandidates: ctx.debugCandidates,
+				})
+			: null;
+
 		const neckline = [
 			{ x: a.idx, y: nlAvg },
 			{ x: isCompleted ? breakoutIdx : c.idx, y: nlAvg },
@@ -447,6 +466,8 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 			range: { start, end: rangeEnd },
 			structureRange: { start, end: structureEnd },
 			...completionFields,
+			// #242 のゲートが当たったら `completed` を上書きして `invalid` にする。
+			...postGate,
 			// ネックライン定義点 v1 / v2 を主構成点の間に挟む（issue #224 症状 3）。並びは構造図に渡す
 			// 5 点と同じ。主構成点は位置ではなく `kind`（triple_top は H）で取る規約なので、
 			// 消費者は `mainPointIdxs()` と同じく kind で絞ること。
@@ -458,17 +479,20 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 			targetMethod: 'neckline_projection' as const,
 			...(diagram ? { structureDiagram: diagram } : {}),
 		});
-		pcand({
-			type: 'triple_top',
-			accepted: true,
-			idxs: isCompleted ? [a.idx, b.idx, c.idx, breakoutIdx] : [a.idx, b.idx, c.idx],
-			pts: [
-				{ role: 'peak1', idx: a.idx, price: a.price },
-				{ role: 'peak2', idx: b.idx, price: b.price },
-				{ role: 'peak3', idx: c.idx, price: c.price },
-				...(isCompleted ? [{ role: 'breakout', idx: breakoutIdx, price: breakoutPrice }] : []),
-			],
-		});
+		// #242 のゲートで `invalid` になった候補に `accepted: true` を積まない
+		// （同じ構造に成功と棄却の 2 行が並ぶと `view=debug` が読めなくなる）。
+		if (!postGate)
+			pcand({
+				type: 'triple_top',
+				accepted: true,
+				idxs: isCompleted ? [a.idx, b.idx, c.idx, breakoutIdx] : [a.idx, b.idx, c.idx],
+				pts: [
+					{ role: 'peak1', idx: a.idx, price: a.price },
+					{ role: 'peak2', idx: b.idx, price: b.price },
+					{ role: 'peak3', idx: c.idx, price: c.price },
+					...(isCompleted ? [{ role: 'breakout', idx: breakoutIdx, price: breakoutPrice }] : []),
+				],
+			});
 	}
 
 	return patterns;
@@ -641,6 +665,25 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 			continue;
 		}
 
+		// 最終構成点 → ブレイクの経路検証 と 山（谷）ゾーン再進入の横展開（issue #242）。
+		// ブレイクが確定している経路でだけ掛ける——`isCompleted` でないと「最終構成点 →
+		// ブレイク」の経路が定義できないうえ、形成中の最終構成点は暫定値になる。
+		// `first` / `mid` の取り方は上の `applyReversalGate` と同じ（構成点列の先頭 2 点）。
+		const postGate = isCompleted
+			? applyPostBreakoutGates({
+					candles,
+					pivots,
+					side: 'bottom',
+					first: a,
+					mid: p1,
+					last: c,
+					breakoutIdx,
+					type: 'triple_bottom',
+					indices: [a.idx, b.idx, c.idx],
+					debugCandidates: ctx.debugCandidates,
+				})
+			: null;
+
 		const neckline = [
 			{ x: a.idx, y: nlAvg },
 			{ x: isCompleted ? breakoutIdx : c.idx, y: nlAvg },
@@ -701,6 +744,8 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 			range: { start, end: rangeEnd },
 			structureRange: { start, end: structureEnd },
 			...completionFields,
+			// #242 のゲートが当たったら `completed` を上書きして `invalid` にする。
+			...postGate,
 			// ネックライン定義点 p1 / p2 を主構成点の間に挟む（issue #224 症状 3）。並びは構造図に渡す
 			// 5 点と同じ。主構成点は位置ではなく `kind`（triple_bottom は L）で取る規約なので、
 			// 消費者は `mainPointIdxs()` と同じく kind で絞ること。
@@ -712,17 +757,20 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 			targetMethod: 'neckline_projection' as const,
 			...(diagram ? { structureDiagram: diagram } : {}),
 		});
-		pcand({
-			type: 'triple_bottom',
-			accepted: true,
-			idxs: isCompleted ? [a.idx, b.idx, c.idx, breakoutIdx] : [a.idx, b.idx, c.idx],
-			pts: [
-				{ role: 'valley1', idx: a.idx, price: a.price },
-				{ role: 'valley2', idx: b.idx, price: b.price },
-				{ role: 'valley3', idx: c.idx, price: c.price },
-				...(isCompleted ? [{ role: 'breakout', idx: breakoutIdx, price: breakoutPrice }] : []),
-			],
-		});
+		// #242 のゲートで `invalid` になった候補に `accepted: true` を積まない
+		// （同じ構造に成功と棄却の 2 行が並ぶと `view=debug` が読めなくなる）。
+		if (!postGate)
+			pcand({
+				type: 'triple_bottom',
+				accepted: true,
+				idxs: isCompleted ? [a.idx, b.idx, c.idx, breakoutIdx] : [a.idx, b.idx, c.idx],
+				pts: [
+					{ role: 'valley1', idx: a.idx, price: a.price },
+					{ role: 'valley2', idx: b.idx, price: b.price },
+					{ role: 'valley3', idx: c.idx, price: c.price },
+					...(isCompleted ? [{ role: 'breakout', idx: breakoutIdx, price: breakoutPrice }] : []),
+				],
+			});
 	}
 
 	return patterns;
@@ -738,6 +786,17 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 	const tolTriple = tolerancePct * factor;
 	const nearTriple = (x: number, y: number) => Math.abs(x - y) / Math.max(1, Math.max(x, y)) <= tolTriple;
 	const highsOnly = pivots.filter((p) => p.kind === 'H');
+
+	/**
+	 * 終端 status（`invalid`）が付いた候補の置き場（issue #242 のレビュー指摘。double と同じ）。
+	 *
+	 * relaxed は**最初に組み上がった候補を返してその場で走査を終える**ので、候補が重なる列で
+	 * 先頭の候補が `invalid` になると**後ろにある成立した候補まで一緒に失われる**。relaxed は
+	 * 同 type の strict が 0 件のときだけ走るので、そのとき検出結果は 0 件になる。
+	 * 終端候補はここに退避して走査を続け、成立した候補が無かったときだけ返す。
+	 * **1 件だけ返す契約は変えない**（`??=` なので退避されるのは最初の 1 件）。
+	 */
+	let terminalFallback: DeduplicablePattern | null = null;
 
 	for (let i = 0; i <= highsOnly.length - 3; i++) {
 		const a = highsOnly[i],
@@ -889,6 +948,25 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 			continue; // 後続候補で confidence が足りるものを探す
 		}
 
+		// 最終構成点 → ブレイクの経路検証 と 山（谷）ゾーン再進入の横展開（issue #242）。
+		// ブレイクが確定している経路でだけ掛ける——`isCompleted` でないと「最終構成点 →
+		// ブレイク」の経路が定義できないうえ、形成中の最終構成点は暫定値になる。
+		// `first` / `mid` の取り方は上の `applyReversalGate` と同じ（構成点列の先頭 2 点）。
+		const postGate = isCompleted
+			? applyPostBreakoutGates({
+					candles,
+					pivots,
+					side: 'top',
+					first: a,
+					mid: v1,
+					last: c,
+					breakoutIdx,
+					type: 'triple_top',
+					indices: [a.idx, b.idx, c.idx],
+					debugCandidates: ctx.debugCandidates,
+				})
+			: null;
+
 		const neckline = [
 			{ x: a.idx, y: nlAvg },
 			{ x: isCompleted ? breakoutIdx : c.idx, y: nlAvg },
@@ -941,13 +1019,15 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 					// LLM が「進捗 0%」と読み違える。
 					...targetReachFields(omittedTargetReach('not_broken_out')),
 				};
-		return {
+		const entry: DeduplicablePattern = {
 			type: 'triple_top',
 			confidence,
 			scoreComponents,
 			range: { start, end: rangeEnd },
 			structureRange: { start, end: structureEnd },
 			...completionFields,
+			// #242 のゲートが当たったら `completed` を上書きして `invalid` にする。
+			...postGate,
 			// ネックライン定義点 v1 / v2 を主構成点の間に挟む（issue #224 症状 3）。並びは構造図に渡す
 			// 5 点と同じ。主構成点は位置ではなく `kind`（triple_top は H）で取る規約なので、
 			// 消費者は `mainPointIdxs()` と同じく kind で絞ること。
@@ -960,8 +1040,13 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 			...(diagram ? { structureDiagram: diagram } : {}),
 			_fallback: `relaxed_triple_x${factor}`,
 		};
+		if (entry.status === 'invalid') {
+			terminalFallback ??= entry;
+			continue;
+		}
+		return entry;
 	}
-	return null;
+	return terminalFallback;
 }
 
 /**
@@ -974,6 +1059,17 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 	const tolTriple = tolerancePct * factor;
 	const nearTriple = (x: number, y: number) => Math.abs(x - y) / Math.max(1, Math.max(x, y)) <= tolTriple;
 	const lowsOnly = pivots.filter((p) => p.kind === 'L');
+
+	/**
+	 * 終端 status（`invalid`）が付いた候補の置き場（issue #242 のレビュー指摘。double と同じ）。
+	 *
+	 * relaxed は**最初に組み上がった候補を返してその場で走査を終える**ので、候補が重なる列で
+	 * 先頭の候補が `invalid` になると**後ろにある成立した候補まで一緒に失われる**。relaxed は
+	 * 同 type の strict が 0 件のときだけ走るので、そのとき検出結果は 0 件になる。
+	 * 終端候補はここに退避して走査を続け、成立した候補が無かったときだけ返す。
+	 * **1 件だけ返す契約は変えない**（`??=` なので退避されるのは最初の 1 件）。
+	 */
+	let terminalFallback: DeduplicablePattern | null = null;
 
 	for (let i = 0; i <= lowsOnly.length - 3; i++) {
 		const a = lowsOnly[i],
@@ -1115,6 +1211,25 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 			continue; // 後続候補で confidence が足りるものを探す
 		}
 
+		// 最終構成点 → ブレイクの経路検証 と 山（谷）ゾーン再進入の横展開（issue #242）。
+		// ブレイクが確定している経路でだけ掛ける——`isCompleted` でないと「最終構成点 →
+		// ブレイク」の経路が定義できないうえ、形成中の最終構成点は暫定値になる。
+		// `first` / `mid` の取り方は上の `applyReversalGate` と同じ（構成点列の先頭 2 点）。
+		const postGate = isCompleted
+			? applyPostBreakoutGates({
+					candles,
+					pivots,
+					side: 'bottom',
+					first: a,
+					mid: p1,
+					last: c,
+					breakoutIdx,
+					type: 'triple_bottom',
+					indices: [a.idx, b.idx, c.idx],
+					debugCandidates: ctx.debugCandidates,
+				})
+			: null;
+
 		const neckline = [
 			{ x: a.idx, y: nlAvg },
 			{ x: isCompleted ? breakoutIdx : c.idx, y: nlAvg },
@@ -1167,13 +1282,15 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 					// LLM が「進捗 0%」と読み違える。
 					...targetReachFields(omittedTargetReach('not_broken_out')),
 				};
-		return {
+		const entry: DeduplicablePattern = {
 			type: 'triple_bottom',
 			confidence,
 			scoreComponents,
 			range: { start, end: rangeEnd },
 			structureRange: { start, end: structureEnd },
 			...completionFields,
+			// #242 のゲートが当たったら `completed` を上書きして `invalid` にする。
+			...postGate,
 			// ネックライン定義点 p1 / p2 を主構成点の間に挟む（issue #224 症状 3）。並びは構造図に渡す
 			// 5 点と同じ。主構成点は位置ではなく `kind`（triple_bottom は L）で取る規約なので、
 			// 消費者は `mainPointIdxs()` と同じく kind で絞ること。
@@ -1186,8 +1303,13 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 			...(diagram ? { structureDiagram: diagram } : {}),
 			_fallback: `relaxed_triple_x${factor}`,
 		};
+		if (entry.status === 'invalid') {
+			terminalFallback ??= entry;
+			continue;
+		}
+		return entry;
 	}
-	return null;
+	return terminalFallback;
 }
 
 // ── Helper: 形成中 Triple Top ──

@@ -72,6 +72,43 @@ function buildNoisyCandles(): Candle[] {
 }
 
 /**
+ * **完成済み strict H&S を 1 件だけ出す価格列**（#242 で追加）。
+ *
+ * `buildNoisyCandles` が担っていた「H&S の 6 軸 `scoreComponents` を踏む」役割を引き取る。
+ * ノイズ列の H&S は #242 の再進入チェック（右肩の直後に肩ゾーンへ戻る）で `invalid` になり、
+ * `globalDedup` が同じ 5 点の形成中 H&S を勝たせるため、6 軸が `data.patterns` に出なくなった。
+ *
+ * 設計（`swingDepth: 3` を明示。1day のオート値 6 では 5 点が立たない長さのため）:
+ *
+ * | 役割 | idx | 終値 |
+ * |---|---:|---:|
+ * | 先行安値（構造ゲートの起点） | 3 | 84 |
+ * | 左肩 p0 | 7 | 120 |
+ * | 谷1 p1 | 11 | 100 |
+ * | 頭 p2 | 15 | 140 |
+ * | 谷2 p3 | 19 | 100 |
+ * | 右肩 p4 | 23 | 120 |
+ * | ネックライン下抜け | 26 | 97 |
+ *
+ * 右肩からブレイクまでは単調に落としてある——間にピボットを作らず（#242 の経路ゲート）、
+ * 肩ゾーン（上限 123 − (123 − 97) × 0.25 = 116.5）にも戻らない。
+ */
+function buildCompletedHsCandles(): Candle[] {
+	const closes = [
+		90, 88, 86, 84, 92, 100, 110, 120, 112, 105, 101, 100, 108, 120, 132, 140, 130, 115, 105, 100, 106, 113, 118, 120,
+		112, 104, 97, 93, 90, 88, 86, 84,
+	];
+	return closes.map((close, i) => ({
+		isoTime: new Date(Date.UTC(2026, 0, 1 + i)).toISOString(),
+		open: close,
+		high: close + 3,
+		low: close - 3,
+		close,
+		volume: 100,
+	}));
+}
+
+/**
  * **relaxed フォールバック経路（`patterns[]._fallback`）を踏ませるための価格列**（#189）。
  *
  * relaxed は「strict がその種別を 1 件も見つけられなかったとき」だけ走る
@@ -259,21 +296,39 @@ function dataOf(result: Record<string, unknown>): Record<string, unknown> {
  *
  * `KNOWN_DATA_STRIPS` に挙げたキーは `expectNoStrippedKeys` 側が
  * 「allowlist にあるのに strip されていない」で落とすため、こちらでは重ねて要求しない
- * ——ただし `_method` / `breakout` は両フィクスチャで踏めていることを意図しているので、
- * どちらのフィクスチャが欠けたのかが失敗メッセージで分かるよう明示する。
+ * ——ただし `breakout` は全フィクスチャ、`_method`（形成中経路のみが付ける）は
+ * `noisy` / `relaxed triple` の 2 つで踏めていることを意図しているので、
+ * どのフィクスチャが欠けたのかが失敗メッセージで分かるよう明示する。
  */
 const DATA_PARITY_FIXTURES = [
 	{
 		label: 'noisy（strict 経路中心。relaxed は踏まない）',
 		build: buildNoisyCandles,
+		// **#242 以降 `includeInvalid: true` が要る。** 本フィクスチャで `patterns[].breakout` を
+		// 持つパターンは `double_top`（83-92-98）だけで、これは #126 G5 以来
+		// `status: 'invalid'`（`re_entered_trough_zone`）なので既定では `data.patterns` に出ない。
+		// 以前は完成済み `head_and_shoulders`（23-31-44-51-59）が同じキーを埋めていたが、
+		// #242 で再進入チェックが H&S へ横展開され、右肩 idx 59 の 2 本後 idx 61 で肩ゾーンへ
+		// 戻るこの構造も `invalid` になった（`globalDedup` は同じ 5 点の形成中 H&S を勝たせる）。
+		// **本テストが見たいのは「載っているキーが parse で strip されないか」**であって検出の
+		// 是非ではないので、フィクスチャの価格列ではなくオプションで経路を戻す。
+		opts: { includeInvalid: true },
+		requiredKeys: ['patterns[].confidence', 'patterns[].breakout.idx', 'patterns[]._method'],
+	},
+	{
+		label: '完成済み H&S（strict。6 軸の scoreComponents を踏む唯一の入力）',
+		build: buildCompletedHsCandles,
+		opts: { swingDepth: 3 },
+		// `patterns[]._method` は**そもそも載らない**——完成済み経路は付けない（形成中の 6 経路だけが
+		// 付ける）ので、要求もしないし allowlist からも外す。`KNOWN_DATA_STRIPS` は
+		// 「挙げたのに strip されていない」でも落ちる（allowlist の腐敗を検出するため）。
+		knownStrips: KNOWN_DATA_STRIPS.filter((k) => k !== 'patterns[]._method'),
 		requiredKeys: [
 			'patterns[].confidence',
 			'patterns[].breakout.idx',
-			'patterns[]._method',
 			// #204 Phase 2 の本体。H&S の整合度の内訳で、**`headProminence` / `timeSymmetry` は
 			// H&S にしか付かない**（triple の `levelMargin` と同じ穴。踏むフィクスチャで別途
-			// 固定しないと Zod の宣言漏れを検出できない）。本フィクスチャは strict H&S が
-			// 6 軸すべてを埋める唯一の入力なので、ここで一括して要求する。
+			// 固定しないと Zod の宣言漏れを検出できない）。
 			'patterns[].scoreComponents.symmetry',
 			'patterns[].scoreComponents.headProminence',
 			'patterns[].scoreComponents.timeSymmetry',
@@ -333,10 +388,15 @@ describe('detect_patterns: meta に載せたキーが出力スキーマで strip
 		label,
 		build,
 		requiredKeys,
+		opts,
+		knownStrips,
+	}: (typeof DATA_PARITY_FIXTURES)[number] & {
+		opts?: Record<string, unknown>;
+		knownStrips?: readonly string[];
 	}) => {
 		// `meta` と同じ欠陥は `data` 側でも起こりうる（`data.patterns[]` のフィールドは 40 以上ある）。
 		// 同じヘルパをそのまま当てられるので、こちらも固定しておく。
-		const { input, output } = await runAndCapture({}, build());
+		const { input, output } = await runAndCapture({ ...opts }, build());
 
 		// フィクスチャが空振りしていないことを先に固定する（`meta` 側と同じ理由）。
 		// **検証したい経路を踏めていないフィクスチャは、宣言漏れがあっても黙って通る。**
@@ -345,7 +405,12 @@ describe('detect_patterns: meta に載せたキーが出力スキーマで strip
 			expect(before.has(key), `${label}: ${key} を踏んでいない（フィクスチャが経路に届いていない）`).toBe(true);
 		}
 
-		expectNoStrippedKeys(dataOf(input), dataOf(output), `detect_patterns data（${label}）`, KNOWN_DATA_STRIPS);
+		expectNoStrippedKeys(
+			dataOf(input),
+			dataOf(output),
+			`detect_patterns data（${label}）`,
+			knownStrips ?? KNOWN_DATA_STRIPS,
+		);
 	});
 
 	it('relaxed 経路の provenance（_fallback）が parse 後も残る（#189）', async () => {

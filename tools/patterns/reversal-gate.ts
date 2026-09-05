@@ -27,7 +27,13 @@
  * ネックライン水準（`necklinePrice`）は **検出器がブレイク判定に使うのと同じ値**を呼び出し側が
  * 渡す（`ReversalStructureInput.necklinePrice` の docstring）。
  */
-import { type ReversalSide, type ReversalStructureResult, validateReversalStructure } from './structural.js';
+import {
+	detectPivotBeforeBreakout,
+	detectTroughZoneReentry,
+	type ReversalSide,
+	type ReversalStructureResult,
+	validateReversalStructure,
+} from './structural.js';
 import type { Pivot } from './swing.js';
 import type { CandDebugEntry, CandleData, PatternStructureGate } from './types.js';
 
@@ -90,4 +96,110 @@ export function buildStructureGate(gate: ReversalStructureResult): PatternStruct
 	}
 	if (gate.necklineCrossIdx !== undefined) out.necklineCrossIdx = gate.necklineCrossIdx;
 	return Object.keys(out).length > 0 ? out : undefined;
+}
+
+export interface PostBreakoutGateInput {
+	candles: CandleData[];
+	pivots: ReadonlyArray<Pivot>;
+	side: ReversalSide;
+	/**
+	 * 構成点列の先頭 2 点。**本ファイル冒頭の注記と同じ取り方**
+	 * （triple なら 谷1 / 山1 と最初の中間構成点、H&S なら 左肩 と 谷1）。
+	 * {@link detectTroughZoneReentry} のゾーン水準を張るのに使う。
+	 */
+	first: Pivot;
+	mid: Pivot;
+	/** 最終構成点（triple なら山3 / 谷3、H&S なら右肩）。ここからブレイクまでの経路を見る */
+	last: Pivot;
+	/** ネックライン突破バーの idx。**ブレイクが確定している経路でだけ呼ぶこと** */
+	breakoutIdx: number;
+	/** `view=debug` の candidate に載せるパターン種別 */
+	type: string;
+	/** 同 `indices`。各経路の既存の棄却 candidate と同じ並びを渡す */
+	indices: number[];
+	debugCandidates: CandDebugEntry[];
+}
+
+/** 終端 status（`PatternEntry` に `...` で展開する形）。 */
+export interface PostBreakoutGateResult {
+	status: 'invalid';
+	invalidReason: string;
+}
+
+/**
+ * **最終構成点の確定後、ネックライン突破までの間にパターンが崩れていないか**を見る 2 つの検査を
+ * まとめて適用する（issue #242）。崩れていれば `view=debug` の候補を積み、終端 status を返す。
+ *
+ * `detect_doubles.ts` は #126 G5 以降この 2 つを（前者だけ）ローカルに持っていたが、
+ * **triple / H&S には 1 つも無かった**——`reversal-gate.ts` が #131 → #138 で構造ゲートを
+ * 横展開したときに、再進入チェックが横展開から漏れていた（issue #242 の原因分析）。
+ * 本関数はその回収で、判定ロジックは持たない（`structural.ts` の純粋関数を呼ぶだけ）。
+ *
+ * ## 適用順（double と揃えてある）
+ *
+ * 1. {@link detectTroughZoneReentry} — 最終構成点の後、パターン高さの一定比率まで**終値が**戻ったか（`re_entered_trough_zone`）
+ * 2. {@link detectPivotBeforeBreakout} — 最終構成点とブレイク足の**間に同種のピボット**が
+ *    あるか（`peak_after_last_pivot` / `trough_after_last_pivot`）
+ *
+ * **2 つは独立した検査で、片方では両方の実例を塞げない**（理由は
+ * {@link detectPivotBeforeBreakout} の docstring）。順序を 1 → 2 にしてあるのは
+ * `detect_doubles.ts` の既存の並び（`checkPostPivotInvalidation` が先）に合わせたもので、
+ * **どちらも当たる候補には先に来た方の理由コードが付く**。
+ *
+ * ## 呼び出し位置
+ *
+ * 各経路の「**既存の棄却検査をすべて通過し、ブレイクが確定した直後**」。
+ * {@link applyReversalGate} と同じ原則（固有の理由コードを持つ候補の `reason` を横取りしない）で、
+ * 最後に置けば「これまで accepted だった候補だけを落とす」ことが位置から保証される。
+ *
+ * **ブレイクが確定していない経路（forming / `near_completion`）では呼ばないこと。**
+ * 「最終構成点 → ブレイクの経路」が定義できないうえ、形成中の最終構成点は暫定値なので
+ * hard reject の材料にしない。
+ *
+ * ## `status: 'invalid'` で出す。候補にも理由を残す
+ *
+ * `re_entered_trough_zone`（double の既存の扱い）に揃えて `status: 'invalid'` +
+ * `invalidReason` を返す。**加えて `view=debug` の候補にも積む**——既定
+ * （`includeInvalid: false`）では `invalid` のエントリが丸ごと消えるため、候補に残さないと
+ * 「なぜ消えたか」が LLM にも利用者にも届かない。
+ */
+export function applyPostBreakoutGates(input: PostBreakoutGateInput): PostBreakoutGateResult | null {
+	const { candles, pivots, side, first, mid, last, breakoutIdx, type, indices, debugCandidates } = input;
+
+	const reentry = detectTroughZoneReentry({ candles, first, mid, second: last, untilIdx: breakoutIdx - 1, side });
+	if (reentry.reentered) {
+		debugCandidates.push({
+			type,
+			accepted: false,
+			reason: 're_entered_trough_zone',
+			indices,
+			details: { side, lastPivotIdx: last.idx, breakoutIdx, zoneLevel: reentry.level, reenteredIdx: reentry.idx },
+		});
+		return { status: 'invalid', invalidReason: 're_entered_trough_zone' };
+	}
+
+	const path = detectPivotBeforeBreakout({ pivots, lastPivotIdx: last.idx, breakoutIdx, side });
+	if (path.found && path.reason) {
+		debugCandidates.push({
+			type,
+			accepted: false,
+			reason: path.reason,
+			indices,
+			details: {
+				side,
+				lastPivotIdx: last.idx,
+				breakoutIdx,
+				...(path.pivot
+					? {
+							offenderIdx: path.pivot.idx,
+							offenderPrice: path.pivot.price,
+							offenderExtremePrice: path.pivot.extremePrice,
+						}
+					: {}),
+			},
+		});
+		return { status: 'invalid', invalidReason: path.reason };
+	}
+
+	return null;
 }
