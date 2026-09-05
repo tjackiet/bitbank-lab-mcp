@@ -116,7 +116,10 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 				'`swingDepth=7` は 1hour では 3、1day では 6 として実行される。' +
 				'指定した値をそのまま効かせたいなら 7 以外を渡すこと（6 や 8 はそのまま通る）。' +
 				'**深くしたい / 浅くしたいときは上の時間軸オート値と比べて選ぶ**' +
-				'（例: 1hour の auto は 3 なので、7 を渡すのは「深くする」ではなく「auto に戻す」）。',
+				'（例: 1hour の auto は 3 なので、7 を渡すのは「深くする」ではなく「auto に戻す」）。\n' +
+				'**#242 の経路ゲート（peak_after_last_pivot / trough_after_last_pivot）と再進入チェックも' +
+				'同じ swingDepth のピボット列で判定するため、深さを増やすと発火しにくくなる**' +
+				'（同じ値動きで swingDepth=3 では invalid、6 では完成済みになりうる。issue #251）。',
 		),
 	tolerancePct: z
 		.number()

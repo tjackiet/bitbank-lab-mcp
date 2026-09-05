@@ -16,6 +16,9 @@
  *    `triangle_ascending`（`status: invalid`）だけが残ること
  * 6. relaxed 経路が、経路ゲートで `invalid` になった候補で**走査を打ち切らない**こと
  *    （`H-L-H-L-H` で先頭の候補が落ちても、後ろの成立した候補を返す）
+ * 7. **ゲートの判定が `swingDepth` に依存すること**——同じ構成点が `swingDepth: 3` では
+ *    `invalid`、`6` では完成済みになる（issue #251 案 3。**仕様として固定**しており、
+ *    ゲートを深さ非依存に変える PR はこの期待値を意図的に更新すること）
  *
  * **既定（`includeInvalid: false`）では `data.patterns` から消える**ので、消えた理由は
  * `view=debug` の候補（`reason: 'peak_after_last_pivot'`）に残す。`re_entered_trough_zone` は
@@ -291,6 +294,61 @@ describe('起票時のライブ実例そのもの（issue #242・実データ D 
 		const { patterns, candidates } = await liveWindow({ includeInvalid: true });
 		expect(patterns.every((p) => p.invalidReason !== 're_entered_trough_zone')).toBe(true);
 		expect(candidates.every((c) => c.reason !== 're_entered_trough_zone')).toBe(true);
+	});
+
+	describe('経路ゲートの判定は swingDepth に依存する（issue #251 案 3・仕様として固定）', () => {
+		/**
+		 * **この describe は「深さ依存」という事実そのものを仕様として固定している（issue #251 案 3）。**
+		 * ゲートを深さ非依存に変える PR（例: `detectPivotBeforeBreakout` を足の高安ベースへ書き換える）は、
+		 * ここの期待値を**意図的に更新すること**。黙って通ることはない。
+		 *
+		 * 同じ構成点（`double_top` 41-46-50 = 実データ D の 329-334-338）で、
+		 *
+		 * - `swingDepth: 3`（1hour の時間軸オート値）: 経路上の **H55**（実データ D の idx 343 /
+		 *   終値 12,711,037 / 高安 12,731,234）がピボットになるので
+		 *   `peak_after_last_pivot` で `invalid`（上の既定パラメータのケースがこれ）
+		 * - `swingDepth: 6`: 同じ足が**極値にならない**（深さ 6 の窓 idx 49〜61 には
+		 *   `high[50] = 12,800,000` / `high[49] = 12,750,000` があり、いずれも 12,731,234 より上）。
+		 *   ピボット列から H55 が消えるためゲートは発火せず、完成済みのまま残る
+		 *
+		 * 経路ゲートはピボット列を入力に取る純粋関数で、そのピボット列は `swingDepth` の関数
+		 * （#242 の「閾値を持たない」設計の帰結）。**足の高安を直接見る実装に変えると
+		 * 深さ 6 でも H55 の戻しが見えるので、下の `completed` 側の期待値が落ちる。**
+		 */
+		it('swingDepth: 3 では peak_after_last_pivot で invalid（深さ依存の対照）', async () => {
+			const { patterns } = await liveWindow({ includeInvalid: true, swingDepth: 3 });
+			const doubles = patterns.filter((p) => p.type === 'double_top');
+			expect(doubles).toHaveLength(1);
+			expect(doubles[0]).toMatchObject({ status: 'invalid', invalidReason: 'peak_after_last_pivot' });
+			expect(mainIdxs(doubles[0])).toEqual([41, 46, 50]);
+		});
+
+		it('swingDepth: 6 では同じ構成点の double_top が完成済みで accepted のまま残る', async () => {
+			const { patterns } = await liveWindow({ swingDepth: 6 });
+			const doubles = patterns.filter((p) => p.type === 'double_top');
+			expect(doubles).toHaveLength(1);
+			expect(mainIdxs(doubles[0])).toEqual([41, 46, 50]);
+			// double の完成済みは `status` を持たない（`invalid` / `forming` のときだけ付く）。
+			// 既定の `includeInvalid: false` で出ていること自体が accepted の証拠。
+			expect(doubles[0].status).toBeUndefined();
+			expect(doubles[0].invalidReason).toBeUndefined();
+			expect(doubles[0].confirmation).toMatchObject({ type: 'neckline_breakout', idx: 56 });
+		});
+
+		it('swingDepth: 6 では debug の swings に idx 55 の H が無い（深さ 6 で極値にならない事実）', async () => {
+			const { swings } = await liveWindow({ includeInvalid: true, includeForming: true, swingDepth: 6 });
+			const around = swings
+				.filter((s) => Number(s.idx) >= 41 && Number(s.idx) <= 58)
+				.map((s) => `${s.kind}${s.idx}@${s.price}`);
+			// swingDepth: 3 の同じ範囲は `H41 / L46 / H50 / H55 / L58`（上のケース）。H55 だけが落ちる。
+			expect(around).toEqual(['H41@12718980', 'L46@12617594', 'H50@12639245', 'L58@12343265']);
+			expect(swings.some((s) => Number(s.idx) === 55)).toBe(false);
+		});
+
+		it('swingDepth: 6 では peak_after_last_pivot の候補が 1 件も出ない', async () => {
+			const { candidates } = await liveWindow({ swingDepth: 6 });
+			expect(candidates.every((c) => c.reason !== 'peak_after_last_pivot')).toBe(true);
+		});
 	});
 });
 
