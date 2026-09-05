@@ -133,6 +133,21 @@ function materializePatternsDir(rev: string): string {
 	mkdirSync(dir, { recursive: true });
 	writeFileSync(join(dir, 'package.json'), '{ "type": "module" }\n');
 
+	// `git ls-tree -r` は再帰なので、将来 `tools/patterns/` にサブディレクトリができると
+	// ネストしたパスが返る。**そのときは書き込む前に落とす**（PR #250 のレビュー指摘）。
+	// 親ディレクトリを掘って書き込みだけ通すのでは不十分——下の import 書き換え
+	// （`../` → `tools/`、`../../` → リポジトリルート）は**このディレクトリがフラットである
+	// ことを前提**にしており、ネストしたファイルの `../` は `tools/patterns/` 自身を指すので
+	// 誤った解決になる。書き込みが通ったぶん、壊れ方が「意味不明な import エラー」に化ける。
+	const nested = files.find((p) => p.slice('tools/patterns/'.length).includes('/'));
+	if (nested !== undefined) {
+		throw new Error(
+			`ベースライン '${rev}' の tools/patterns/ にサブディレクトリがある（${nested}）。` +
+				'本関数の import 書き換えはこのディレクトリがフラットである前提なので、' +
+				'そのままでは相対パスの解決を誤る。ネストを導入したなら書き換えを深さ対応にすること。',
+		);
+	}
+
 	for (const path of files) {
 		const name = path.slice('tools/patterns/'.length);
 		const src = execFileSync('git', ['show', `${rev}:${path}`], {
@@ -827,10 +842,17 @@ function sectionCdOverlap(results: CorpusResult[]): string {
 		`| 実データ C の共存構造 | ${c.structures.length} |`,
 		`| 実データ D の共存構造 | ${d.structures.length} |`,
 	];
+	// **表の件数と下の一覧は同じ配列から出す**（PR #250 のレビュー指摘）。
+	// 「C にだけ出る」を `c.structures.length - matched.length` で引き算すると、複数の D 構造が
+	// 同じ C 構造に写った場合に `matched`（D 側の件数）が C 側の一致数を上回り、表と一覧が
+	// 食い違う（極端には負になる）。**二重に数えないための節で数え方が 2 通りある**のは本末転倒。
+	const dKeys = new Set(d.structures.map((s) => shift(s, OFFSET)));
 	const matched = d.structures.filter((s) => cKeys.has(shift(s, OFFSET)));
+	const dOnly = d.structures.filter((s) => !cKeys.has(shift(s, OFFSET)));
+	const cOnly = c.structures.filter((s) => !dKeys.has(shift(s, 0)));
 	out.push(`| **両方に出る（= 同じ実体。二重に数えない）** | **${matched.length}** |`);
-	out.push(`| 実データ D にだけ出る | ${d.structures.length - matched.length} |`);
-	out.push(`| 実データ C にだけ出る | ${c.structures.length - matched.length} |`);
+	out.push(`| 実データ D にだけ出る | ${dOnly.length} |`);
+	out.push(`| 実データ C にだけ出る | ${cOnly.length} |`);
 	if (matched.length > 0) {
 		out.push('');
 		for (const s of matched) {
@@ -841,17 +863,12 @@ function sectionCdOverlap(results: CorpusResult[]): string {
 			);
 		}
 	}
-	const only = (xs: Structure[], other: Map<string, Structure> | null, off: number) =>
-		xs.filter((s) => (other === null ? true : !other.has(shift(s, off))));
-	const dOnly = only(d.structures, cKeys, OFFSET);
 	if (dOnly.length > 0) {
 		out.push('');
 		out.push(
 			`- 実データ D にだけ出る構造: ${dOnly.map((s) => `\`${s.first.tf} ${s.first.dType} ${s.first.dIdxs.join('-')} × ${s.first.cType}\``).join(' , ')}`,
 		);
 	}
-	const dKeys = new Set(d.structures.map((s) => shift(s, OFFSET)));
-	const cOnly = c.structures.filter((s) => !dKeys.has(shift(s, 0)));
 	if (cOnly.length > 0) {
 		out.push(
 			`- 実データ C にだけ出る構造: ${cOnly.map((s) => `\`${s.first.tf} ${s.first.dType} ${s.first.dIdxs.join('-')} × ${s.first.cType}\``).join(' , ')}`,
