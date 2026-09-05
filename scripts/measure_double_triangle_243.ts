@@ -19,11 +19,11 @@
  *   （PR #241 のマージ＝ #242 実装前の `main`）を `git show` で読む。
  * - `--baseline-rev worktree`: 両方とも作業ツリー。**差分が 0 になるのが正しい**（冪等性の検算）。
  *
- * ベースライン側は 6 検出器すべてを当該リビジョンから読む。#242 が触ったのは
- * `detect_doubles` / `detect_triples` / `detect_hs` / `reversal-gate` / `structural` だけだが、
- * 「触っていないはず」を前提にせず全部そのリビジョンから読むほうが安い（変更ファイル一覧は
- * 検算として 0 章に出す）。**ベースラインが既に #242 実装後だった場合は落ちる**——
- * 差分が常に 0 なのに数字だけ出るという最悪の壊れ方を避けるため。
+ * ベースライン側は **`tools/patterns/` をディレクトリごと**当該リビジョンから展開する
+ * （{@link materializePatternsDir}）。検出器 6 ファイルだけを写すと、検出器が import する
+ * `./reversal-gate.js` / `./structural.js` が作業ツリーへ解決されて「#242 前」に #242 後の
+ * 実装が混ざる。**ベースラインが既に #242 実装後だった場合は落ちる**——差分が常に 0 なのに
+ * 数字だけ出るという最悪の壊れ方を避けるため。変更ファイル一覧は検算として 0 章に出す。
  *
  * ## 使い方
  *
@@ -39,7 +39,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -85,47 +85,98 @@ const PRODUCTION_GATE_MARKERS = ['checkBreakoutPath', 'applyPostBreakoutGates'];
 
 const TMP_DIR = mkdtempSync(join(tmpdir(), 'double-triangle-243-'));
 
-/** `rev === 'worktree'` 以外は `git show` で当該リビジョンから読む。 */
-function readDetectorSource(rev: string, file: string): string {
-	if (rev === 'worktree') return readFileSync(join(ROOT, 'tools/patterns', file), 'utf8');
+/**
+ * ベースラインのリビジョンの `tools/patterns/` を**ディレクトリごと**一時領域へ展開する。
+ *
+ * ## 検出器 6 ファイルだけを写してはいけない（PR #250 のレビュー指摘）
+ *
+ * ベースラインの `detect_hs` / `detect_triples` は `./reversal-gate.js` を、
+ * `detect_doubles` / `detect_hs` / `detect_triples` は `./structural.js` を import する。
+ * 検出器だけを写して `./` を作業ツリーへ書き換えると、**「#242 前」の実行が #242 後の
+ * `reversal-gate.ts` / `structural.ts` を呼ぶ。** 今回の #242 の差分がたまたま純増
+ * （`structural.ts` は +92 / −0、`reversal-gate.ts` は +113 / −1 でどれも新規 export）
+ * だったので数値は変わらないが、**それはハーネスが保証している性質ではない**。
+ * 別のリビジョンを渡した瞬間に「#242 前」に現在の実装が混ざり、しかも黙って数字だけ出る。
+ *
+ * そこで同ディレクトリの依存も含めて丸ごと展開し、`./` の import は**展開先の中で**解決させる。
+ * ディレクトリ外（`../../lib/` 等）は #242 の差分に含まれないので作業ツリーの絶対パスへ向ける。
+ *
+ * `package.json`（`{"type":"module"}`）を置くのは、拡張子 `.ts` のまま ESM として読ませるため
+ * （一時ディレクトリには親の `package.json` が無く、置かないと CJS 扱いになる）。
+ *
+ * @returns 展開先ディレクトリの絶対パス
+ * @throws リビジョンが解決できない場合と、ベースラインに #242 の本番ゲートが入っていた場合
+ */
+function materializePatternsDir(rev: string): string {
+	let files: string[];
 	try {
-		return execFileSync('git', ['show', `${rev}:tools/patterns/${file}`], {
+		files = execFileSync('git', ['ls-tree', '-r', '--name-only', rev, '--', 'tools/patterns/'], {
 			cwd: ROOT,
 			encoding: 'utf8',
-			maxBuffer: 64 * 1024 * 1024,
-		});
+		})
+			.split('\n')
+			.map((s) => s.trim())
+			.filter((s) => s.endsWith('.ts'));
 	} catch (e) {
 		const detail = e instanceof Error ? e.message.split('\n')[0] : String(e);
 		throw new Error(
-			`ベースラインのリビジョン '${rev}' から tools/patterns/${file} を読めない（${detail}）。` +
+			`ベースラインのリビジョン '${rev}' から tools/patterns/ を読めない（${detail}）。` +
 				'--baseline-rev で #242 実装前のリビジョンを指定するか、' +
 				'冪等性の検算をしたい場合だけ --baseline-rev worktree を渡すこと。',
 		);
 	}
+	if (files.length === 0) {
+		throw new Error(`ベースラインのリビジョン '${rev}' の tools/patterns/ に .ts が 1 つも無い。`);
+	}
+
+	const dir = join(TMP_DIR, `patterns_${rev.replace(/[^a-z0-9]/gi, '')}`);
+	mkdirSync(dir, { recursive: true });
+	writeFileSync(join(dir, 'package.json'), '{ "type": "module" }\n');
+
+	for (const path of files) {
+		const name = path.slice('tools/patterns/'.length);
+		const src = execFileSync('git', ['show', `${rev}:${path}`], {
+			cwd: ROOT,
+			encoding: 'utf8',
+			maxBuffer: 64 * 1024 * 1024,
+		});
+		// 本番ゲートの混入検査は**展開したファイル全部**に掛ける。検出器 6 ファイルだけ見ると、
+		// ゲート本体（`reversal-gate.ts` の `applyPostBreakoutGates`）が入った状態を見逃す。
+		const marker = PRODUCTION_GATE_MARKERS.find((m) => src.includes(m));
+		if (marker !== undefined) {
+			throw new Error(
+				`ベースライン '${rev}' の ${name} に #242 の本番ゲート（${marker}）が入っている。` +
+					'この状態の差分は「#242 で共存がどれだけ消えたか」を表さない。' +
+					'--baseline-rev に #242 実装前のリビジョンを指定すること。',
+			);
+		}
+		writeFileSync(
+			join(dir, name),
+			src
+				// ディレクトリ外への import は作業ツリーの絶対パスへ。
+				.replace(/from '\.\.\/\.\.\//g, `from '${ROOT}/`)
+				// `../patterns/` は**同ディレクトリの別名**（`detect_triples.ts` の `config.js`）。
+				// 下の汎用 `../` 規則より先に畳まないと展開先の外へ逃げる。
+				.replace(/from '\.\.\/patterns\//g, "from './")
+				.replace(/from '\.\.\//g, `from '${ROOT}/tools/`),
+			// `from './` は書き換えない——展開先の中で解決させるのが本関数の目的。
+		);
+	}
+	return dir;
 }
 
-/** 指定リビジョンの 6 検出器を読み込む。相対 import は作業ツリーの絶対パスへ書き換える。 */
+/**
+ * 指定リビジョンの 6 検出器を読み込む。
+ *
+ * `rev === 'worktree'` のときは**作業ツリーの本物をそのまま import する**（写しを作らない）。
+ * 母集団側は現行の実装そのものでなければ意味がなく、写しを挟むと写し方の誤りが混入しうる。
+ */
 async function loadDetectors(rev: string): Promise<DetectorSet> {
+	const dir = rev === 'worktree' ? join(ROOT, 'tools/patterns') : materializePatternsDir(rev);
 	const out = {} as DetectorSet;
 	for (const [key, file, exportName] of DETECTOR_FILES) {
-		let src = readDetectorSource(rev, file);
-		if (rev !== 'worktree') {
-			const marker = PRODUCTION_GATE_MARKERS.find((m) => src.includes(m));
-			if (marker !== undefined) {
-				throw new Error(
-					`ベースライン '${rev}' の ${file} に #242 の本番ゲート（${marker}）が入っている。` +
-						'この状態の差分は「#242 で共存がどれだけ消えたか」を表さない。' +
-						'--baseline-rev に #242 実装前のリビジョンを指定すること。',
-				);
-			}
-		}
-		src = src
-			.replace(/from '\.\.\/\.\.\//g, `from '${ROOT}/`)
-			.replace(/from '\.\.\//g, `from '${ROOT}/tools/`)
-			.replace(/from '\.\//g, `from '${ROOT}/tools/patterns/`);
-		const path = join(TMP_DIR, `${file.replace('.ts', '')}_243_${rev.replace(/[^a-z0-9]/gi, '')}.mts`);
-		writeFileSync(path, src);
-		out[key] = ((await import(pathToFileURL(path).href)) as Record<string, Detector>)[exportName];
+		const href = pathToFileURL(join(dir, file)).href;
+		out[key] = ((await import(href)) as Record<string, Detector>)[exportName];
 	}
 	return out;
 }
@@ -810,6 +861,39 @@ function sectionCdOverlap(results: CorpusResult[]): string {
 }
 
 /**
+ * 全コーパスを通算した構造数（共有点数別 / 方向別 / 継続 type 別）。
+ *
+ * **これは #219 の「プールしない」に反する分析ではない。** 分布を読むための表ではなく、
+ * メモ側の目視判定表（`docs/internal/double-triangle-exclusion-243.md` §5-2 / §5-3）が
+ * コーパスを跨いだ 1 本のリストで書かれているため、その**行数の手集計を機械で検算する**ための
+ * チェックサム。実際 PR #250 のレビューで「3 点共有 6」（正しくは標準 5 + 実データ D 2 = 7）
+ * という手集計の取り違えが見つかっており、その再発を防ぐのが目的。
+ * 分布の読み取りは従来どおりコーパス別の表で行うこと。
+ */
+function sectionChecksum(structures: Structure[]): string {
+	const label = (n: number | null) => (n === null ? '判定不能（`wedge_*`）' : `${n} 点`);
+	const out: string[] = [
+		`共存構造は全コーパス通算で **${structures.length}**。メモ §5 の判定表の行数はこれと一致する。`,
+		'',
+		'| 主構成点の共有 | 構造 |',
+		'|---|---:|',
+	];
+	const shared = [...new Set(structures.map((s) => s.first.shared))].sort((a, b) => (a ?? -1) - (b ?? -1));
+	for (const k of shared) {
+		out.push(`| ${label(k)} | ${structures.filter((s) => s.first.shared === k).length} |`);
+	}
+	out.push('', '| 方向 | 構造 |', '|---|---:|');
+	for (const c of COMBOS) {
+		const n = structures.filter((s) => s.first.combo === c).length;
+		if (n > 0) out.push(`| ${COMBO_LABEL[c]} | ${n} |`);
+	}
+	out.push('', '| 継続 type / status | 構造 |', '|---|---:|');
+	const byType = countBy(structures, (s) => `${s.first.cType} / ${s.first.cStatus}`);
+	for (const k of [...byType.keys()].sort()) out.push(`| ${k} | ${byType.get(k) as number} |`);
+	return out.join('\n');
+}
+
+/**
  * フラグの値を**計測を始める前に**取り出す（#211 / #216 / #242 の計測スクリプトと同じ理由）。
  *
  * @throws 値が無い、または次が別のフラグだった場合
@@ -953,6 +1037,11 @@ async function main(): Promise<void> {
 	md.push('## 計測 5: 実データ C / D の重なりの突き合わせ');
 	md.push('');
 	md.push(sectionCdOverlap(results));
+
+	md.push('');
+	md.push('## 全コーパス通算（メモの手集計の検算用）');
+	md.push('');
+	md.push(sectionChecksum(allStructures));
 
 	const text = md.join('\n');
 	process.stdout.write(`${text}\n`);
