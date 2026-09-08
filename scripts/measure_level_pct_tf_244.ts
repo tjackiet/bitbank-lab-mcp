@@ -1079,7 +1079,9 @@ function sectionRelaxed(res: CorpusResult): string[] {
 	const out: string[] = [];
 	const tfs = [...new Set(res.relaxedNow.map((r) => r.tf))].sort();
 	out.push(
-		'#227 と同じ集計（呼び出し = ケース × type）。`strict 0 件率` は relaxed が評価される割合、',
+		// 行頭が `#227` だと Markdown が ATX 見出しとして解釈する（markdownlint MD018）。
+		// 生成物を docs/internal/ に貼るので `issue ` を前置して行頭の `#` を外す。
+		'issue #227 と同じ集計（呼び出し = ケース × type）。`strict 0 件率` は relaxed が評価される割合、',
 		'`relaxed accepted` は relaxed が実際に候補を返した呼び出し数。',
 		'',
 		'| type | 時間足 | 呼び出し | strict 0 件率（現行） | 同（候補） | relaxed accepted（現行） | 同（候補） |',

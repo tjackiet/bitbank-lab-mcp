@@ -1,7 +1,7 @@
 # 同水準判定（価格相対 3 つ）の時間足追従の実測（issue #244 Phase 1）
 
-`scripts/measure_level_pct_tf_244.ts` の出力をそのまま貼ったもの（§8 以降）に、
-補正した問題設定（§2）と Phase 2 への推奨（§6）を足したメモ。
+`scripts/measure_level_pct_tf_244.ts` の出力をそのまま貼ったもの（§9）に、
+補正した問題設定（§3）と Phase 2 への推奨（§7）を足したメモ。
 **検出器・`config.ts`・`structural.ts` は 1 行も変更していない。**
 
 候補ビルド（ablation）は `tools/patterns/` を一時領域へディレクトリごと展開し、
@@ -186,7 +186,7 @@ FORMING_*_FACTOR` の価格相対のままで、高さ相対の受け皿が無�
 本 issue で `tolerancePct` の tf-auto 表を締める案（推奨では採らない）を採ると、
 **#178 項目 1 の未対応部分にも同時に効いてしまう**。形成中の分布は本 Phase では測っていない
 （計測対象は accepted な完成済みのみ）ので、`tolerancePct` を動かす案を検討するなら
-#178 項目 1 側の計測が先に要る。逆に `HS_SHOULDER_MAX_PCT` だけを動かす推奨案なら接点は無い。
+issue #178 項目 1 側の計測が先に要る。逆に `HS_SHOULDER_MAX_PCT` だけを動かす推奨案なら接点は無い。
 
 ## 9. 計測スクリプトの出力（そのまま）
 
@@ -357,7 +357,7 @@ ablation で**消えた**構造 11 件 / **現れた**構造 0 件。
 
 #### 計測 3: relaxed 経路への影響
 
-##227 と同じ集計（呼び出し = ケース × type）。`strict 0 件率` は relaxed が評価される割合、
+issue #227 と同じ集計（呼び出し = ケース × type）。`strict 0 件率` は relaxed が評価される割合、
 `relaxed accepted` は relaxed が実際に候補を返した呼び出し数。
 
 | type | 時間足 | 呼び出し | strict 0 件率（現行） | 同（候補） | relaxed accepted（現行） | 同（候補） |
@@ -442,7 +442,7 @@ ablation で**消えた**構造 7 件 / **現れた**構造 0 件。
 
 #### 計測 3: relaxed 経路への影響
 
-##227 と同じ集計（呼び出し = ケース × type）。`strict 0 件率` は relaxed が評価される割合、
+issue #227 と同じ集計（呼び出し = ケース × type）。`strict 0 件率` は relaxed が評価される割合、
 `relaxed accepted` は relaxed が実際に候補を返した呼び出し数。
 
 | type | 時間足 | 呼び出し | strict 0 件率（現行） | 同（候補） | relaxed accepted（現行） | 同（候補） |
@@ -532,7 +532,7 @@ ablation で**消えた**構造 7 件 / **現れた**構造 0 件。
 
 #### 計測 3: relaxed 経路への影響
 
-##227 と同じ集計（呼び出し = ケース × type）。`strict 0 件率` は relaxed が評価される割合、
+issue #227 と同じ集計（呼び出し = ケース × type）。`strict 0 件率` は relaxed が評価される割合、
 `relaxed accepted` は relaxed が実際に候補を返した呼び出し数。
 
 | type | 時間足 | 呼び出し | strict 0 件率（現行） | 同（候補） | relaxed accepted（現行） | 同（候補） |
@@ -619,7 +619,7 @@ ablation で**消えた**構造 8 件 / **現れた**構造 0 件。
 
 #### 計測 3: relaxed 経路への影響
 
-##227 と同じ集計（呼び出し = ケース × type）。`strict 0 件率` は relaxed が評価される割合、
+issue #227 と同じ集計（呼び出し = ケース × type）。`strict 0 件率` は relaxed が評価される割合、
 `relaxed accepted` は relaxed が実際に候補を返した呼び出し数。
 
 | type | 時間足 | 呼び出し | strict 0 件率（現行） | 同（候補） | relaxed accepted（現行） | 同（候補） |
@@ -705,7 +705,7 @@ ablation で**消えた**構造 7 件 / **現れた**構造 0 件。
 
 #### 計測 3: relaxed 経路への影響
 
-##227 と同じ集計（呼び出し = ケース × type）。`strict 0 件率` は relaxed が評価される割合、
+issue #227 と同じ集計（呼び出し = ケース × type）。`strict 0 件率` は relaxed が評価される割合、
 `relaxed accepted` は relaxed が実際に候補を返した呼び出し数。
 
 | type | 時間足 | 呼び出し | strict 0 件率（現行） | 同（候補） | relaxed accepted（現行） | 同（候補） |
