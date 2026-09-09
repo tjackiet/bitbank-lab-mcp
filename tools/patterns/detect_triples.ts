@@ -1363,6 +1363,76 @@ function rejectFormingNecklineSide(
 	return true;
 }
 
+/**
+ * 形成中 triple の主構成点 3 点（確定 2 点 ＋ 最新足）が**単調な階段**になっていないかを見る
+ * （issue #263）。棄却したら debug candidate を積んで `true` を返す（呼び出し側は `continue`）。
+ *
+ * ## 両向きを見る。**理由コードは向きの名前**であって type の名前ではない
+ *
+ * | 3 点の並び | 読み | 理由コード |
+ * |---|---|---|
+ * | `main1 < main2 < current` | 上昇継続（切り上がり） | `forming_stair_step_up` |
+ * | `main1 > main2 > current` | 下降継続（切り下がり） | `forming_stair_step_down` |
+ *
+ * `triple_top` の切り上がりは「レジスタンスに 3 回当たった」ではなく**上昇トレンドの高値更新の連続**、
+ * `triple_top` の切り下がりは**下降トレンドの戻り高値の連続**。どちらも水平な水準への反復接触ではない
+ * ので triple とは呼べない。`triple_bottom` は符号を反転して同じ。**4 通りすべてが対象。**
+ *
+ * ## #263 以前は片側ずつしか見ていなかった
+ *
+ * `triple_top` は切り上がりだけ、`triple_bottom` は切り下がりだけを評価しており、
+ * **`triple_top` の単調な切り下がりと `triple_bottom` の単調な切り上がりが素通り**していた。
+ * #178 項目 1 Phase 1 の目視判定（`docs/internal/forming-triple-level-spread-178.md` §8）の
+ * #14（切り下がり 2.77%）と #20（切り上がり 1.86%）が実データの実例で、どちらも
+ * 「呼べない」判定なのに accepted になっていた。
+ *
+ * ## 閾値は {@link FORMING_STAIR_STEP_LIMIT} を**両向きで共有**する
+ *
+ * 新しいつまみを増やさない。累積ステップの定義も向きで変えず、
+ * **`|current − main1| / main1`**（両端の差を第 1 構成点で正規化）で共通。
+ * 中間点 `main2` は単調性の判定にだけ使い、大きさには入れない——#263 以前の 2 つの分岐が
+ * どちらもそう書いてあり、**閾値の意味を変えないため**そのまま踏襲する。
+ *
+ * ## 呼び出し位置は同水準判定（`forming_*_not_level`）の**前**
+ *
+ * #263 以前の 2 つの分岐と同じ位置。「level spread より具体的な診断のため最初に評価する」という
+ * 元のコメントの意図を両向きに広げただけで、位置は動かしていない。**単調な階段は同水準判定でも
+ * 落ちうるが、`forming_peaks_not_level`（ばらつきが大きい）より
+ * `forming_stair_step_down`（単調に切り下がっている）のほうが形を言い当てている。**
+ */
+function rejectFormingStairStep(
+	type: 'triple_top' | 'triple_bottom',
+	main1: Pivot,
+	main2: Pivot,
+	currentPrice: number,
+	lastIdx: number,
+	pcand: Pcand,
+): boolean {
+	const ascending = main1.price < main2.price && main2.price < currentPrice;
+	const descending = main1.price > main2.price && main2.price > currentPrice;
+	// [issue #263] 両向き。**この 1 行が #263 の変更の実体**で、以前は
+	// `type === 'triple_top' ? ascending : descending`（type ごとに片側だけ）だった。
+	const monotonic = ascending || descending;
+	if (!monotonic) return false;
+
+	const totalStep = Math.abs(currentPrice - main1.price) / Math.max(1, main1.price);
+	if (totalStep <= FORMING_STAIR_STEP_LIMIT) return false;
+
+	const role = type === 'triple_top' ? 'peak' : 'valley';
+	pcand({
+		type,
+		accepted: false,
+		reason: ascending ? 'forming_stair_step_up' : 'forming_stair_step_down',
+		idxs: [main1.idx, main2.idx, lastIdx],
+		pts: [
+			{ role: `${role}1`, idx: main1.idx, price: main1.price },
+			{ role: `${role}2`, idx: main2.idx, price: main2.price },
+			{ role: 'current', idx: lastIdx, price: currentPrice },
+		],
+	});
+	return true;
+}
+
 // ── Helper: 形成中 Triple Top ──
 
 /**
@@ -1406,25 +1476,10 @@ function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
 		const currentDiff = Math.abs(currentPrice - avgPeakPrice) / Math.max(1, avgPeakPrice);
 		if (currentDiff > tripleTolerancePct || currentPrice < avgPeakPrice * 0.95) continue;
 
-		// 階段状の切り上がり（peak1 < peak2 < current）は triple_top ではなく
-		// 上昇継続として扱う。level spread より具体的な診断のため最初に評価する。
-		if (peak1.price < peak2.price && peak2.price < currentPrice) {
-			const totalStep = (currentPrice - peak1.price) / Math.max(1, peak1.price);
-			if (totalStep > FORMING_STAIR_STEP_LIMIT) {
-				pcand({
-					type: 'triple_top',
-					accepted: false,
-					reason: 'forming_stair_step_up',
-					idxs: [peak1.idx, peak2.idx, lastIdx],
-					pts: [
-						{ role: 'peak1', idx: peak1.idx, price: peak1.price },
-						{ role: 'peak2', idx: peak2.idx, price: peak2.price },
-						{ role: 'current', idx: lastIdx, price: currentPrice },
-					],
-				});
-				continue;
-			}
-		}
+		// 単調な階段（切り上がり = 上昇継続 / 切り下がり = 下降トレンドの戻り高値の連続）は
+		// triple_top ではない。**両向きを見る**（issue #263）。level spread より具体的な診断なので
+		// 先に評価する。判定の実体と根拠は `rejectFormingStairStep` の docstring。
+		if (rejectFormingStairStep('triple_top', peak1, peak2, currentPrice, lastIdx, pcand)) continue;
 
 		// 3 山（peak1, peak2, 現在価格）の水平性チェック。
 		// peak1-peak2 と current-avg の個別チェックだけでは、非単調な配置
@@ -1699,25 +1754,9 @@ function tryFormingTripleBottom(ctx: DetectContext): DeduplicablePattern | null 
 		const currentDiff = Math.abs(currentPrice - avgValleyPrice) / Math.max(1, avgValleyPrice);
 		if (currentDiff > tripleTolerancePct || currentPrice > avgValleyPrice * 1.05) continue;
 
-		// 階段状の切り下がり（valley1 > valley2 > current）は triple_bottom ではなく
-		// 下降継続として扱う。level spread より具体的な診断のため最初に評価する。
-		if (valley1.price > valley2.price && valley2.price > currentPrice) {
-			const totalStep = (valley1.price - currentPrice) / Math.max(1, valley1.price);
-			if (totalStep > FORMING_STAIR_STEP_LIMIT) {
-				pcand({
-					type: 'triple_bottom',
-					accepted: false,
-					reason: 'forming_stair_step_down',
-					idxs: [valley1.idx, valley2.idx, lastIdx],
-					pts: [
-						{ role: 'valley1', idx: valley1.idx, price: valley1.price },
-						{ role: 'valley2', idx: valley2.idx, price: valley2.price },
-						{ role: 'current', idx: lastIdx, price: currentPrice },
-					],
-				});
-				continue;
-			}
-		}
+		// 単調な階段（切り下がり = 下降継続 / 切り上がり = 上昇トレンドの押し安値の連続）は
+		// triple_bottom ではない。**両向きを見る**（issue #263。top の符号反転）。
+		if (rejectFormingStairStep('triple_bottom', valley1, valley2, currentPrice, lastIdx, pcand)) continue;
 
 		// 3 谷（valley1, valley2, 現在価格）の水平性チェック。
 		// 非単調な配置（例: 100 → 95 → 100）でも累積 spread が大きいケースを弾く。
