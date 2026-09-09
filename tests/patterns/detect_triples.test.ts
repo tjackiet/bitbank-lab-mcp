@@ -689,6 +689,72 @@ describe('detectTriples', () => {
 		expect(rejected).toBeDefined();
 	});
 
+	// ── 形成中 Triple Top: 階段状**切り下がり**の reject（issue #263）──
+	//
+	// #263 以前は `triple_top` の切り上がりしか見ておらず、**単調な切り下がりは素通り**していた。
+	// 実データの実例は #178 項目 1 Phase 1 の目視判定 §8 の #14（切り下がり 2.77%）/ #20。
+	// 切り下がる 3 山は「レジスタンスに 3 回当たった」ではなく**下降トレンドの戻り高値の連続**。
+
+	/**
+	 * 3 山が `peak1 > peak2 > current` に並ぶ系列を組む。`currentClose` で累積ステップを動かす。
+	 * 山は 100 / 99.5 固定なので `peakDiff` は 0.5% で同水準判定は常に通る。
+	 */
+	function descendingTopCtx(currentClose: number): DetectContext {
+		const total = 51;
+		const candles: CandleData[] = Array.from({ length: total }, (_, i) => mkCandle(total - i, 90, 95, 85, 90));
+		candles[0] = mkCandle(total, 99, 100, 98, 100);
+		candles[10] = mkCandle(total - 10, 80, 82, 79, 80);
+		candles[20] = mkCandle(total - 20, 99, 100, 98, 99.5);
+		candles[32] = mkCandle(total - 32, 80, 82, 79, 81);
+		for (let i = 45; i < total; i++) {
+			candles[i] = mkCandle(total - i, currentClose, currentClose + 1, currentClose - 1, currentClose);
+		}
+		const allPeaks: Pivot[] = [
+			{ idx: 0, price: 100, kind: 'H', extremePrice: 100 },
+			{ idx: 20, price: 99.5, kind: 'H', extremePrice: 99.5 },
+		];
+		const allValleys: Pivot[] = [
+			{ idx: 10, price: 80, kind: 'L', extremePrice: 80 },
+			{ idx: 32, price: 81, kind: 'L', extremePrice: 81 },
+		];
+		return buildCtx({
+			candles,
+			pivots: [...allPeaks, ...allValleys],
+			allPeaks,
+			allValleys,
+			includeForming: true,
+		});
+	}
+
+	it('forming triple_top: 3 山が単調に切り下がる場合は forming_stair_step_down で reject（#263）', () => {
+		// peak1=100 > peak2=99.5 > current=97 の切り下がり。
+		// ステップ = (100-97)/100 = 3.0% > FORMING_STAIR_STEP_LIMIT(2%) で reject。
+		// peakDiff=0.5%・currentDiff=|97-99.75|/99.75=2.76% はどちらも 4.8% 以内なので、
+		// **この系列を止めているのは単調性ゲートだけ**（下の対照系列が accepted になることが証拠）。
+		const ctx = descendingTopCtx(97);
+		const result = detectTriples(ctx);
+
+		expect(result.patterns.filter((p) => p.type === 'triple_top' && p.status === 'forming')).toHaveLength(0);
+		const rejected = ctx.debugCandidates.find(
+			(d) => d.type === 'triple_top' && d.accepted === false && d.reason === 'forming_stair_step_down',
+		);
+		expect(rejected).toBeDefined();
+		expect(rejected?.indices).toEqual([0, 20, 50]);
+		// 既存の切り上がり側と同じ 3 点を積む（role 名も揃える）
+		expect(rejected?.points?.map((p) => p.role)).toEqual(['peak1', 'peak2', 'current']);
+	});
+
+	it('forming triple_top: 切り下がりでもステップが上限内なら accepted のまま（#263 の最小対）', () => {
+		// current=98.5 → ステップ = (100-98.5)/100 = 1.5% ≤ 2%。上のケースとの差は最新足の終値だけ。
+		const ctx = descendingTopCtx(98.5);
+		const result = detectTriples(ctx);
+
+		expect(result.patterns.filter((p) => p.type === 'triple_top' && p.status === 'forming')).toHaveLength(1);
+		expect(
+			ctx.debugCandidates.filter((d) => d.reason === 'forming_stair_step_down' || d.reason === 'forming_stair_step_up'),
+		).toHaveLength(0);
+	});
+
 	it('forming triple_top: 3 山の累計 spread が tripleTolerancePct を超えると forming_peaks_not_level で reject', () => {
 		// 階段ではないが（peak1 < peak2 > current で V 字）、3 点累計 spread が大きいケース。
 		// peak1=100, peak2=105, current=99 → spread=(105-99)/105≈5.71% > tripleTolerancePct=4.8%。
@@ -979,6 +1045,64 @@ describe('detectTriples', () => {
 	});
 
 	// ── 形成中 Triple Bottom: 階段状切り下がり / 山乖離の reject（対称ケース）──
+
+	/**
+	 * 3 谷が `valley1 < valley2 < current` に並ぶ系列（issue #263。上の top の鏡像）。
+	 * 谷は 100 / 100.5 固定なので `valleyDiff` は 0.5% で同水準判定は常に通る。
+	 */
+	function ascendingBottomCtx(currentClose: number): DetectContext {
+		const total = 51;
+		const candles: CandleData[] = Array.from({ length: total }, (_, i) => mkCandle(total - i, 105, 115, 95, 105));
+		candles[0] = mkCandle(total, 101, 102, 100, 100);
+		candles[10] = mkCandle(total - 10, 109, 110, 108, 109);
+		candles[20] = mkCandle(total - 20, 100, 102, 100, 100.5);
+		candles[32] = mkCandle(total - 32, 109, 110, 108, 109);
+		for (let i = 45; i < total; i++) {
+			candles[i] = mkCandle(total - i, currentClose, currentClose + 1, currentClose - 1, currentClose);
+		}
+		const allValleys: Pivot[] = [
+			{ idx: 0, price: 100, kind: 'L', extremePrice: 100 },
+			{ idx: 20, price: 100.5, kind: 'L', extremePrice: 100.5 },
+		];
+		const allPeaks: Pivot[] = [
+			{ idx: 10, price: 110, kind: 'H', extremePrice: 110 },
+			{ idx: 32, price: 110, kind: 'H', extremePrice: 110 },
+		];
+		return buildCtx({
+			candles,
+			pivots: [...allPeaks, ...allValleys],
+			allPeaks,
+			allValleys,
+			includeForming: true,
+		});
+	}
+
+	it('forming triple_bottom: 3 谷が単調に切り上がる場合は forming_stair_step_up で reject（#263）', () => {
+		// valley1=100 < valley2=100.5 < current=103 の切り上がり。
+		// ステップ = (103-100)/100 = 3.0% > FORMING_STAIR_STEP_LIMIT(2%) で reject。
+		// valleyDiff=0.5%・currentDiff=|103-100.25|/100.25=2.74% はどちらも 4.8% 以内。
+		const ctx = ascendingBottomCtx(103);
+		const result = detectTriples(ctx);
+
+		expect(result.patterns.filter((p) => p.type === 'triple_bottom' && p.status === 'forming')).toHaveLength(0);
+		const rejected = ctx.debugCandidates.find(
+			(d) => d.type === 'triple_bottom' && d.accepted === false && d.reason === 'forming_stair_step_up',
+		);
+		expect(rejected).toBeDefined();
+		expect(rejected?.indices).toEqual([0, 20, 50]);
+		expect(rejected?.points?.map((p) => p.role)).toEqual(['valley1', 'valley2', 'current']);
+	});
+
+	it('forming triple_bottom: 切り上がりでもステップが上限内なら accepted のまま（#263 の最小対）', () => {
+		// current=101.5 → ステップ = (101.5-100)/100 = 1.5% ≤ 2%。差は最新足の終値だけ。
+		const ctx = ascendingBottomCtx(101.5);
+		const result = detectTriples(ctx);
+
+		expect(result.patterns.filter((p) => p.type === 'triple_bottom' && p.status === 'forming')).toHaveLength(1);
+		expect(
+			ctx.debugCandidates.filter((d) => d.reason === 'forming_stair_step_down' || d.reason === 'forming_stair_step_up'),
+		).toHaveLength(0);
+	});
 
 	it('forming triple_bottom: 3 谷が単調に切り下がる場合は forming_stair_step_down で reject', () => {
 		// triple_top の対称: valley1=102, valley2=100, currentPrice=99 → 切り下がり。

@@ -109,11 +109,22 @@ const FORMING_DOUBLE_TOP = legs(100, [
 	[10, 112],
 	[13, 128.05],
 ]);
-/** 形成中ダブルボトムと形成中トリプルボトムが同時に立つ列（構成点を共有する） */
+/**
+ * 形成中ダブルボトムと形成中トリプルボトムが同時に立つ列（構成点を共有する）。
+ *
+ * **谷は 102 → 100.5 の順（切り下がり）にしてある**（#263）。以前は 100 → 101 で、最新足 103.6 と
+ * 合わせて 3 谷が単調に切り上がっており（`|103.6 − 100| / 100` = 3.6% > `FORMING_STAIR_STEP_LIMIT`）、
+ * 両向きになった単調性ゲートが `forming_stair_step_up` で落とす形だった
+ * （#263 以前は `triple_bottom` の切り上がりを見ていなかったので通っていた）。
+ *
+ * **最終脚 103.6 は動かせない。** ここを下げると価格が谷ゾーンへ戻り、
+ * `checkPostPivotInvalidation` が形成中ダブルボトムを `status: 'invalid'` にしてしまう（#126 G5）。
+ * 単調性を崩すのは谷側で行う。
+ */
 const FORMING_BOTTOMS = legs(132, [
-	[9, 100],
+	[9, 102],
 	[6, 118],
-	[7, 101],
+	[7, 100.5],
 	[6, 118],
 	[7, 103.6],
 ]);
@@ -368,12 +379,15 @@ describe('forming double / triple debug candidates (#158)', () => {
 			{
 				reason: 'forming_confidence_below_min',
 				type: 'triple_top',
+				// 2 山は 129 → 130 の順（**非単調**）。130 → 129 → 126.5 だと 3 点が単調に切り下がり、
+				// 前段の単調性ゲートが `forming_stair_step_down` で先に落とす（#263）。
+				// 山の平均は 129.5 のままなので `currentDiff` = 2.32% も confidence 0.41 も変わらない。
 				candles: () =>
 					fromCloses(
 						legs(100, [
-							[9, 130],
+							[9, 129],
 							[6, 112],
-							[7, 129],
+							[7, 130],
 							[6, 113],
 							[7, 126.5],
 						]),
@@ -397,14 +411,50 @@ describe('forming double / triple debug candidates (#158)', () => {
 			{
 				reason: 'forming_confidence_below_min',
 				type: 'triple_bottom',
+				// 2 谷は 102.3 → 100 の順（**非単調**）。100 → 102.3 → 103.8 だと単調な切り上がりで
+				// `forming_stair_step_up` が先に落とす（#263）。谷の差 2.25% は変わらないので
+				// confidence 0.43 も変わらない。
 				candles: () =>
 					fromCloses(
 						legs(132, [
-							[9, 100],
+							[9, 102.3],
 							[6, 118],
-							[7, 102.3],
+							[7, 100],
 							[6, 118],
 							[7, 103.8],
+						]),
+					),
+			},
+			// issue #263: 単調性ゲートの**逆向き**。#263 以前は `triple_top` の切り上がりと
+			// `triple_bottom` の切り下がりしか見ておらず、この 2 行は 1 件も発火しなかった。
+			// 元からある向き（top の up / bottom の down）の回帰は `detect_triples.test.ts` が持つ。
+			{
+				reason: 'forming_stair_step_down',
+				type: 'triple_top',
+				// 3 山 100 → 99.5 → 97 の単調な切り下がり。ステップ 3.0% > 2%
+				candles: () =>
+					fromCloses(
+						legs(90, [
+							[9, 100],
+							[6, 88],
+							[7, 99.5],
+							[6, 88],
+							[7, 97],
+						]),
+					),
+			},
+			{
+				reason: 'forming_stair_step_up',
+				type: 'triple_bottom',
+				// 3 谷 100 → 100.5 → 103 の単調な切り上がり。ステップ 3.0% > 2%
+				candles: () =>
+					fromCloses(
+						legs(110, [
+							[9, 100],
+							[6, 112],
+							[7, 100.5],
+							[6, 112],
+							[7, 103],
 						]),
 					),
 			},

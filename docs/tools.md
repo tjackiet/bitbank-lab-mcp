@@ -562,6 +562,31 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 
 契約は `tests/patterns/structural-gates-btcjpy.test.ts`（実データ fixture）が固定している。
 
+### 形成中 triple の単調性ゲート（#263）
+
+`triple_top` / `triple_bottom` の**形成中**経路は、主構成点 3 点（確定 2 点 ＋ 最新足の終値）が
+**単調な階段**に並んでいたら落とす。水平な水準への反復接触ではなくトレンドの継続だから。
+
+| 3 点の並び | 読み | 理由コード |
+|---|---|---|
+| `main1 < main2 < current` | 上昇継続（`triple_top`）/ 上昇トレンドの押し安値の連続（`triple_bottom`） | `forming_stair_step_up` |
+| `main1 > main2 > current` | 下降トレンドの戻り高値の連続（`triple_top`）/ 下降継続（`triple_bottom`） | `forming_stair_step_down` |
+
+**理由コードは向きの名前で、type の名前ではない。** `triple_top` に `forming_stair_step_down` が、
+`triple_bottom` に `forming_stair_step_up` が出る。**#263 以前はその 2 通りが出なかった**
+（`triple_top` は切り上がりだけ、`triple_bottom` は切り下がりだけを見ていた）。
+
+- 閾値は `FORMING_STAIR_STEP_LIMIT`（2%）を**両向きで共有**する。累積ステップの定義も向きで変えず
+  `|current − main1| / main1`。中間点は単調性の判定にだけ使い、大きさには入れない。
+- **同水準判定（`forming_peaks_not_level` / `forming_valleys_not_level`）より前に評価する。**
+  単調な階段は同水準判定でも落ちうるが、「ばらつきが大きい」より「単調に切り下がっている」の
+  ほうが形を言い当てているため。`view=debug` で理由コードを集計するときはこの順序が見える。
+- **完成済み経路と形成中 double にはこのゲートは無い**（完成済みは 3 点すべてが確定ピボットで
+  `tolerancePct` と高さ相対の 2 段が掛かる。double は主構成点が 2 点なので「階段」が定義できない）。
+
+契約は `tests/patterns/detect_triples.test.ts`（合成 fixture の最小対）と
+`tests/patterns/stair-step-both-directions-263.test.ts`（実データの実例）が固定している。
+
 ### 主構成点とネックラインの位置関係（#216 / #261）
 
 反転パターンは、上の構造ゲートとは別に**主構成点がネックラインの正しい側にあるか**を見る。

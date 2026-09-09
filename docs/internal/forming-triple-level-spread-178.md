@@ -105,6 +105,11 @@ if (levelSpread > levelSpreadLimit) → 'forming_peaks_not_level'
 **triple_top の単調な切り下がり / triple_bottom の単調な切り上がりは素通りする。**
 §8 の #14（切り下がり 2.77%）と #23（切り上がり 1.52%）がその実例。
 
+> **その後（#263）**: 両向きに直した。**閾値 `FORMING_STAIR_STEP_LIMIT`（2%）は据え置き**なので、
+> 落ちるようになったのは #14（2.77%）だけで、**#23 は 1.52% で閾値の直下のまま残る**
+> （#20 の切り上がり 1.86% も同じ。あちらは元から見ていた向き）。
+> 実測は同スクリプトの §7。
+
 ## 4. 主指標 — 完成しえない形成中候補
 
 ### 4-1. 件数
@@ -801,7 +806,7 @@ accepted な形成中 double: **延べ 73 件 / 構造 6 件 / 実体 4 件**（
 | `FORMING_TOLERANCE_MULTIPLIER` | 1.2 | `tripleTolerancePct = tolerancePct × 1.2` |
 | `FORMING_LEVEL_SPREAD_FACTOR` | 1 | `levelSpreadLimit = tripleTolerancePct × 1` |
 | `FORMING_NECKLINE_SPREAD_FACTOR` | 1 | `necklineSpreadLimit = tolerancePct × 1` |
-| `FORMING_STAIR_STEP_LIMIT` | 0.02 | `tolerancePct` 由来ではない固定値。**片側しか見ていない**——`triple_top` の切り上がりと `triple_bottom` の切り下がりだけで、逆向きの単調列は素通りする |
+| `FORMING_STAIR_STEP_LIMIT` | 0.02 | `tolerancePct` 由来ではない固定値。**計測時点では片側しか見ていなかった**——`triple_top` の切り上がりと `triple_bottom` の切り下がりだけで、逆向きの単調列は素通りしていた（**#263 で両向きになった**。値は据え置き） |
 | `FORMING_MIN_CONFIDENCE` / `FORMING_MAX_CONFIDENCE` | 0.5 / 0.59 | 採点の下限・上限（§5-3）。本ゲートは採点式を変えないので不変 |
 
 高さ相対のゲートを**足すだけ**なら他の係数に触らない。それを機械的に確かめるため、ablation ビルドで**新ゲートより前に置かれた棄却理由の件数**を base と突き合わせる。

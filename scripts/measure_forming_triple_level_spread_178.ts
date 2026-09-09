@@ -41,6 +41,7 @@
  * | 4 | 形成中 double の同じ量（実装対象は本 Phase では決めない） |
  * | 5 | 波及の確認（`FORMING_*` 係数の独立性 / `view=debug` の cap / `confidence` との整合） |
  * | 6 | **issue #261**: `validateMainPointsNecklineSide` を形成中 4 経路に配線した効果（配線前後） |
+ * | 7 | **issue #263**: 形成中 triple の単調性ゲートを両向きにした効果（配線前後） |
  *
  * ## ハーネス
  *
@@ -60,7 +61,11 @@
  *   挿入後にマーカーが**ちょうど 2 回**（top / bottom）現れることを確認する。
  *   `maxRatio = 999`（実質無効）のビルドが `base` と全ケースで一致することも検算するので、
  *   **差分はゲートのみに帰属する**（#178 項目 3 のコメントと同じ流儀）。
- * - **strip ビルド（§6）**: issue #261 が入れたネックライン側検査を**外した**ビルド。
+ * - **strip ビルド（§6 / §7）**: 後から入ったゲートを**外した**ビルドを 2 つ作る——
+ *   `stripBoth`（#261 も #263 も外す = `main` d86fb2b）と `strip263`（#263 だけ外す = `main` 56432d8）。
+ *   §6 は `stripBoth → strip263` で #261 だけを、§7 は `strip263 → base` で #263 だけを測る。
+ *   こう分けないと、あとから入った #263 が §6 の「配線前」に混ざって #261 の効果が測れない。
+ *   #261 分の中身は次のとおり。
  *   `rejectFormingNecklineSide` の本体先頭に `return false;` を差し込むだけで、アンカーが
  *   `detect_triples.ts` / `detect_doubles.ts` に**それぞれちょうど 1 回**現れることを挿入前に確認する。
  *   ablation（§3）と**向きが逆**なのは、#261 が既に作業ツリーに入っているため。
@@ -262,6 +267,34 @@ const NECKLINE_STRIP_MARKER = '__strip261_disabled';
 /** {@link NECKLINE_STRIP_ANCHOR} を持つファイル（形成中経路を実装している 2 つ）。 */
 const NECKLINE_STRIP_FILES = ['detect_triples.ts', 'detect_doubles.ts'] as const;
 
+/**
+ * issue #263 の ablation（**両向き化を外す**方向）で書き換える 1 行。
+ * `rejectFormingStairStep`（`detect_triples.ts`）の中でちょうど 1 回現れる。
+ *
+ * 置換後は **#263 以前の片側だけの挙動**（`triple_top` は切り上がりのみ / `triple_bottom` は
+ * 切り下がりのみ）に厳密に戻る。判定式そのものを差し替えるので、閾値・理由コード・積む点は
+ * 一切変わらない。
+ */
+const STAIR_STEP_STRIP_ANCHOR = '\tconst monotonic = ascending || descending;';
+
+/** {@link STAIR_STEP_STRIP_ANCHOR} の置換後（#263 以前の片側判定）。 */
+const STAIR_STEP_STRIP_REPLACEMENT =
+	'\t// [ablation issue #263] 両向き化を外した「配線前」ビルド。計測ハーネスが書き換えた行。\n' +
+	"\tconst monotonic = type === 'triple_top' ? ascending : descending;";
+
+/** issue #263 が発火させうる理由コード（向きの名前。type ではない）。 */
+const STAIR_STEP_REASONS = new Set(['forming_stair_step_up', 'forming_stair_step_down']);
+
+const isStairStepReason = (reason: unknown): boolean => typeof reason === 'string' && STAIR_STEP_REASONS.has(reason);
+
+/**
+ * その候補が **#263 で初めて発火するようになった向き**か（`triple_top` の切り下がり /
+ * `triple_bottom` の切り上がり）。#263 以前から発火していた向きと区別して数えるために使う。
+ */
+const isNewStairStepDirection = (type: unknown, reason: unknown): boolean =>
+	(type === 'triple_top' && reason === 'forming_stair_step_down') ||
+	(type === 'triple_bottom' && reason === 'forming_stair_step_up');
+
 /** issue #261 が新設した理由コード（形成中パス版）。 */
 const NECKLINE_SIDE_FORMING_REASONS = new Set(['forming_peaks_below_neckline', 'forming_valleys_above_neckline']);
 
@@ -274,6 +307,8 @@ interface BuildVariantOpts {
 	ablationMaxRatio?: number;
 	/** `true` なら issue #261 のネックライン側検査を**無効化**する（§6 の「配線前」）。 */
 	stripNecklineSide?: boolean;
+	/** `true` なら issue #263 の単調性ゲートの**両向き化**を外し、片側だけに戻す（§7 の「配線前」）。 */
+	stripStairStep?: boolean;
 }
 
 /**
@@ -284,7 +319,7 @@ interface BuildVariantOpts {
  * @param opts ablation の作り分け（{@link BuildVariantOpts}）
  */
 function materializePatternsDir(variant: string, opts: BuildVariantOpts = {}): string {
-	const { ablationMaxRatio, stripNecklineSide } = opts;
+	const { ablationMaxRatio, stripNecklineSide, stripStairStep } = opts;
 	const files = execFileSync('git', ['ls-tree', '-r', '--name-only', 'HEAD', '--', 'tools/patterns/'], {
 		cwd: ROOT,
 		encoding: 'utf8',
@@ -348,6 +383,17 @@ function materializePatternsDir(variant: string, opts: BuildVariantOpts = {}): s
 			if (src.split(`const ${NECKLINE_STRIP_MARKER} = `).length - 1 !== 1) {
 				throw new Error(`strip ブロックが ${name} に 1 箇所入っていない。`);
 			}
+		}
+
+		if (stripStairStep && name === 'detect_triples.ts') {
+			const hits = src.split(STAIR_STEP_STRIP_ANCHOR).length - 1;
+			if (hits !== 1) {
+				throw new Error(
+					`issue #263 の strip アンカーが ${name} に ${hits} 回現れる（期待 1 回）。` +
+						'単調性ゲートの実装が変わったので、アンカーを取り直すこと。',
+				);
+			}
+			src = src.replace(STAIR_STEP_STRIP_ANCHOR, STAIR_STEP_STRIP_REPLACEMENT);
 		}
 
 		const rewritten = src
@@ -954,10 +1000,11 @@ async function main(): Promise<void> {
 	say();
 	say(
 		'**§1〜§5 は issue #178 項目 1 Phase 1**（形成中 triple の `levelSpread`）、' +
-			'**§6 は issue #261**（`validateMainPointsNecklineSide` の形成中への配線）。' +
-			'#261 が先にマージされたので、§1〜§5 の `base` は**配線後**の値であり、' +
+			'**§6 は issue #261**（ネックライン側検査の形成中への配線）、' +
+			'**§7 は issue #263**（単調性ゲートの両向き化）。' +
+			'#261 / #263 が先にマージされたので、§1〜§5 の `base` は**両方入った後**の値であり、' +
 			'`docs/internal/forming-triple-level-spread-178.md` §10 に貼ってある Phase 1 当時の出力' +
-			'（`main` d86fb2b 時点）とは一致しない。Phase 1 の数字は §6 の「配線前」列に出る。',
+			'（`main` d86fb2b 時点）とは一致しない。Phase 1 の数字は §6 の「配線前」列（`stripBoth`）に出る。',
 	);
 	say();
 	say('## 0. 検算（展開ビルド ≡ 作業ツリー）');
@@ -1791,47 +1838,86 @@ async function main(): Promise<void> {
 	say('## 6. issue #261 — `validateMainPointsNecklineSide` を形成中 4 経路に配線した効果');
 	say();
 	say(
-		'**§1〜§5 の `base` は「配線後」**（作業ツリー = #261 マージ済み）。「配線前」は ' +
-			'`rejectFormingNecklineSide` の本体先頭に `return false;` を差し込んだ strip ビルドで再現する。' +
-			'§3 の ablation と**向きが逆**（あちらは足す / こちらは外す）なのは、#261 が既に作業ツリーに' +
-			'入っているため。',
+		'**§1〜§5 の `base` は #261 も #263 も入った作業ツリー。** 2 つのゲートを切り分けるため、' +
+			'strip ビルドを 2 つ作る:',
+	);
+	say();
+	say('| ビルド | #261（ネックライン側） | #263（単調性の両向き化） | 対応する `main` |');
+	say('|---|---|---|---|');
+	say('| `stripBoth` | 外す | 外す | d86fb2b（#260 マージ直後） |');
+	say('| `strip263` | **入り** | 外す | 56432d8（#264 マージ直後） |');
+	say('| `base`（作業ツリー） | 入り | **入り** | #263 実装後 |');
+	say();
+	say(
+		'**§6 は `stripBoth` → `strip263`**（#261 だけの効果。PR #264 が報告した数字を再現する）、' +
+			'**§7 は `strip263` → `base`**（#263 だけの効果）。こう分けないと、あとから入った #263 が ' +
+			'§6 の「配線前」に混ざって #261 の効果が測れなくなる。',
 	);
 	say();
 
-	const before = await loadBuild('before261', { stripNecklineSide: true });
-	const beforeRecs: FormingRec[] = [];
-	const beforeRows = new Map<string, Row[]>();
-	for (const part of corpus) {
-		const rows: Row[] = [];
-		for (const spec of part.cases) {
-			const r = runCase(before, spec);
-			rows.push({ spec, corpus: part, cands: r.cands, patterns: r.patterns });
-			const collected = collectFromCase(before, spec, part, r.cands);
-			for (const rec of collected) {
-				const p = r.patterns.find((x) => x.type === rec.type && x.status === 'forming');
-				rec.confidence = typeof p?.confidence === 'number' ? p.confidence : null;
+	/** 1 ビルドぶんコーパスを 1 周して、行と accepted な形成中候補を採る。 */
+	const collectAll = async (
+		variant: string,
+		opts: BuildVariantOpts,
+	): Promise<{ recs: FormingRec[]; rows: Map<string, Row[]> }> => {
+		const b = await loadBuild(variant, opts);
+		const outRecs: FormingRec[] = [];
+		const outRows = new Map<string, Row[]>();
+		for (const part of corpus) {
+			const rows: Row[] = [];
+			for (const spec of part.cases) {
+				const r = runCase(b, spec);
+				rows.push({ spec, corpus: part, cands: r.cands, patterns: r.patterns });
+				const collected = collectFromCase(b, spec, part, r.cands);
+				for (const rec of collected) {
+					const p = r.patterns.find((x) => x.type === rec.type && x.status === 'forming');
+					rec.confidence = typeof p?.confidence === 'number' ? p.confidence : null;
+				}
+				outRecs.push(...collected);
 			}
-			beforeRecs.push(...collected);
+			outRows.set(part.label, rows);
 		}
-		beforeRows.set(part.label, rows);
-	}
+		return { recs: outRecs, rows: outRows };
+	};
 
-	// 検算: strip ビルドでは新理由コードが 1 件も出ない（＝配線が本当に外れている）。
+	const stripBoth = await collectAll('strip_both', { stripNecklineSide: true, stripStairStep: true });
+	const strip263 = await collectAll('strip_263', { stripStairStep: true });
+	const beforeRecs = stripBoth.recs;
+	const beforeRows = stripBoth.rows;
+
+	// 検算 1: 両方外したビルドでは #261 の理由コードが 1 件も出ない。
 	let strippedFired = 0;
 	for (const rows of beforeRows.values()) {
 		for (const row of rows) for (const c of row.cands) if (isNecklineSideFormingReason(c.reason)) strippedFired++;
 	}
 	if (strippedFired > 0) {
-		throw new Error(`strip ビルドで新理由コードが ${strippedFired} 件発火した。配線が外れていない。`);
+		throw new Error(`stripBoth で #261 の理由コードが ${strippedFired} 件発火した。配線が外れていない。`);
 	}
-	say(`- ✅ strip ビルドでは \`forming_peaks_below_neckline\` / \`forming_valleys_above_neckline\` が 0 件。`);
-	say('  **差分はゲートのみに帰属する。**');
+	// 検算 2: #263 を外したビルドでは「新しい向き」が 1 件も出ない（元からある向きは出てよい）。
+	for (const [label, rows] of [
+		['stripBoth', beforeRows],
+		['strip263', strip263.rows],
+	] as const) {
+		let newDir = 0;
+		for (const rs of rows.values()) {
+			for (const row of rs) for (const c of row.cands) if (isNewStairStepDirection(c.type, c.reason)) newDir++;
+		}
+		if (newDir > 0) {
+			throw new Error(`${label} で #263 の新しい向きが ${newDir} 件発火した。両向き化が外れていない。`);
+		}
+	}
+	say('- ✅ `stripBoth` で `forming_peaks_below_neckline` / `forming_valleys_above_neckline` が 0 件。');
+	say(
+		'- ✅ `stripBoth` / `strip263` のどちらでも `triple_top:forming_stair_step_down` と ' +
+			'`triple_bottom:forming_stair_step_up`（#263 が足した向き）が 0 件。',
+	);
+	say('  **差分はそれぞれのゲートのみに帰属する。**');
 	say();
 
 	const beforeTriples = beforeRecs.filter((r) => r.family === 'triple');
 	const beforeDoubles = beforeRecs.filter((r) => r.family === 'double');
-	const afterTriples = triples;
-	const afterDoubles = doubles;
+	const afterTriples = strip263.recs.filter((r) => r.family === 'triple');
+	const afterDoubles = strip263.recs.filter((r) => r.family === 'double');
 	const overMaxRatio = (rs: readonly FormingRec[]): FormingRec[] =>
 		rs.filter((r) => r.spreadRatio !== null && (r.spreadRatio as number) > base.MAX_LEVEL_SPREAD_RATIO);
 
@@ -1853,7 +1939,7 @@ async function main(): Promise<void> {
 	for (const [label, b, a] of triRows) say(`| ${label} | ${b} | ${a} | ${a - b >= 0 ? '+' : ''}${a - b} |`);
 	say();
 	let newTotal = 0;
-	for (const rows of byCorpusRows.values()) {
+	for (const rows of strip263.rows.values()) {
 		for (const row of rows) for (const c of row.cands) if (isNecklineSideFormingReason(c.reason)) newTotal++;
 	}
 	say(`新理由コードの発火（配線後・cap 前の生の \`debugCandidates\`）: **延べ ${newTotal} 件**。`);
@@ -1975,7 +2061,7 @@ async function main(): Promise<void> {
 			return m;
 		};
 		const b = perCase(beforeRows);
-		const a = perCase(byCorpusRows);
+		const a = perCase(strip263.rows);
 		const decreased = new Map<string, number>();
 		const totalsBefore = new Map<string, number>();
 		const totalsAfter = new Map<string, number>();
@@ -2029,7 +2115,7 @@ async function main(): Promise<void> {
 	{
 		let dTop = 0;
 		let dBottom = 0;
-		for (const rows of byCorpusRows.values()) {
+		for (const rows of strip263.rows.values()) {
 			for (const row of rows) {
 				for (const c of row.cands) {
 					if (!isNecklineSideFormingReason(c.reason)) continue;
@@ -2069,7 +2155,7 @@ async function main(): Promise<void> {
 			return m;
 		};
 		const sb = byStatus(beforeRows);
-		const sa = byStatus(byCorpusRows);
+		const sa = byStatus(strip263.rows);
 		say('| `type:status` | 配線前（延べ） | 配線後（延べ） | 差 |');
 		say('|---|---:|---:|---:|');
 		for (const k of [...new Set([...sb.keys(), ...sa.keys()])].sort()) {
@@ -2093,7 +2179,7 @@ async function main(): Promise<void> {
 	say('|---|---:|---|---|---|---:|');
 	for (const part of corpus) {
 		const bRows = beforeRows.get(part.label) ?? [];
-		const aRows = byCorpusRows.get(part.label) ?? [];
+		const aRows = strip263.rows.get(part.label) ?? [];
 		if (bRows.length === 0) continue;
 		let same = 0;
 		let fired = 0;
@@ -2129,7 +2215,7 @@ async function main(): Promise<void> {
 	say('|---|---:|---:|---:|---|');
 	for (const part of corpus) {
 		const bRows = beforeRows.get(part.label) ?? [];
-		const aRows = byCorpusRows.get(part.label) ?? [];
+		const aRows = strip263.rows.get(part.label) ?? [];
 		if (bRows.length === 0) continue;
 		const satBefore = bRows.filter((r) => filterCandidatesByWant([...r.cands], new Set()).length > DEBUG_CAP).length;
 		const satAfter = aRows.filter((r) => filterCandidatesByWant([...r.cands], new Set()).length > DEBUG_CAP).length;
@@ -2139,6 +2225,301 @@ async function main(): Promise<void> {
 			const capped = applyDebugCap(row.cands, new Set());
 			for (const c of row.cands) {
 				if (!isNecklineSideFormingReason(c.reason)) continue;
+				total++;
+				if (capped.has(c)) visible++;
+			}
+		}
+		say(
+			`| ${part.label} | ${aRows.length} | ${satBefore} | ${satAfter} | ` +
+				`${visible} / ${total}${total > 0 ? ` (${((visible / total) * 100).toFixed(1)}%)` : ''} |`,
+		);
+	}
+	say();
+
+	// ── §7 issue #263 の配線前後 ──
+	say('## 7. issue #263 — 形成中 triple の単調性ゲートを両向きにした効果');
+	say();
+	say(
+		'`strip263`（#261 入り / #263 の両向き化なし = `main` 56432d8）→ `base`（両方入り）。' +
+			'#263 以前は `triple_top` の切り上がりと `triple_bottom` の切り下がりしか見ておらず、' +
+			'**`triple_top` の単調な切り下がりと `triple_bottom` の単調な切り上がりが素通り**していた。',
+	);
+	say();
+
+	const midTriples = strip263.recs.filter((r) => r.family === 'triple');
+	const baseTriples = triples;
+
+	say('### 7-1. 新しい向きの発火');
+	say();
+	{
+		const fired: Array<{ type: string; reason: string; row: Row; c: CandDebugEntry }> = [];
+		for (const rows of byCorpusRows.values()) {
+			for (const row of rows) {
+				for (const c of row.cands) {
+					if (isNewStairStepDirection(c.type, c.reason)) {
+						fired.push({ type: String(c.type), reason: String(c.reason), row, c });
+					}
+				}
+			}
+		}
+		// 構造 / 実体は「その候補が指す 2 つの主構成点」で畳む（accepted 側と同じキーの作り方）。
+		const structKeys = new Set<string>();
+		const tsKeys = new Set<string>();
+		for (const f of fired) {
+			const idxs = f.c.indices ?? [];
+			if (idxs.length < 2) continue;
+			structKeys.add(`${f.row.spec.series.name}|${f.row.spec.tf}|${f.type}|${idxs[0]}-${idxs[1]}`);
+			const iso = (i: number) => f.row.spec.series.candles[i]?.isoTime ?? String(i);
+			tsKeys.add(`${f.row.spec.tf}|${f.type}|${iso(idxs[0])}-${iso(idxs[1])}`);
+		}
+		say('| 数え方 | 件数 |');
+		say('|---|---:|');
+		say(`| 新しい向きの発火（延べ） | ${fired.length} |`);
+		say(`| 同、構造 | ${structKeys.size} |`);
+		say(`| 同、実体 | ${tsKeys.size} |`);
+		say(
+			`| うち \`triple_top\` の切り下がり（\`forming_stair_step_down\`） | ${fired.filter((f) => f.type === 'triple_top').length} |`,
+		);
+		say(
+			`| うち \`triple_bottom\` の切り上がり（\`forming_stair_step_up\`） | ${fired.filter((f) => f.type === 'triple_bottom').length} |`,
+		);
+		say();
+
+		// 「配線前は accepted だったもの」= strip263 で accepted な形成中 triple のうち、base で消えたもの。
+		const baseAccepted = new Set(baseTriples.map((r) => `${r.caseKey}|${structKey(r)}`));
+		const lost = midTriples.filter((r) => !baseAccepted.has(`${r.caseKey}|${structKey(r)}`));
+		say(
+			`配線前（\`strip263\`）に accepted だった形成中 triple のうち、配線後に accepted でなくなったのは ` +
+				`**延べ ${lost.length} 件 / 構造 ${new Set(lost.map(structKey)).size} 件 / 実体 ${new Set(lost.map(tsKey)).size} 件**。`,
+		);
+		say();
+		say('| 指標 | 配線前（`strip263`） | 配線後（`base`） | 差 |');
+		say('|---|---:|---:|---:|');
+		const rows7: ReadonlyArray<readonly [string, number, number]> = [
+			['延べ', midTriples.length, baseTriples.length],
+			['構造', new Set(midTriples.map(structKey)).size, new Set(baseTriples.map(structKey)).size],
+			['**実体**', new Set(midTriples.map(tsKey)).size, new Set(baseTriples.map(tsKey)).size],
+			[
+				'実体のうち `spreadRatio > 0.5`',
+				new Set(overMaxRatio(midTriples).map(tsKey)).size,
+				new Set(overMaxRatio(baseTriples).map(tsKey)).size,
+			],
+			['延べのうち `spreadRatio > 0.5`', overMaxRatio(midTriples).length, overMaxRatio(baseTriples).length],
+		];
+		for (const [label, b, a] of rows7) say(`| ${label} | ${b} | ${a} | ${a - b >= 0 ? '+' : ''}${a - b} |`);
+	}
+	say();
+
+	say('### 7-2. #178 の残差（`spreadRatio > 0.5` の実体）との突き合わせ');
+	say();
+	say(
+		'#261 配線後の残差（`strip263` で `spreadRatio > 0.5` の実体）を、`spreadRatio` の降順で出す。' +
+			'`§8` 列は `docs/internal/forming-triple-level-spread-178.md` §8 の行番号（主構成点の時刻で対応付け）。' +
+			'**実体は延べの OR で生き残る**（#264 の教訓）ので、実体の生死ではなく' +
+			'**`spreadRatio > 0.5` の延べが 1 件も残らなくなったか**で数える。',
+	);
+	say();
+	{
+		const overMid = overMaxRatio(midTriples);
+		const entities = [...new Set(overMid.map(tsKey))].sort((a, b) => {
+			const ma = Math.max(...overMid.filter((r) => tsKey(r) === a).map((r) => r.spreadRatio ?? 0));
+			const mb = Math.max(...overMid.filter((r) => tsKey(r) === b).map((r) => r.spreadRatio ?? 0));
+			return mb - ma;
+		});
+		const overBaseEntities = new Set(overMaxRatio(baseTriples).map(tsKey));
+		const baseEntities = new Set(baseTriples.map(tsKey));
+		say(`残差: **${entities.length} 実体**`);
+		say();
+		say(
+			'| # | 実体（tf / type / 主構成点の時刻） | 代表窓の `spreadRatio` | 単調性 | 全延べ 前 → 後 | 実体 | `> 0.5` の実体 |',
+		);
+		say('|---:|---|---|---|---|---|---|');
+		let stillOverN = 0;
+		entities.forEach((k, i) => {
+			const g = overMid.filter((r) => tsKey(r) === k).sort((a, b) => (a.spreadRatio ?? 0) - (b.spreadRatio ?? 0));
+			const rep = g[Math.floor(g.length / 2)];
+			const allMid = midTriples.filter((r) => tsKey(r) === k);
+			const allBase = baseTriples.filter((r) => tsKey(r) === k);
+			// 代表窓の 3 点が単調か（主構成点 2 点 + current の終値で見る）。
+			const mainRole = rep.type.endsWith('_top') ? 'peak' : 'valley';
+			const m1 = rep.pts.find((pp) => pp.role === `${mainRole}1`);
+			const m2 = rep.pts.find((pp) => pp.role === `${mainRole}2`);
+			const cur = rep.pts.find((pp) => pp.role === 'current');
+			let mono = '—';
+			if (m1 && m2 && cur) {
+				const up = m1.price < m2.price && m2.price < cur.price;
+				const down = m1.price > m2.price && m2.price > cur.price;
+				const step = Math.abs(cur.price - m1.price) / Math.max(1, m1.price);
+				if (up || down) mono = `${down ? '切り下がり' : '切り上がり'} ${(step * 100).toFixed(2)}%`;
+			}
+			const stillOver = overBaseEntities.has(k);
+			if (stillOver) stillOverN++;
+			say(
+				`| ${i + 1} | ${rep.tf} / ${rep.type} / ${rep.main1Iso.slice(0, 16)} + ${rep.main2Iso.slice(0, 16)} | ` +
+					`${f4(rep.spreadRatio)} | ${mono} | ${allMid.length} → ${allBase.length} | ` +
+					`${baseEntities.has(k) ? '残る' : '**落ちる**'} | ${stillOver ? '残る' : '**落ちる**'} |`,
+			);
+		});
+		say();
+		say('| 集計（実体単位） | 件数 |');
+		say('|---|---:|');
+		say(`| #261 配線後の残差 | ${entities.length} |`);
+		say(`| #263 で \`spreadRatio > 0.5\` の延べが 1 件も残らなくなった | **${entities.length - stillOverN}** |`);
+		say(`| **#178 項目 1 Phase 2 に残る残差** | **${stillOverN}** |`);
+	}
+	say();
+
+	say('### 7-3. 既存の理由コードの増減（ケース単位）');
+	say();
+	say(
+		'**#261（最後尾に置くゲート）と違い、単調性ゲートは前段にある**ので、後段の理由コードから' +
+			'件数が移るのは設計どおり。ここでは「減ったケース数」を横取りの証拠として扱わず、' +
+			'**移った先が単調性ゲートであること**を別建てで確かめる。',
+	);
+	say();
+	{
+		const perCase = (rows: Map<string, Row[]>): Map<string, Map<string, number>> => {
+			const m = new Map<string, Map<string, number>>();
+			for (const rs of rows.values()) {
+				for (const row of rs) {
+					const counts = new Map<string, number>();
+					for (const c of row.cands) {
+						if (typeof c.reason !== 'string') continue;
+						counts.set(c.reason, (counts.get(c.reason) ?? 0) + 1);
+					}
+					m.set(caseKeyOf(row.spec), counts);
+				}
+			}
+			return m;
+		};
+		const b = perCase(strip263.rows);
+		const a = perCase(byCorpusRows);
+		const totalsB = new Map<string, number>();
+		const totalsA = new Map<string, number>();
+		const decreasedCases = new Map<string, number>();
+		for (const [key, counts] of b) {
+			const after = a.get(key) ?? new Map<string, number>();
+			for (const [reason, n] of counts) {
+				totalsB.set(reason, (totalsB.get(reason) ?? 0) + n);
+				if ((after.get(reason) ?? 0) < n) decreasedCases.set(reason, (decreasedCases.get(reason) ?? 0) + 1);
+			}
+		}
+		for (const counts of a.values()) {
+			for (const [reason, n] of counts) totalsA.set(reason, (totalsA.get(reason) ?? 0) + n);
+		}
+		const reasons = [...new Set([...totalsB.keys(), ...totalsA.keys()])]
+			.filter((r) => (totalsA.get(r) ?? 0) !== (totalsB.get(r) ?? 0))
+			.sort();
+		say('| 理由コード | 配線前（延べ） | 配線後（延べ） | 増減 | 減ったケース数 |');
+		say('|---|---:|---:|---:|---:|');
+		if (reasons.length === 0) say('| （件数が動いた理由コードは無い） | — | — | — | — |');
+		for (const r of reasons) {
+			const bn = totalsB.get(r) ?? 0;
+			const an = totalsA.get(r) ?? 0;
+			say(
+				`| \`${r}\`${isStairStepReason(r) ? ' **(単調性)**' : ''} | ${bn} | ${an} | ` +
+					`${an - bn >= 0 ? '+' : ''}${an - bn} | ${decreasedCases.get(r) ?? 0} |`,
+			);
+		}
+		say();
+		const lostTotal = reasons
+			.filter((r) => !isStairStepReason(r))
+			.reduce((acc, r) => acc + Math.max(0, (totalsB.get(r) ?? 0) - (totalsA.get(r) ?? 0)), 0);
+		const gainedStair = reasons
+			.filter((r) => isStairStepReason(r))
+			.reduce((acc, r) => acc + Math.max(0, (totalsA.get(r) ?? 0) - (totalsB.get(r) ?? 0)), 0);
+		say(
+			`単調性以外の理由コードが失った延べの合計は **${lostTotal}**、単調性ゲートが得た延べは **${gainedStair}**。` +
+				'**帰属が移っただけで、どこにも行き場の無い候補は生まれていない**——移動先は理由コードの名前で追える。',
+		);
+	}
+	say();
+
+	say('### 7-4. 標準コーパス 800 の差分');
+	say();
+	{
+		const part = corpus.find((c) => c.cases.length === 800);
+		const bRows = part ? (strip263.rows.get(part.label) ?? []) : [];
+		const aRows = part ? (byCorpusRows.get(part.label) ?? []) : [];
+		interface StdDiff {
+			spec: CaseSpec;
+			patternsChanged: boolean;
+			before: number;
+			after: number;
+			movedFrom: string[];
+		}
+		const diffs: StdDiff[] = [];
+		let firedStd = 0;
+		for (let i = 0; i < bRows.length; i++) {
+			for (const c of aRows[i].cands) if (isNewStairStepDirection(c.type, c.reason)) firedStd++;
+			const patternsChanged = digest(bRows[i].patterns) !== digest(aRows[i].patterns);
+			if (!patternsChanged && digest(bRows[i].cands) === digest(aRows[i].cands)) continue;
+			// この候補がどの理由コードから単調性ゲートへ移ったか（ケース内で件数が減った理由コード）。
+			const count = (cs: readonly CandDebugEntry[]): Map<string, number> => {
+				const m = new Map<string, number>();
+				for (const c of cs) if (typeof c.reason === 'string') m.set(c.reason, (m.get(c.reason) ?? 0) + 1);
+				return m;
+			};
+			const cb = count(bRows[i].cands);
+			const ca = count(aRows[i].cands);
+			const movedFrom = [...cb.keys()]
+				.filter((r) => !isStairStepReason(r) && (ca.get(r) ?? 0) < (cb.get(r) ?? 0))
+				.sort();
+			diffs.push({
+				spec: bRows[i].spec,
+				patternsChanged,
+				before: bRows[i].patterns.length,
+				after: aRows[i].patterns.length,
+				movedFrom,
+			});
+		}
+		const patternsChangedN = diffs.filter((d) => d.patternsChanged).length;
+		say(
+			`全 ${bRows.length} ケース中、新しい向きが発火したのは **${firedStd} 件**。` +
+				`何かが動いたケースは **${diffs.length}**、そのうち **\`data.patterns\` が動いたのは ${patternsChangedN} ケース**。`,
+		);
+		say();
+		if (diffs.length === 0) {
+			say('**0 件差**（合成 fixture に、新しい向きの単調な階段になる形成中 triple は無い）。');
+		} else {
+			say(
+				patternsChangedN === 0
+					? '**`data.patterns` は 1 ケースも動かない。** 動くのは `view=debug` の理由コードの帰属だけで、' +
+							'落ちる候補の集合は変わらない——**その候補は元から別の理由で落ちていた**（下の `移動元` 列）。'
+					: `**\`data.patterns\` が動くケースが ${patternsChangedN} 件ある。** 明細は下表。`,
+			);
+			say();
+			say('| # | 系列 | tf | sd | オプション（F/C/I） | `patterns` 前 → 後 | 移動元の理由コード |');
+			say('|---:|---|---|---|---|---|---|');
+			diffs.forEach((d, i) => {
+				const o = d.spec.opts;
+				say(
+					`| ${i + 1} | ${d.spec.series.name} | ${d.spec.tf} | ${d.spec.swingDepth ?? 'auto'} | ` +
+						`${o.includeForming ? 1 : 0}${o.includeCompleted ? 1 : 0}${o.includeInvalid ? 1 : 0} | ` +
+						`${d.before} → ${d.after}${d.patternsChanged ? ' **(変化)**' : ''} | ` +
+						`${d.movedFrom.length ? d.movedFrom.map((r) => `\`${r}\``).join(' / ') : '—'} |`,
+				);
+			});
+		}
+	}
+	say();
+
+	say('### 7-5. `view=debug` の cap（200 件）への影響');
+	say();
+	say('| 母集団 | ケース | 飽和ケース（前） | 飽和ケース（後） | 新しい向きが cap 内 / 全延べ |');
+	say('|---|---:|---:|---:|---|');
+	for (const part of corpus) {
+		const bRows = strip263.rows.get(part.label) ?? [];
+		const aRows = byCorpusRows.get(part.label) ?? [];
+		if (bRows.length === 0) continue;
+		const satBefore = bRows.filter((r) => filterCandidatesByWant([...r.cands], new Set()).length > DEBUG_CAP).length;
+		const satAfter = aRows.filter((r) => filterCandidatesByWant([...r.cands], new Set()).length > DEBUG_CAP).length;
+		let total = 0;
+		let visible = 0;
+		for (const row of aRows) {
+			const capped = applyDebugCap(row.cands, new Set());
+			for (const c of row.cands) {
+				if (!isNewStairStepDirection(c.type, c.reason)) continue;
 				total++;
 				if (capped.has(c)) visible++;
 			}
