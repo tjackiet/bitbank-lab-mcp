@@ -68,6 +68,81 @@
 | 53 | #242 PR 1/2 | `double_*` の**完成済み 4 経路**に「最終構成点（山2 / 谷2）とネックライン突破バーの**間**に同種のピボットがあれば `invalid`」という経路検証を足した。**閾値を 1 つも導入していない**（水準を問わない 0/1 判定）。triple / H&S への配線は PR 2 | 実データ C / D で**減る**（1,088 ケースで `double_top` 延べ −16（C・1 構造）/ −24（D・2 構造）。標準コーパス・実データ B は 0 件。**増加 0**） |
 | 54 | #242 PR 2/2 | 同じ経路検証を `triple_*` / H&S 系の**完成済み 4 経路ずつ**へ配線し、あわせて double にしかなかった**谷（山）ゾーン再進入チェック**（`detectTroughZoneReentry`）を triple / H&S へ横展開した（#131 → #138 の構造ゲート横展開から漏れていた分の回収） | 実データ C / D で**減る**（どちらの窓でも `head_and_shoulders` 延べ −56 / `triple_top` −12。標準コーパスは **type 別の増減 0** で 20 行が入れ替わり、実データ B は 0 件。**増加 0**） |
 
+### Security（`sharp` を 0.35.2 → 0.35.4 に上げた。`npm audit` の high 対応。`hono` / `qs` の moderate も同時に解消）
+
+`npm audit --audit-level=high` が `sharp` の high アドバイザリ 1 件で落ちていたのを解消した。
+**lockfile だけの変更**で、依存の宣言（`package` マニフェスト）は触っていない。
+
+| | |
+|---|---|
+| 対象 | `sharp` 0.35.2 → **0.35.4**（**直接依存**。宣言の範囲 `^0.35.2` に収まるのでマニフェストは無変更） |
+| 同時に解消 | `hono` 4.12.34 → **4.13.5**（推移。`@modelcontextprotocol/sdk` / `@hono/node-server`）、`qs` 6.15.2 → **6.16.0**（推移。`@modelcontextprotocol/sdk` → `express@5.2.1` → `qs`） |
+| アドバイザリ | high 1 件 + moderate 5 件（下表）。**6 件とも採用バージョンで patched** |
+| 直接依存の宣言変更 | 無し |
+
+値は npm レジストリの advisories bulk API（`npm audit` が参照するのと同じソース）で確認した:
+
+| GHSA | パッケージ | 深刻度 | 脆弱範囲 | 内容 |
+|---|---|---|---|---|
+| GHSA-rgj7-g3m4-5g8c | `sharp` | **high** | `<0.35.4` | libheif の GHSA-g89c-p67h-r497 / GHSA-2jg2-4ch7-h545 |
+| GHSA-gqvv-2mrq-wpjv | `hono` | moderate | `<4.13.5` | CVE-2026-39408 の修正漏れ。`toSSG()` が出力ディレクトリ外へ書く |
+| GHSA-g6gw-c38x-mqfc | `hono` | moderate | `<4.13.5` | `parseBody()` のドット記法の入れ子が無制限でメモリ枯渇 |
+| GHSA-crvj-82cr-hjcx | `hono` | moderate | `<4.13.5` | クエリパーサが URL フラグメント以降を読み、キャッシュキー / プロキシ解釈の差異 |
+| GHSA-x5fp-wj9c-mxmx | `qs` | moderate | `>=6.14.2 <=6.15.3` | bracket-key のカンマ解析による array-limit バイパス |
+| GHSA-4mjr-xmp4-gh2g | `qs` | moderate | `>=2.2.5 <6.16.0` | 攻撃者が制御する `isBuffer` による DoS |
+
+#### `qs` は #219 の「クールダウンが明けたら別途上げる」の回収
+
+`fast-uri` の項（本ファイル内）で「`qs` の moderate は残る（意図的）……6.16.0 の公開は
+2026-08-29 で、2026-09-03 時点ではクールダウン（7 日）の内側にあり採用できない。
+クールダウンが明ける 2026-09-05 以降に別途上げる」と書いた分をここで回収した。
+
+#### クールダウン（`min-release-age=7`）を守ったうえで直せる
+
+`.npmrc` の `min-release-age=7`（CONTRIBUTING.md「依存パッケージのクールダウン運用」）により、
+**公開 7 日未満のバージョンは解決対象にならない**。今回は 3 件とも猶予が明けており、
+`.npmrc` の一時書き換え（CONTRIBUTING.md「緊急パッチが必要な場合」）は不要だった。
+以下は **2026-09-09 時点**（公開日は UTC）:
+
+| 版 | 公開日（UTC） | 経過 | クールダウン | 採否 |
+|---|---|---|---|---|
+| `sharp` 0.35.4 | 2026-08-26 | 13.7 日 | 外 | **採用** |
+| `hono` 4.13.5 | 2026-08-26 | 14.0 日 | 外 | **採用** |
+| `hono` 4.13.6 / 4.13.7 | 2026-09-04 | 4.3 日 | **内** | 不採用（アドバイザリの解消には不要） |
+| `qs` 6.16.0 | 2026-08-29 | 10.1 日 | 外 | **採用** |
+
+**クールダウンが実際に効いていることが `hono` で確認できる。** 最新は 4.13.7 だが、
+公開 4.3 日で解決対象外になるため 4.13.5 に着地した。`<4.13.5` の 3 件はこれで解消する。
+
+**npm 10.x では `min-release-age` が黙って無視される**（CONTRIBUTING.md の注意点どおり）。
+本環境の npm 10.9.7 では `npm config get min-release-age` が `7` を返すのに
+`npm config get before` が `null`（＝効いていない）で、npm 11.10.0 では `before` が
+7 日前の日付になる。**この差を実機で確認したうえで、本変更は npm 11.10.0 で解決した。**
+npm 10.x で解決すると `hono` 4.13.7 を掴み、クールダウンを迂回した lockfile ができる。
+
+#### `@vitest/mocker` の moderate 3 件は残る（意図的）
+
+`@vitest/mocker` の GHSA-82fw-gwwq-j7x9（moderate。`vitest` / `@vitest/coverage-v8` と循環参照で
+3 件として計上される）は本 PR では解消していない。**`npm audit fix` / `npm update` では動かせない**
+——`@vitest/coverage-v8@4.1.9` の peerDependencies が `vitest: 4.1.9` を**完全一致**で要求するため、
+両者を揃えて 4.1.11 へ上げる必要がある（4.1.11 は公開 21.5 日でクールダウンは外）。
+
+テストランナー自体の更新は、依存セキュリティの PR に混ぜると検証の性質が変わる（テストの
+挙動が変わりうる差分と、脆弱性解消の差分が同じ diff に載る）ので**別 PR に切る**。
+CI のゲートは `--audit-level=high` なので moderate は落とさない。
+
+#### 検証
+
+- `npm ci` → `npm audit --audit-level=high` が **exit 0**（残るのは `@vitest/mocker` の moderate 3 件のみ）
+- `npm run typecheck` 通過、`npm test` は **221 ファイル / 5,652 件すべて通過**
+- **`@img/*` のプラットフォーム別エントリが 27 件のまま**（`darwin-arm64` / `darwin-x64` /
+  `linux-{arm,arm64,ppc64,riscv64,s390x,x64}` / `linuxmusl-{arm64,x64}` / `win32-{arm64,ia32,x64}` /
+  `wasm32` / `freebsd-wasm32` / `webcontainers-wasm32` と対応する `libvips`）。
+  `sharp` はプラットフォーム別の optional 依存を持つため、Linux コンテナで lockfile を
+  再生成すると他プラットフォーム分が落ちうる。**落ちていないことを件数で確認した**
+- `sharp` 0.35.4（libvips 8.18.6）が **SVG → PNG を実際に出力できることを確認**
+  （`render_*_svg` の `savePng` / `tools/trading_process/lib/svg_to_png.ts` が使う経路）
+
 ### Changed（triple / H&S に経路検証とゾーン再進入チェックを横展開する。#242 PR 2/2）
 
 PR 1 が double に入れた経路検証（`peak_after_last_pivot` / `trough_after_last_pivot`）を
