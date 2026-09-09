@@ -71,6 +71,39 @@
 | 56 | #261 | `validateMainPointsNecklineSide`（#216 Phase 2）を**形成中**の triple / double 4 経路へ配線した。**閾値を 1 つも導入していない**（完成済みと同じ判定関数を共有し、理由コードだけ `forming_` 接頭辞で分ける）。`FORMING_*` 係数 / `tolerancePct` / `MAX_LEVEL_SPREAD_RATIO` は不変 | 実データ 1hour で**減る**（12,104 ケースで accepted な形成中 triple が延べ 7,581 → 5,818 / 実体 48 → 43）。**標準コーパス 800 は全候補の JSON が完全一致で 0 件差**。形成中 double の `forming` は延べ 73 で不変（減るのは `expired` 側 1,925 → 1,182） |
 | 57 | #263 | 形成中 triple の**単調性ゲートを両向き**にした（`triple_top` の切り下がり / `triple_bottom` の切り上がりが素通りしていた）。**閾値 `FORMING_STAIR_STEP_LIMIT`（2%）は据え置き**で、見る向きを増やしただけ | 実データ 1hour で**わずかに減る**（12,104 ケースで accepted な形成中 triple が延べ 5,818 → 5,763 / 実体 43 のまま）。**標準コーパス 800 の `data.patterns` は 1 ケースも動かない**（動くのは `view=debug` の理由コードの帰属だけ） |
 | 58 | #178 項目 1 | **形成中 triple への高さ相対ゲートは案 C（不採用）で決着。文書化のみ。** #261 / #263 で帰属を正した後の残差 17 実体のうち 12 実体が他ゲートの仕事、単独で拾う 5 実体のうち 3 実体が目視で妥当なトリプル。配線すると帰属が誤り妥当な形を落とす。**#178 の 4 項目すべてが決着し issue はクローズ** | **変わらない**（docstring / docs / 内部メモのみ。コードのロジックは 1 行も触っていない） |
+| 59 | #262 Phase 1 | **形成中 double の「形成中」の定義が top / bottom で違う件の計測。コード変更なし。** top は「最終構成点が形成中」（確定 2 点 + 最新足）、bottom は「構造完成・ブレイク待ち」（確定 3 点）で、**同じ `status: 'forming'` が別の段階を指している**。形成中 `double_top` が 0 件になる律速は `forming_bars_out_of_range`（到達 4,303 のうち 4,159 = 96.7% が**全件下限割れ**）で、issue が疑っていた `DOUBLE_LEVEL_MAX_PCT` ではない（172 件 = 3.2%） | **変わらない**（計測スクリプトと内部メモのみ。検出器・`structural.ts`・`config.ts`・`status` の enum は 1 行も触っていない） |
+
+### Docs（#262 Phase 1: 形成中 double の「形成中」の定義の非対称を計測。決定はしない）
+
+**検出器・`structural.ts`・`config.ts`・ベースライン・`status` の enum は 1 行も変えていない。**
+issue #262 は「主構成点の取り方が非対称」と書いていたが、コードを読むと **2 経路は「形成中」の
+段階そのものが違う**（`tryFormingDoubleTop` = 最終構成点が形成中 / `tryFormingDoubleBottom` =
+構造完成・ブレイク待ち）。主構成点の取り方の差はその帰結であって原因ではない。
+
+12,104 ケース（標準 800 + 実データ B / C / D 各 96 + ローリング窓 3,672 × 3）で実測した:
+
+| 何を | 実測 |
+|---|---|
+| 形成中 `double_top` が 0 件になる律速 | **`forming_bars_out_of_range`**。構成点が揃った 4,303 件のうち **4,159 件（96.7%）が全件下限割れ**（`formationBars` は p50 11 本 / max 38 本。要求は `1day` 23 / `1hour` 34 / `4hour` 42 本） |
+| issue が疑っていた `DOUBLE_LEVEL_MAX_PCT` | **律速ではない**。`forming_peaks_not_level` の棄却は 172 件（到達 5,453 の 3.2%）。緩めても 0 件は動かない |
+| 原因 | top は左の主構成点に**最新の確定山**を取るので `formationBars` が「パターン長」ではなく「直近の山からの距離」を測る。bottom は谷ペアの左側なので構造全体を張る（p50 230 本） |
+| ablation A（bottom を top の流儀へ） | **全母集団で accepted 0 件**。現行 bottom の `forming` 6 実体 / `expired` 9 / `invalid` 5 が全部消える。落ち方も同型（`forming_bars_out_of_range` 3,869 件が全件下限割れ） |
+| ablation B（top を bottom の流儀へ） | **0 → 13 実体**（`expired` 8 / `invalid` 5 / **`forming` 2**）。既定（`includeInvalid: false`）で見えるのは `forming` の 2 実体だけ |
+| 目視判定（B の 13 実体を値動きで畳んだ 10 形） | **呼べる 3 / 保留 2 / 呼べない 5**。**`forming` で見える 2 実体は両方「呼べる」**。10 形すべて完成済み経路の高さ相対ゲート（`validateLevelDiff`）を通過する（max 0.488） |
+| ローリング窓での追跡 | 形成中 double が `completed` に至った例は **top / bottom / A / B のどれにも 0 件**（現行 bottom の 7 構造も全部 `expired` / `invalid`） |
+
+**`near_completion` は既に「構造完成・ブレイク待ち」を意味している**（`detect_triples` / `detect_hs` の
+完成済み経路がブレイク未検出のとき出す）。**double 2 型だけがこの status を一度も出さず**、現行
+`tryFormingDoubleBottom` の `forming` はその語彙では誤ラベル。案 C（両段階を持つ）は enum の追加を
+伴わない。
+
+**Phase 1 の推奨は「案 A は採らない / 案 C を本命・案 B をその第 1 段」で、決定はしていない。**
+案 A（bottom を top に揃える）は非対称の解消ではなく**形成中 double の廃止**になる。
+
+- `scripts/measure_forming_double_asymmetry_262.ts` — 計測ハーネス（新規）。`tools/patterns/` を
+  一時領域へ展開し、形成中 1 経路を `return null` に差し替えた**対照ビルドとの差集合**で経路を同定する
+  （理由コードの名前では完成済み経路の棄却が混ざるため）
+- `docs/internal/forming-double-asymmetry-262.md` — 計測結果・目視判定・契約の棚卸し・案 A/B/C/D の比較
 
 ### Docs（#178 項目 1: 形成中 triple への高さ相対ゲートは案 C（不採用）で決着。#178 クローズ）
 
