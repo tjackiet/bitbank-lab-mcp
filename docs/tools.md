@@ -650,7 +650,7 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 4 経路が持つ**高さ相対の hard gate**（`MAX_LEVEL_SPREAD_RATIO` = 0.5。`tools/patterns/structural.ts` の
 `validateLevelSpread`）に当たる段が無い。**未配線ではなく実測に基づく不採用**で、
 [#178 項目 1 の決定](https://github.com/tjackiet/bitbank-lab-mcp/issues/178#issuecomment-5599895375)（2026-09-09、案 C）による。
-#261 / #263 の配線後に測ると、accepted な形成中 triple 43 実体のうち 17 実体が 0.5 を超えるが、
+その後 #261 / #263 を配線してから測ると、accepted な形成中 triple 43 実体のうち 17 実体が 0.5 を超えるが、
 うち 12 実体は他ゲートの仕事（ネックライン誤側 8 / 誤側との差 0.15% 未満 3 / 単調だが閾値の直下 1）で
 別の終端窓で生き残っているものであり、配線するとそれらを「高さ相対」の理由コードで落として**帰属が誤る**。
 単独で拾う残り 5 実体のうち **3 実体は目視で妥当なトリプル**なので、入れると妥当な形を落とす。
