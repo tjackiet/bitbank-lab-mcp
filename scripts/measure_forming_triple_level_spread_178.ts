@@ -1698,8 +1698,9 @@ async function main(): Promise<void> {
 	);
 	say(
 		`| \`FORMING_STAIR_STEP_LIMIT\` | ${base.FORMING_STAIR_STEP_LIMIT} | ` +
-			'`tolerancePct` 由来ではない固定値。**片側しか見ていない**——`triple_top` の切り上がりと ' +
-			'`triple_bottom` の切り下がりだけで、逆向きの単調列は素通りする |',
+			'`tolerancePct` 由来ではない固定値。**両向きを見る**（#263）——`triple_top` / `triple_bottom` の ' +
+			'切り上がりと切り下がりを同じ式で評価する。**Phase 1 の計測時点では片側だけ**で、' +
+			'逆向きの単調列が素通りしていた（値は据え置き。効果は §7） |',
 	);
 	say(
 		`| \`FORMING_MIN_CONFIDENCE\` / \`FORMING_MAX_CONFIDENCE\` | ${base.FORMING_MIN_CONFIDENCE} / ${base.FORMING_MAX_CONFIDENCE} | ` +
@@ -2435,11 +2436,95 @@ async function main(): Promise<void> {
 			.reduce((acc, r) => acc + Math.max(0, (totalsA.get(r) ?? 0) - (totalsB.get(r) ?? 0)), 0);
 		say(
 			`単調性以外の理由コードが失った延べの合計は **${lostTotal}**、単調性ゲートが得た延べは **${gainedStair}**` +
-				`（差 ${gainedStair - lostTotal}）。**失った側はすべて単調性ゲートへ移っている**——` +
-				'ゲートは棄却時に `continue` するので、`accepted` になって `return` していた周回が先の（より古い）' +
-				'ペアまで回り続け、**その追加の周回が新たに単調性ゲートに掛かる**ぶんだけ得た側が多くなる' +
-				'（§3-1 / §6-2 と同じ構造）。**どこにも行き場の無い候補は生まれていない。**',
+				`（差 ${gainedStair - lostTotal}）。**ただし集計値の増減だけでは「どこへ移ったか」は言えない**ので、` +
+				'下で**候補単位**に突き合わせる。',
 		);
+		say();
+
+		// **候補単位の遷移**（CodeRabbit の指摘）。集計値の増減は「A が減って B が増えた」までしか言えず、
+		// 「**A だった候補が B になった**」を示さない。同じ候補を `(ケース, type, 構成点の idx)` で対応付けて、
+		// 失われた非単調性の理由が実際に単調性ゲートへ移ったかを数える。
+		say('#### 候補単位の遷移（集計値ではなく同一候補の追跡）');
+		say();
+		say(
+			'`(ケース, type, 構成点の idx)` で配線前後の候補を対応付ける。対象は**形成中 triple の候補だけ**——' +
+				'`type` が `triple_*` で、かつ `indices` が 3 点でその末尾が窓の最終足（形成中経路は必ず ' +
+				'`[main1, main2, lastIdx]` を積む）。**完成済み経路を混ぜると対応が付かない**' +
+				'（strict / relaxed × 2 段が同じ `[a, b, c]` を積むのでキーが重複する）。' +
+				'それでも重複が残るものは対応が一意に決まらないので**別建てで数える**。',
+		);
+		say();
+		{
+			const keyed = (rows: Map<string, Row[]>): Map<string, Map<string, string[]>> => {
+				const m = new Map<string, Map<string, string[]>>();
+				for (const rs of rows.values()) {
+					for (const row of rs) {
+						const per = new Map<string, string[]>();
+						for (const c of row.cands) {
+							if (c.type !== 'triple_top' && c.type !== 'triple_bottom') continue;
+							if (typeof c.reason !== 'string') continue;
+							const idxs = c.indices ?? [];
+							// 形成中経路の指紋。完成済み経路の `[a, b, c]` は末尾が最終足ではないので落ちる
+							// （最終足がちょうど第 3 構成点になる完成済み候補だけは混ざりうるが、
+							// そのときは下の「一意に決まらない」に計上されるので結論を汚さない）。
+							if (idxs.length !== 3 || idxs[2] !== row.spec.windowEnd) continue;
+							const k = `${c.type}|${idxs.join('-')}`;
+							const arr = per.get(k);
+							if (arr) arr.push(c.reason);
+							else per.set(k, [c.reason]);
+						}
+						m.set(caseKeyOf(row.spec), per);
+					}
+				}
+				return m;
+			};
+			const kb = keyed(strip263.rows);
+			const ka = keyed(byCorpusRows);
+			let toStair = 0;
+			let toOther = 0;
+			let unchanged = 0;
+			let vanished = 0;
+			let appeared = 0;
+			let ambiguous = 0;
+			for (const [caseKey, per] of kb) {
+				const after = ka.get(caseKey) ?? new Map<string, string[]>();
+				for (const [k, reasons] of per) {
+					const ar = after.get(k);
+					if (reasons.length !== 1 || (ar !== undefined && ar.length !== 1)) {
+						ambiguous += reasons.length;
+						continue;
+					}
+					if (ar === undefined) {
+						vanished++;
+						continue;
+					}
+					if (ar[0] === reasons[0]) unchanged++;
+					else if (isStairStepReason(ar[0])) toStair++;
+					else toOther++;
+				}
+				for (const [k, reasons] of after) {
+					if (!per.has(k)) appeared += reasons.length;
+				}
+			}
+			say('| 遷移（配線前 → 配線後） | 延べ |');
+			say('|---|---:|');
+			say(`| 理由コードが変わらない | ${unchanged} |`);
+			say(`| **非単調性の理由 → 単調性の理由** | **${toStair}** |`);
+			say(`| 非単調性の理由 → 別の非単調性の理由 | **${toOther}** |`);
+			say(`| 配線前だけに存在（候補ごと消えた） | **${vanished}** |`);
+			say(`| 配線後だけに存在（ループが先へ進んで増えた） | ${appeared} |`);
+			say(`| 対応が一意に決まらない（同じキーが 1 ケース内に複数回） | ${ambiguous} |`);
+			say();
+			say(
+				toOther === 0 && vanished === 0
+					? '**理由コードが変わった候補は 1 件残らず単調性ゲートへ移っている。** ' +
+							'別の経路へ逃げた候補も、候補ごと消えた候補も 0 件——集計値の差 ' +
+							`${gainedStair - lostTotal} は「配線後だけに存在」${appeared} 件の内数で、` +
+							'ゲートの `continue` でループが先の（より古い）ペアまで回るぶん（§3-1 / §6-2 と同じ構造）。'
+					: `⚠️ **単調性ゲート以外へ移った候補が ${toOther} 件、候補ごと消えたものが ${vanished} 件ある。** ` +
+							'集計値だけで「すべて移った」とは言えないので、移動経路は確定していない。',
+			);
+		}
 		say();
 		say('依頼文が名指しした「理由が移る候補」の実測値（**横取りではなく、前段のゲートへの設計どおりの帰属変更**）:');
 		say();
