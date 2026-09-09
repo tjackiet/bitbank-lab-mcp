@@ -42,6 +42,7 @@ import {
 	getDefaultParamsForTf,
 	getDefaultToleranceForTf,
 	getHeadProminenceForTf,
+	getHsShoulderMaxPctForTf,
 	getSizeThresholdsForTf,
 } from '../../tools/patterns/config.js';
 import { detectTriples } from '../../tools/patterns/detect_triples.js';
@@ -71,6 +72,7 @@ function buildTripleCtxFor(candles: CandleData[], tf: string, swingDepthOverride
 		tolerancePct: tol,
 		headProminencePct: getHeadProminenceForTf(tf),
 		sizeThresholds: getSizeThresholdsForTf(tf),
+		hsShoulderMaxPct: getHsShoulderMaxPctForTf(tf),
 		minDist: auto.minBarsBetweenSwings,
 		want: new Set(['triple_top', 'triple_bottom']),
 		includeForming: false,

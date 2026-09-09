@@ -221,10 +221,11 @@ describe('実データ（`btc_jpy_1hour_2026_08`）の H&S 候補が誤った側
 			// 頭 (idx 294) は誤った側ではない——**落ちた原因は肩**。
 			expect(c.details?.offenders?.some((o) => o.idx === 294)).toBe(false);
 		}
-		// 落ちた窓は右肩 325-330 を共有する複数の左肩候補（283 / 257 / 211 / 204）。
-		expect(rejected.map((c) => c.indices?.join('-'))).toEqual(
-			expect.arrayContaining(['283-285-294-325-330', '257-272-294-325-330']),
-		);
+		// 落ちた窓は右肩 325-330 を共有する左肩候補。**#244 Phase 2 で 257 だけになった**——
+		// 283 / 211 / 204 は右肩 330（12,407,578）との肩 `relDiff` が 1.386% / 1.188% / 1.306% で
+		// `1hour` の肩ゲート（`getHsShoulderMaxPctForTf('1hour')` = 1.04%）を超えるため、
+		// **本ゲートより手前の `shoulders_not_near:cap` で落ちる**。257 は 0.844% で通る。
+		expect(rejected.map((c) => c.indices?.join('-'))).toEqual(expect.arrayContaining(['257-272-294-325-330']));
 	});
 
 	it('逆 H&S: 左肩がネックラインより上だと `valleys_above_neckline` で落ちる', async () => {

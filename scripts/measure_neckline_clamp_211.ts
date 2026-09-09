@@ -103,7 +103,7 @@ import { pathToFileURL } from 'node:url';
 import { buildBtcJpy2026Candles } from '../tests/fixtures/btc_jpy_1day_2026.js';
 import { buildBtcJpy1hour202608Candles } from '../tests/fixtures/btc_jpy_1hour_2026_08.js';
 import * as synth from '../tests/fixtures/synthetic_pattern_candles.js';
-import { getSizeThresholdsForTf, resolveParams } from '../tools/patterns/config.js';
+import { getHsShoulderMaxPctForTf, getSizeThresholdsForTf, resolveParams } from '../tools/patterns/config.js';
 import { detectHeadAndShoulders, necklineProjectionHeight } from '../tools/patterns/detect_hs.js';
 import { linearRegressionWithR2, near as nearFn, pct as pctFn } from '../tools/patterns/regression.js';
 import { HS_NECKLINE_MAX_PCT, relDiff } from '../tools/patterns/structural.js';
@@ -373,6 +373,7 @@ function buildCtx(spec: CaseSpec): DetectContext {
 		tolerancePct: resolved.tolerancePct,
 		headProminencePct: resolved.headProminencePct,
 		sizeThresholds: getSizeThresholdsForTf(spec.tf),
+		hsShoulderMaxPct: getHsShoulderMaxPctForTf(spec.tf),
 		minDist: resolved.minBarsBetweenSwings,
 		want: new Set(),
 		includeForming: spec.opts.includeForming,

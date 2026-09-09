@@ -152,6 +152,17 @@ export interface DetectContext {
 	 * （`MIN_PATTERN_HEIGHT_PCT` / `MIN_DEPTH_PCT`）を直接読むと時間足別の値が効かなくなる。
 	 */
 	sizeThresholds: SizeThresholds;
+	/**
+	 * H&S / 逆 H&S の**左右肩の同水準判定の上限**（issue #244 Phase 2）。
+	 * `getHsShoulderMaxPctForTf(type)` を `detect_patterns.ts` で **1 回だけ**解決して載せる
+	 * （{@link sizeThresholds} と同じ流儀。`structural.ts` / 各検出器は `tf` を知らない）。
+	 *
+	 * **適用先は肩ゲートだけ。** `enumerateHsWindows` の窓生成（`outerShoulderOk`）は
+	 * モジュール定数 `HS_SHOULDER_MAX_PCT`（5%）のまま緩く残す——窓生成で落とすと
+	 * `view=debug` が無音になり、肩ゲートで落とせば `shoulders_not_near:cap` が残るため
+	 * （`getHsShoulderMaxPctForTf` の docstring）。
+	 */
+	hsShoulderMaxPct: number;
 	minDist: number;
 	/** 検出対象パターン種別。空 = 全種 */
 	want: Set<string>;

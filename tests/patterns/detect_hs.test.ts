@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dayjs } from '../../lib/datetime.js';
-import { getDefaultToleranceForTf, getSizeThresholdsForTf } from '../../tools/patterns/config.js';
+import {
+	getDefaultToleranceForTf,
+	getHsShoulderMaxPctForTf,
+	getSizeThresholdsForTf,
+} from '../../tools/patterns/config.js';
 import { detectHeadAndShoulders, necklineAt, necklineProjectionTarget } from '../../tools/patterns/detect_hs.js';
 import { linearRegressionWithR2 } from '../../tools/patterns/regression.js';
 import type { Pivot } from '../../tools/patterns/swing.js';
@@ -44,6 +48,7 @@ function buildCtx(opts: {
 		tolerancePct: tol,
 		headProminencePct: headProm,
 		sizeThresholds: getSizeThresholdsForTf(opts.type ?? '1day'),
+		hsShoulderMaxPct: getHsShoulderMaxPctForTf(opts.type ?? '1day'),
 		minDist: 5,
 		want: opts.want ?? new Set(),
 		includeForming: opts.includeForming ?? false,
@@ -420,9 +425,14 @@ describe('detectHeadAndShoulders', () => {
 
 	// ── shoulders_not_near の conjunct 分割（issue #172） ──
 	//
-	// 肩の判定は `near(tolerancePct)` と `isSameLevel(HS_SHOULDER_MAX_PCT)` の AND で、
-	// 実効閾値は `min(tolerancePct, HS_SHOULDER_MAX_PCT)`。棄却理由が 1 種類しか無かったため
+	// 肩の判定は `near(tolerancePct)` と `isSameLevel(ctx.hsShoulderMaxPct)` の AND で、
+	// 実効閾値は `min(tolerancePct, ctx.hsShoulderMaxPct)`。棄却理由が 1 種類しか無かったため
 	// `view=debug` を reason で集計するとどちらで落ちたか消えていた（#152 / #167 の誤診の原因）。
+	//
+	// **本ブロックのケースは `buildCtx` の既定 `type`（`1day`）で走る**ので、cap は
+	// `HS_SHOULDER_MAX_PCT` = 5% のまま。#244 Phase 2 で時間足別になったのは `1day` 未満で、
+	// `1day` の挙動と実効閾値はここでも変わっていない（時間足別の側は
+	// `tests/patterns/hs-shoulder-max-pct-tf.test.ts` が持つ）。
 
 	it('H&S: tolerancePct のみ超過 → shoulders_not_near:tolerance', () => {
 		// left=100, right=104.5 → 4.5/104.5 ≈ 0.0431
@@ -456,9 +466,13 @@ describe('detectHeadAndShoulders', () => {
 	});
 
 	it('H&S: HS_SHOULDER_MAX_PCT のみ超過 → shoulders_not_near:cap（15min の tf-auto 許容）', () => {
-		// `:cap` は `tolerancePct > HS_SHOULDER_MAX_PCT` のときしか成立しない。tf-auto で
-		// そうなるのは 15min / 30min（0.06 > 0.05）だけなので、マジックナンバーではなく
-		// tf-auto 表から引く（1day / 1hour では構造上この理由コードを発火させられない）。
+		// `:cap` は `tolerancePct > cap` のときしか成立しない。**ctx の `type` は `1day`**（既定）
+		// なので cap は 5% で、`tolerancePct` だけを 15min の tf-auto 値（0.06 > 0.05）に差し替えて
+		// 発火させる。マジックナンバーを書かずに tf-auto 表から引く。
+		//
+		// **#244 Phase 2 以降、`1day` 未満では tf-auto の cap 自体が `tolerancePct` を下回るので
+		// `:cap` は既定パスで普通に出る**（`1hour` cap 1.04% < tol 5%）。ここは `1day` の
+		// 「呼び出し側が明示的に緩めたときだけ出る」経路を固定している。
 		const tol15min = getDefaultToleranceForTf('15min');
 		expect(tol15min).toBeGreaterThan(0.05);
 		// left=100, right=105.5 → 5.5/105.5 ≈ 0.0521
@@ -514,7 +528,12 @@ describe('detectHeadAndShoulders', () => {
 
 	it('接尾辞なしの shoulders_not_near は積まれない / tolerancePct <= cap では :cap も出ない', () => {
 		// 右肩を掃引して strict 経路の肩棄却を集め、(a) 旧コードが残っていないこと、
-		// (b) `tolerancePct <= HS_SHOULDER_MAX_PCT` では `:cap` が構造上発火しないことを固定する。
+		// (b) `tolerancePct <= cap` では `:cap` が構造上発火しないことを固定する。
+		//
+		// **掃引は `buildCtx` の既定 `type`（`1day`）で走るので cap = 5% 固定。** #244 Phase 2 で
+		// 時間足別になったのは `1day` 未満で、この不変条件（`tolerancePct <= cap` なら `:cap` は
+		// 出ない）自体は cap の値に依らず成り立つ——掃引の `tolerancePct` 格子（0.03 / 0.04 / 0.05）が
+		// `1day` の cap 以下であることが前提なので、`type` を短い足に変えるならこの格子も変えること。
 		const seen = new Set<string>();
 		for (const rightShoulder of [100, 102, 104, 104.5, 105, 105.5, 106, 108, 112, 120, 135]) {
 			for (const tolerancePct of [0.03, 0.04, 0.05]) {
@@ -622,8 +641,8 @@ describe('detectHeadAndShoulders', () => {
 	// ── relaxed 経路の肩落ち（issue #174） ──
 	//
 	// relaxed は `near()` を呼ばず `tolerancePct * factors.shoulder` をインラインで比較する。
-	// 実効閾値は `min(tolerancePct * factors.shoulder, HS_SHOULDER_MAX_PCT)` で、
-	// **既定パスではほぼ全時間足で HS_SHOULDER_MAX_PCT が律速する**（strict と逆）。
+	// 実効閾値は `min(tolerancePct * factors.shoulder, ctx.hsShoulderMaxPct)` で、
+	// **既定パスでは全時間足で cap が律速する**（#244 Phase 2 以降は strict も `1day` 未満で同じ）。
 	// #173 以前は肩で落ちた窓に何も積んでいなかったため、`view=debug` の集計に relaxed が
 	// 1 件も映らず、`:cap` 実測 0 件（#167）が strict の観測だと分からなくなっていた。
 

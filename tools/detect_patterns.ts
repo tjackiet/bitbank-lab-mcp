@@ -6,7 +6,7 @@ import { DetectPatternsOutputSchema, type PatternFilterEnum } from '../src/schem
 import analyzeIndicators from './analyze_indicators.js';
 import { buildStatistics } from './patterns/aftermath.js';
 import { filterCandidatesByWant } from './patterns/candidate-filter.js';
-import { getSizeThresholdsForTf, resolveParams } from './patterns/config.js';
+import { getHsShoulderMaxPctForTf, getSizeThresholdsForTf, resolveParams } from './patterns/config.js';
 // --- 各パターン検出モジュール ---
 import { detectDoubles } from './patterns/detect_doubles.js';
 import { detectHeadAndShoulders } from './patterns/detect_hs.js';
@@ -234,6 +234,10 @@ export default async function detectPatterns(
 			// 反転パターンのサイズ検査の下限（issue #152）。**時間足の解決はここ 1 箇所だけ。**
 			// `structural.ts` / 各検出器は純粋関数側なので `tf` を知らない。
 			sizeThresholds: getSizeThresholdsForTf(type),
+			// H&S / 逆 H&S の肩の同水準判定の上限（issue #244 Phase 2）。**時間足の解決はここ 1 箇所だけ。**
+			// 窓生成（`outerShoulderOk`）は `HS_SHOULDER_MAX_PCT`（5%）のまま——理由は
+			// `getHsShoulderMaxPctForTf` の docstring（無音の偽陰性を避けるため窓生成は緩く残す）。
+			hsShoulderMaxPct: getHsShoulderMaxPctForTf(type),
 			minDist,
 			want,
 			includeForming,

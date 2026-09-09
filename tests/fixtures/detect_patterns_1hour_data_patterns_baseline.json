@@ -1,126 +1,6 @@
 [
 	{
 		"type": "inverse_head_and_shoulders",
-		"confidence": 0.78,
-		"timeframe": "1hour",
-		"timeframeLabel": "1時間足",
-		"range": {
-			"start": "2026-08-12T23:00:00.000Z",
-			"end": "2026-08-19T15:00:00.000Z"
-		},
-		"structureRange": {
-			"start": "2026-08-12T23:00:00.000Z",
-			"end": "2026-08-19T06:00:00.000Z"
-		},
-		"confirmation": {
-			"type": "neckline_breakout",
-			"date": "2026-08-19T15:00:00.000Z",
-			"idx": 163,
-			"price": 10848712
-		},
-		"precedingTrend": {
-			"start": "2026-08-12T20:00:00.000Z",
-			"end": "2026-08-12T23:00:00.000Z",
-			"direction": "insufficient_data",
-			"returnPct": -0.27,
-			"lookbackBars": 30
-		},
-		"pivots": [
-			{
-				"idx": 3,
-				"price": 10112502,
-				"kind": "L",
-				"extremePrice": 10103165
-			},
-			{
-				"idx": 9,
-				"price": 10173012,
-				"kind": "H",
-				"extremePrice": 10188490
-			},
-			{
-				"idx": 42,
-				"price": 9965270,
-				"kind": "L",
-				"extremePrice": 9955830
-			},
-			{
-				"idx": 147,
-				"price": 10330037,
-				"kind": "H",
-				"extremePrice": 10334411
-			},
-			{
-				"idx": 154,
-				"price": 10251555,
-				"kind": "L",
-				"extremePrice": 10234089
-			}
-		],
-		"neckline": [
-			{
-				"x": 9,
-				"y": 10173012
-			},
-			{
-				"x": 147,
-				"y": 10330037
-			}
-		],
-		"structureDiagram": {
-			"svg": "<svg width=\"600\" height=\"300\" xmlns=\"http://www.w3.org/2000/svg\">\n  <rect width=\"600\" height=\"300\" fill=\"#f8f9fa\"/>\n  <!-- Neckline (peaks average) -->\n  <line x1=\"50\" y1=\"80\" x2=\"550\" y2=\"80\" stroke=\"#666\" stroke-width=\"2\" stroke-dasharray=\"5,5\"/>\n  <text x=\"300\" y=\"95\" text-anchor=\"middle\" fill=\"#555\" font-size=\"12\">ネックライン: 10,251,525円</text>\n  <!-- Structural polyline: L1 -> H1 -> L(head) -> H2 -> L3 -->\n  <polyline points=\"100,180 200,80 300,240 400,80 500,180\" fill=\"none\" stroke=\"#ccc\" stroke-width=\"2\"/>\n  <!-- Trend guide lines (left/right) -->\n  <line x1=\"50\" y1=\"40\" x2=\"100\" y2=\"180\" stroke=\"#ccc\" stroke-width=\"2\" stroke-dasharray=\"\"/>\n  <line x1=\"500\" y1=\"180\" x2=\"550\" y2=\"40\" stroke=\"#ccc\" stroke-width=\"2\" stroke-dasharray=\"\"/>\n  <!-- Pivot markers -->\n  <circle cx=\"100\" cy=\"180\" r=\"6\" fill=\"#3b82f6\"/>\n  <text x=\"100\" y=\"205\" text-anchor=\"middle\" fill=\"#333\" font-size=\"14\">左肩: 8/13 08:00</text>\n  <circle cx=\"200\" cy=\"80\" r=\"6\" fill=\"#3b82f6\"/>\n  <text x=\"200\" y=\"65\" text-anchor=\"middle\" fill=\"#333\" font-size=\"14\">山1: 8/13 14:00</text>\n  <circle cx=\"300\" cy=\"240\" r=\"6\" fill=\"#3b82f6\"/>\n  <text x=\"300\" y=\"265\" text-anchor=\"middle\" fill=\"#333\" font-size=\"14\">谷: 8/14 23:00</text>\n  <circle cx=\"400\" cy=\"80\" r=\"6\" fill=\"#3b82f6\"/>\n  <text x=\"400\" y=\"65\" text-anchor=\"middle\" fill=\"#333\" font-size=\"14\">山2: 8/19 08:00</text>\n  <circle cx=\"500\" cy=\"180\" r=\"6\" fill=\"#3b82f6\"/>\n  <text x=\"500\" y=\"205\" text-anchor=\"middle\" fill=\"#333\" font-size=\"14\">右肩: 8/19 15:00</text>\n  <text x=\"300\" y=\"20\" text-anchor=\"middle\" fill=\"#111\" font-size=\"14\">逆ヘッドアンドショルダー (8/13 08:00-8/20 00:00)</text>\n</svg>",
-			"artifact": {
-				"identifier": "inverse_head_and_shoulders-diagram-2026-08-12",
-				"title": "逆ヘッドアンドショルダー構造図 (8/13 08:00-8/20 00:00)"
-			}
-		},
-		"status": "completed",
-		"scoreComponents": {
-			"symmetry": 0.9864,
-			"headProminence": 0.4299,
-			"timeSymmetry": 0.3482,
-			"breakoutQuality": 1,
-			"duration": 0.8
-		},
-		"breakoutDate": "2026-08-19T15:00:00.000Z",
-		"breakoutBarIndex": 163,
-		"breakoutDirection": "up",
-		"outcome": "success",
-		"breakoutTarget": 10575328,
-		"targetMethod": "neckline_projection",
-		"targetReachedPct": 641,
-		"targetReached": true,
-		"targetReachedDate": "2026-08-21T08:00:00.000Z",
-		"targetReachedPrice": 12600000,
-		"trendlineLabel": "ネックライン",
-		"aftermath": {
-			"breakoutDate": "2026-08-19T16:00:00.000Z",
-			"breakoutConfirmed": true,
-			"priceMove": {
-				"days3": {
-					"return": -0.35,
-					"high": 10902013,
-					"low": 10734235
-				},
-				"days7": {
-					"return": 0.81,
-					"high": 11058550,
-					"low": 10734235
-				},
-				"days14": {
-					"return": 1.38,
-					"high": 11063169,
-					"low": 10734235
-				}
-			},
-			"targetReached": true,
-			"theoreticalTarget": 10694804,
-			"outcome": "成功（理論目標価格到達）",
-			"daysToTarget": 1
-		}
-	},
-	{
-		"type": "inverse_head_and_shoulders",
 		"confidence": 0.77,
 		"timeframe": "1hour",
 		"timeframeLabel": "1時間足",
@@ -239,6 +119,123 @@
 			},
 			"targetReached": true,
 			"theoreticalTarget": 12638501,
+			"outcome": "成功（理論目標価格到達）",
+			"daysToTarget": 1
+		}
+	},
+	{
+		"type": "inverse_head_and_shoulders",
+		"confidence": 0.73,
+		"timeframe": "1hour",
+		"timeframeLabel": "1時間足",
+		"range": {
+			"start": "2026-08-12T23:00:00.000Z",
+			"end": "2026-08-17T18:00:00.000Z"
+		},
+		"structureRange": {
+			"start": "2026-08-12T23:00:00.000Z",
+			"end": "2026-08-17T09:00:00.000Z"
+		},
+		"confirmation": {
+			"type": "neckline_breakout",
+			"date": "2026-08-17T18:00:00.000Z",
+			"idx": 118,
+			"price": 10278277
+		},
+		"precedingTrend": {
+			"start": "2026-08-12T20:00:00.000Z",
+			"end": "2026-08-12T23:00:00.000Z",
+			"direction": "insufficient_data",
+			"returnPct": -0.27,
+			"lookbackBars": 30
+		},
+		"pivots": [
+			{
+				"idx": 3,
+				"price": 10112502,
+				"kind": "L",
+				"extremePrice": 10103165
+			},
+			{
+				"idx": 9,
+				"price": 10173012,
+				"kind": "H",
+				"extremePrice": 10188490
+			},
+			{
+				"idx": 42,
+				"price": 9965270,
+				"kind": "L",
+				"extremePrice": 9955830
+			},
+			{
+				"idx": 106,
+				"price": 10116030,
+				"kind": "H",
+				"extremePrice": 10128000
+			},
+			{
+				"idx": 109,
+				"price": 10079659,
+				"kind": "L",
+				"extremePrice": 10073402
+			}
+		],
+		"neckline": [
+			{
+				"x": 9,
+				"y": 10173012
+			},
+			{
+				"x": 106,
+				"y": 10116030
+			}
+		],
+		"structureDiagram": {
+			"svg": "<svg width=\"600\" height=\"300\" xmlns=\"http://www.w3.org/2000/svg\">\n  <rect width=\"600\" height=\"300\" fill=\"#f8f9fa\"/>\n  <!-- Neckline (peaks average) -->\n  <line x1=\"50\" y1=\"80\" x2=\"550\" y2=\"80\" stroke=\"#666\" stroke-width=\"2\" stroke-dasharray=\"5,5\"/>\n  <text x=\"300\" y=\"95\" text-anchor=\"middle\" fill=\"#555\" font-size=\"12\">ネックライン: 10,144,521円</text>\n  <!-- Structural polyline: L1 -> H1 -> L(head) -> H2 -> L3 -->\n  <polyline points=\"100,180 200,80 300,240 400,80 500,180\" fill=\"none\" stroke=\"#ccc\" stroke-width=\"2\"/>\n  <!-- Trend guide lines (left/right) -->\n  <line x1=\"50\" y1=\"40\" x2=\"100\" y2=\"180\" stroke=\"#ccc\" stroke-width=\"2\" stroke-dasharray=\"\"/>\n  <line x1=\"500\" y1=\"180\" x2=\"550\" y2=\"40\" stroke=\"#ccc\" stroke-width=\"2\" stroke-dasharray=\"\"/>\n  <!-- Pivot markers -->\n  <circle cx=\"100\" cy=\"180\" r=\"6\" fill=\"#3b82f6\"/>\n  <text x=\"100\" y=\"205\" text-anchor=\"middle\" fill=\"#333\" font-size=\"14\">左肩: 8/13 08:00</text>\n  <circle cx=\"200\" cy=\"80\" r=\"6\" fill=\"#3b82f6\"/>\n  <text x=\"200\" y=\"65\" text-anchor=\"middle\" fill=\"#333\" font-size=\"14\">山1: 8/13 14:00</text>\n  <circle cx=\"300\" cy=\"240\" r=\"6\" fill=\"#3b82f6\"/>\n  <text x=\"300\" y=\"265\" text-anchor=\"middle\" fill=\"#333\" font-size=\"14\">谷: 8/14 23:00</text>\n  <circle cx=\"400\" cy=\"80\" r=\"6\" fill=\"#3b82f6\"/>\n  <text x=\"400\" y=\"65\" text-anchor=\"middle\" fill=\"#333\" font-size=\"14\">山2: 8/17 15:00</text>\n  <circle cx=\"500\" cy=\"180\" r=\"6\" fill=\"#3b82f6\"/>\n  <text x=\"500\" y=\"205\" text-anchor=\"middle\" fill=\"#333\" font-size=\"14\">右肩: 8/17 18:00</text>\n  <text x=\"300\" y=\"20\" text-anchor=\"middle\" fill=\"#111\" font-size=\"14\">逆ヘッドアンドショルダー (8/13 08:00-8/18 03:00)</text>\n</svg>",
+			"artifact": {
+				"identifier": "inverse_head_and_shoulders-diagram-2026-08-12",
+				"title": "逆ヘッドアンドショルダー構造図 (8/13 08:00-8/18 03:00)"
+			}
+		},
+		"status": "completed",
+		"scoreComponents": {
+			"symmetry": 0.9968,
+			"headProminence": 0.2686,
+			"timeSymmetry": 0.5821,
+			"breakoutQuality": 0.8614,
+			"duration": 0.6
+		},
+		"breakoutDate": "2026-08-17T18:00:00.000Z",
+		"breakoutBarIndex": 118,
+		"breakoutDirection": "up",
+		"outcome": "success",
+		"breakoutTarget": 10304386,
+		"targetMethod": "neckline_projection",
+		"targetProgressOmittedReason": "degenerate_target_distance",
+		"trendlineLabel": "ネックライン",
+		"aftermath": {
+			"breakoutDate": "2026-08-17T23:00:00.000Z",
+			"breakoutConfirmed": true,
+			"priceMove": {
+				"days3": {
+					"return": -0.18,
+					"high": 10278277,
+					"low": 10245085
+				},
+				"days7": {
+					"return": -0.45,
+					"high": 10279898,
+					"low": 10230785
+				},
+				"days14": {
+					"return": -0.16,
+					"high": 10300000,
+					"low": 10215505
+				}
+			},
+			"targetReached": true,
+			"theoreticalTarget": 10266790,
 			"outcome": "成功（理論目標価格到達）",
 			"daysToTarget": 1
 		}
