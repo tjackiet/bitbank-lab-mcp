@@ -22,11 +22,18 @@
 
   | ビルド | 中身 | 用途 |
   |---|---|---|
-  | `base` | 本体は 1 文字も変えない（末尾に `export { … }` を 1 行足すだけ） | §4 / §5 の分布。作業ツリーと 12,104 ケース全件で一致することを §12-0 が検算 |
+  | `base` | 本体は 1 文字も変えない（末尾に `export { … }` を 1 行足すだけ） | §4 / §5 の分布 |
   | `noTop` | `tryFormingDoubleTop` を `return null` に | 形成中 top 経路の候補を差分で同定する対照 |
   | `noBottom` | `tryFormingDoubleBottom` を `return null` に | 同、bottom 経路 |
   | `ablA` | `tryFormingDoubleBottom` を top の流儀へ組み替え | §6 |
   | `ablB` | `tryFormingDoubleTop` を bottom の流儀へ組み替え | §7 |
+  | `pr` | 作業ツリーそのまま | §13（Phase 2 の実装との突き合わせ） |
+
+  **Phase 2（PR #270）以降、上の 5 ビルドは `detect_doubles.ts` を `main` から取る**
+  （strip ビルド）。作業ツリーには `tryFormingDoubleBottom` がもう無いので、
+  ablation のアンカーが取れないだけでなく、§4〜§7 が Phase 1 と別物の測定になってしまうため。
+  §12-0 の「展開ビルド ≡ 作業ツリー」の検算は `pr` ビルドが担い、strip ≡ `main` は
+  「この PR が `tools/patterns/` で触ったのは `detect_doubles.ts` だけ」の検算で担保する（§13）。
 
   `ablA` の bottom 経路は `noBottom` を対照に取れる（`ablA` は bottom しか触っていないので、
   そこを潰せば `noBottom` と同一のビルドになる）。`ablB` と `noTop` も同じ関係。
@@ -1229,7 +1236,6 @@ accepted は **0 件**。
 | 12 | `4hour\|double_top\|2026-08-25T02:00:00.000Z-2026-08-25T13:00:00.000Z-2026-08-25T16:00:00.000Z` | `expired` | btc_jpy_1hour_2026_08 btc_jpy_1hour_2026_09 btc_jpy_1hour_2026_09_05 / sd=6,auto / end=336 | 12,851,000 | 12,531,708 | 12,617,817 | 12,501,187 | 1.815% | 100 |
 | 13 | `1hour\|double_top\|2026-08-31T19:00:00.000Z-2026-09-01T02:00:00.000Z-2026-09-01T05:00:00.000Z` | `expired` | btc_jpy_1hour_2026_09 btc_jpy_1hour_2026_09_05 / sd=2,3,auto / end=308 | 12,598,466 | 12,536,428 | 12,659,390 | 12,428,578 | 0.481% | 100 |
 
-
 構成点の idx（フィクスチャを直接引くための検算用）:
 
 | # | 系列 | tf | sd | 終端 idx | 山1 idx | 谷 idx | 山2 idx |
@@ -1259,3 +1265,195 @@ accepted は **0 件**。
 | 実データ C 96（`btc_jpy_1hour_2026_09`） | 96 | 193 → 209 | 486 → 527 | 44 → 56 |
 | 実データ D 96（`btc_jpy_1hour_2026_09_05`） | 96 | 200 → 218 | 493 → 533 | 44 → 56 |
 <!-- END measure_forming_double_asymmetry_262 output -->
+
+## 13. Phase 2 の実測（PR #270 / issue #262 の実装）
+
+**Phase 1（§1〜§12）はコード変更なしの計測で、本節だけが実装後の測定。**
+`scripts/measure_forming_double_asymmetry_262.ts` に **strip ビルド**（`detect_doubles.ts` だけを
+`main` から取る）を足し、同じ 12,104 ケースで作業ツリー（本 PR）と突き合わせたもの。
+`--strip-ref <ref>` で参照先を変えられる。走らせる前に `git fetch origin main` すること。
+
+**strip ≡ `main` の担保**: strip は `detect_doubles.ts` だけを ref から取り、`tools/patterns/` の
+残りは作業ツリーのままなので、**本 PR が `tools/patterns/` で他のファイルを触っていたら等価性が崩れる。**
+`verifyStripScope` が `git diff --name-only <ref> -- tools/patterns/` を見て、
+`detect_doubles.ts` 以外が出たらその場で落とす。
+
+### 13-0. 読みどころ
+
+| 何を | 実測 |
+|---|---|
+| 既定（`includeForming: false`）の `data.patterns` | **544 ケース全件で完全一致**。未ブレイクの構造は forming バケットなので、検出器は従来どおり `no_breakout` で抜ける |
+| `includeForming: true` | 11,560 ケース中 **2,791 ケース**で変わる |
+| 理由コードの減少 | `forming_*` の減少は**全件が削除した `tryFormingDoubleBottom` のぶん**（残差 0）。それ以外の減少は `no_breakout` / `no_breakout_relaxed` だけで、これは未ブレイク構造が accepted に移ったぶん |
+| 既定で見える `near_completion` の 3 値判定 | **呼べる 4 / 保留 9 / 呼べない 6**（計 19 実体）。Phase 1 §8 で「呼べる」だった 形 07 / 形 09 は両方とも本 PR でも `near_completion` として出て「呼べる」のまま |
+| `view=debug` の cap | 実データ C / D で **44 → 36 に減る**。Phase 1 の案 B は 44 → 56 に**増やして**いた——案 B は top をループ経路にして候補を増やす案だったのに対し、本実装は既存のループの分岐を変えるだけで、むしろ削除した `tryFormingDoubleBottom` が積んでいた候補が消えるため |
+
+### 13-1. ハーネスの出力（そのまま）
+
+strip は `detect_doubles.ts` だけを `main` から取り、`tools/patterns/` の残りは作業ツリー。この組み方が `main` と等価であることは、**本 PR が `tools/patterns/` で触ったファイルが `detect_doubles.ts` だけ**であることの検算で担保している（実測: `tools/patterns/detect_doubles.ts`）。§1〜§7 は strip で走らせているので Phase 1 の数字がそのまま再現される。
+
+#### 8-1. 未ブレイク構造の status（延べ / 構造 / 実体）
+
+`breakoutBarIndex` を持たない `patterns` エントリだけを数える（＝ブレイク足が無い構造）。
+
+| type / status | strip 延べ | strip 構造 | strip 実体 | PR 延べ | PR 構造 | PR 実体 |
+|---|---:|---:|---:|---:|---:|---:|
+| `double_bottom\|expired` | 1182 | 16 | 9 | 435 | 6 | 3 |
+| `double_bottom\|forming` | 73 | 10 | 6 | 0 | 0 | 0 |
+| `double_bottom\|invalid` | 114 | 11 | 5 | 293 | 16 | 7 |
+| `double_bottom\|near_completion` | 0 | 0 | 0 | 325 | 14 | 7 |
+| `double_top\|expired` | 0 | 0 | 0 | 721 | 15 | 6 |
+| `double_top\|invalid` | 0 | 0 | 0 | 328 | 20 | 11 |
+| `double_top\|near_completion` | 0 | 0 | 0 | 537 | 27 | 12 |
+
+#### 8-2. 実体単位の対応表（strip の status → PR の status）
+
+実体キーは `(時間足, type, 構成点の絶対時刻)`。同じ実体が窓によって別の status で現れるので、セルは**その実体に付いた status の集合**。`—` はその側に 1 件も出ないこと。**行はどちらかのビルドで未ブレイクとして現れた実体**に絞り、セルには `completed` も含める——旧 `tryFormingDoubleBottom` は完成済み経路と同じ構造を二重に出していたので、「消えた」と「完成済みとして 1 本になった」を分けないと読めない。
+
+| # | 実体 | strip | PR | 代表ケース |
+|---:|---|---|---|---|
+| 1 | `1day\|double_bottom\|2026-01-05T00:00:00.000Z-2026-01-11T00:00:00.000Z-2026-01-17T00:00:00.000Z` | forming | near_completion | forming_double_bottom / 1day / sd=2 / end=29 |
+| 2 | `1day\|double_bottom\|2026-08-03T00:00:00.000Z-2026-08-07T00:00:00.000Z-2026-08-14T00:00:00.000Z` | forming | — | btc_jpy_1day_2026 / 1day / sd=2 / end=89 |
+| 3 | `1day\|double_bottom\|2026-08-03T00:00:00.000Z-2026-08-10T00:00:00.000Z-2026-08-14T00:00:00.000Z` | completed / forming | completed | btc_jpy_1day_2026 / 1day / sd=auto / end=89 |
+| 4 | `1day\|double_top\|2026-01-04T00:00:00.000Z-2026-01-10T00:00:00.000Z-2026-01-15T00:00:00.000Z` | — | invalid | forming_symmetrical_triangle / 1day / sd=2 / end=35 |
+| 5 | `1day\|double_top\|2026-01-15T00:00:00.000Z-2026-01-20T00:00:00.000Z-2026-01-24T00:00:00.000Z` | — | near_completion | forming_symmetrical_triangle / 1day / sd=2 / end=35 |
+| 6 | `1hour\|double_bottom\|2026-01-05T00:00:00.000Z-2026-01-11T00:00:00.000Z-2026-01-17T00:00:00.000Z` | — | near_completion | forming_double_bottom / 1hour / sd=2 / end=29 |
+| 7 | `1hour\|double_bottom\|2026-06-05T00:00:00.000Z-2026-06-15T00:00:00.000Z-2026-07-01T00:00:00.000Z` | completed / expired | completed | btc_jpy_1day_2026 / 1hour / sd=6 / end=89 |
+| 8 | `1hour\|double_bottom\|2026-08-13T16:00:00.000Z-2026-08-13T22:00:00.000Z-2026-08-14T14:00:00.000Z` | expired / forming | — | btc_jpy_1hour_2026_08 / 1hour / sd=6 / end=59 |
+| 9 | `1hour\|double_bottom\|2026-08-20T13:00:00.000Z-2026-08-20T17:00:00.000Z-2026-08-20T19:00:00.000Z` | expired | — | btc_jpy_1hour_2026_09 / 1hour / sd=2 / end=59 |
+| 10 | `1hour\|double_bottom\|2026-08-22T10:00:00.000Z-2026-08-22T16:00:00.000Z-2026-08-23T05:00:00.000Z` | invalid | invalid | btc_jpy_1hour_2026_08 / 1hour / sd=6 / end=255 |
+| 11 | `1hour\|double_bottom\|2026-08-24T04:00:00.000Z-2026-08-24T07:00:00.000Z-2026-08-24T08:00:00.000Z` | expired | — | btc_jpy_1hour_2026_08 / 1hour / sd=2 / end=364 |
+| 12 | `1hour\|double_bottom\|2026-08-25T13:00:00.000Z-2026-08-25T16:00:00.000Z-2026-08-25T21:00:00.000Z` | — | invalid / near_completion | btc_jpy_1hour_2026_08 / 1hour / sd=2 / end=315 |
+| 13 | `1hour\|double_bottom\|2026-08-25T21:00:00.000Z-2026-08-26T02:00:00.000Z-2026-08-26T15:00:00.000Z` | expired / forming | — | btc_jpy_1hour_2026_08 / 1hour / sd=auto / end=364 |
+| 14 | `1hour\|double_bottom\|2026-08-25T21:00:00.000Z-2026-08-26T06:00:00.000Z-2026-08-26T15:00:00.000Z` | expired / forming / invalid | expired / invalid / near_completion | btc_jpy_1hour_2026_08 / 1hour / sd=6 / end=364 |
+| 15 | `1hour\|double_bottom\|2026-08-30T23:00:00.000Z-2026-08-31T09:00:00.000Z-2026-08-31T12:00:00.000Z` | expired / invalid | expired / invalid / near_completion | btc_jpy_1hour_2026_09 / 1hour / sd=auto / end=270 |
+| 16 | `1hour\|double_bottom\|2026-09-01T09:00:00.000Z-2026-09-01T14:00:00.000Z-2026-09-01T18:00:00.000Z` | — | near_completion | btc_jpy_1hour_2026_09 / 1hour / sd=auto / end=300 |
+| 17 | `1hour\|double_bottom\|2026-09-01T18:00:00.000Z-2026-09-01T23:00:00.000Z-2026-09-02T01:00:00.000Z` | — | invalid / near_completion | btc_jpy_1hour_2026_09 / 1hour / sd=auto / end=307 |
+| 18 | `1hour\|double_bottom\|2026-09-02T01:00:00.000Z-2026-09-02T05:00:00.000Z-2026-09-02T13:00:00.000Z` | invalid | invalid | btc_jpy_1hour_2026_09 / 1hour / sd=6 / end=322 |
+| 19 | `1hour\|double_bottom\|2026-09-02T13:00:00.000Z-2026-09-02T16:00:00.000Z-2026-09-03T10:00:00.000Z` | invalid | — | btc_jpy_1hour_2026_09 / 1hour / sd=6 / end=364 |
+| 20 | `1hour\|double_top\|2026-01-04T00:00:00.000Z-2026-01-10T00:00:00.000Z-2026-01-15T00:00:00.000Z` | — | invalid | forming_symmetrical_triangle / 1hour / sd=2 / end=35 |
+| 21 | `1hour\|double_top\|2026-01-06T00:00:00.000Z-2026-01-08T00:00:00.000Z-2026-01-13T00:00:00.000Z` | — | invalid | forming_rising_wedge / 1hour / sd=2 / end=34 |
+| 22 | `1hour\|double_top\|2026-01-13T00:00:00.000Z-2026-01-15T00:00:00.000Z-2026-01-20T00:00:00.000Z` | — | invalid | forming_rising_wedge / 1hour / sd=2 / end=34 |
+| 23 | `1hour\|double_top\|2026-01-15T00:00:00.000Z-2026-01-20T00:00:00.000Z-2026-01-24T00:00:00.000Z` | — | near_completion | forming_symmetrical_triangle / 1hour / sd=2 / end=35 |
+| 24 | `1hour\|double_top\|2026-01-19T00:00:00.000Z-2026-01-22T00:00:00.000Z-2026-01-26T00:00:00.000Z` | — | invalid | forming_ascending_triangle / 1hour / sd=2 / end=32 |
+| 25 | `1hour\|double_top\|2026-01-20T00:00:00.000Z-2026-01-22T00:00:00.000Z-2026-01-27T00:00:00.000Z` | — | invalid | forming_rising_wedge / 1hour / sd=2 / end=34 |
+| 26 | `1hour\|double_top\|2026-08-13T05:00:00.000Z-2026-08-13T16:00:00.000Z-2026-08-13T22:00:00.000Z` | — | expired | btc_jpy_1hour_2026_08 / 1hour / sd=6 / end=59 |
+| 27 | `1hour\|double_top\|2026-08-21T23:00:00.000Z-2026-08-22T10:00:00.000Z-2026-08-22T16:00:00.000Z` | — | expired / near_completion | btc_jpy_1hour_2026_08 / 1hour / sd=6 / end=242 |
+| 28 | `1hour\|double_top\|2026-08-23T21:00:00.000Z-2026-08-24T04:00:00.000Z-2026-08-24T15:00:00.000Z` | — | invalid / near_completion | btc_jpy_1hour_2026_08 / 1hour / sd=auto / end=286 |
+| 29 | `1hour\|double_top\|2026-08-24T15:00:00.000Z-2026-08-24T17:00:00.000Z-2026-08-24T19:00:00.000Z` | — | invalid / near_completion | btc_jpy_1hour_2026_08 / 1hour / sd=2 / end=289 |
+| 30 | `1hour\|double_top\|2026-08-25T02:00:00.000Z-2026-08-25T13:00:00.000Z-2026-08-25T16:00:00.000Z` | — | expired / near_completion | btc_jpy_1hour_2026_08 / 1hour / sd=6 / end=314 |
+| 31 | `1hour\|double_top\|2026-08-27T09:00:00.000Z-2026-08-27T13:00:00.000Z-2026-08-27T15:00:00.000Z` | — | invalid | btc_jpy_1hour_2026_08 / 1hour / sd=auto / end=364 |
+| 32 | `1hour\|double_top\|2026-08-27T15:00:00.000Z-2026-08-27T18:00:00.000Z-2026-08-28T01:00:00.000Z` | invalid | invalid / near_completion | btc_jpy_1hour_2026_09 / 1hour / sd=2 / end=186 |
+| 33 | `1hour\|double_top\|2026-08-31T09:00:00.000Z-2026-08-31T12:00:00.000Z-2026-08-31T19:00:00.000Z` | — | invalid | btc_jpy_1hour_2026_09 / 1hour / sd=auto / end=277 |
+| 34 | `1hour\|double_top\|2026-08-31T19:00:00.000Z-2026-09-01T02:00:00.000Z-2026-09-01T05:00:00.000Z` | — | expired / near_completion | btc_jpy_1hour_2026_09 / 1hour / sd=2 / end=286 |
+| 35 | `1hour\|double_top\|2026-09-03T21:00:00.000Z-2026-09-04T02:00:00.000Z-2026-09-04T06:00:00.000Z` | completed / invalid | completed / invalid / near_completion | btc_jpy_1hour_2026_09 / 1hour / sd=2 / end=359 |
+| 36 | `4hour\|double_bottom\|2026-06-05T00:00:00.000Z-2026-06-15T00:00:00.000Z-2026-07-01T00:00:00.000Z` | completed / expired | completed | btc_jpy_1day_2026 / 4hour / sd=6 / end=89 |
+| 37 | `4hour\|double_bottom\|2026-08-21T09:00:00.000Z-2026-08-21T23:00:00.000Z-2026-08-22T10:00:00.000Z` | expired | expired | btc_jpy_1hour_2026_09_05 / 4hour / sd=auto / end=364 |
+| 38 | `4hour\|double_bottom\|2026-09-02T01:00:00.000Z-2026-09-02T05:00:00.000Z-2026-09-02T13:00:00.000Z` | — | invalid | btc_jpy_1hour_2026_09 / 4hour / sd=6 / end=322 |
+| 39 | `4hour\|double_top\|2026-08-21T23:00:00.000Z-2026-08-22T10:00:00.000Z-2026-08-22T16:00:00.000Z` | — | expired / near_completion | btc_jpy_1hour_2026_08 / 4hour / sd=auto / end=241 |
+| 40 | `4hour\|double_top\|2026-08-23T21:00:00.000Z-2026-08-24T04:00:00.000Z-2026-08-24T15:00:00.000Z` | — | invalid / near_completion | btc_jpy_1hour_2026_08 / 4hour / sd=3 / end=286 |
+| 41 | `4hour\|double_top\|2026-08-25T02:00:00.000Z-2026-08-25T13:00:00.000Z-2026-08-25T16:00:00.000Z` | — | expired / near_completion | btc_jpy_1hour_2026_08 / 4hour / sd=auto / end=313 |
+
+#### 8-3. 理由コードの差分（延べ。全母集団）
+
+**`no_breakout` が減ったぶんが未ブレイク構造の accepted に移っていること**を確かめる。
+
+`削除経路` 列は strip の **`tryFormingDoubleBottom` が積んだぶん**（対照ビルド `noBottom` との差集合で同定。名前では切り分けられない共有コードがあるため）。減少がこの列で説明できるなら、**その減少は「経路を削除したぶん」であって判定が緩んだのではない。**
+
+| 理由コード | strip | うち削除経路 | PR | 差 | 残差（差 + 削除経路） |
+|---|---:|---:|---:|---:|---:|
+| `forming_bars_out_of_range` | 21451 | 17292 | 4159 | -17292 | 0 |
+| `forming_current_below_valley_zone` | 3972 | 3972 | 0 | -3972 | 0 |
+| `forming_pattern_height_below_min` | 87473 | 87473 | 0 | -87473 | 0 |
+| `forming_peak_too_shallow` | 12761 | 12761 | 0 | -12761 | 0 |
+| `forming_valleys_above_neckline` | 743 | 743 | 0 | -743 | 0 |
+| `forming_valleys_not_level` | 5991 | 5991 | 0 | -5991 | 0 |
+| `neckline_above_pre_decline_high` | 23835 | 16687 | 22958 | -877 | +15810 |
+| `neckline_below_pre_decline_low` | 296 | 0 | 25401 | +25105 | +25105 |
+| `no_breakout` | 55819 | 0 | 1672 | -54147 | -54147 |
+| `no_breakout_relaxed` | 43940 | 0 | 1248 | -42692 | -42692 |
+| `no_neckline_cross_before_peak1` | 0 | 0 | 270 | +270 | +270 |
+| `no_neckline_cross_before_trough1` | 768 | 768 | 0 | -768 | 0 |
+| `peaks_diff_vs_height_excess` | 0 | 0 | 184 | +184 | +184 |
+| `prior_trend_mismatch:up` | 8526 | 3826 | 8518 | -8 | +3818 |
+| `reclassified_as_triple_bottom` | 5662 | 5614 | 14228 | +8566 | +14180 |
+| `reclassified_as_triple_top` | 88 | 0 | 26080 | +25992 | +25992 |
+| `retracement_out_of_band` | 2510 | 2114 | 6084 | +3574 | +5688 |
+| `valleys_diff_vs_height_excess` | 628 | 0 | 1534 | +906 | +906 |
+
+#### 8-4. `data.patterns` が食い違ったケース数
+
+| `includeForming` | ケース | 食い違い |
+|---|---:|---:|
+| includeForming: false（既定） | 544 | 0 |
+| includeForming: true | 11560 | 2791 |
+
+食い違ったケース（重複を畳んで 2713 行。**明細はハーネスの出力を参照**（本メモでは省略）。
+
+#### 8-5. Phase 1 の ablation B（13 実体）との突き合わせ
+
+ablation B は **bottom のゲート集合**で top を組んだもので、本 PR は**完成済みのゲート集合**で組んでいる。集合が違うので accepted な実体も変わりうる——`double_top` の未ブレイク構造について、ablation B が accepted にした実体と本 PR の実体を突き合わせる（`—` はその側に無いこと）。
+
+| # | 実体 | ablation B | PR | 代表ケース |
+|---:|---|---|---|---|
+| 1 | `1day\|double_top\|2026-01-04T00:00:00.000Z-2026-01-10T00:00:00.000Z-2026-01-15T00:00:00.000Z` | invalid | invalid | forming_symmetrical_triangle / 1day / sd=2 / end=35 |
+| 2 | `1day\|double_top\|2026-01-15T00:00:00.000Z-2026-01-20T00:00:00.000Z-2026-01-24T00:00:00.000Z` | — | near_completion | forming_symmetrical_triangle / 1day / sd=2 / end=35 |
+| 3 | `1day\|double_top\|2026-01-30T00:00:00.000Z-2026-01-31T00:00:00.000Z-2026-02-06T00:00:00.000Z` | invalid | — |  |
+| 4 | `1day\|double_top\|2026-08-21T08:00:00.000Z-2026-08-21T09:00:00.000Z-2026-08-21T23:00:00.000Z` | invalid | — |  |
+| 5 | `1hour\|double_top\|2026-01-04T00:00:00.000Z-2026-01-10T00:00:00.000Z-2026-01-15T00:00:00.000Z` | — | invalid | forming_symmetrical_triangle / 1hour / sd=2 / end=35 |
+| 6 | `1hour\|double_top\|2026-01-06T00:00:00.000Z-2026-01-08T00:00:00.000Z-2026-01-13T00:00:00.000Z` | — | invalid | forming_rising_wedge / 1hour / sd=2 / end=34 |
+| 7 | `1hour\|double_top\|2026-01-13T00:00:00.000Z-2026-01-15T00:00:00.000Z-2026-01-20T00:00:00.000Z` | — | invalid | forming_rising_wedge / 1hour / sd=2 / end=34 |
+| 8 | `1hour\|double_top\|2026-01-15T00:00:00.000Z-2026-01-20T00:00:00.000Z-2026-01-24T00:00:00.000Z` | — | near_completion | forming_symmetrical_triangle / 1hour / sd=2 / end=35 |
+| 9 | `1hour\|double_top\|2026-01-19T00:00:00.000Z-2026-01-22T00:00:00.000Z-2026-01-26T00:00:00.000Z` | — | invalid | forming_ascending_triangle / 1hour / sd=2 / end=32 |
+| 10 | `1hour\|double_top\|2026-01-20T00:00:00.000Z-2026-01-22T00:00:00.000Z-2026-01-27T00:00:00.000Z` | — | invalid | forming_rising_wedge / 1hour / sd=2 / end=34 |
+| 11 | `1hour\|double_top\|2026-08-13T05:00:00.000Z-2026-08-13T16:00:00.000Z-2026-08-13T22:00:00.000Z` | expired | expired | btc_jpy_1hour_2026_08 / 1hour / sd=6 / end=59 |
+| 12 | `1hour\|double_top\|2026-08-21T08:00:00.000Z-2026-08-21T09:00:00.000Z-2026-08-21T23:00:00.000Z` | invalid | — |  |
+| 13 | `1hour\|double_top\|2026-08-21T23:00:00.000Z-2026-08-22T10:00:00.000Z-2026-08-22T16:00:00.000Z` | expired / forming | expired / near_completion | btc_jpy_1hour_2026_08 / 1hour / sd=6 / end=242 |
+| 14 | `1hour\|double_top\|2026-08-23T21:00:00.000Z-2026-08-24T04:00:00.000Z-2026-08-24T15:00:00.000Z` | invalid | invalid / near_completion | btc_jpy_1hour_2026_08 / 1hour / sd=auto / end=286 |
+| 15 | `1hour\|double_top\|2026-08-24T15:00:00.000Z-2026-08-24T17:00:00.000Z-2026-08-24T19:00:00.000Z` | — | invalid / near_completion | btc_jpy_1hour_2026_08 / 1hour / sd=2 / end=289 |
+| 16 | `1hour\|double_top\|2026-08-25T02:00:00.000Z-2026-08-25T13:00:00.000Z-2026-08-25T16:00:00.000Z` | expired / forming | expired / near_completion | btc_jpy_1hour_2026_08 / 1hour / sd=6 / end=314 |
+| 17 | `1hour\|double_top\|2026-08-27T09:00:00.000Z-2026-08-27T13:00:00.000Z-2026-08-27T15:00:00.000Z` | — | invalid | btc_jpy_1hour_2026_08 / 1hour / sd=auto / end=364 |
+| 18 | `1hour\|double_top\|2026-08-27T15:00:00.000Z-2026-08-27T18:00:00.000Z-2026-08-28T01:00:00.000Z` | expired | invalid / near_completion | btc_jpy_1hour_2026_09 / 1hour / sd=2 / end=186 |
+| 19 | `1hour\|double_top\|2026-08-31T09:00:00.000Z-2026-08-31T12:00:00.000Z-2026-08-31T19:00:00.000Z` | — | invalid | btc_jpy_1hour_2026_09 / 1hour / sd=auto / end=277 |
+| 20 | `1hour\|double_top\|2026-08-31T19:00:00.000Z-2026-09-01T02:00:00.000Z-2026-09-01T05:00:00.000Z` | expired | expired / near_completion | btc_jpy_1hour_2026_09 / 1hour / sd=2 / end=286 |
+| 21 | `1hour\|double_top\|2026-09-03T21:00:00.000Z-2026-09-04T02:00:00.000Z-2026-09-04T06:00:00.000Z` | expired | completed / invalid / near_completion | btc_jpy_1hour_2026_09 / 1hour / sd=2 / end=359 |
+| 22 | `4hour\|double_top\|2026-08-21T23:00:00.000Z-2026-08-22T10:00:00.000Z-2026-08-22T16:00:00.000Z` | expired | expired / near_completion | btc_jpy_1hour_2026_08 / 4hour / sd=auto / end=241 |
+| 23 | `4hour\|double_top\|2026-08-23T21:00:00.000Z-2026-08-24T04:00:00.000Z-2026-08-24T15:00:00.000Z` | — | invalid / near_completion | btc_jpy_1hour_2026_08 / 4hour / sd=3 / end=286 |
+| 24 | `4hour\|double_top\|2026-08-25T02:00:00.000Z-2026-08-25T13:00:00.000Z-2026-08-25T16:00:00.000Z` | expired | expired / near_completion | btc_jpy_1hour_2026_08 / 4hour / sd=auto / end=313 |
+
+#### 8-6. `near_completion` の実体の 3 値判定（Phase 1 §8-2 の基準をそのまま数値で当てる）
+
+**既定（`includeInvalid: false`）で利用者に見えるのは `near_completion` だけ**なので、この集合だけを判定する。基準は Phase 1 §8-2 の 5 段を順に当て、最初に当たったものを採る（1: 中間構成点が第1構成点の隣接足 / 2: 第2構成点以降に外側の極値を超えた / 3: 深さ < 0.5% / 4: 深さ ≥ 1.0% かつ第2構成点以降にネックラインを抜けた / 5: それ以外は保留）。使う量は構成点の終値・極値と区間の最高安値だけで、**検出器も閾値も通していない。**
+
+| # | 実体 | 間隔 | 深さ | 判定 | 根拠 | 代表ケース |
+|---:|---|---:|---:|---|---|---|
+| 1 | `1day\|double_bottom\|2026-01-05T00:00:00.000Z-2026-01-11T00:00:00.000Z-2026-01-17T00:00:00.000Z` | 6 本 | 26.250% | **保留** | 基準 5（該当なし） | forming_double_bottom / 1day / sd=2 / end=29 |
+| 2 | `1day\|double_top\|2026-01-15T00:00:00.000Z-2026-01-20T00:00:00.000Z-2026-01-24T00:00:00.000Z` | 5 本 | 22.388% | **保留** | 基準 5（該当なし） | forming_symmetrical_triangle / 1day / sd=2 / end=35 |
+| 3 | `1hour\|double_bottom\|2026-01-05T00:00:00.000Z-2026-01-11T00:00:00.000Z-2026-01-17T00:00:00.000Z` | 6 本 | 26.250% | **保留** | 基準 5（該当なし） | forming_double_bottom / 1hour / sd=2 / end=29 |
+| 4 | `1hour\|double_bottom\|2026-08-25T13:00:00.000Z-2026-08-25T16:00:00.000Z-2026-08-25T21:00:00.000Z` | 3 本 | 0.687% | **保留** | 基準 5（該当なし） | btc_jpy_1hour_2026_08 / 1hour / sd=2 / end=315 |
+| 5 | `1hour\|double_bottom\|2026-08-25T21:00:00.000Z-2026-08-26T06:00:00.000Z-2026-08-26T15:00:00.000Z` | 9 本 | 0.364% | **呼べない** | 基準 3（深さ < 0.5%） | btc_jpy_1hour_2026_08 / 1hour / sd=6 / end=364 |
+| 6 | `1hour\|double_bottom\|2026-08-30T23:00:00.000Z-2026-08-31T09:00:00.000Z-2026-08-31T12:00:00.000Z` | 10 本 | 0.883% | **保留** | 基準 5（該当なし） | btc_jpy_1hour_2026_09 / 1hour / sd=auto / end=270 |
+| 7 | `1hour\|double_bottom\|2026-09-01T09:00:00.000Z-2026-09-01T14:00:00.000Z-2026-09-01T18:00:00.000Z` | 5 本 | 0.286% | **呼べない** | 基準 3（深さ < 0.5%） | btc_jpy_1hour_2026_09 / 1hour / sd=auto / end=300 |
+| 8 | `1hour\|double_bottom\|2026-09-01T18:00:00.000Z-2026-09-01T23:00:00.000Z-2026-09-02T01:00:00.000Z` | 5 本 | 0.445% | **呼べない** | 基準 3（深さ < 0.5%） | btc_jpy_1hour_2026_09 / 1hour / sd=auto / end=307 |
+| 9 | `1hour\|double_top\|2026-01-15T00:00:00.000Z-2026-01-20T00:00:00.000Z-2026-01-24T00:00:00.000Z` | 5 本 | 22.388% | **保留** | 基準 5（該当なし） | forming_symmetrical_triangle / 1hour / sd=2 / end=35 |
+| 10 | `1hour\|double_top\|2026-08-21T23:00:00.000Z-2026-08-22T10:00:00.000Z-2026-08-22T16:00:00.000Z` | 11 本 | 1.845% | **呼べる** | 基準 4 | btc_jpy_1hour_2026_08 / 1hour / sd=6 / end=242 |
+| 11 | `1hour\|double_top\|2026-08-23T21:00:00.000Z-2026-08-24T04:00:00.000Z-2026-08-24T15:00:00.000Z` | 7 本 | 1.166% | **保留** | 基準 5（該当なし） | btc_jpy_1hour_2026_08 / 1hour / sd=auto / end=286 |
+| 12 | `1hour\|double_top\|2026-08-24T15:00:00.000Z-2026-08-24T17:00:00.000Z-2026-08-24T19:00:00.000Z` | 2 本 | 0.416% | **呼べない** | 基準 3（深さ < 0.5%） | btc_jpy_1hour_2026_08 / 1hour / sd=2 / end=289 |
+| 13 | `1hour\|double_top\|2026-08-25T02:00:00.000Z-2026-08-25T13:00:00.000Z-2026-08-25T16:00:00.000Z` | 11 本 | 2.485% | **呼べる** | 基準 4 | btc_jpy_1hour_2026_08 / 1hour / sd=6 / end=314 |
+| 14 | `1hour\|double_top\|2026-08-27T15:00:00.000Z-2026-08-27T18:00:00.000Z-2026-08-28T01:00:00.000Z` | 3 本 | 0.251% | **呼べない** | 基準 3（深さ < 0.5%） | btc_jpy_1hour_2026_09 / 1hour / sd=2 / end=186 |
+| 15 | `1hour\|double_top\|2026-08-31T19:00:00.000Z-2026-09-01T02:00:00.000Z-2026-09-01T05:00:00.000Z` | 7 本 | 0.492% | **呼べない** | 基準 3（深さ < 0.5%） | btc_jpy_1hour_2026_09 / 1hour / sd=2 / end=286 |
+| 16 | `1hour\|double_top\|2026-09-03T21:00:00.000Z-2026-09-04T02:00:00.000Z-2026-09-04T06:00:00.000Z` | 5 本 | 0.797% | **保留** | 基準 5（該当なし） | btc_jpy_1hour_2026_09 / 1hour / sd=2 / end=359 |
+| 17 | `4hour\|double_top\|2026-08-21T23:00:00.000Z-2026-08-22T10:00:00.000Z-2026-08-22T16:00:00.000Z` | 11 本 | 1.845% | **呼べる** | 基準 4 | btc_jpy_1hour_2026_08 / 4hour / sd=auto / end=241 |
+| 18 | `4hour\|double_top\|2026-08-23T21:00:00.000Z-2026-08-24T04:00:00.000Z-2026-08-24T15:00:00.000Z` | 7 本 | 1.166% | **保留** | 基準 5（該当なし） | btc_jpy_1hour_2026_08 / 4hour / sd=3 / end=286 |
+| 19 | `4hour\|double_top\|2026-08-25T02:00:00.000Z-2026-08-25T13:00:00.000Z-2026-08-25T16:00:00.000Z` | 11 本 | 2.485% | **呼べる** | 基準 4 | btc_jpy_1hour_2026_08 / 4hour / sd=auto / end=313 |
+
+集計: **保留 9** / **呼べない 6** / **呼べる 4**（計 19 実体）
+
+#### 8-7. `view=debug` の cap への影響（PR）
+
+| 母集団 | ケース | 候補総数 p50 strip → PR | max strip → PR | cap 超過ケース strip → PR |
+|---|---:|---|---|---|
+| 標準コーパス 800（合成 704 + 実データ A 96） | 800 | 9 → 9 | 93 → 86 | 0 → 0 |
+| 実データ B 96（`btc_jpy_1hour_2026_08`） | 96 | 229 → 229 | 452 → 411 | 56 → 56 |
+| 実データ C 96（`btc_jpy_1hour_2026_09`） | 96 | 193 → 181 | 486 → 444 | 44 → 36 |
+| 実データ D 96（`btc_jpy_1hour_2026_09_05`） | 96 | 200 → 184 | 493 → 454 | 44 → 36 |
