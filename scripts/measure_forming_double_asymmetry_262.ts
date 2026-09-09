@@ -1167,6 +1167,15 @@ function patternKey(p: DeduplicablePattern): string | null {
 
 const laneOf = (spec: CaseSpec): string => `${spec.series.name}|${spec.tf}|${spec.swingDepth ?? 'auto'}`;
 
+/**
+ * Markdown の表のセルに入れる文字列を安全にする。
+ *
+ * **`|` はインラインコードの中でもセル区切りとして解釈される**（GFM）。実体キーは
+ * `1day|double_top|2026-…` の形なので、そのまま書くと 10 列のヘッダに対して 12 セルの行になり、
+ * 右端の 2 列が描画で落ちる（PR #267 の CodeRabbit 指摘。markdownlint MD056）。
+ */
+const mdCell = (v: string): string => v.replaceAll('|', '\\|');
+
 const yen = (v: number): string => Math.round(v).toLocaleString('ja-JP');
 
 /** 1 経路ぶんの集計。 */
@@ -1184,6 +1193,12 @@ interface PathAgg {
 	/** `prior_trend_insufficient_data`（棄却ではなく注記として積まれる accepted） */
 	insufficientData: number;
 	acceptedRecs: AcceptedRec[];
+	/**
+	 * accepted な候補のうち、対応する `PatternEntry` を引けなかった件数（{@link findPatternFor}）。
+	 * **0 件であるべき**——1 件でもあれば `confidence` / `completionPct` / `necklinePrice` が
+	 * 欠けた行が §6 に出るので、§0 で申告する。
+	 */
+	unmatchedAccepted: number;
 	/**
 	 * `forming_bars_out_of_range` の内訳（下限割れ / 上限超え）。
 	 * `formationBars = 最新足の idx − 左の主構成点の idx` を候補から復元して数える。
@@ -1203,6 +1218,7 @@ function newAgg(label: string, stages: Stage[]): PathAgg {
 		unknown: new Map(),
 		insufficientData: 0,
 		acceptedRecs: [],
+		unmatchedAccepted: 0,
 		barsBelowMin: 0,
 		barsAboveMax: 0,
 		formationBarsSamples: [],
@@ -1224,12 +1240,13 @@ function feed(
 			agg.insufficientData++;
 			continue;
 		}
-		const { struct, ts } = keysOf(e, spec);
+		const { struct, ts, mainIdxs } = keysOf(e, spec);
 		agg.totalByCorpus.set(corpus, (agg.totalByCorpus.get(corpus) ?? 0) + 1);
 		if (e.accepted) {
 			const status = String(e.status ?? 'forming');
 			bump(agg.accepted, `${corpus}|${status}`, struct, ts);
-			const p = patterns.find((x) => x.type === e.type);
+			const p = findPatternFor(patterns, e.type, status, mainIdxs);
+			if (!p) agg.unmatchedAccepted++;
 			const lastIdx = spec.windowEnd;
 			agg.acceptedRecs.push({
 				corpus,
@@ -1275,6 +1292,42 @@ function feed(
 		if (!stage) agg.unknown.set(reason, (agg.unknown.get(reason) ?? 0) + 1);
 		bump(agg.byReason, `${corpus}|${stage ? stage.label : `未分類: ${reason}`}`, struct, ts);
 	}
+}
+
+/**
+ * 候補 1 件に対応する `PatternEntry` を **構成点と `status` で**引く。
+ *
+ * **`type` だけで引いてはいけない。** 同じケースで完成済み `double_top` と形成中 `double_top` が
+ * 両方返ることがあり（`detectDoubles` の `push` は素の `arr.push` で dedup しない）、
+ * 完成済みのほうが配列の前にあるので `find(x => x.type === e.type)` は別の構造を掴む。
+ * その結果 `confidence` / `completionPct` / `necklinePrice` が**別の構造の値**になる
+ * （PR #267 の CodeRabbit 指摘）。
+ *
+ * **構成点だけでも足りない。** 完成済みと形成中が**同じ 3 点**で同時に出るケースが実在し
+ * （実データ C / D の `1hour` idx 174-177-184 など）、そこでは `pivots` の突き合わせも
+ * 両方に当たる。完成済みには `completionPct` が無いので、掴み違えると §6 の `completion` 列が
+ * `—` になる（実際になっていた）。**`status` まで見れば一意に決まる**——形成中経路は
+ * `pushCand` の `status` と `PatternEntry.status` に同じ値を入れており、完成済みは
+ * `completed` / `near_completion` なので衝突しない。
+ *
+ * 形成中経路の `pivots` は**候補の `indices` から最新足を除いた並びと厳密に一致する**
+ * （top 2 点 / bottom 3 点 / ablation も同じ）。
+ * **一致しなければ `undefined` を返す**——別の構造の値を黙って載せるより、`—` を出すほうが安全。
+ * 取りこぼしが 0 件であることは §0 の「対応する `PatternEntry` を引けなかった accepted」で申告する。
+ */
+function findPatternFor(
+	patterns: readonly DeduplicablePattern[],
+	type: string,
+	status: string,
+	mainIdxs: readonly number[],
+): DeduplicablePattern | undefined {
+	if (mainIdxs.length === 0) return undefined;
+	return patterns.find((x) => {
+		if (x.type !== type) return false;
+		if (String((x as unknown as { status?: string }).status ?? '') !== status) return false;
+		const pv = (x as unknown as { pivots?: Array<{ idx: number }> }).pivots ?? [];
+		return pv.length === mainIdxs.length && pv.every((q, i) => q.idx === mainIdxs[i]);
+	});
 }
 
 /** ファネル表 1 つ（1 経路 × 1 母集団）。 */
@@ -1466,6 +1519,12 @@ async function main(): Promise<void> {
 		'- 4 つの差し替えビルド（`noTop` / `noBottom` / `ablA` / `ablB`）は、対照ビルドの候補列が ' +
 			'base の**部分列**であることを毎ケース検算している（崩れたらその場で例外）。',
 	);
+	{
+		const unmatched = [aggBaseTop, aggBaseBottom, aggA, aggB]
+			.map((a) => `${a.label} ${a.unmatchedAccepted}`)
+			.join(' / ');
+		header.push(`- accepted な候補のうち対応する \`PatternEntry\` を引けなかった件数（0 であるべき）: ${unmatched}`);
+	}
 	header.push('');
 	header.push('### 形成中 double が要求する形成バー数（`getDoubleFormingBarParams`）');
 	header.push('');
@@ -1630,7 +1689,7 @@ async function main(): Promise<void> {
 			const p2 = r.pts.find((p) => p.role === 'peak2');
 			const relDiff = p1 && p2 ? Math.abs(p1.price - p2.price) / Math.max(1, Math.max(p1.price, p2.price)) : Number.NaN;
 			say(
-				`| ${i} | \`${ts}\` | \`${[...new Set(rs.map((x) => x.status))].sort().join(' / ')}\` | ` +
+				`| ${i} | \`${mdCell(ts)}\` | \`${[...new Set(rs.map((x) => x.status))].sort().join(' / ')}\` | ` +
 					`${[...new Set(rs.map((x) => x.series))].join(' ')} / sd=${[...new Set(rs.map((x) => x.sd))].sort().join(',')} / end=${r.windowEnd} | ` +
 					`${p1 ? yen(p1.price) : '—'} | ${v ? yen(v.price) : '—'} | ${p2 ? yen(p2.price) : '—'} | ` +
 					`${yen(r.currentPrice)} | ${Number.isFinite(relDiff) ? `${(relDiff * 100).toFixed(3)}%` : '—'} | ` +
