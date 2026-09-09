@@ -336,7 +336,7 @@ accepted の `formationBars`: min 34 / p50 76 / max 94（延べ 129 件）。
 
 **集計: 呼べる 0 / 保留 8 / 呼べない 0（本判定）、呼べる 0 / 保留 4 / 呼べない 4（補助判定）。**
 
-#268 の判断軸（「accepted が出て、目視で『呼べる』があれば直す」）に照らすと、
+issue #268 の判断軸（「accepted が出て、目視で『呼べる』があれば直す」）に照らすと、
 **accepted は出たが「呼べる」は 1 件も出ていない。**
 
 ## 8. ローリング窓での追跡（計測仕様 5）
@@ -351,7 +351,7 @@ accepted の `formationBars`: min 34 / p50 76 / max 94（延べ 129 件）。
 （3 点）が同じ構造として結べる。**8 構造とも、初めて形成中として現れた窓より後の窓で
 `completed` にも `near_completion` にも終端 status にもならなかった。**
 
-#262 Phase 1 §7-2 の「ローリング窓の範囲では、形成中 double が完成に至った例は top / bottom
+issue #262 Phase 1 §7-2 の「ローリング窓の範囲では、形成中 double が完成に至った例は top / bottom
 どちらにも無い」は、`ablP` でも変わらない。PR #270 で `double_top` にも `near_completion` が
 出るようになったが、**`ablP` が拾う 8 構造はその段階にも到達していない。**
 
@@ -523,7 +523,7 @@ npx tsx scripts/measure_forming_double_top_268.ts --emit ablP /tmp/detect_double
 - ✅ 12104 ケース全件で `base` ≡ 作業ツリー（`patterns` / `debugCandidates` とも）
 - うち `includeForming: true` は 11560 ケース（形成中経路が呼ばれるのはここだけ）
 - strip ビルドは使っていない（検出器を変更しないので作業ツリー = `main` がそのまま対照）
-- 展開先: `/tmp/forming-double-top-268-LeAU24`（作業ツリーは 1 バイトも変更していない）
+- 展開先: `/tmp/forming-double-top-268-toxc5A`（作業ツリーは 1 バイトも変更していない）
 - 形成中の係数（展開ビルドから読んだ値）: `DOUBLE_LEVEL_MAX_PCT` = 0.03 / `FORMING_PEAK_TOLERANCE_PCT` = 0.05 / `FORMING_EXPIRY_BARS` = 20 / `MIN_FORMING_COMPLETION` = 0.4
 - 3 つの差し替えビルド（`noTop` / `ablP` / `ablP+minDist`）は、対照ビルドの候補列が `base` の**部分列**であることを毎ケース検算している（崩れたらその場で例外）。
 - accepted な候補のうち対応する `PatternEntry` を引けなかった件数（0 であるべき）: 現行 `tryFormingDoubleTop` 0 / ablP（谷を挟んで最新足と同水準の最初の確定山） 0 / ablP+minDist（中間構成点にも `minDist`） 0
@@ -1072,7 +1072,6 @@ accepted は **0 件**。
 | 7 | `1hour\|double_top\|2026-08-23T21:00:00.000Z-2026-08-24T04:00:00.000Z` | btc_jpy_1hour_2026_08 / sd=6 / end=299 | 12,357,128 | 12,213,097 | 12,726,672 | +2.991% | **✅ 超えている**（12,900,000 > 12,396,586） | 7 | 27 | 1.166% | **保留** | 基準 5（該当なし） | 保留（基準 5（該当なし）、+30 本） |
 | 8 | `4hour\|double_top\|2026-08-23T21:00:00.000Z-2026-08-24T04:00:00.000Z` | btc_jpy_1hour_2026_08 / sd=auto / end=307 | 12,357,128 | 12,213,097 | 12,663,616 | +2.480% | **✅ 超えている**（12,663,616 > 12,396,586） | 7 | 35 | 1.166% | **保留** | 基準 5（該当なし） | 呼べない（基準 2（第2構成点以降に外側を超えた）、+30 本） |
 
-
 集計（本判定）: **保留 8**（計 8 実体）
 
 集計（後続 30 本を見た補助判定）: **保留 4** / **呼べない 4**
@@ -1104,7 +1103,6 @@ accepted は **0 件**。
 | 6 | `1hour\|double_top\|2026-08-21T23:00:00.000Z-2026-08-23T05:00:00.000Z` | btc_jpy_1hour_2026_08 / sd=6 / end=295 | 12,445,660 | 12,075,755 | 12,823,737 | +3.038% | **✅ 超えている**（12,894,611 > 12,525,196） | 30 | 46 | 2.972% | **保留** | 基準 5（該当なし） | 呼べない（基準 2（第2構成点以降に外側を超えた）、+30 本） |
 | 7 | `1hour\|double_top\|2026-08-23T21:00:00.000Z-2026-08-24T04:00:00.000Z` | btc_jpy_1hour_2026_08 / sd=6 / end=299 | 12,357,128 | 12,213,097 | 12,726,672 | +2.991% | **✅ 超えている**（12,900,000 > 12,396,586） | 7 | 27 | 1.166% | **保留** | 基準 5（該当なし） | 保留（基準 5（該当なし）、+30 本） |
 | 8 | `4hour\|double_top\|2026-08-23T21:00:00.000Z-2026-08-24T04:00:00.000Z` | btc_jpy_1hour_2026_08 / sd=auto / end=307 | 12,357,128 | 12,213,097 | 12,663,616 | +2.480% | **✅ 超えている**（12,663,616 > 12,396,586） | 7 | 35 | 1.166% | **保留** | 基準 5（該当なし） | 呼べない（基準 2（第2構成点以降に外側を超えた）、+30 本） |
-
 
 集計（本判定）: **保留 8**（計 8 実体）
 
@@ -1281,7 +1279,6 @@ accepted は **0 件**。
 
 食い違ったケース（重複を畳んで 129 行。うち合成フィクスチャ 0 行）。**合成フィクスチャの行は #158 / #169 のテスト期待値が動きうる箇所**なので全部出す:
 
-
 実データ側（先頭 40 行 / 全 129 行）:
 
 - btc_jpy_1hour_2026_08 / 1day / sd=auto / end=294 / includeForming: true: （0 件） → ablP double_top:forming → ablP+minDist double_top:forming
@@ -1324,4 +1321,3 @@ accepted は **0 件**。
 - btc_jpy_1hour_2026_08 / 4hour / sd=auto / end=307 / includeForming: true: （0 件） → ablP double_top:forming → ablP+minDist double_top:forming
 - btc_jpy_1hour_2026_08 / 4hour / sd=6 / end=307 / includeForming: true: （0 件） → ablP double_top:forming → ablP+minDist double_top:forming
 - btc_jpy_1hour_2026_08 / 1hour / sd=6 / end=307 / includeForming: true: （0 件） → ablP double_top:forming → ablP+minDist double_top:forming
-

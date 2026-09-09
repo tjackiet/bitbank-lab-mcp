@@ -1875,8 +1875,10 @@ async function main(): Promise<void> {
 			);
 		}
 		say();
-		if (shapes.size > MAX_ROWS) say(`（先頭 ${MAX_ROWS} 件のみ。全件は \`--json\` 側に出る）`);
-		say();
+		if (shapes.size > MAX_ROWS) {
+			say(`（先頭 ${MAX_ROWS} 件のみ。全件は \`--json\` 側に出る）`);
+			say();
+		}
 		say(
 			`集計（本判定）: ${[...tally.entries()]
 				.sort()
@@ -2062,15 +2064,16 @@ async function main(): Promise<void> {
 				'**合成フィクスチャの行は #158 / #169 のテスト期待値が動きうる箇所**なので全部出す:',
 		);
 		say();
-		for (const line of synthetic.slice(0, 80)) say(`- ${line}`);
-		if (synthetic.length > 80) say(`- （合成はここまでで ${synthetic.length - 80} 行省略）`);
-		say();
+		if (synthetic.length > 0) {
+			for (const line of synthetic.slice(0, 80)) say(`- ${line}`);
+			if (synthetic.length > 80) say(`- （合成はここまでで ${synthetic.length - 80} 行省略）`);
+			say();
+		}
 		const real = samples.filter((s) => s.startsWith('btc_jpy_'));
 		if (real.length > 0) {
 			say(`実データ側（先頭 40 行 / 全 ${real.length} 行）:`);
 			say();
 			for (const line of real.slice(0, 40)) say(`- ${line}`);
-			say();
 		}
 	}
 
