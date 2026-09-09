@@ -116,8 +116,10 @@ interface Build {
 	MIN_FORMING_COMPLETION: number;
 	MIN_PATTERN_DAYS: number;
 	FORMING_PEAK_TOLERANCE_PCT: number;
-	FORMING_TOLERANCE_MULTIPLIER: number;
-	FORMING_VALLEY_INVALID_PCT: number;
+	/** #262 Phase 2 で削除。strip ビルド（`main`）にだけ在る。 */
+	FORMING_TOLERANCE_MULTIPLIER?: number;
+	/** 同上。 */
+	FORMING_VALLEY_INVALID_PCT?: number;
 	FORMING_EXPIRY_BARS: number;
 	getDoubleFormingBarParams: (tf: string) => { minBars: number; maxBars: number };
 }
@@ -130,10 +132,28 @@ interface Build {
  * 閉じていた `const` だけで、**宣言に名前を付け直すだけなので判定は 1 ミリも変わらない。**
  * それを §0 の検算が全ケースで確かめる。
  */
-const INTERNAL_EXPORTS: Readonly<Record<string, string>> = {
-	'detect_doubles.ts':
-		'\nexport { FORMING_PEAK_TOLERANCE_PCT, FORMING_TOLERANCE_MULTIPLIER, FORMING_VALLEY_INVALID_PCT, FORMING_EXPIRY_BARS };\n',
-};
+/**
+ * 展開ビルドの末尾に足す `export { … }`。**そのソースに実在する識別子だけを並べる。**
+ *
+ * `FORMING_TOLERANCE_MULTIPLIER` / `FORMING_VALLEY_INVALID_PCT` は `tryFormingDoubleBottom` 専用の
+ * 係数で、issue #262 Phase 2 で同関数ごと削除された。strip ビルド（`main` のソース）には在って
+ * 作業ツリーには無いので、固定文字列で書くと**どちらかのビルドが必ず読み込みに失敗する。**
+ */
+const DOUBLES_INTERNAL_SYMBOLS = [
+	'FORMING_PEAK_TOLERANCE_PCT',
+	'FORMING_TOLERANCE_MULTIPLIER',
+	'FORMING_VALLEY_INVALID_PCT',
+	'FORMING_EXPIRY_BARS',
+] as const;
+
+/** {@link DOUBLES_INTERNAL_SYMBOLS} のうち、そのソースに実在するものだけの `export { … }` を返す。 */
+function internalExportsFor(name: string, src: string): string {
+	if (name !== 'detect_doubles.ts') return '';
+	const present = DOUBLES_INTERNAL_SYMBOLS.filter(
+		(sym) => src.includes(`const ${sym} `) || src.includes(`const ${sym}=`),
+	);
+	return present.length > 0 ? `\nexport { ${present.join(', ')} };\n` : '';
+}
 
 // ── 形成中 2 経路の差し替え（ablation / 対照ビルド） ──
 
@@ -617,6 +637,43 @@ interface BuildVariantOpts {
 	top?: 'disable' | 'ablB';
 	/** `tryFormingDoubleBottom` の本体を差し替える。 */
 	bottom?: 'disable' | 'ablA';
+	/**
+	 * `detect_doubles.ts` を作業ツリーではなくこの git ref から取る（**strip ビルド**）。
+	 *
+	 * #264 / #265 と同じ様式。Phase 1 の 5 ビルドはこの PR より前の検出器で測った数字なので、
+	 * 作業ツリーから組むと ablation のアンカー（削除済みの `tryFormingDoubleBottom`）を
+	 * 見失うだけでなく、§1〜§7 が Phase 1 と別物の測定になってしまう。
+	 * **`tools/patterns/` の他のファイルは作業ツリーのまま**で、それが妥当であることは
+	 * {@link verifyStripScope} が「この PR が `tools/patterns/` で触ったのは
+	 * `detect_doubles.ts` だけ」を検算して担保する（= strip ≡ `main`）。
+	 */
+	fromRef?: string;
+}
+
+/**
+ * strip ビルドが `main` と等価であることの検算（#264 / #265 の様式）。
+ *
+ * strip は「`detect_doubles.ts` だけを ref から取り、残りは作業ツリー」という組み方なので、
+ * **この PR が `tools/patterns/` の他のファイルを触っていたら等価性が崩れる。**
+ * その場合は数字を出さずに落とす。戻り値は差分のあったファイル一覧（メモに出す）。
+ */
+function verifyStripScope(ref: string): string[] {
+	const changed = execFileSync('git', ['diff', '--name-only', ref, '--', 'tools/patterns/'], {
+		cwd: ROOT,
+		encoding: 'utf8',
+	})
+		.split('\n')
+		.map((s) => s.trim())
+		.filter(Boolean);
+	const unexpected = changed.filter((path) => path !== 'tools/patterns/detect_doubles.ts');
+	if (unexpected.length > 0) {
+		throw new Error(
+			`strip ビルドが '${ref}' と等価にならない: ${unexpected.join(', ')} も変更されている。` +
+				'strip は detect_doubles.ts だけを ref から取るので、他のファイルも触るなら ' +
+				'materializePatternsDir の fromRef を全ファイルに広げること。',
+		);
+	}
+	return changed;
 }
 
 /** 差し替え 1 件ぶんの「置換後の本体」と「埋める目印」。 */
@@ -695,6 +752,9 @@ function materializePatternsDir(variant: string, opts: BuildVariantOpts = {}): s
 		let src = readFileSync(join(ROOT, path), 'utf8');
 
 		if (name === 'detect_doubles.ts') {
+			if (opts.fromRef) {
+				src = execFileSync('git', ['show', `${opts.fromRef}:${path}`], { cwd: ROOT, encoding: 'utf8' });
+			}
 			if (opts.top) src = swapFormingFn(src, 'top', opts.top);
 			if (opts.bottom) src = swapFormingFn(src, 'bottom', opts.bottom);
 		}
@@ -706,7 +766,7 @@ function materializePatternsDir(variant: string, opts: BuildVariantOpts = {}): s
 			.replace(/from '\.\.\/patterns\//g, "from './")
 			.replace(/from '\.\.\//g, `from '${ROOT}/tools/`);
 		// `from './` は書き換えない——展開先の中で解決させるのが本関数の目的。
-		writeFileSync(join(dir, name), rewritten + (INTERNAL_EXPORTS[name] ?? ''));
+		writeFileSync(join(dir, name), rewritten + internalExportsFor(name, src));
 	}
 	return dir;
 }
@@ -1398,11 +1458,235 @@ function acceptedSummary(agg: PathAgg, corpora: readonly CorpusPart[]): string {
 
 // ── main ──
 
+// ── §8: 本 PR（issue #262 Phase 2）の実装 vs strip（`main`） ──
+
+/** §8-7 の目視判定に要る、実体 1 つぶんの生データ（フィクスチャから直接読める量だけ）。 */
+interface ShapeRec {
+	series: Series;
+	tf: string;
+	sd: string;
+	windowEnd: number;
+	type: string;
+	idxs: number[];
+	necklinePrice: number;
+}
+
+/**
+ * Phase 1 §8-2 の 3 値判定を**数値だけで**再現する。
+ *
+ * 使う量は「構成点の終値 / 極値」と「区間の最高値 / 最安値」の 2 種類だけで、
+ * どちらも凍結フィクスチャから直接読める（検出器も閾値も通さない）。
+ * 順に当てて最初に当たったものを採る、という Phase 1 の手順もそのまま。
+ */
+function judgeShape(rec: ShapeRec): { verdict: string; basis: string; gapBars: number; depthPct: number } {
+	const [aIdx, bIdx, cIdx] = rec.idxs;
+	const cd = rec.series.candles;
+	const isTop = rec.type === 'double_top';
+	const closeAt = (i: number): number => Number(cd[i]?.close ?? NaN);
+	const gapBars = bIdx - aIdx;
+	// 中間構成点の深さ（対 第1構成点の終値）。top は押し、bottom は戻り。
+	const depthPct = Math.abs(closeAt(aIdx) - closeAt(bIdx)) / Math.max(1, Math.abs(closeAt(aIdx)));
+	// 第2構成点より後（終端まで）の極値。
+	let beyond = isTop ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY;
+	let nlBroken = false;
+	for (let i = cIdx + 1; i <= rec.windowEnd; i++) {
+		const hi = Number(cd[i]?.high ?? NaN);
+		const lo = Number(cd[i]?.low ?? NaN);
+		if (isTop && Number.isFinite(hi)) beyond = Math.max(beyond, hi);
+		if (!isTop && Number.isFinite(lo)) beyond = Math.min(beyond, lo);
+		const cl = closeAt(i);
+		if (Number.isFinite(cl) && (isTop ? cl < rec.necklinePrice : cl > rec.necklinePrice)) nlBroken = true;
+	}
+	const outerExtreme = isTop
+		? Math.max(Number(cd[aIdx]?.high ?? NaN), Number(cd[cIdx]?.high ?? NaN))
+		: Math.min(Number(cd[aIdx]?.low ?? NaN), Number(cd[cIdx]?.low ?? NaN));
+	const exceeded = isTop ? beyond > outerExtreme : beyond < outerExtreme;
+
+	if (gapBars <= 1) return { verdict: '呼べない', basis: '基準 1（中間構成点が隣接足）', gapBars, depthPct };
+	if (exceeded) return { verdict: '呼べない', basis: '基準 2（第2構成点以降に外側を超えた）', gapBars, depthPct };
+	if (depthPct < 0.005) return { verdict: '呼べない', basis: '基準 3（深さ < 0.5%）', gapBars, depthPct };
+	if (depthPct >= 0.01 && nlBroken) return { verdict: '呼べる', basis: '基準 4', gapBars, depthPct };
+	return { verdict: '保留', basis: '基準 5（該当なし）', gapBars, depthPct };
+}
+
+/** `patterns` 1 件の status（未設定は完成済み扱い。`ranking.ts` の `statusScore` と同じ規約）。 */
+function statusOf(p: DeduplicablePattern): string {
+	return String((p as unknown as { status?: string }).status ?? 'completed');
+}
+
+/** 未ブレイクの構造か（ブレイク足を持たない ＝ `near_completion` / `expired` / `invalid` / `forming`）。 */
+function isUnbroken(p: DeduplicablePattern): boolean {
+	return (p as unknown as { breakoutBarIndex?: number }).breakoutBarIndex === undefined;
+}
+
+/** `patterns` 1 件の構造キー / 実体キー（候補側の {@link keysOf} と同じ畳み方）。 */
+function patternKeysOf(p: DeduplicablePattern, spec: CaseSpec): { struct: string; ts: string; idxs: number[] } {
+	const idxs = ((p as unknown as { pivots?: Array<{ idx: number }> }).pivots ?? []).map((v) => v.idx);
+	const isos = idxs.map((i) => spec.series.candles[i]?.isoTime ?? `#${i}`);
+	return {
+		struct: `${spec.series.name}|${spec.tf}|${p.type}|${idxs.join('-')}`,
+		ts: `${spec.tf}|${p.type}|${isos.join('-')}`,
+		idxs,
+	};
+}
+
+interface Phase2Agg {
+	/** `type|status` → 延べ / 構造 / 実体（PR ビルドの未ブレイク構造）。 */
+	unbroken: Map<string, Cell>;
+	/** strip の未ブレイク構造（現行 `tryFormingDoubleBottom` の accepted）。 */
+	stripUnbroken: Map<string, Cell>;
+	/**
+	 * 実体キー → status の集合（1 対 1 の対応表を作るため）。
+	 *
+	 * **未ブレイク構造だけでなく `completed` も入れる。** strip で `forming` だった実体が
+	 * PR で消えたのか `completed` になったのかは、未ブレイクだけ見ていると区別できない
+	 * （旧 `tryFormingDoubleBottom` は完成済み経路と**同じ構造を二重に**出していたので、
+	 * 「消えた」の多くが実は「完成済みとして 1 本だけ出るようになった」）。
+	 */
+	entityStrip: Map<string, Set<string>>;
+	entityPr: Map<string, Set<string>>;
+	/** 8-2 に出す実体（どちらかのビルドで未ブレイクとして現れたもの）。 */
+	unbrokenEntities: Set<string>;
+	/** PR で `near_completion` になった実体の代表 1 件（§8-6 の目視判定の材料）。 */
+	nearCompletionRecs: Map<string, ShapeRec>;
+	/** 実体キー → 代表ケース（メモの明細用）。 */
+	entityWhere: Map<string, string>;
+	/** 理由コード → 延べ（strip / PR）。 */
+	reasonStrip: Map<string, number>;
+	reasonPr: Map<string, number>;
+	/**
+	 * strip の **`tryFormingDoubleBottom` が積んだぶんだけ**の理由コード（延べ）。
+	 * 差分の内訳を「削除した経路のぶん」と「未ブレイク構造が accepted に移ったぶん」に
+	 * 分けるために要る——`neckline_above_pre_decline_high` のような**共有の理由コード**は
+	 * 名前だけでは経路を切り分けられない（対照ビルドとの差集合で同定する）。
+	 */
+	reasonStripFormingBottom: Map<string, number>;
+	/** `data.patterns` が食い違ったケース数（`includeForming` 別）。 */
+	diffCases: Map<string, { total: number; diff: number }>;
+	/** 食い違ったケースの明細（重複を畳んだもの）。 */
+	diffSamples: Set<string>;
+}
+
+/** 空の {@link Phase2Agg}。1 回の走行で 1 つだけ作り、全ケースを流し込む。 */
+function newPhase2Agg(): Phase2Agg {
+	return {
+		unbroken: new Map(),
+		stripUnbroken: new Map(),
+		entityStrip: new Map(),
+		entityPr: new Map(),
+		unbrokenEntities: new Set(),
+		nearCompletionRecs: new Map(),
+		entityWhere: new Map(),
+		reasonStrip: new Map(),
+		reasonPr: new Map(),
+		reasonStripFormingBottom: new Map(),
+		diffCases: new Map(),
+		diffSamples: new Set(),
+	};
+}
+
+/** `Map<キー, Set<値>>` に 1 件足す（同じ実体が窓ごとに別の status を取るので集合で持つ）。 */
+function addTo(map: Map<string, Set<string>>, k: string, v: string): void {
+	const cur = map.get(k);
+	if (cur) cur.add(v);
+	else map.set(k, new Set([v]));
+}
+
+/**
+ * 棄却候補の理由コードを延べで数える。**accepted は数えない**——§8-3 は「棄却がどこへ移ったか」の表で、
+ * accepted 側の増減は §8-1 の status 表が持つ。
+ */
+function countReasons(map: Map<string, number>, cands: readonly CandDebugEntry[]): void {
+	for (const c of cands) {
+		if (c.accepted) continue;
+		const r = String(c.reason ?? '');
+		map.set(r, (map.get(r) ?? 0) + 1);
+	}
+}
+
+/** 1 ケースぶんの strip / PR の走行結果を §8 の集計に流す。 */
+function feedPhase2(
+	agg: Phase2Agg,
+	spec: CaseSpec,
+	corpus: string,
+	strip: RunOut,
+	prRun: RunOut,
+	stripFormingBottom: readonly CandDebugEntry[],
+): void {
+	const bucket = spec.opts.includeForming ? 'includeForming: true' : 'includeForming: false（既定）';
+	const cell = agg.diffCases.get(bucket) ?? { total: 0, diff: 0 };
+	cell.total++;
+	if (key(strip.patterns) !== key(prRun.patterns)) {
+		cell.diff++;
+		// **`includeForming: true` の 4 つの opts 組み合わせは double にとって同じケース**なので、
+		// 同じ行を 4 回積まない（`includeInvalid` / `includeCompleted` は検出器の外の絞り込み）。
+		const line =
+			`${spec.series.name} / ${spec.tf} / sd=${spec.swingDepth ?? 'auto'} / end=${spec.windowEnd}` +
+			` / ${bucket}: ${summarizePatterns(strip.patterns)} → ${summarizePatterns(prRun.patterns)}`;
+		agg.diffSamples.add(line);
+	}
+	agg.diffCases.set(bucket, cell);
+
+	countReasons(agg.reasonStrip, strip.cands);
+	countReasons(agg.reasonPr, prRun.cands);
+	countReasons(agg.reasonStripFormingBottom, stripFormingBottom);
+
+	const where = `${spec.series.name} / ${spec.tf} / sd=${spec.swingDepth ?? 'auto'} / end=${spec.windowEnd}`;
+	const feedSide = (
+		patterns: readonly DeduplicablePattern[],
+		unbrokenTally: Map<string, Cell>,
+		entities: Map<string, Set<string>>,
+	): void => {
+		for (const p of patterns) {
+			if (p.type !== 'double_top' && p.type !== 'double_bottom') continue;
+			const k = patternKeysOf(p, spec);
+			const status = statusOf(p);
+			addTo(entities, k.ts, status);
+			if (isUnbroken(p)) {
+				bump(unbrokenTally, `${p.type}|${status}`, k.struct, k.ts);
+				agg.unbrokenEntities.add(k.ts);
+				if (!agg.entityWhere.has(k.ts)) agg.entityWhere.set(k.ts, where);
+			}
+			if (entities === agg.entityPr && status === 'near_completion' && !agg.nearCompletionRecs.has(k.ts)) {
+				const nl = (p as unknown as { neckline?: Array<{ y: number }> }).neckline;
+				agg.nearCompletionRecs.set(k.ts, {
+					series: spec.series,
+					tf: spec.tf,
+					sd: String(spec.swingDepth ?? 'auto'),
+					windowEnd: spec.windowEnd,
+					type: p.type,
+					idxs: k.idxs,
+					necklinePrice: nl && nl.length > 0 ? nl[0].y : Number.NaN,
+				});
+			}
+		}
+	};
+	feedSide(strip.patterns, agg.stripUnbroken, agg.entityStrip);
+	feedSide(prRun.patterns, agg.unbroken, agg.entityPr);
+	void corpus;
+}
+
+/** 差分サンプル 1 行ぶんの `patterns` の要約（`type:status` の並び）。 */
+function summarizePatterns(patterns: readonly DeduplicablePattern[]): string {
+	if (patterns.length === 0) return '（0 件）';
+	return patterns.map((p) => `${p.type}:${statusOf(p)}`).join(', ');
+}
+
+/**
+ * 全ビルドを組み、コーパスを 1 周して §0〜§8 を Markdown で標準出力へ書く。
+ * `--json <path>` で accepted 候補の明細を、`--no-rolling` でローリング窓を外す。
+ */
 async function main(): Promise<void> {
 	const argv = process.argv.slice(2);
 	const jsonAt = argv.indexOf('--json');
 	const jsonPath = jsonAt >= 0 ? argv[jsonAt + 1] : null;
 	const includeRolling = !argv.includes('--no-rolling');
+	const refAt = argv.indexOf('--strip-ref');
+	// strip ビルドの参照先。既定は `main`（`--strip-ref <ref>` で上書き）。
+	// **ローカルの `main` が古いと「PR の差分」ではなく「main が進んだぶん」まで測ってしまう**ので、
+	// 走らせる前に `git fetch origin main` しておくこと（`verifyStripScope` が
+	// `tools/patterns/` の想定外の差分を見つけたら落ちる）。
+	const stripRef = refAt >= 0 ? argv[refAt + 1] : 'main';
 
 	const out: string[] = [];
 	const say = (s = ''): void => {
@@ -1410,11 +1694,16 @@ async function main(): Promise<void> {
 	};
 
 	const corpus = buildCorpus(includeRolling);
-	const base = await loadBuild('base');
-	const noTop = await loadBuild('noTop', { top: 'disable' });
-	const noBottom = await loadBuild('noBottom', { bottom: 'disable' });
-	const ablA = await loadBuild('ablA', { bottom: 'ablA' });
-	const ablB = await loadBuild('ablB', { top: 'ablB' });
+	// §1〜§7 は Phase 1 の数字を再現する測定なので、**`main` の検出器（strip）**で組む。
+	// §8 だけが作業ツリー（本 PR の実装）を使う。
+	const stripScope = verifyStripScope(stripRef);
+	const base = await loadBuild('base', { fromRef: stripRef });
+	const noTop = await loadBuild('noTop', { top: 'disable', fromRef: stripRef });
+	const noBottom = await loadBuild('noBottom', { bottom: 'disable', fromRef: stripRef });
+	const ablA = await loadBuild('ablA', { bottom: 'ablA', fromRef: stripRef });
+	const ablB = await loadBuild('ablB', { top: 'ablB', fromRef: stripRef });
+	const pr = await loadBuild('pr');
+	const phase2 = newPhase2Agg();
 
 	const aggBaseTop = newAgg('現行 `tryFormingDoubleTop`', STAGES_BASE_TOP);
 	const aggBaseBottom = newAgg('現行 `tryFormingDoubleBottom`', STAGES_BASE_BOTTOM);
@@ -1427,7 +1716,7 @@ async function main(): Promise<void> {
 	const lanesB = new Map<string, Slice[]>();
 
 	// §7 の cap 用。
-	const capRows: Array<{ corpus: string; base: number; ablB: number }> = [];
+	const capRows: Array<{ corpus: string; base: number; ablB: number; pr: number }> = [];
 
 	let mismatch = 0;
 	let caseCount = 0;
@@ -1436,10 +1725,11 @@ async function main(): Promise<void> {
 	for (const part of corpus) {
 		for (const spec of part.cases) {
 			caseCount++;
-			// §0 検算: 展開した base が作業ツリーと全キーで一致するか（triple 込み）。
+			// §0 検算: 展開した `pr` ビルドが作業ツリーと全キーで一致するか（triple 込み）。
 			const fullBase = runFull(base.detectTriples, base.detectDoubles, spec);
+			const fullPr = runFull(pr.detectTriples, pr.detectDoubles, spec);
 			const fullWork = runFull(realDetectTriples, realDetectDoubles, spec);
-			if (key(fullBase.patterns) !== key(fullWork.patterns) || key(fullBase.cands) !== key(fullWork.cands)) {
+			if (key(fullPr.patterns) !== key(fullWork.patterns) || key(fullPr.cands) !== key(fullWork.cands)) {
 				mismatch++;
 				if (mismatch <= 3) {
 					say(
@@ -1449,8 +1739,10 @@ async function main(): Promise<void> {
 			}
 
 			const bd = runDoubles(base, spec);
+			const pd = runDoubles(pr, spec);
 			const ct = runDoubles(noTop, spec);
 			const cb = runDoubles(noBottom, spec);
+			feedPhase2(phase2, spec, part.label, bd, pd, attributeToPath(bd.cands, cb.cands));
 			const ra = runDoubles(ablA, spec);
 			const rb = runDoubles(ablB, spec);
 
@@ -1470,6 +1762,7 @@ async function main(): Promise<void> {
 					corpus: part.label,
 					base: applyDebugCapCount([...triplesCands, ...bd.cands]),
 					ablB: applyDebugCapCount([...triplesCands, ...rb.cands]),
+					pr: applyDebugCapCount([...triplesCands, ...pd.cands]),
 				});
 			}
 
@@ -1484,40 +1777,55 @@ async function main(): Promise<void> {
 	}
 
 	if (mismatch > 0) {
-		throw new Error(`展開ビルドが作業ツリーと ${mismatch} / ${caseCount} ケースで食い違った。計測は無効。`);
+		throw new Error(`展開ビルド（pr）が作業ツリーと ${mismatch} / ${caseCount} ケースで食い違った。計測は無効。`);
 	}
 
 	// ── §0 ──
 	const header: string[] = [];
-	header.push('# 形成中 double の「形成中」の定義の非対称の計測（issue #262 Phase 1）');
+	header.push('# 形成中 double の「形成中」の定義の非対称の計測（issue #262）');
 	header.push('');
 	header.push(
-		'**検出器・ベースラインは 1 行も変更していない。** 本スクリプトは `tools/patterns/` を' +
-			'一時領域へ展開し、形成中 2 経路を差し替えたビルドを別に作って走らせるだけ。',
+		'**作業ツリーは 1 バイトも変更しない。** 本スクリプトは `tools/patterns/` を一時領域へ展開し、' +
+			`形成中 2 経路を差し替えたビルドと、\`detect_doubles.ts\` だけを \`${stripRef}\` から取った ` +
+			'strip ビルドを別に作って走らせるだけ。**§1〜§7（Phase 1）は strip、§8（Phase 2）は作業ツリー。**',
 	);
 	header.push('');
-	header.push('## 0. 検算（展開ビルド ≡ 作業ツリー）');
+	header.push('## 0. 検算');
 	header.push('');
 	header.push(
-		'`tools/patterns/` を一時領域へディレクトリごと展開し、`detect_doubles.ts` の末尾に ' +
-			'`export { … }` を 1 行足しただけのビルド（`base`）が、作業ツリーの本物と ' +
-			'`patterns` / `debugCandidates` の JSON 全キーで一致することを**全ケースで**確かめる。',
+		'**(a) 展開ビルド ≡ 作業ツリー**: `tools/patterns/` を一時領域へディレクトリごと展開し、' +
+			'`detect_doubles.ts` の末尾に `export { … }` を 1 行足しただけのビルド（**`pr`**）が、' +
+			'作業ツリーの本物と `patterns` / `debugCandidates` の JSON 全キーで一致することを' +
+			'**全ケースで**確かめる。',
 	);
 	header.push('');
-	header.push(`- ✅ ${caseCount} ケース全件で一致（\`patterns\` / \`debugCandidates\` とも）`);
+	header.push(
+		`**(b) strip ≡ \`${stripRef}\`**: strip 系のビルド（\`base\` / \`noTop\` / \`noBottom\` / ` +
+			`\`ablA\` / \`ablB\`）は \`detect_doubles.ts\` だけを \`${stripRef}\` から取り、` +
+			'`tools/patterns/` の残りは作業ツリーのまま。この組み方が等価になるのは' +
+			'**作業ツリーが `tools/patterns/` で `detect_doubles.ts` 以外を触っていない**ときだけなので、' +
+			'`git diff --name-only` で確かめてから走る（違反したらその場で例外）。',
+	);
+	header.push('');
+	header.push(`- ✅ ${caseCount} ケース全件で \`pr\` ≡ 作業ツリー（\`patterns\` / \`debugCandidates\` とも）`);
 	header.push(`- うち \`includeForming: true\` は ${formingCases} ケース（形成中経路が呼ばれるのはここだけ）`);
+	header.push(
+		`- \`${stripRef}\` との \`tools/patterns/\` の差分: ` +
+			`${stripScope.length === 0 ? 'なし' : stripScope.map((f) => `\`${f}\``).join(' / ')}`,
+	);
 	header.push(`- 展開先: \`${TMP_DIR}\`（作業ツリーは 1 バイトも変更していない）`);
 	header.push(
-		`- 形成中の係数（展開ビルドから読んだ値）: \`DOUBLE_LEVEL_MAX_PCT\` = ${base.DOUBLE_LEVEL_MAX_PCT} / ` +
+		`- 形成中の係数（**strip ビルドから読んだ値**。§1〜§7 はこれで測っている）: ` +
+			`\`DOUBLE_LEVEL_MAX_PCT\` = ${base.DOUBLE_LEVEL_MAX_PCT} / ` +
 			`\`FORMING_PEAK_TOLERANCE_PCT\` = ${base.FORMING_PEAK_TOLERANCE_PCT} / ` +
-			`\`FORMING_TOLERANCE_MULTIPLIER\` = ${base.FORMING_TOLERANCE_MULTIPLIER} / ` +
-			`\`FORMING_VALLEY_INVALID_PCT\` = ${base.FORMING_VALLEY_INVALID_PCT} / ` +
+			`\`FORMING_TOLERANCE_MULTIPLIER\` = ${base.FORMING_TOLERANCE_MULTIPLIER ?? '（そのビルドに無い）'} / ` +
+			`\`FORMING_VALLEY_INVALID_PCT\` = ${base.FORMING_VALLEY_INVALID_PCT ?? '（そのビルドに無い）'} / ` +
 			`\`FORMING_EXPIRY_BARS\` = ${base.FORMING_EXPIRY_BARS} / ` +
 			`\`MIN_FORMING_COMPLETION\` = ${base.MIN_FORMING_COMPLETION}`,
 	);
 	header.push(
 		'- 4 つの差し替えビルド（`noTop` / `noBottom` / `ablA` / `ablB`）は、対照ビルドの候補列が ' +
-			'base の**部分列**であることを毎ケース検算している（崩れたらその場で例外）。',
+			'`base` の**部分列**であることを毎ケース検算している（崩れたらその場で例外）。',
 	);
 	{
 		const unmatched = [aggBaseTop, aggBaseBottom, aggA, aggB]
@@ -1739,6 +2047,196 @@ async function main(): Promise<void> {
 		say(
 			`| ${part.label} | ${rs.length} | ${q(bs, 0.5)} → ${q(as, 0.5)} | ${bs[bs.length - 1]} → ${as[as.length - 1]} | ` +
 				`${rs.filter((r) => r.base > DEBUG_CAP).length} → ${rs.filter((r) => r.ablB > DEBUG_CAP).length} |`,
+		);
+	}
+	say();
+
+	// ── §8 本 PR（#262 Phase 2）の実装 vs strip（`main`） ──
+	say('## 8. 本 PR の実装 vs strip（`main`）');
+	say();
+	say(
+		`strip は \`detect_doubles.ts\` だけを \`${stripRef}\` から取り、\`tools/patterns/\` の残りは作業ツリー。` +
+			'この組み方が `main` と等価であることは、**本 PR が `tools/patterns/` で触ったファイルが ' +
+			'`detect_doubles.ts` だけ**であることの検算で担保している' +
+			`（実測: ${stripScope.length === 0 ? '差分なし' : stripScope.map((f) => `\`${f}\``).join(' / ')}）。` +
+			'§1〜§7 は strip で走らせているので Phase 1 の数字がそのまま再現される。',
+	);
+	say();
+
+	say('### 8-1. 未ブレイク構造の status（延べ / 構造 / 実体）');
+	say();
+	say('`breakoutBarIndex` を持たない `patterns` エントリだけを数える（＝ブレイク足が無い構造）。');
+	say();
+	say('| type / status | strip 延べ | strip 構造 | strip 実体 | PR 延べ | PR 構造 | PR 実体 |');
+	say('|---|---:|---:|---:|---:|---:|---:|');
+	{
+		const keys = [...new Set([...phase2.stripUnbroken.keys(), ...phase2.unbroken.keys()])].sort();
+		for (const k of keys) {
+			const a = cellOf(phase2.stripUnbroken, k);
+			const b = cellOf(phase2.unbroken, k);
+			say(
+				`| \`${mdCell(k)}\` | ${a.total} | ${a.struct.size} | ${a.ts.size} | ` +
+					`${b.total} | ${b.struct.size} | ${b.ts.size} |`,
+			);
+		}
+	}
+	say();
+
+	say('### 8-2. 実体単位の対応表（strip の status → PR の status）');
+	say();
+	say(
+		'実体キーは `(時間足, type, 構成点の絶対時刻)`。同じ実体が窓によって別の status で現れるので、' +
+			'セルは**その実体に付いた status の集合**。`—` はその側に 1 件も出ないこと。' +
+			'**行はどちらかのビルドで未ブレイクとして現れた実体**に絞り、セルには `completed` も含める' +
+			'——旧 `tryFormingDoubleBottom` は完成済み経路と同じ構造を二重に出していたので、' +
+			'「消えた」と「完成済みとして 1 本になった」を分けないと読めない。',
+	);
+	say();
+	say('| # | 実体 | strip | PR | 代表ケース |');
+	say('|---:|---|---|---|---|');
+	{
+		const keys = [...phase2.unbrokenEntities].sort();
+		let n = 0;
+		for (const k of keys) {
+			n++;
+			const a = phase2.entityStrip.get(k);
+			const b = phase2.entityPr.get(k);
+			const fmt = (v: Set<string> | undefined): string => (v ? [...v].sort().join(' / ') : '—');
+			say(`| ${n} | \`${mdCell(k)}\` | ${fmt(a)} | ${fmt(b)} | ${mdCell(phase2.entityWhere.get(k) ?? '')} |`);
+		}
+		if (n === 0) say('| — | （未ブレイク構造が 1 件も無い） | — | — | — |');
+	}
+	say();
+
+	say('### 8-3. 理由コードの差分（延べ。全母集団）');
+	say();
+	say('**`no_breakout` が減ったぶんが未ブレイク構造の accepted に移っていること**を確かめる。');
+	say();
+	say(
+		'`削除経路` 列は strip の **`tryFormingDoubleBottom` が積んだぶん**（対照ビルド `noBottom` との' +
+			'差集合で同定。名前では切り分けられない共有コードがあるため）。減少がこの列で説明できるなら、' +
+			'**その減少は「経路を削除したぶん」であって判定が緩んだのではない。**',
+	);
+	say();
+	say('| 理由コード | strip | うち削除経路 | PR | 差 | 残差（差 + 削除経路） |');
+	say('|---|---:|---:|---:|---:|---:|');
+	{
+		const keys = [...new Set([...phase2.reasonStrip.keys(), ...phase2.reasonPr.keys()])].sort();
+		for (const k of keys) {
+			const a = phase2.reasonStrip.get(k) ?? 0;
+			const b = phase2.reasonPr.get(k) ?? 0;
+			if (a === b) continue;
+			const del = phase2.reasonStripFormingBottom.get(k) ?? 0;
+			const d = b - a;
+			say(
+				`| \`${mdCell(k || '(なし)')}\` | ${a} | ${del} | ${b} | ${d > 0 ? '+' : ''}${d} | ` +
+					`${d + del > 0 ? '+' : ''}${d + del} |`,
+			);
+		}
+	}
+	say();
+
+	say('### 8-4. `data.patterns` が食い違ったケース数');
+	say();
+	say('| `includeForming` | ケース | 食い違い |');
+	say('|---|---:|---:|');
+	for (const [k, v] of [...phase2.diffCases.entries()].sort()) {
+		say(`| ${k} | ${v.total} | ${v.diff} |`);
+	}
+	say();
+	if (phase2.diffSamples.size > 0) {
+		const samples = [...phase2.diffSamples];
+		say(`食い違ったケース（重複を畳んで ${samples.length} 行。先頭 60 行）:`);
+		say();
+		for (const line of samples.slice(0, 60)) say(`- ${line}`);
+		say();
+	}
+
+	say('### 8-5. Phase 1 の ablation B（13 実体）との突き合わせ');
+	say();
+	say(
+		'ablation B は **bottom のゲート集合**で top を組んだもので、本 PR は**完成済みのゲート集合**で' +
+			'組んでいる。集合が違うので accepted な実体も変わりうる——`double_top` の未ブレイク構造について、' +
+			'ablation B が accepted にした実体と本 PR の実体を突き合わせる（`—` はその側に無いこと）。',
+	);
+	say();
+	say('| # | 実体 | ablation B | PR | 代表ケース |');
+	say('|---:|---|---|---|---|');
+	{
+		const ablBEntities = new Map<string, Set<string>>();
+		for (const r of aggB.acceptedRecs) {
+			if (r.type !== 'double_top' || !r.ts) continue;
+			addTo(ablBEntities, r.ts, r.status);
+		}
+		const prTopEntities = new Map<string, Set<string>>();
+		for (const [k, v] of phase2.entityPr) {
+			if (!k.includes('|double_top|') || !phase2.unbrokenEntities.has(k)) continue;
+			prTopEntities.set(k, v);
+		}
+		const keys = [...new Set([...ablBEntities.keys(), ...prTopEntities.keys()])].sort();
+		const fmt = (v: Set<string> | undefined): string => (v ? [...v].sort().join(' / ') : '—');
+		let n = 0;
+		for (const k of keys) {
+			n++;
+			say(
+				`| ${n} | \`${mdCell(k)}\` | ${fmt(ablBEntities.get(k))} | ${fmt(prTopEntities.get(k))} | ` +
+					`${mdCell(phase2.entityWhere.get(k) ?? '')} |`,
+			);
+		}
+		if (n === 0) say('| — | （どちらにも `double_top` の未ブレイク構造が無い） | — | — | — |');
+	}
+	say();
+
+	say('### 8-6. `near_completion` の実体の 3 値判定（Phase 1 §8-2 の基準をそのまま数値で当てる）');
+	say();
+	say(
+		'**既定（`includeInvalid: false`）で利用者に見えるのは `near_completion` だけ**なので、' +
+			'この集合だけを判定する。基準は Phase 1 §8-2 の 5 段を順に当て、最初に当たったものを採る' +
+			'（1: 中間構成点が第1構成点の隣接足 / 2: 第2構成点以降に外側の極値を超えた / 3: 深さ < 0.5% / ' +
+			'4: 深さ ≥ 1.0% かつ第2構成点以降にネックラインを抜けた / 5: それ以外は保留）。' +
+			'使う量は構成点の終値・極値と区間の最高安値だけで、**検出器も閾値も通していない。**',
+	);
+	say();
+	say('| # | 実体 | 間隔 | 深さ | 判定 | 根拠 | 代表ケース |');
+	say('|---:|---|---:|---:|---|---|---|');
+	{
+		const keys = [...phase2.nearCompletionRecs.keys()].sort();
+		const tally = new Map<string, number>();
+		let n = 0;
+		for (const k of keys) {
+			const rec = phase2.nearCompletionRecs.get(k);
+			if (!rec || rec.idxs.length < 3) continue;
+			n++;
+			const j = judgeShape(rec);
+			tally.set(j.verdict, (tally.get(j.verdict) ?? 0) + 1);
+			say(
+				`| ${n} | \`${mdCell(k)}\` | ${j.gapBars} 本 | ${(j.depthPct * 100).toFixed(3)}% | ` +
+					`**${j.verdict}** | ${j.basis} | ${mdCell(phase2.entityWhere.get(k) ?? '')} |`,
+			);
+		}
+		say();
+		say(
+			`集計: ${[...tally.entries()]
+				.sort()
+				.map(([v, c]) => `**${v} ${c}**`)
+				.join(' / ')}（計 ${n} 実体）`,
+		);
+	}
+	say();
+
+	say('### 8-7. `view=debug` の cap への影響（PR）');
+	say();
+	say('| 母集団 | ケース | 候補総数 p50 strip → PR | max strip → PR | cap 超過ケース strip → PR |');
+	say('|---|---:|---|---|---|');
+	for (const part of corpus) {
+		const rs = capRows.filter((r) => r.corpus === part.label);
+		if (rs.length === 0) continue;
+		const bs = rs.map((r) => r.base).sort((a, b) => a - b);
+		const ps = rs.map((r) => r.pr).sort((a, b) => a - b);
+		const q = (v: number[], pq: number): number => v[Math.min(v.length - 1, Math.floor(pq * v.length))] ?? 0;
+		say(
+			`| ${part.label} | ${rs.length} | ${q(bs, 0.5)} → ${q(ps, 0.5)} | ${bs[bs.length - 1]} → ${ps[ps.length - 1]} | ` +
+				`${rs.filter((r) => r.base > DEBUG_CAP).length} → ${rs.filter((r) => r.pr > DEBUG_CAP).length} |`,
 		);
 	}
 	say();

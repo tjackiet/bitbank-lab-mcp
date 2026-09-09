@@ -39,6 +39,7 @@ import {
 	UPTREND_FAKE_DOUBLE_BOTTOM_BARS,
 } from './fixtures/synthetic_pattern_candles.js';
 
+/** `analyze_indicators` の成功レスポンスの最小形（`detect_patterns` はここから `chart.candles` だけを読む）。 */
 function indicatorsOk(candles: Candle[]) {
 	return {
 		ok: true,
@@ -82,7 +83,7 @@ describe('detect_patterns fixtures', () => {
 				breakoutConfirmed: true,
 			},
 		});
-		expect(res.data.overlays!.ranges).toEqual([
+		expect(res.data.overlays?.ranges).toEqual([
 			{
 				start: makeIso(5),
 				end: makeIso(20),
@@ -92,7 +93,14 @@ describe('detect_patterns fixtures', () => {
 		expect(res.meta.count).toBe(1);
 	});
 
-	it('synthetic fixture から forming の double_bottom を completed なしで返せる', async () => {
+	/**
+	 * **`status` の期待値を `forming` から `near_completion` に変えた（issue #262）。**
+	 * この synthetic fixture は「確定 2 谷 + 中間の山が揃い、ネックライン突破を待っている」形で、
+	 * 旧 `tryFormingDoubleBottom` がそれを `forming` と呼んでいた。完成済み経路の
+	 * `near_completion` に付け替えたのが #262。`completionPct` は完成度スコアごと消えた
+	 * （triple / H&S の `near_completion` も持たない）。**`range.end` も最新足から谷2 になった**。
+	 */
+	it('synthetic fixture から near_completion の double_bottom を completed なしで返せる', async () => {
 		mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(indicatorsOk(buildFormingDoubleBottomCandles())));
 
 		const res = await detectPatterns('btc_jpy', '1day', FORMING_DOUBLE_BOTTOM_BARS, {
@@ -107,14 +115,16 @@ describe('detect_patterns fixtures', () => {
 		expect(res.data.patterns).toHaveLength(1);
 		expect(res.data.patterns[0]).toMatchObject({
 			type: 'double_bottom',
-			status: 'forming',
+			status: 'near_completion',
 			timeframe: '1day',
 			timeframeLabel: '日足',
 			trendlineLabel: 'ネックライン',
-			completionPct: expect.any(Number),
 			targetMethod: 'neckline_projection',
+			targetProgressOmittedReason: 'not_broken_out',
 		});
-		expect(res.data.patterns[0].range.end).toBe(makeIso(FORMING_DOUBLE_BOTTOM_BARS - 1));
+		expect(res.data.patterns[0].completionPct).toBeUndefined();
+		// `range.end` は第2構成点（谷2）。`structureRange` と一致する（`detect_triples` と同じ）。
+		expect(res.data.patterns[0].range.end).toBe(res.data.patterns[0].structureRange?.end);
 		expect(res.meta.count).toBe(1);
 	});
 
@@ -132,7 +142,7 @@ describe('detect_patterns fixtures', () => {
 
 		assertOk(res);
 		expect(res.data.patterns).toEqual([]);
-		expect(res.data.overlays!.ranges).toEqual([]);
+		expect(res.data.overlays?.ranges).toEqual([]);
 		expect(res.meta.count).toBe(0);
 	});
 
@@ -654,6 +664,7 @@ describe('detect_patterns fixtures', () => {
 			expect(dt[0].confidence).toBeGreaterThanOrEqual(0.6);
 		});
 
+		// `status` の期待値が `near_completion` に変わった理由は上の同 fixture のテストを参照（#262）。
 		it('既存 forming double_bottom fixture は引き続き検出され、confidence は維持される', async () => {
 			mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(indicatorsOk(buildFormingDoubleBottomCandles())));
 			const res = await detectPatterns('btc_jpy', '1day', FORMING_DOUBLE_BOTTOM_BARS, {
@@ -666,7 +677,7 @@ describe('detect_patterns fixtures', () => {
 			assertOk(res);
 			const db = res.data.patterns.filter((p: { type: string }) => p.type === 'double_bottom');
 			expect(db).toHaveLength(1);
-			expect(db[0].status).toBe('forming');
+			expect(db[0].status).toBe('near_completion');
 			expect(db[0].confidence).toBeGreaterThanOrEqual(0.4);
 		});
 

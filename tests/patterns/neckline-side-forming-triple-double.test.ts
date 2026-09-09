@@ -21,6 +21,10 @@
  *
  * 完成済み経路の回帰は `neckline-side-triple-double.test.ts`、判定関数そのものの単体は
  * 同ファイルと `neckline-side-hs.test.ts` が持つ。**ここは配線だけを見る。**
+ *
+ * **issue #262 以降、`double_bottom` のケースだけは完成済み経路（`near_completion`）を見ている。**
+ * `tryFormingDoubleBottom` が削除され、同じ 3 点を完成済み経路が組むようになったため。
+ * 見ている検査（`validateMainPointsNecklineSide`）と fixture は #261 のまま。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { asMockResult, assertOk } from '../_assertResult.js';
@@ -57,6 +61,7 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
+/** 1 系列を `includeForming: true` / `view=debug` で流し、`data.patterns` と候補一覧を返す。 */
 async function detectForming(
 	candles: Candle[],
 	tf: string,
@@ -73,6 +78,9 @@ async function detectForming(
 
 const forming = (patterns: Pattern[], type: string) =>
 	patterns.filter((p) => p.type === type && p.status === 'forming');
+/** ブレイク待ちの完成構造（issue #262 で `double_bottom` がこちらへ移った）。 */
+const nearCompletion = (patterns: Pattern[], type: string) =>
+	patterns.filter((p) => p.type === type && p.status === 'near_completion');
 const withReason = (cands: Candidate[], type: string, reason: string) =>
 	cands.filter((c) => c.type === type && c.reason === reason);
 
@@ -154,25 +162,38 @@ describe('形成中 double — 主構成点がネックラインの誤側（issu
 		expect(withReason(candidates, 'double_top', 'forming_peaks_below_neckline')).toHaveLength(0);
 	});
 
-	it('谷1 がネックライン（山の終値）以上の double_bottom は forming_valleys_above_neckline で落ちる', async () => {
+	/**
+	 * **`forming_valleys_above_neckline` → `valleys_above_neckline`、`forming` → `near_completion`
+	 * に変えた（issue #262）。** 形成中ダブルボトムの経路（`tryFormingDoubleBottom`）は削除され、
+	 * 同じ 3 点は完成済み経路の未ブレイク分岐（`near_completion`）が組む。ネックライン側検査は
+	 * **同じ `validateMainPointsNecklineSide` の同じ 2 谷**に掛かり続けるので、
+	 * #261 が固定したかった「谷1 が誤側なら落ちる」は据え置き。`indices` が 4 点 → 3 点に
+	 * 減ったのは、完成済み経路が最新足を構成点として持たないため（#262 の非対称の解消そのもの）。
+	 */
+	it('谷1 がネックライン（山の終値）以上の double_bottom は valleys_above_neckline で落ちる', async () => {
 		const { patterns, candidates } = await detectForming(rowsToCandles(formingDoubleBottomRows()), '1day');
-		expect(forming(patterns, 'double_bottom')).toHaveLength(0);
+		expect(nearCompletion(patterns, 'double_bottom')).toHaveLength(0);
+		// 形成中パスは削除済みなので `forming_` 接頭辞側は 1 件も出ない
+		expect(withReason(candidates, 'double_bottom', 'forming_valleys_above_neckline')).toHaveLength(0);
 
-		const hits = withReason(candidates, 'double_bottom', 'forming_valleys_above_neckline');
-		expect(hits).toHaveLength(1);
-		// 形成中ダブルボトムの `indices` は 4 点（確定 3 点 + 最新足）。主構成点は確定 2 谷で、
-		// 中間の山はネックラインの定義点そのものなので検査に渡していない（#262 の非対称）。
-		expect(hits[0].indices).toEqual([8, 16, 24, 35]);
-		expect(hits[0].details?.necklinePrice).toBe(101.086);
-		expect(hits[0].details?.offenders).toEqual([
-			{ idx: 8, price: 101.543, deviation: expect.closeTo(0.457, 6), deviationPct: expect.closeTo(0.0045209, 6) },
-		]);
+		// **strict と relaxed の 2 件が並ぶ。** relaxed は同 type の strict が `completed` を
+		// 出さなかったときのフォールバックで、#262 以前は `no_breakout_relaxed` で
+		// ネックライン側検査に届く前に抜けていた。同じ 3 点・同じ理由コードなので中身は同一。
+		const hits = withReason(candidates, 'double_bottom', 'valleys_above_neckline');
+		expect(hits).toHaveLength(2);
+		for (const hit of hits) {
+			expect(hit.indices).toEqual([8, 16, 24]);
+			expect(hit.details?.necklinePrice).toBe(101.086);
+			expect(hit.details?.offenders).toEqual([
+				{ idx: 8, price: 101.543, deviation: expect.closeTo(0.457, 6), deviationPct: expect.closeTo(0.0045209, 6) },
+			]);
+		}
 	});
 
 	it('対照: 山をネックラインとして 2 谷の上に置くと accepted のまま（最小対）', async () => {
 		const { patterns, candidates } = await detectForming(rowsToCandles(formingDoubleBottomRows(102.5)), '1day');
-		expect(forming(patterns, 'double_bottom')).toHaveLength(1);
-		expect(withReason(candidates, 'double_bottom', 'forming_valleys_above_neckline')).toHaveLength(0);
+		expect(nearCompletion(patterns, 'double_bottom')).toHaveLength(1);
+		expect(withReason(candidates, 'double_bottom', 'valleys_above_neckline')).toHaveLength(0);
 	});
 });
 

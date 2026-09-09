@@ -6,10 +6,22 @@
  * 形成中ダブルトップは**サイズ検査そのものが無かった**（下限がゼロ）。
  * triple / H&S の形成中パスは #139 で `validatePatternSize`（高さ + 深さ）に揃っている。
  *
- * 「形成中は早期警告なので緩くてよい」は一般には正しく、同じ関数の
- * `FORMING_TOLERANCE_MULTIPLIER = 1.5`（水準一致判定の緩和）は**意図的な設計として残す**。
+ * 「形成中は早期警告なので緩くてよい」は一般には正しく、形成中ダブルトップの
+ * `FORMING_PEAK_TOLERANCE_PCT`（水準一致判定の緩和）は**意図的な設計として残す**。
  * 緩めてよいのは「同水準か」の判定で、「そもそも形と呼べる大きさか」ではない
  * （#138 欠陥 2-2 / #139 が決めた原則）。
+ *
+ * ## ダブルボトム側は issue #262 で**完成済みパスの検査に一本化された**
+ *
+ * `tryFormingDoubleBottom` は「構造が揃ってブレイクを待っている」段階を `forming` という
+ * 誤ラベルで出しており、#262 でその段階を完成済み経路の `near_completion` に付け替えて削除した。
+ * したがって bottom 側の期待値は `forming_*` 接頭辞の理由コードから**完成済みの理由コード**
+ * （`peak_too_shallow` / `pattern_too_small`）へ移り、accepted な形の `status` は
+ * `forming` から `near_completion` へ移った。**検査そのものは緩んでいない**
+ * ——`validateBottomSize` は形成中パスでも完成済みパスでも同じ 3 点に掛かっていたので、
+ * 落ちる形・通る形は変わらない（このファイルの数値がそのまま残っているのがその証拠）。
+ * 唯一消えたのは両脚チェック `forming_pattern_height_below_min` で、完成済みの
+ * `validateBottomSize` の高さ検査（`pattern_too_small`）が同じ役割を果たす。
  *
  * ## この fixture が **ヒゲ無し**（`high = low = close`）なのはなぜか
  *
@@ -98,6 +110,10 @@ function buildCompletedShapeDoubleTop(valley: number): Candle[] {
 	return closes.map((c, i) => mkCandle(i, c));
 }
 
+/**
+ * 1 系列を `view=debug` で流し、`data.patterns` と候補の理由コード / accepted な status を返す。
+ * サイズ検査は棄却側で見るので、理由コードの配列がこのファイルの主な検査対象。
+ */
 async function detect(candles: Candle[], tf: string, want: 'double_top' | 'double_bottom') {
 	vi.mocked(analyzeIndicators).mockResolvedValueOnce(
 		asMockResult({ ok: true, summary: 'ok', data: { chart: { candles } } }),
@@ -123,7 +139,7 @@ async function detect(candles: Candle[], tf: string, want: 'double_top' | 'doubl
 }
 
 describe('形成中 double のサイズ検査（issue #169）', () => {
-	describe('形成中ダブルボトム: 深さ（depthPct）', () => {
+	describe('ブレイク待ちダブルボトム: 深さ（depthPct）', () => {
 		// 谷 100 / 100、山 104 → 両脚 (104-100)/104 = 3.85% ≥ 3% で高さは通り、
 		// 深さ (104-100)/100 = 4% < 5% で落ちる。
 		const legPct = (104 - 100) / 104;
@@ -134,44 +150,47 @@ describe('形成中 double のサイズ検査（issue #169）', () => {
 			expect(depth).toBeLessThan(DAY.depthPct);
 		});
 
-		it('1day: 高さは通るが深さで落ち、forming_peak_too_shallow が記録される', async () => {
+		// **期待値を `forming_peak_too_shallow` → `peak_too_shallow` に変えた（#262）。**
+		// 同じ 3 点に同じ `validateBottomSize` が掛かる経路が完成済みパスだけになったため。
+		// 落ちる値動きは変わっていない（`depth` の前提は上のテストがそのまま固定している）。
+		it('1day: 高さは通るが深さで落ち、peak_too_shallow が記録される', async () => {
 			const r = await detect(buildFormingDoubleBottom(104), '1day', 'double_bottom');
 			expect(r.patterns).toHaveLength(0);
-			expect(r.reasons).toContain('forming_peak_too_shallow');
-			// 高さの段（両脚チェック）では落ちていない
-			expect(r.reasons).not.toContain('forming_pattern_height_below_min');
-		});
-
-		it('1day: 完成済みパスは同じ 3 点を peak_too_shallow で落とす（形成中と判定が一致する）', async () => {
-			const r = await detect(buildFormingDoubleBottom(104), '1day', 'double_bottom');
-			// 同じ谷1 / 山 / 谷2 に対し、完成済みパスの `peak_too_shallow` と
-			// 形成中パスの `forming_peak_too_shallow` が同じ候補一覧に並ぶ。
 			expect(r.reasons).toContain('peak_too_shallow');
-			expect(r.reasons).toContain('forming_peak_too_shallow');
+			// 高さの段では落ちていない
+			expect(r.reasons).not.toContain('pattern_too_small');
+			// 形成中パスは削除済みなので `forming_` 接頭辞の理由コードは 1 件も出ない（#262）
+			expect(r.reasons).not.toContain('forming_peak_too_shallow');
+			expect(r.reasons).not.toContain('forming_pattern_height_below_min');
 		});
 
 		it('1hour: 同じ値動きは閾値が緩いので検出される（時間足別テーブル / #152）', async () => {
 			expect(depth).toBeGreaterThanOrEqual(HOUR.depthPct);
 			const r = await detect(buildFormingDoubleBottom(104), '1hour', 'double_bottom');
 			expect(r.patterns.map((p) => p.type)).toContain('double_bottom');
-			expect(r.patterns[0]?.status).toBe('forming');
-			expect(r.reasons).not.toContain('forming_peak_too_shallow');
+			// 未ブレイクなので `near_completion`（#262。旧 `forming` は誤ラベルだった）
+			expect(r.patterns[0]?.status).toBe('near_completion');
+			expect(r.reasons).not.toContain('peak_too_shallow');
 		});
 
 		it('1day: 深さを満たす形（山 105）はこれまでどおり検出される', async () => {
 			expect((105 - 100) / 100).toBeGreaterThanOrEqual(DAY.depthPct);
 			const r = await detect(buildFormingDoubleBottom(105), '1day', 'double_bottom');
 			expect(r.patterns.map((p) => p.type)).toContain('double_bottom');
-			expect(r.patterns[0]?.status).toBe('forming');
+			expect(r.patterns[0]?.status).toBe('near_completion');
 		});
 
-		it('1day: 両脚の高さチェック（forming_pattern_height_below_min）は残っている（#166）', async () => {
+		// **期待値を `forming_pattern_height_below_min` → `pattern_too_small` に変えた（#262）。**
+		// 両脚チェックは形成中パス専用の検査で、同関数の削除と一緒に消えた。同じ値動きは
+		// 完成済みの `validateBottomSize` の高さ検査（左脚 ≥ heightPct）が落とす——#166 が
+		// 固定したかった「山 102 の形は検出されない」は据え置き。
+		it('1day: 高さが足りない形（山 102）は pattern_too_small で落ちる（#166 の値動きを据え置き）', async () => {
 			// 山 102 → 両脚 (102-100)/102 = 1.96% < 3%。深さの段より前に落ちる。
 			expect((102 - 100) / 102).toBeLessThan(DAY.heightPct);
 			const r = await detect(buildFormingDoubleBottom(102), '1day', 'double_bottom');
 			expect(r.patterns).toHaveLength(0);
-			expect(r.reasons).toContain('forming_pattern_height_below_min');
-			expect(r.reasons).not.toContain('forming_peak_too_shallow');
+			expect(r.reasons).toContain('pattern_too_small');
+			expect(r.reasons).not.toContain('peak_too_shallow');
 		});
 	});
 

@@ -65,6 +65,16 @@
  * これは `globalDedup` の代表ではないため出力に出ていなかった。実測ログは
  * `docs/internal/hs-neckline-side-216.md`、回帰は `tests/patterns/neckline-side-hs.test.ts` が持つ）。
  *
+ * **#262 Phase 2 でも更新していない**（double の完成済み 4 経路が、ネックライン未突破の構造を
+ * `no_breakout` で棄却する代わりに `near_completion` / `expired` / `invalid` として出すようにし、
+ * 誤ラベルだった `tryFormingDoubleBottom` を削除した変更。**未ブレイクの構造は
+ * `includeForming` の管轄**で、検出器は `includeForming: false` のとき従来どおり `no_breakout` で
+ * 抜ける——本 fixture は既定オプション（`includeForming: false`）なので、
+ * `data.patterns` にも `view=debug` の理由コードにも差分が出る余地が無い。
+ * 12,104 ケースの実測でも `includeForming: false` 側は全件一致している
+ * （`scripts/measure_forming_double_asymmetry_262.ts` の §8-4）。double の未ブレイク構造の
+ * 回帰は `tests/patterns/near-completion-double-262.test.ts` が持つ）。
+ *
  * **#224 症状 1 でも更新していない**（`meta.reduction` に `tripleHsCandidateCount` を足し、
  * 「検出内訳:」行に `（比較対象 H&S 無し）` の注記を付けた申告のみの変更。判定ロジックは
  * 触っておらず `data.patterns` は不変。本 fixture は `data.patterns` だけを凍結していて

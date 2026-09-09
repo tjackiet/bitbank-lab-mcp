@@ -502,9 +502,18 @@ describe('detectDoubles', () => {
 		expect(forming).toHaveLength(0);
 	});
 
-	// ── 形成中ダブルボトム ───────────────────────────────
+	// ── ブレイク待ちのダブルボトム（issue #262 で `forming` → `near_completion`）──────────
 
-	it('形成中ダブルボトム: 確定谷2つ + 現在価格がネックライン付近', () => {
+	/**
+	 * **期待値を `forming` から `near_completion` に変えた（issue #262）。**
+	 * この形（確定 2 谷 + 中間の山 + 未ブレイク）は構造が完成していてネックライン突破を
+	 * 待っている段階で、`forming`（＝最終構成点がまだ形成中）ではない。旧 `tryFormingDoubleBottom`
+	 * の誤ラベルを完成済み経路の `near_completion` に付け替えた。
+	 *
+	 * `completionPct` の検査を落としたのも同じ理由——完成度スコアは形成中経路の概念で、
+	 * triple / H&S の `near_completion` も持っていない。
+	 */
+	it('ブレイク待ちダブルボトム: 確定谷2つ + 現在価格がネックライン付近 → near_completion', () => {
 		const candles: CandleData[] = [];
 		// 谷1 より前はネックライン(130)より上で推移させる。構造ゲート（issue #126）は
 		// 「谷1 前にネックライン水準を終値で下抜けた事象」を要求するので、
@@ -517,8 +526,11 @@ describe('detectDoubles', () => {
 		candles[20] = mkCandle(30, 128, 130, 125, 128);
 		// valley2
 		candles[30] = mkCandle(20, 103, 105, 100, 103);
-		// 現在価格がネックライン付近まで回復
-		for (let i = 40; i < 50; i++) candles[i] = mkCandle(50 - i, 125, 128, 122, 126);
+		// 谷2 以降は**ネックライン(130)を超えない**まま推移させる（issue #262）。
+		// 旧 fixture は idx 31〜39 が終値 140 のままで、実際には完成済みパスが idx 31 で
+		// ブレイクを拾っていた——`forming` の重複報告がまさにこの PR の動機なので、
+		// 「ブレイク待ち」を見たいこのテストでは埋め直す。
+		for (let i = 31; i < 50; i++) candles[i] = mkCandle(50 - i, 125, 128, 122, 126);
 
 		const pivots: Pivot[] = [
 			{ idx: 5, price: 140, kind: 'H', extremePrice: 145 },
@@ -533,12 +545,14 @@ describe('detectDoubles', () => {
 		const ctx = buildCtx({ candles, pivots, allPeaks, allValleys, includeForming: true });
 		const result = detectDoubles(ctx);
 
-		const forming = result.patterns.filter((p) => p.type === 'double_bottom' && p.status === 'forming');
-		expect(forming.length).toBeGreaterThanOrEqual(1);
-		if (forming.length > 0) {
-			expect(forming[0].completionPct).toBeDefined();
-			expect(forming[0].breakoutTarget).toBeDefined();
-			expect(forming[0].targetMethod).toBe('neckline_projection');
+		const nearCompletion = result.patterns.filter((p) => p.type === 'double_bottom' && p.status === 'near_completion');
+		expect(nearCompletion.length).toBeGreaterThanOrEqual(1);
+		expect(result.patterns.filter((p) => p.type === 'double_bottom' && p.status === 'forming')).toHaveLength(0);
+		if (nearCompletion.length > 0) {
+			expect(nearCompletion[0].breakoutTarget).toBeDefined();
+			expect(nearCompletion[0].targetMethod).toBe('neckline_projection');
+			// 未ブレイクなので進捗は測れないことを名乗る（#224 症状 2）
+			expect(nearCompletion[0].targetProgressOmittedReason).toBe('not_broken_out');
 		}
 	});
 
@@ -623,14 +637,21 @@ describe('detectDoubles', () => {
 		expect(forming.confirmation?.type).toBe('not_confirmed');
 	});
 
-	it('forming double_bottom: structureRange は valley1〜valley2 で閉じる（lastIdx は含まない）', () => {
+	/**
+	 * **期待値を `forming` から `near_completion` に変えた（issue #262）。** 理由は上の
+	 * 「ブレイク待ちダブルボトム」の docstring を参照。`structureRange` が 2 谷で閉じることは
+	 * 変わらない（完成済み経路の `structureRange` も第1〜第2構成点で閉じる）。**`range.end` は
+	 * 最新足ではなく谷2 になった**——`detect_triples` の `near_completion` と同じ取り方。
+	 */
+	it('near_completion double_bottom: structureRange / range とも valley1〜valley2 で閉じる', () => {
 		const candles: CandleData[] = [];
 		// 谷1 前をネックライン(130)より上にするのは上の fixture と同じ理由（issue #126）
 		for (let i = 0; i < 50; i++) candles.push(mkCandle(50 - i, 140, 145, 135, 140));
 		candles[10] = mkCandle(40, 102, 105, 100, 102);
 		candles[20] = mkCandle(30, 128, 130, 125, 128);
 		candles[30] = mkCandle(20, 103, 105, 100, 103);
-		for (let i = 40; i < 50; i++) candles[i] = mkCandle(50 - i, 125, 128, 122, 126);
+		// 谷2 以降が未ブレイクであることは上の fixture と同じ理由（issue #262）
+		for (let i = 31; i < 50; i++) candles[i] = mkCandle(50 - i, 125, 128, 122, 126);
 
 		const pivots: Pivot[] = [
 			{ idx: 5, price: 140, kind: 'H', extremePrice: 145 },
@@ -644,13 +665,18 @@ describe('detectDoubles', () => {
 
 		const ctx = buildCtx({ candles, pivots, allPeaks, allValleys, includeForming: true });
 		const result = detectDoubles(ctx);
-		const forming = result.patterns.find((p) => p.type === 'double_bottom' && p.status === 'forming');
-		expect(forming).toBeDefined();
-		if (!forming) return;
+		const nearCompletion = result.patterns.find((p) => p.type === 'double_bottom' && p.status === 'near_completion');
+		expect(nearCompletion).toBeDefined();
+		if (!nearCompletion) return;
 
-		expect(forming.structureRange?.start).toBe(candles[10].isoTime);
-		expect(forming.structureRange?.end).toBe(candles[30].isoTime);
-		expect(forming.confirmation?.type).toBe('not_confirmed');
+		expect(nearCompletion.structureRange?.start).toBe(candles[10].isoTime);
+		expect(nearCompletion.structureRange?.end).toBe(candles[30].isoTime);
+		expect(nearCompletion.range?.start).toBe(candles[10].isoTime);
+		expect(nearCompletion.range?.end).toBe(candles[30].isoTime);
+		expect(nearCompletion.confirmation?.type).toBe('not_confirmed');
+		// ブレイク足が無いので breakout 系は出さない
+		expect(nearCompletion.breakout).toBeUndefined();
+		expect(nearCompletion.breakoutBarIndex).toBeUndefined();
 	});
 
 	// ── targetReachedPct / targetReached (high/low ベース) ───

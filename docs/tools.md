@@ -497,12 +497,15 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 | 検出器 | `pivots` の並び | ネックライン定義点 | 水平ネックラインの `y` |
 |---|---|---|---|
 | H&S / 逆 H&S | `[p0, p1, p2, p3, p4]` | `p1` / `p3` | — （H&S は傾きあり。`neckline` を参照） |
-| double | `[a, b, c]` | `b` | `b.price` |
+| double（完成済み / near_completion） | `[a, b, c]` | `b` | `b.price` |
+| double（形成中。`double_top` のみ） | `[a, b]` | `b` | `b.price` |
 | triple（完成済み / near_completion） | `[a, v1, b, v2, c]` | `v1` / `v2` | `(v1.price + v2.price) / 2` |
 | triple（形成中） | `[a, v1, b, v2]` | `v1` / `v2` | 同上 |
 
-形成中 triple の 3 点目は現在価格の暫定値なので `pivots` に入らない（content の
-「3 山目は現在価格を暫定」注記がそれを言う）。**消費者は `pivots.length` で構成を判定しないこと**——
+形成中 triple の 3 点目、および形成中 `double_top` の 2 山目は現在価格の暫定値なので
+`pivots` に入らない（content の「3 山目は現在価格を暫定」注記がそれを言う）。
+**`double_bottom` に形成中は無い**——構造が揃ってブレイクを待つ段階は `near_completion` として
+完成済み経路が 3 点で出す（#262。`double_top` 側で「最終構成点が形成中」を出すかは #268）。**消費者は `pivots.length` で構成を判定しないこと**——
 主構成点が要るなら `kind` で絞る。`view=debug` の `candidates[].points[].role` も同じ表から
 `main` / `neckline` を決めている。
 
@@ -581,8 +584,11 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 - **同水準判定（`forming_peaks_not_level` / `forming_valleys_not_level`）より前に評価する。**
   単調な階段は同水準判定でも落ちうるが、「ばらつきが大きい」より「単調に切り下がっている」の
   ほうが形を言い当てているため。`view=debug` で理由コードを集計するときはこの順序が見える。
-- **完成済み経路と形成中 double にはこのゲートは無い**（完成済みは 3 点すべてが確定ピボットで
-  `tolerancePct` と高さ相対の 2 段が掛かる。double は主構成点が 2 点なので「階段」が定義できない）。
+- **完成済み経路（`near_completion` を含む）と形成中 `double_top` にはこのゲートは無い**
+  （完成済みは 3 点すべてが確定ピボットで `tolerancePct` と高さ相対の 2 段が掛かる。
+  形成中 `double_top` は主構成点が 2 点なので「階段」が定義できない）。
+  **#262 以前は「形成中 double」と書いていたが、形成中 `double_bottom` は削除された**
+  ——同じ 3 点は完成済み経路が `near_completion` として組む（上と同じ理由でゲートは無い）。
 
 契約は `tests/patterns/detect_triples.test.ts`（合成 fixture の最小対）と
 `tests/patterns/stair-step-both-directions-263.test.ts`（実データの実例）が固定している。
@@ -597,7 +603,7 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 
 | 種別 | 完成済み | 形成中 | 比較相手 |
 |---|---|---|---|
-| `double_*` / `triple_*` | ✅（#216 Phase 2） | ✅（#261） | **水平スカラー** 1 つ（`validateMainPointsNecklineSide`） |
+| `double_*` / `triple_*` | ✅（#216 Phase 2。`near_completion` も同じ検査を通る） | ✅（#261。形成中経路は `double_top` / `triple_*` の 3 つ） | **水平スカラー** 1 つ（`validateMainPointsNecklineSide`） |
 | `head_and_shoulders` / `inverse_head_and_shoulders` | ✅（#216 の H&S 分。#211 マージ後） | **未配線** | **点ごとの線の値** `necklineAt(idx)`（`validateMainPointsAgainstNecklineAt`） |
 
 **H&S 系だけ比較相手が違うのは、ネックラインが傾きを持ち、肩が定義 2 点の外側に来て外挿が
@@ -613,8 +619,12 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 |---|---|---|
 | `peaks_below_neckline` | 完成済み（double / triple / H&S 系） | (top) 主構成点（山）のいずれかがネックライン以下 |
 | `valleys_above_neckline` | 完成済み（同上） | (bottom) 主構成点（谷）のいずれかがネックライン以上 |
-| `forming_peaks_below_neckline` | 形成中（double / triple のみ） | 同上（`view=debug` の `▼ reason 横断合計` で完成済みと混ざらないよう語彙を分けてある） |
-| `forming_valleys_above_neckline` | 形成中（同上） | 同上 |
+| `forming_peaks_below_neckline` | 形成中（`double_top` / `triple_top`） | 同上（`view=debug` の `▼ reason 横断合計` で完成済みと混ざらないよう語彙を分けてある） |
+| `forming_valleys_above_neckline` | 形成中（`triple_bottom` のみ） | 同上 |
+
+`forming_valleys_above_neckline` に `double_bottom` が出ないのは **#262 で形成中
+`double_bottom` の経路を削除したから**で、同じ 3 点の棄却は完成済み経路の
+`valleys_above_neckline` として出る（strict と relaxed の 2 件が並ぶ）。
 
 完成済みの 2 コードは**スカラー版と線版で共通**（判定の意味が同じなので分けていない）。
 
@@ -637,6 +647,9 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 - **形成中 `double_top` だけは 2 つの検査で分担する。** 最新足の側は既存の
   `forming_current_at_or_below_valley`（`currentPrice <= valley.price`）が同じ判定を担っており、
   `forming_peaks_below_neckline` が見るのは確定側の山 1 点だけ。
+  **これは「主構成点の 1 つが確定ピボットではない」経路に固有の事情**で、#262 以降そういう経路は
+  形成中 `double_top` だけになった（形成中 `double_bottom` は削除され、3 点が揃った構造は
+  完成済み経路が `near_completion` として同じ検査を 1 回で掛ける）。
 
 契約は `tests/patterns/neckline-side-triple-double.test.ts`（完成済み double / triple）、
 `tests/patterns/neckline-side-forming-triple-double.test.ts`（形成中 double / triple）、
@@ -777,14 +790,20 @@ ATR 比テーブルを掛けたもの。
 | `status` | 意味 | 既定で出るか |
 |---|---|---|
 | `forming` | 形成途上。まだネックライン突破の余地がある | `includeForming: true` で |
-| `near_completion` | 突破目前 | `includeForming: true` で |
+| `near_completion` | **構造は揃い、ネックライン突破を待っている**（double / triple / H&S 系。#262 で double 2 型にも出るようになった） | `includeForming: true` で |
 | `completed` | 検出器がネックライン突破を確認済み | ○ |
 | `invalid` | 構成点確定後に形が崩れて無効化された（理由は `invalidReason`） | `includeInvalid: true` で |
 | `expired` | **突破確認窓を使い切った。**以後 `completed` になることはない | `includeInvalid: true` で |
 
 `expired` は `invalid` と同義ではない——形が崩れたのではなく、成立する時間を使い切った状態。
-突破探索は第2構成点から 20 本しか行われないので、それを過ぎた候補が `forming` を名乗ると
-「まだ完成しうる」という誤った含意になる。既定で隠すのは、既に決着した候補がノイズになるため。
+突破探索は第2構成点から 20 本しか行われないので、それを過ぎた候補が `forming` /
+`near_completion` を名乗ると「まだ完成しうる」という誤った含意になる。
+既定で隠すのは、既に決着した候補がノイズになるため。
+
+**double 2 型の `expired` / `invalid` は #262 で完成済み経路（未ブレイク分岐）由来になった。**
+以前は形成中 `double_bottom` 専用の経路が出していたもので、判定（`FORMING_EXPIRY_BARS` の
+期限切れ / 谷ゾーン再進入）は同じまま置き場所だけが移っている。未ブレイクの構造なので
+`includeForming: false` では `expired` / `invalid` も返らない（`includeInvalid: true` でも同じ）。
 
 ### 整合度は「ゲート通過後の形の良さ」
 

@@ -27,9 +27,7 @@ import { MIN_FORMING_COMPLETION } from '../../tools/patterns/detect_doubles.js';
 import { FORMING_MIN_COMPLETION as TRIPLE_MIN_COMPLETION } from '../../tools/patterns/detect_triples.js';
 import type { CandDebugEntry, DetectContext, PatternEntry } from '../../tools/patterns/types.js';
 import { pushCand } from '../../tools/patterns/types.js';
-import { buildBtcJpy2026Candles } from '../fixtures/btc_jpy_1day_2026.js';
 import {
-	formingDoubleBottomRows,
 	formingDoubleTopRows,
 	formingTripleTopRows,
 	mirrorRows,
@@ -75,11 +73,6 @@ function legs(start: number, spec: Array<[bars: number, endPrice: number]>): num
 		cur = end;
 	}
 	return out.map((v) => Math.round(v * 100) / 100);
-}
-
-/** 凍結済み BTC/JPY 日足 fixture の先頭 n 本 */
-function realCandles(n: number): Candle[] {
-	return buildBtcJpy2026Candles().slice(0, n);
 }
 
 async function runDebug(
@@ -170,22 +163,28 @@ describe('forming double / triple debug candidates (#158)', () => {
 			expect(hits[0].points?.every((p) => typeof p.isoTime === 'string')).toBe(true);
 		});
 
+		/**
+		 * **`status` を `forming` から `near_completion` に、`indices` を 4 点から 3 点に変えた
+		 * （issue #262）。** `tryFormingDoubleBottom` は削除され、同じ構造を完成済み経路の
+		 * 未ブレイク分岐が組む。最新足は構成点ではなくなったので `current` の 1 点が消え、
+		 * 成功エントリは完成済みパスと同じ 3 点（`valley1` / `peak` / `valley2`）になった。
+		 * **#158 が守りたかったこと（この経路が `view=debug` に無音でない）は据え置き。**
+		 */
 		it('double_bottom', async () => {
 			const { patterns, candidates } = await runDebug(fromCloses(FORMING_BOTTOMS));
 
-			const pattern = patterns.find((p) => p.type === 'double_bottom' && p.status === 'forming');
+			const pattern = patterns.find((p) => p.type === 'double_bottom' && p.status === 'near_completion');
 			expect(pattern).toBeDefined();
 			expect(pattern?.pivots?.map((p) => p.idx)).toEqual([9, 15, 22]);
 
 			const hits = formingAcceptedFor(candidates, 'double_bottom');
 			expect(hits).toHaveLength(1);
-			expect(hits[0].status).toBe('forming');
-			expect(hits[0].indices).toEqual([9, 15, 22, 35]);
+			expect(hits[0].status).toBe('near_completion');
+			expect(hits[0].indices).toEqual([9, 15, 22]);
 			expect(hits[0].points?.map((p) => [p.role, p.idx])).toEqual([
 				['valley1', 9],
 				['peak', 15],
 				['valley2', 22],
-				['current', 35],
 			]);
 		});
 
@@ -321,45 +320,11 @@ describe('forming double / triple debug candidates (#158)', () => {
 						]),
 					),
 			},
-			// tryFormingDoubleBottom（構成点 3 点が揃った後の分岐のみ）
-			{
-				reason: 'forming_pattern_height_below_min',
-				type: 'double_bottom',
-				candles: () => realCandles(72),
-				opts: { swingDepth: 2 },
-			},
-			{
-				reason: 'forming_valleys_not_level',
-				type: 'double_bottom',
-				candles: () =>
-					fromCloses(
-						legs(130, [
-							[10, 100],
-							[10, 120],
-							[8, 90],
-							[8, 100],
-						]),
-					),
-			},
-			{
-				reason: 'forming_current_below_valley_zone',
-				type: 'double_bottom',
-				candles: () =>
-					fromCloses(
-						legs(112, [
-							[10, 100],
-							[8, 105],
-							[8, 100],
-							[8, 105],
-							[8, 95.5],
-						]),
-					),
-			},
-			{
-				reason: 'forming_bars_out_of_range',
-				type: 'double_bottom',
-				candles: () => fromCloses(FORMING_TRIPLE_TOP),
-			},
+			// `tryFormingDoubleBottom` の 4 分岐（`forming_pattern_height_below_min` /
+			// `forming_valleys_not_level` / `forming_current_below_valley_zone` /
+			// `forming_bars_out_of_range`）は issue #262 で経路ごと削除した。同じ形の棄却は
+			// 完成済み経路の理由コードが担う（対応表は #262 の PR 本文。回帰は
+			// `size-gates-forming-doubles.test.ts` と `neckline-side-forming-triple-double.test.ts`）。
 			// tryFormingTripleTop / tryFormingTripleBottom（同上）
 			{
 				reason: 'forming_bars_out_of_range',
@@ -477,11 +442,8 @@ describe('forming double / triple debug candidates (#158)', () => {
 				type: 'double_top',
 				candles: () => rowsToCandles(formingDoubleTopRows()),
 			},
-			{
-				reason: 'forming_valleys_above_neckline',
-				type: 'double_bottom',
-				candles: () => rowsToCandles(formingDoubleBottomRows()),
-			},
+			// `double_bottom` の `forming_valleys_above_neckline` は #262 で完成済み経路の
+			// `valleys_above_neckline` になった（`neckline-side-forming-triple-double.test.ts`）。
 			{
 				reason: 'forming_completion_below_min',
 				type: 'triple_bottom',
@@ -513,7 +475,8 @@ describe('forming double / triple debug candidates (#158)', () => {
 	});
 
 	describe('到達しないガード — fixture ではなく算術境界を固定する', () => {
-		it('double top / bottom の forming_completion_below_min は現行の重みでは発火しない', () => {
+		// #262 で `tryFormingDoubleBottom` を削除したので、この境界が意味を持つのは **top だけ**。
+		it('double top の forming_completion_below_min は現行の重みでは発火しない', () => {
 			// completion = min(1, 0.66 + progress * 0.34)、progress は [0, 1] にクランプ済み。
 			// 下限は progress=0 のときの 0.66 で、しきい値 0.4 を割れない。
 			const baseCompletion = 0.66;
