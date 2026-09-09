@@ -2181,6 +2181,11 @@ async function main(): Promise<void> {
 		const bRows = beforeRows.get(part.label) ?? [];
 		const aRows = strip263.rows.get(part.label) ?? [];
 		if (bRows.length === 0) continue;
+		// 2 つのビルドは同じ `corpus` を同じ順で回すので行数は一致するはずだが、**一致しないまま
+		// 添字で突き合わせると黙って別のケースを比較する**ので落とす（§7-4 と同じ理由）。
+		if (bRows.length !== aRows.length) {
+			throw new Error(`${part.label} の行数が食い違う（前 ${bRows.length} / 後 ${aRows.length}）。`);
+		}
 		let same = 0;
 		let fired = 0;
 		for (let i = 0; i < bRows.length; i++) {
@@ -2453,12 +2458,24 @@ async function main(): Promise<void> {
 	}
 	say();
 
-	say('### 7-4. 標準コーパス 800 の差分');
-	say();
 	{
-		const part = corpus.find((c) => c.cases.length === 800);
-		const bRows = part ? (strip263.rows.get(part.label) ?? []) : [];
-		const aRows = part ? (byCorpusRows.get(part.label) ?? []) : [];
+		// **標準コーパスは「合成 fixture を含む唯一の母集団」で選ぶ。ケース数（800）で探さない。**
+		// 合成 fixture や `swingDepth` の格子が変われば数が動き、`find` が `undefined` を返して
+		// 行配列が空になり、**§7-4 が黙って「0 件差」と報告する**（計測の false negative）。
+		// 見つからない / 行数が食い違うなら落とす。
+		const part = corpus.find((c) => c.cases.some((sp) => sp.series.group === 'synthetic'));
+		if (!part) {
+			throw new Error('標準コーパス（合成 fixture を含む母集団）が見つからない。§7-4 の母集団の選び方を取り直すこと。');
+		}
+		const bRows = strip263.rows.get(part.label) ?? [];
+		const aRows = byCorpusRows.get(part.label) ?? [];
+		if (bRows.length === 0 || bRows.length !== aRows.length) {
+			throw new Error(
+				`標準コーパスの行が取れない / 行数が食い違う（前 ${bRows.length} / 後 ${aRows.length}）。§7-4 は比較できない。`,
+			);
+		}
+		say(`### 7-4. ${part.label}の差分`);
+		say();
 		interface StdDiff {
 			spec: CaseSpec;
 			patternsChanged: boolean;
