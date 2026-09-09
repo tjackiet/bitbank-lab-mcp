@@ -97,6 +97,7 @@ import { nowIso } from '../lib/datetime.js';
 import { buildBtcJpy2026Candles } from '../tests/fixtures/btc_jpy_1day_2026.js';
 import { buildBtcJpy1hour202608Candles } from '../tests/fixtures/btc_jpy_1hour_2026_08.js';
 import { buildBtcJpy1hour202609Candles } from '../tests/fixtures/btc_jpy_1hour_2026_09.js';
+import { buildBtcJpy1hour20260905Candles } from '../tests/fixtures/btc_jpy_1hour_2026_09_05.js';
 import * as synth from '../tests/fixtures/synthetic_pattern_candles.js';
 import { filterCandidatesByWant } from '../tools/patterns/candidate-filter.js';
 import { getHsShoulderMaxPctForTf, getSizeThresholdsForTf, resolveParams } from '../tools/patterns/config.js';
@@ -422,18 +423,6 @@ function rollingCases(series: Series): CaseSpec[] {
 	return out;
 }
 
-/** 実データ D は別ファイル（未追加の環境がある）。動的 import で存在チェックする。 */
-async function loadRealD(): Promise<Series | null> {
-	try {
-		const mod = (await import('../tests/fixtures/btc_jpy_1hour_2026_09_05.js')) as {
-			buildBtcJpy1hour20260905Candles: () => Candle[];
-		};
-		return { group: 'realD', name: 'btc_jpy_1hour_2026_09_05', candles: mod.buildBtcJpy1hour20260905Candles() };
-	} catch {
-		return null;
-	}
-}
-
 interface CorpusPart {
 	label: string;
 	/** 時間足別の結論に使える母集団か（実 1hour 系列 / 実データ A の 1day のみ true）。 */
@@ -442,7 +431,7 @@ interface CorpusPart {
 }
 
 /** 標準コーパス 800 と実データ B / C / D、およびそれぞれのローリング窓。**プールしない**（#219）。 */
-async function buildCorpus(includeRolling: boolean): Promise<CorpusPart[]> {
+function buildCorpus(includeRolling: boolean): CorpusPart[] {
 	const standard: CaseSpec[] = [];
 	for (const [name, build] of SYNTHETIC_BUILDERS) {
 		const series: Series = { group: 'synthetic', name, candles: build() };
@@ -466,7 +455,16 @@ async function buildCorpus(includeRolling: boolean): Promise<CorpusPart[]> {
 		name: 'btc_jpy_1hour_2026_09',
 		candles: buildBtcJpy1hour202609Candles() as Candle[],
 	};
-	const realD = await loadRealD();
+	// **実データ D は必須。** 先行スクリプト（#244 / #249）は「未追加の環境がある」として
+	// 動的 import + `catch { return null }` にしていたが、fixture は 34ae147 でコミット済みで、
+	// いま null に落ちるのは**読み込みが壊れたとき**だけ。そこで黙って落とすと
+	// **コーパスが 12,104 → 4,760 ケースに縮んだまま正常終了し、メモの数字と比較できない結果が出る**
+	// （PR #260 の CodeRabbit 指摘）。静的 import にして、壊れたらその場で落ちるようにしてある。
+	const realD: Series = {
+		group: 'realD',
+		name: 'btc_jpy_1hour_2026_09_05',
+		candles: buildBtcJpy1hour20260905Candles() as Candle[],
+	};
 
 	const out: CorpusPart[] = [
 		{
@@ -477,11 +475,10 @@ async function buildCorpus(includeRolling: boolean): Promise<CorpusPart[]> {
 		{ label: '実データ B 96（`btc_jpy_1hour_2026_08`）', tfAuthoritative: true, cases: realCases(realB) },
 		{ label: '実データ C 96（`btc_jpy_1hour_2026_09`）', tfAuthoritative: true, cases: realCases(realC) },
 	];
-	if (realD)
-		out.push({ label: '実データ D 96（`btc_jpy_1hour_2026_09_05`）', tfAuthoritative: true, cases: realCases(realD) });
+	out.push({ label: '実データ D 96（`btc_jpy_1hour_2026_09_05`）', tfAuthoritative: true, cases: realCases(realD) });
 
 	if (includeRolling) {
-		for (const s of [realB, realC, ...(realD ? [realD] : [])]) {
+		for (const s of [realB, realC, realD]) {
 			const cases = rollingCases(s);
 			out.push({
 				label:
@@ -882,7 +879,7 @@ async function main(): Promise<void> {
 		out.push(s);
 	};
 
-	const corpus = await buildCorpus(includeRolling);
+	const corpus = buildCorpus(includeRolling);
 	const base = await loadBuild('base');
 
 	// ── §0 検算 ──
