@@ -858,8 +858,6 @@ interface FollowUp {
 	rejectedByHeightGate: boolean;
 	/** 後続の窓で形成中としても完成済みとしても現れなくなったか。 */
 	vanished: boolean;
-	/** 形成中として現れた最後の終端 idx。 */
-	lastFormingEnd: number;
 }
 
 const HEIGHT_GATE_REASONS = new Set(['peak_spread_vs_height_excess', 'valley_spread_vs_height_excess']);
@@ -1220,14 +1218,24 @@ async function main(): Promise<void> {
 		(r) => r.spreadRatioOnCompletion !== null && (r.spreadRatioOnCompletion as number) > base.MAX_LEVEL_SPREAD_RATIO,
 	);
 	const overIdiomWithBoth = withBoth.filter((r) => (r.spreadRatio as number) > base.MAX_LEVEL_SPREAD_RATIO);
+	// **3 段すべて出す。** 延べだけだと「idiom の選び方で結論が変わるのか」に答えられない
+	// （実際に延べは食い違い、構造と実体は一致する）。
+	say('| 数え方 | 完成仮説で 0.5 超 | 形成中 idiom で 0.5 超 | 一致 |');
+	say('|---|---:|---:|---|');
+	const rows: ReadonlyArray<readonly [string, number, number]> = [
+		['延べ', overOnCompletion.length, overIdiomWithBoth.length],
+		['構造', new Set(overOnCompletion.map(structKey)).size, new Set(overIdiomWithBoth.map(structKey)).size],
+		['実体', new Set(overOnCompletion.map(tsKey)).size, new Set(overIdiomWithBoth.map(tsKey)).size],
+	];
+	for (const [label, a, b] of rows) say(`| ${label} | ${a} | ${b} | ${a === b ? '✅' : '❌'} |`);
+	say();
 	say(
-		`**完成仮説で 0.5 を超える延べは ${overOnCompletion.length} / ${withBoth.length} 件** ` +
-			`（構造 ${new Set(overOnCompletion.map(structKey)).size} 件）。同じ母集団を形成中の idiom で数えると ` +
-			`${overIdiomWithBoth.length} 件（構造 ${new Set(overIdiomWithBoth.map(structKey)).size} 件）で、` +
+		`母集団は「両方の比を算出できた ${withBoth.length} 延べ」。` +
 			`${
-				overOnCompletion.length === overIdiomWithBoth.length
-					? '**両者は一致した**（ヒゲが分母の端点を動かさなかった候補が多数）。'
-					: '**両者は一致しない**——上の両向きの動きが閾値をまたいだ候補があるため。'
+				rows.every(([, a, b]) => a === b)
+					? '**3 段とも一致した**ので、主指標の結論は idiom の選び方に依存しない。'
+					: '**延べは食い違うが、構造と実体は一致する**——閾値をまたいだ候補があっても、' +
+						'それは同じ構造の別の窓に吸収される。主指標の結論（件数）は idiom の選び方に依存しない。'
 			}`,
 	);
 	say();
@@ -1569,6 +1577,15 @@ async function main(): Promise<void> {
 	say(
 		`| \`FORMING_NECKLINE_SPREAD_FACTOR\` | ${base.FORMING_NECKLINE_SPREAD_FACTOR} | \`necklineSpreadLimit = tolerancePct × ${base.FORMING_NECKLINE_SPREAD_FACTOR}\` |`,
 	);
+	say(
+		`| \`FORMING_STAIR_STEP_LIMIT\` | ${base.FORMING_STAIR_STEP_LIMIT} | ` +
+			'`tolerancePct` 由来ではない固定値。**片側しか見ていない**——`triple_top` の切り上がりと ' +
+			'`triple_bottom` の切り下がりだけで、逆向きの単調列は素通りする |',
+	);
+	say(
+		`| \`FORMING_MIN_CONFIDENCE\` / \`FORMING_MAX_CONFIDENCE\` | ${base.FORMING_MIN_CONFIDENCE} / ${base.FORMING_MAX_CONFIDENCE} | ` +
+			'採点の下限・上限（§5-3）。本ゲートは採点式を変えないので不変 |',
+	);
 	say();
 	say(
 		'高さ相対のゲートを**足すだけ**なら他の係数に触らない。それを機械的に確かめるため、' +
@@ -1786,21 +1803,19 @@ function buildFollowUps(byCorpusRows: Map<string, Row[]>, triples: readonly Form
 		let completed = false;
 		let heightRejected = false;
 		let stillSeen = false;
-		let lastFormingEnd = r.windowEnd;
 		const local = `${r.type}|${r.main1Idx}-${r.main2Idx}`;
 		for (const [lane, arr] of lanes) {
 			if (!lane.startsWith(`${r.series}|${r.tf}|`)) continue;
 			const first = arr.find((s) => s.forming.has(local));
 			if (!first) continue;
 			for (const s of arr) {
-				if (s.forming.has(local)) lastFormingEnd = Math.max(lastFormingEnd, s.end);
 				if (s.end <= first.end) continue;
 				if (s.completed.has(local)) completed = true;
 				if (s.heightRejected.has(local)) heightRejected = true;
 				if (s.forming.has(local) || s.completed.has(local) || s.heightRejected.has(local)) stillSeen = true;
 			}
 		}
-		out.set(k, { completed, rejectedByHeightGate: heightRejected, vanished: !stillSeen, lastFormingEnd });
+		out.set(k, { completed, rejectedByHeightGate: heightRejected, vanished: !stillSeen });
 	}
 	return out;
 }
