@@ -647,14 +647,18 @@ export const DetectedPatternSchema = z.object({
 		.optional()
 		.describe(
 			'パターンの状態。' +
-				'`forming` = 形成途上（まだネックライン突破の余地がある）。' +
-				'`near_completion` = 突破目前。' +
+				'`forming` = 形成途上（最終構成点がまだ確定しておらず、ネックライン突破の余地がある）。' +
+				'`near_completion` = **構成点は揃い、ネックライン突破を待っている**。' +
+				'反転系（double / triple / H&S）はいずれもこの状態を取る' +
+				'（double 2 型は issue #262 まで出しておらず、同じ段階を `forming` と呼んでいた）。' +
 				'`completed` = ネックライン突破を検出器が確認済み。' +
 				'`invalid` = 構成点確定後に形が崩れて無効化された（理由は `invalidReason`）。' +
 				'`expired` = **期限切れ**。第2構成点の確定から突破確認窓を過ぎてもネックラインを' +
 				'突破しなかったもので、以後この候補が `completed` になることはない。' +
 				'`invalid` と同義ではない——形が崩れたのではなく、成立する時間を使い切った状態。' +
-				'既定では出力されず、`includeInvalid: true` で `invalid` と一緒に現れる。',
+				'既定では出力されず、`includeInvalid: true` で `invalid` と一緒に現れる' +
+				'（ただし double 2 型の `expired` / `invalid` は**未ブレイクの構造**なので' +
+				'`includeForming: true` も要る）。',
 		),
 	/** status='invalid' / 'expired' の理由コード（issue #126） */
 	invalidReason: z

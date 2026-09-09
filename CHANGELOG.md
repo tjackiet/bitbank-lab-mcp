@@ -72,6 +72,55 @@
 | 57 | #263 | 形成中 triple の**単調性ゲートを両向き**にした（`triple_top` の切り下がり / `triple_bottom` の切り上がりが素通りしていた）。**閾値 `FORMING_STAIR_STEP_LIMIT`（2%）は据え置き**で、見る向きを増やしただけ | 実データ 1hour で**わずかに減る**（12,104 ケースで accepted な形成中 triple が延べ 5,818 → 5,763 / 実体 43 のまま）。**標準コーパス 800 の `data.patterns` は 1 ケースも動かない**（動くのは `view=debug` の理由コードの帰属だけ） |
 | 58 | #178 項目 1 | **形成中 triple への高さ相対ゲートは案 C（不採用）で決着。文書化のみ。** #261 / #263 で帰属を正した後の残差 17 実体のうち 12 実体が他ゲートの仕事、単独で拾う 5 実体のうち 3 実体が目視で妥当なトリプル。配線すると帰属が誤り妥当な形を落とす。**#178 の 4 項目すべてが決着し issue はクローズ** | **変わらない**（docstring / docs / 内部メモのみ。コードのロジックは 1 行も触っていない） |
 | 59 | #262 Phase 1 | **形成中 double の「形成中」の定義が top / bottom で違う件の計測。コード変更なし。** top は「最終構成点が形成中」（確定 2 点 + 最新足）、bottom は「構造完成・ブレイク待ち」（確定 3 点）で、**同じ `status: 'forming'` が別の段階を指している**。形成中 `double_top` が 0 件になる律速は `forming_bars_out_of_range`（到達 4,303 のうち 4,159 = 96.7% が**全件下限割れ**）で、issue が疑っていた `DOUBLE_LEVEL_MAX_PCT` ではない（172 件 = 3.2%） | **変わらない**（計測スクリプトと内部メモのみ。検出器・`structural.ts`・`config.ts`・`status` の enum は 1 行も触っていない） |
+| 60 | #262 Phase 2 | **double の「構造完成・ブレイク待ち」を `near_completion` で出すようにし、誤ラベルだった `tryFormingDoubleBottom` を削除した。** 完成済み 4 経路（strict / relaxed × top / bottom）は `findBreakoutIdx` が −1 のとき `no_breakout` で棄却していたが、triple / H&S と同じく `near_completion` を組むようにした。**`status` の enum も `FORMING_*` 係数も 1 つも変えていない** | **既定（`includeForming: false`）は 544 ケース全件で完全一致**（未ブレイク構造は forming バケットなので、検出器は従来どおり `no_breakout` で抜ける）。`includeForming: true` は 11,560 ケース中 2,791 ケースで変わる |
+
+### Changed（#262 Phase 2: double の「ブレイク待ち」を `near_completion` で出す）
+
+**`status` の enum にも `FORMING_*` 係数にも `MAX_BARS_FROM_EXTREMUM` にも触っていない。**
+
+`detect_doubles.ts` の完成済み 4 経路（strict / relaxed × top / bottom）は、ネックライン突破が
+見つからないと `no_breakout` で棄却して終わっていた。`detect_triples` / `detect_hs` の完成済み経路は
+同じ状況で `status: 'near_completion'` を出しており、**double 2 型だけがこの status を一度も
+出していなかった。**
+
+同時に、`tryFormingDoubleBottom` は**まったく同じ段階**（確定 3 点が揃い、ブレイクを待っている）を
+`status: 'forming'` として出していた。`forming` は triple / H&S では「最終構成点がまだ確定していない」
+段階を指す語なので、これは**誤ラベル**であり、同じ構造が完成済み経路の候補と形成中の候補として
+二重に出る原因でもあった（実測で 3 実体が `completed` と `forming` の両方で現れていた）。
+
+- **完成済み 4 経路が未ブレイクの構造を `near_completion` として出す。** ゲート集合は完成済みと同じ
+  （サイズ / 同水準 2 段 / 高さ相対 / 構造ゲート / ネックライン側）。`confirmation` は
+  `not_confirmed`、進捗は `targetProgressOmittedReason: 'not_broken_out'` で申告し、
+  `breakout` / `breakoutBarIndex` は出さない。`breakoutTarget` は出す（triple と同じ形）。
+- **#242 の経路ゲート（`checkBreakoutPath`）は掛けない。** `near_completion` は定義上
+  「最終構成点からブレイクまでの経路がまだ無い」状態なので、検証する経路が存在しない。
+- **#126 G4 / G5 の終端 status を完成済み経路側で引き継ぐ。** 第2構成点から
+  `FORMING_EXPIRY_BARS`（= `MAX_BARS_FROM_EXTREMUM` = 20 本）を過ぎたら `expired` /
+  `forming_expired`、谷（山）ゾーンへ再進入していたら `invalid` / `re_entered_trough_zone`。
+  判定そのものは旧 `tryFormingDoubleBottom` と同じで、置き場所だけが移った。
+- **`tryFormingDoubleBottom` を削除した。** 役目を終えたため。`tryFormingDoubleTop`
+  （「2 つ目の山を作っている途中」）は触っていない（#268）。
+- **`found` は完成済みだけで立てる。** 未ブレイクでも立てると、strict が `near_completion` を
+  1 件出しただけで relaxed フォールバックが走らなくなり、別の構成点で成立していた
+  **completed な relaxed 候補が消える。**
+
+**`forming` → `near_completion` の付け替えは「同じ語の意味の差し替え」ではなく誤ラベルの訂正**
+なので、`.claude/rules/tools.md` 規約 7 の alias 猶予は置かない。`forming` の語の意味
+（最終構成点が形成中）は triple / H&S と同じまま変わっていない
+（[#262 の決定コメント 4](https://github.com/tjackiet/bitbank-lab-mcp/issues/262#issuecomment-5603464009)）。
+
+実測（12,104 ケース。`scripts/measure_forming_double_asymmetry_262.ts` に本 PR の strip ビルドを足した）:
+
+| 何を | 実測 |
+|---|---|
+| `includeForming: false`（既定） | **544 ケース全件で `data.patterns` が完全一致**。未ブレイク構造は forming バケットなので、検出器は従来どおり `no_breakout` で抜ける |
+| `includeForming: true` | 11,560 ケース中 **2,791 ケース**で変わる |
+| 未ブレイク構造の実体（strip → PR） | `double_bottom` は `forming` 6 / `expired` 9 / `invalid` 5 → `near_completion` 7 / `expired` 3 / `invalid` 7。`double_top` は 0 → `near_completion` 12 / `expired` 6 / `invalid` 11 |
+| 既定で利用者に見える `near_completion` の 3 値判定 | Phase 1 §8-2 の 5 段の基準を数値で当てた結果は PR 本文の §8-6 |
+| `view=debug` の cap 超過ケース | 実データ C / D で **44 → 36 に減る**（Phase 1 の案 B は 44 → 56 に増やしていた）。削除した `tryFormingDoubleBottom` が積んでいた候補のほうが多い |
+
+契約の更新: `src/schema/patterns.ts` の `status` description、`docs/tools.md` の `pivots` の点数表 /
+理由コード表 / 単調性ゲートの注記 / `status` の表。
 
 ### Docs（#262 Phase 1: 形成中 double の「形成中」の定義の非対称を計測。決定はしない）
 

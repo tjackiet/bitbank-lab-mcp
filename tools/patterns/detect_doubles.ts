@@ -78,8 +78,9 @@ export const MIN_FORMING_COMPLETION = 0.4;
  * ここの日数は「その値がどこから来たか」を示す注記であって、暦日数の要件ではない。
  */
 export const MIN_PATTERN_DAYS = 14;
-const FORMING_TOLERANCE_MULTIPLIER = 1.5;
-const FORMING_VALLEY_INVALID_PCT = 0.02;
+// `FORMING_TOLERANCE_MULTIPLIER` / `FORMING_VALLEY_INVALID_PCT` は `tryFormingDoubleBottom` 専用の
+// 係数だったので、同関数の削除（issue #262）と一緒に消した。前者と同名の係数は
+// `detect_triples.ts` が形成中 triple 用に別途持っている（値も用途も独立）。
 /**
  * 形成中パターンが `forming` を名乗れる、第2構成点確定からの経過バー数の上限（issue #126 G4）。
  *
@@ -528,6 +529,53 @@ function checkPostPivotInvalidation(opts: {
 /** 完成済みパスの終端 status（`status` / `invalidReason` をまとめて展開するための形）。 */
 type DoubleTerminal = { status: 'invalid'; invalidReason: string };
 
+/** 未ブレイクの構造（ブレイク足が存在しない）の status（issue #262）。 */
+type DoubleUnbrokenStatus =
+	| { status: 'near_completion' }
+	| { status: 'expired'; invalidReason: string }
+	| { status: 'invalid'; invalidReason: string };
+
+/**
+ * **構成点 3 点が揃っていて、まだネックラインを突破していない**構造の status を決める（issue #262）。
+ *
+ * 完成済み 4 経路（strict / relaxed × top / bottom）は以前、`findBreakoutIdx` が −1 のとき
+ * `no_breakout` で棄却して終わっていた。`detect_triples` / `detect_hs` の完成済み経路は同じ状況で
+ * `status: 'near_completion'` を出しており、**double 2 型だけがこの status を一度も出さなかった**。
+ * 「構造は完成し、ブレイクを待っている」という段階そのものは double にも実在するので、
+ * 同じ語を同じ意味で使う（issue #262 の決定 2）。
+ *
+ * ## triple / H&S より 2 段多い理由（#126 G4 / G5 を引き継ぐ）
+ *
+ * 旧 `tryFormingDoubleBottom`（本 PR で削除）は、まさにこの段階を `status: 'forming'` という
+ * 誤ラベルで出しており、**終端の 2 条件を持っていた**。同じ判定をここへ移す:
+ *
+ * - **期限切れ（#126 G4）**: 第2構成点 `c` から {@link FORMING_EXPIRY_BARS} を過ぎても未ブレイクなら
+ *   `expired`。`findBreakoutIdx` は `c` から {@link MAX_BARS_FROM_EXTREMUM} 本しか突破を探さないので、
+ *   窓を過ぎた候補は**以後どれだけ待っても `completed` にならない**。2 つの定数が同値であることに
+ *   意味があるのはこのため（{@link FORMING_EXPIRY_BARS} の docstring が単一ソース）。
+ * - **無効化（#126 G5）**: {@link checkPostPivotInvalidation} が谷（山）ゾーンへの再進入を見つけたら
+ *   `invalid`。未ブレイクなので走査終端は `untilIdx = lastIdx`（呼び出し側が渡す）。
+ *
+ * `reclassify`（同水準の第3構成点があり triple へ委ねる）は呼び出し側が先に `continue` するので
+ * ここには来ない。到達しても `near_completion` にはせず、フォールスルーの分岐を書かずに済ませている。
+ *
+ * ## #242 の経路ゲート（{@link checkBreakoutPath}）は掛けない
+ *
+ * `near_completion` は定義上「最終構成点からブレイクまでの経路がまだ無い」状態なので、
+ * その経路を検証するゲートは掛けようがない。呼び出し側は `isCompleted` でも絞っている。
+ */
+function unbrokenStatusFields(opts: {
+	post: ReturnType<typeof checkPostPivotInvalidation>;
+	/** 第2構成点（山2 / 谷2）の idx。ここからの経過バー数で期限切れを判定する。 */
+	lastPivotIdx: number;
+	lastIdx: number;
+}): DoubleUnbrokenStatus {
+	if (opts.post.verdict === 'invalid') return { status: 'invalid', invalidReason: opts.post.reason };
+	if (opts.lastIdx - opts.lastPivotIdx > FORMING_EXPIRY_BARS)
+		return { status: 'expired', invalidReason: 'forming_expired' };
+	return { status: 'near_completion' };
+}
+
 /**
  * 最終構成点（山2 / 谷2）からネックライン突破バーまでの**経路**を検証する（issue #242）。
  * 不合格なら `view=debug` の候補を積み、終端 status を返す。合格なら `null`。
@@ -620,21 +668,27 @@ function findRelaxedDoubleTop(
 	sizeThresholds: SizeThresholds,
 	tz: string | undefined,
 	type: string,
+	includeForming: boolean,
 ): PatternEntry | null {
 	const tolRelax = tolerancePct * factor;
+	const lastIdx = candles.length - 1;
 	const nearRelaxed = (x: number, y: number) => Math.abs(x - y) <= Math.max(x, y) * tolRelax;
 
 	/**
-	 * 終端 status（`invalid`）が付いた候補の置き場（issue #242 のレビュー指摘）。
+	 * `completed` 以外の status（`invalid` / `expired` / `near_completion`）が付いた候補の置き場
+	 * （issue #242 のレビュー指摘。#262 で `near_completion` を追加）。
 	 *
 	 * relaxed は**最初に組み上がった候補を返してその場で走査を終える**ので、
 	 * `H-L-H-L-H` のように候補が重なる列で先頭の候補が `invalid` になると、
 	 * **後ろにある成立した候補まで一緒に失われる**（relaxed は同 type の strict が
 	 * 0 件のときだけ走るフォールバックなので、そのとき検出結果は 0 件になる）。
-	 * 終端候補はここに退避して走査を続け、成立した候補が無かったときだけ返す。
+	 * 退避して走査を続け、`completed` な候補が無かったときだけ返す。
 	 * **1 件だけ返す契約は変えない**（`??=` なので退避されるのは最初の 1 件）。
+	 *
+	 * `near_completion` を `completed` と同じ「即 return」にしないのは同じ理由——
+	 * ブレイク待ちの構造を 1 件拾っただけで、後ろにある**完成済み**の候補を捨てることになる。
 	 */
-	let terminalFallback: PatternEntry | null = null;
+	let nonCompletedFallback: PatternEntry | null = null;
 
 	for (let i = 0; i + 2 < pivots.length; i++) {
 		const a = pivots[i],
@@ -678,7 +732,10 @@ function findRelaxedDoubleTop(
 
 		const necklinePrice = b.price;
 		const breakoutIdx = findBreakoutIdx(candles, c.idx, necklinePrice, 'below');
-		if (breakoutIdx < 0) {
+		const isCompleted = breakoutIdx >= 0;
+		// 未ブレイクでも棄却しない（issue #262）。`includeForming` が false のときだけ
+		// 従来どおり `no_breakout_relaxed` で抜ける（strict 側の同じ箇所を参照）。
+		if (!isCompleted && !includeForming) {
 			pcand({
 				type: 'double_top',
 				accepted: false,
@@ -692,7 +749,7 @@ function findRelaxedDoubleTop(
 			});
 			continue;
 		}
-		const trend = validatePriorTrend(candles, a.idx, breakoutIdx - a.idx, 'up_or_sideways');
+		const trend = validatePriorTrend(candles, a.idx, (isCompleted ? breakoutIdx : lastIdx) - a.idx, 'up_or_sideways');
 		if (!trend.ok) {
 			pcand({
 				type: 'double_top',
@@ -725,7 +782,7 @@ function findRelaxedDoubleTop(
 			a,
 			b,
 			c,
-			untilIdx: breakoutIdx - 1,
+			untilIdx: isCompleted ? breakoutIdx - 1 : lastIdx,
 			side: 'top',
 		});
 		if (post.verdict === 'reclassify') {
@@ -740,22 +797,23 @@ function findRelaxedDoubleTop(
 		if (rejectByLevelDiff('top', 'double_top', a, b, c, Math.min(tolRelax, DOUBLE_LEVEL_MAX_PCT), pcand)) continue;
 		if (rejectByNecklineSide('top', 'double_top', a, b, c, necklinePrice, pcand)) continue;
 		// 最終構成点 → ブレイクの経路検証（issue #242）。既に `invalid` が付いている候補には掛けない。
+		// **未ブレイク（`near_completion`）にも掛けない**——検証する経路がまだ存在しない（#262）。
 		const pathTerminal =
-			post.verdict === 'ok'
+			isCompleted && post.verdict === 'ok'
 				? checkBreakoutPath({ pivots, side: 'top', type: 'double_top', a, b, c, breakoutIdx, pcand })
 				: null;
 
 		const start = candles[a.idx].isoTime,
-			end = candles[breakoutIdx].isoTime;
+			end = isCompleted ? candles[breakoutIdx]?.isoTime : candles[c.idx]?.isoTime;
 		if (!start || !end) continue;
 
 		const neckline = [
 			{ x: a.idx, y: necklinePrice },
-			{ x: breakoutIdx, y: necklinePrice },
+			{ x: isCompleted ? breakoutIdx : c.idx, y: necklinePrice },
 		];
 		const per = periodScoreDays(start, end);
 		const dtRelAvgPeak = (a.price + c.price) / 2;
-		const dtRelBp = Number(candles[breakoutIdx]?.close ?? NaN);
+		const dtRelBp = isCompleted ? Number(candles[breakoutIdx]?.close ?? NaN) : NaN;
 		const { components: scoreComponents, base } = buildDoubleScore({
 			outer1: a.price,
 			outer2: c.price,
@@ -779,18 +837,23 @@ function findRelaxedDoubleTop(
 			{ tz, type },
 		);
 		const dtRelTarget = Math.round(necklinePrice - (dtRelAvgPeak - necklinePrice));
-		// ブレイク足の終値が非有限なら**理由を名乗って**畳む（#224 症状 2）。
-		const dtRelReach = Number.isFinite(dtRelBp)
-			? computeTargetReach(candles, breakoutIdx, dtRelBp, dtRelTarget, 'down', dtRelAvgPeak - necklinePrice)
-			: omittedTargetReach('invalid_breakout_price');
+		// 未ブレイク / ブレイク足の終値が非有限——どちらも**理由を名乗って**畳む（#224 症状 2）。
+		const dtRelReach = !isCompleted
+			? omittedTargetReach('not_broken_out')
+			: Number.isFinite(dtRelBp)
+				? computeTargetReach(candles, breakoutIdx, dtRelBp, dtRelTarget, 'down', dtRelAvgPeak - necklinePrice)
+				: omittedTargetReach('invalid_breakout_price');
 		const structureRange =
 			candles[a.idx]?.isoTime && candles[c.idx]?.isoTime
 				? { start: candles[a.idx].isoTime as string, end: candles[c.idx].isoTime as string }
 				: undefined;
-		const confirmation = buildNecklineConfirmation(candles, breakoutIdx);
+		const confirmation = isCompleted
+			? buildNecklineConfirmation(candles, breakoutIdx)
+			: ({ type: 'not_confirmed' } as const);
 		const precedingTrend = buildPrecedingTrend(candles, trend, a.idx);
 
 		const structureGate = buildStructureGate(gate);
+		const unbroken = isCompleted ? null : unbrokenStatusFields({ post, lastPivotIdx: c.idx, lastIdx });
 
 		const entry: PatternEntry = {
 			type: 'double_top',
@@ -801,27 +864,28 @@ function findRelaxedDoubleTop(
 			...(structureRange ? { structureRange } : {}),
 			...(confirmation ? { confirmation } : {}),
 			...(precedingTrend ? { precedingTrend } : {}),
-			...(post.verdict === 'invalid'
-				? { status: 'invalid' as const, invalidReason: post.reason }
-				: (pathTerminal ?? {})),
+			...(unbroken ??
+				(post.verdict === 'invalid'
+					? { status: 'invalid' as const, invalidReason: post.reason }
+					: (pathTerminal ?? {}))),
 			pivots: [a, b, c],
 			neckline,
 			trendlineLabel: 'ネックライン',
-			breakout: { idx: breakoutIdx, price: dtRelBp },
-			breakoutBarIndex: breakoutIdx,
+			...(isCompleted ? { breakout: { idx: breakoutIdx, price: dtRelBp }, breakoutBarIndex: breakoutIdx } : {}),
 			breakoutTarget: dtRelTarget,
 			targetMethod: 'neckline_projection' as const,
 			...targetReachFields(dtRelReach),
 			structureDiagram: diagram,
 			_fallback: `relaxed_double_x${factor}`,
 		};
-		if (entry.status === 'invalid') {
-			terminalFallback ??= entry;
+		// 完成済み（status 未設定）だけが即 return。それ以外は退避して走査を続ける。
+		if (entry.status !== undefined) {
+			nonCompletedFallback ??= entry;
 			continue;
 		}
 		return entry;
 	}
-	return terminalFallback;
+	return nonCompletedFallback;
 }
 
 // ── Helper: relaxed fallback ダブルボトム検索 ──
@@ -836,21 +900,27 @@ function findRelaxedDoubleBottom(
 	sizeThresholds: SizeThresholds,
 	tz: string | undefined,
 	type: string,
+	includeForming: boolean,
 ): PatternEntry | null {
 	const tolRelax = tolerancePct * factor;
+	const lastIdx = candles.length - 1;
 	const nearRelaxed = (x: number, y: number) => Math.abs(x - y) <= Math.max(x, y) * tolRelax;
 
 	/**
-	 * 終端 status（`invalid`）が付いた候補の置き場（issue #242 のレビュー指摘）。
+	 * `completed` 以外の status（`invalid` / `expired` / `near_completion`）が付いた候補の置き場
+	 * （issue #242 のレビュー指摘。#262 で `near_completion` を追加）。
 	 *
 	 * relaxed は**最初に組み上がった候補を返してその場で走査を終える**ので、
 	 * `H-L-H-L-H` のように候補が重なる列で先頭の候補が `invalid` になると、
 	 * **後ろにある成立した候補まで一緒に失われる**（relaxed は同 type の strict が
 	 * 0 件のときだけ走るフォールバックなので、そのとき検出結果は 0 件になる）。
-	 * 終端候補はここに退避して走査を続け、成立した候補が無かったときだけ返す。
+	 * 退避して走査を続け、`completed` な候補が無かったときだけ返す。
 	 * **1 件だけ返す契約は変えない**（`??=` なので退避されるのは最初の 1 件）。
+	 *
+	 * `near_completion` を `completed` と同じ「即 return」にしないのは同じ理由——
+	 * ブレイク待ちの構造を 1 件拾っただけで、後ろにある**完成済み**の候補を捨てることになる。
 	 */
-	let terminalFallback: PatternEntry | null = null;
+	let nonCompletedFallback: PatternEntry | null = null;
 
 	for (let i = 0; i + 2 < pivots.length; i++) {
 		const a = pivots[i],
@@ -894,7 +964,10 @@ function findRelaxedDoubleBottom(
 
 		const necklinePrice = b.price;
 		const breakoutIdx = findBreakoutIdx(candles, c.idx, necklinePrice, 'above');
-		if (breakoutIdx < 0) {
+		const isCompleted = breakoutIdx >= 0;
+		// 未ブレイクでも棄却しない（issue #262）。`includeForming` が false のときだけ
+		// 従来どおり `no_breakout_relaxed` で抜ける（strict 側の同じ箇所を参照）。
+		if (!isCompleted && !includeForming) {
 			pcand({
 				type: 'double_bottom',
 				accepted: false,
@@ -908,7 +981,7 @@ function findRelaxedDoubleBottom(
 			});
 			continue;
 		}
-		const trend = validatePriorTrend(candles, a.idx, breakoutIdx - a.idx, 'down_or_sideways');
+		const trend = validatePriorTrend(candles, a.idx, (isCompleted ? breakoutIdx : lastIdx) - a.idx, 'down_or_sideways');
 		if (!trend.ok) {
 			pcand({
 				type: 'double_bottom',
@@ -941,7 +1014,7 @@ function findRelaxedDoubleBottom(
 			a,
 			b,
 			c,
-			untilIdx: breakoutIdx - 1,
+			untilIdx: isCompleted ? breakoutIdx - 1 : lastIdx,
 			side: 'bottom',
 		});
 		if (post.verdict === 'reclassify') {
@@ -957,22 +1030,23 @@ function findRelaxedDoubleBottom(
 			continue;
 		if (rejectByNecklineSide('bottom', 'double_bottom', a, b, c, necklinePrice, pcand)) continue;
 		// 最終構成点 → ブレイクの経路検証（issue #242）。既に `invalid` が付いている候補には掛けない。
+		// **未ブレイク（`near_completion`）にも掛けない**——検証する経路がまだ存在しない（#262）。
 		const pathTerminal =
-			post.verdict === 'ok'
+			isCompleted && post.verdict === 'ok'
 				? checkBreakoutPath({ pivots, side: 'bottom', type: 'double_bottom', a, b, c, breakoutIdx, pcand })
 				: null;
 
 		const start = candles[a.idx].isoTime,
-			end = candles[breakoutIdx].isoTime;
+			end = isCompleted ? candles[breakoutIdx]?.isoTime : candles[c.idx]?.isoTime;
 		if (!start || !end) continue;
 
 		const neckline = [
 			{ x: a.idx, y: necklinePrice },
-			{ x: breakoutIdx, y: necklinePrice },
+			{ x: isCompleted ? breakoutIdx : c.idx, y: necklinePrice },
 		];
 		const per = periodScoreDays(start, end);
 		const dbRelAvgValley = (a.price + c.price) / 2;
-		const dbRelBp = Number(candles[breakoutIdx]?.close ?? NaN);
+		const dbRelBp = isCompleted ? Number(candles[breakoutIdx]?.close ?? NaN) : NaN;
 		const { components: scoreComponents, base } = buildDoubleScore({
 			outer1: a.price,
 			outer2: c.price,
@@ -996,18 +1070,23 @@ function findRelaxedDoubleBottom(
 			{ tz, type },
 		);
 		const dbRelTarget = Math.round(necklinePrice + (necklinePrice - dbRelAvgValley));
-		// ブレイク足の終値が非有限なら**理由を名乗って**畳む（#224 症状 2）。
-		const dbRelReach = Number.isFinite(dbRelBp)
-			? computeTargetReach(candles, breakoutIdx, dbRelBp, dbRelTarget, 'up', necklinePrice - dbRelAvgValley)
-			: omittedTargetReach('invalid_breakout_price');
+		// 未ブレイク / ブレイク足の終値が非有限——どちらも**理由を名乗って**畳む（#224 症状 2）。
+		const dbRelReach = !isCompleted
+			? omittedTargetReach('not_broken_out')
+			: Number.isFinite(dbRelBp)
+				? computeTargetReach(candles, breakoutIdx, dbRelBp, dbRelTarget, 'up', necklinePrice - dbRelAvgValley)
+				: omittedTargetReach('invalid_breakout_price');
 		const structureRange =
 			candles[a.idx]?.isoTime && candles[c.idx]?.isoTime
 				? { start: candles[a.idx].isoTime as string, end: candles[c.idx].isoTime as string }
 				: undefined;
-		const confirmation = buildNecklineConfirmation(candles, breakoutIdx);
+		const confirmation = isCompleted
+			? buildNecklineConfirmation(candles, breakoutIdx)
+			: ({ type: 'not_confirmed' } as const);
 		const precedingTrend = buildPrecedingTrend(candles, trend, a.idx);
 
 		const structureGate = buildStructureGate(gate);
+		const unbroken = isCompleted ? null : unbrokenStatusFields({ post, lastPivotIdx: c.idx, lastIdx });
 
 		const entry: PatternEntry = {
 			type: 'double_bottom',
@@ -1018,27 +1097,28 @@ function findRelaxedDoubleBottom(
 			...(structureRange ? { structureRange } : {}),
 			...(confirmation ? { confirmation } : {}),
 			...(precedingTrend ? { precedingTrend } : {}),
-			...(post.verdict === 'invalid'
-				? { status: 'invalid' as const, invalidReason: post.reason }
-				: (pathTerminal ?? {})),
+			...(unbroken ??
+				(post.verdict === 'invalid'
+					? { status: 'invalid' as const, invalidReason: post.reason }
+					: (pathTerminal ?? {}))),
 			pivots: [a, b, c],
 			neckline,
 			trendlineLabel: 'ネックライン',
-			breakout: { idx: breakoutIdx, price: dbRelBp },
-			breakoutBarIndex: breakoutIdx,
+			...(isCompleted ? { breakout: { idx: breakoutIdx, price: dbRelBp }, breakoutBarIndex: breakoutIdx } : {}),
 			breakoutTarget: dbRelTarget,
 			targetMethod: 'neckline_projection' as const,
 			...targetReachFields(dbRelReach),
 			structureDiagram: diagram,
 			_fallback: `relaxed_double_x${factor}`,
 		};
-		if (entry.status === 'invalid') {
-			terminalFallback ??= entry;
+		// 完成済み（status 未設定）だけが即 return。それ以外は退避して走査を続ける。
+		if (entry.status !== undefined) {
+			nonCompletedFallback ??= entry;
 			continue;
 		}
 		return entry;
 	}
-	return terminalFallback;
+	return nonCompletedFallback;
 }
 
 // ── Helper: 形成中ダブルトップ検索 ──
@@ -1268,302 +1348,13 @@ function tryFormingDoubleTop(ctx: DetectContext): PatternEntry | null {
 	};
 }
 
-// ── Helper: 形成中ダブルボトム検索 ──
-
-/**
- * 形成中ダブルボトムを組み立てる。組めなければ null。
- *
- * ## debug candidate の積み方（issue #158）
- *
- * 成功エントリの意味（`accepted: true` は dedup 前＝「検出器が組み立てた」）は
- * {@link tryFormingDoubleTop} の docstring が単一ソース。
- *
- * 棄却の理由コードは**構成点 3 点（谷1 / 山 / 谷2）が揃った後の分岐にだけ**積む。
- * この関数は谷ペアを回すループなので、揃う前の `continue`（`minDist` 不足 / 間に山が
- * 無い）はペア数ぶん発火し、`detect_patterns.ts` の cap=200 を食い潰して**他の検出器の
- * 棄却理由を押し出す**。#155 が `formingHsForHead` で置いた制約と同じ。
- */
-function tryFormingDoubleBottom(ctx: DetectContext): PatternEntry | null {
-	const { candles, allPeaks, allValleys, tolerancePct, want, minDist } = ctx;
-	if (!(want.size === 0 || want.has('double_bottom')) || allValleys.length < 2) return null;
-
-	const lastIdx = candles.length - 1;
-	const currentPrice = Number(candles[lastIdx]?.close ?? NaN);
-	const isoAt = (i: number) => candles[i]?.isoTime || '';
-	const formingBars = getDoubleFormingBarParams(ctx.type);
-
-	const confirmedValleys = allValleys.filter((v) => v.idx < lastIdx - 2);
-	if (confirmedValleys.length < 2) return null;
-
-	for (let j = confirmedValleys.length - 1; j >= 1; j--) {
-		const rightValley = confirmedValleys[j];
-		const leftValley = confirmedValleys[j - 1];
-		if (rightValley.idx - leftValley.idx < minDist) continue;
-
-		const peaksBetween = allPeaks.filter((p) => p.idx > leftValley.idx && p.idx < rightValley.idx);
-		if (!peaksBetween.length) continue;
-		const midPeak = peaksBetween.reduce((best, p) => (p.price > best.price ? p : best), peaksBetween[0]);
-
-		// 構成点 3 点が揃った。以降の棄却はこの並びで積む（既存の棄却エントリと同じ
-		// role 名 / indices の並びにして、同じ経路の ✅ と ❌ が並んで読めるようにする）。
-		// 最新足は確定ピボットではないので role を `current` で区別する。
-		const formingIdxs = [leftValley.idx, midPeak.idx, rightValley.idx, lastIdx];
-		const formingPts = [
-			{ role: 'valley1', idx: leftValley.idx, price: leftValley.price },
-			{ role: 'peak', idx: midPeak.idx, price: midPeak.price },
-			{ role: 'valley2', idx: rightValley.idx, price: rightValley.price },
-			{ role: 'current', idx: lastIdx, price: currentPrice },
-		];
-		const rejectForming = (reason: string) => {
-			pushCand(ctx, { type: 'double_bottom', accepted: false, reason, idxs: formingIdxs, pts: formingPts });
-		};
-
-		// 値幅の評価なので基準は `extremePrice`（{@link validateBottomSize} と同じ理由）。
-		// 完成済みパスと同じ `sizeThresholds.heightPct` を使う以上ここだけ終値基準にすると、
-		// 「形成中は通るのに完成した瞬間にサイズ検査で落ちる」候補ができる。
-		//
-		// **サイズ検査のうち高さだけがここにある。** 深さ（`depthPct`）は既存の棄却検査を
-		// すべて通過した後（構造ゲートの直前）で `validateBottomSize` として掛ける（issue #169）。
-		// 位置が分かれているのは配置規約の都合で、この両脚チェックの理由コード
-		// `forming_pattern_height_below_min` は #166 のテストが名前を固定しているため改名しない。
-		const leftDepth = (midPeak.extremePrice - leftValley.extremePrice) / Math.max(EPSILON, midPeak.extremePrice);
-		const rightDepth = (midPeak.extremePrice - rightValley.extremePrice) / Math.max(EPSILON, midPeak.extremePrice);
-		if (!(leftDepth >= ctx.sizeThresholds.heightPct && rightDepth >= ctx.sizeThresholds.heightPct)) {
-			rejectForming('forming_pattern_height_below_min');
-			continue;
-		}
-
-		const valleyDiff =
-			Math.abs(leftValley.price - rightValley.price) / Math.max(1, Math.max(leftValley.price, rightValley.price));
-		if (valleyDiff > Math.min(tolerancePct * FORMING_TOLERANCE_MULTIPLIER, DOUBLE_LEVEL_MAX_PCT)) {
-			rejectForming('forming_valleys_not_level');
-			continue;
-		}
-		if (currentPrice < rightValley.price * (1 - FORMING_VALLEY_INVALID_PCT)) {
-			rejectForming('forming_current_below_valley_zone');
-			continue;
-		}
-
-		const upRatio = (currentPrice - rightValley.price) / Math.max(EPSILON, midPeak.price - rightValley.price);
-		const progress = Math.max(0, Math.min(1, upRatio));
-		const completion = Math.min(1, 0.66 + 0.34 * progress);
-		if (completion < 0.4) {
-			rejectForming('forming_completion_below_min');
-			continue;
-		}
-
-		const formationBars = Math.max(0, lastIdx - leftValley.idx);
-		if (formationBars < formingBars.minBars || formationBars > formingBars.maxBars) {
-			rejectForming('forming_bars_out_of_range');
-			continue;
-		}
-
-		const trend = validatePriorTrend(candles, leftValley.idx, lastIdx - leftValley.idx, 'down_or_sideways');
-		if (!trend.ok) {
-			ctx.debugCandidates.push({
-				type: 'double_bottom',
-				accepted: false,
-				reason: `prior_trend_mismatch:${trend.classification}`,
-				indices: [leftValley.idx, midPeak.idx, rightValley.idx, lastIdx],
-				points: [
-					{ role: 'valley1', idx: leftValley.idx, price: leftValley.price, isoTime: candles[leftValley.idx]?.isoTime },
-					{ role: 'peak', idx: midPeak.idx, price: midPeak.price, isoTime: candles[midPeak.idx]?.isoTime },
-					{
-						role: 'valley2',
-						idx: rightValley.idx,
-						price: rightValley.price,
-						isoTime: candles[rightValley.idx]?.isoTime,
-					},
-				],
-			});
-			continue;
-		}
-		if (trend.classification === 'insufficient_data') {
-			ctx.debugCandidates.push({
-				type: 'double_bottom',
-				accepted: true,
-				reason: 'prior_trend_insufficient_data',
-				indices: [leftValley.idx, midPeak.idx, rightValley.idx, lastIdx],
-			});
-		}
-
-		// 深さ検査（issue #169）。**完成済み double bottom と同じ `validateBottomSize` を、
-		// 同じ 3 点（すべて確定ピボット）に掛ける。** 形成中ダブルボトムの構成点は
-		// `leftValley` / `midPeak` / `rightValley` の 3 点だけで完成した L-H-L になっており、
-		// `currentPrice` は有効性判定（`forming_current_below_valley_zone`）と完成度にしか
-		// 使われない**構成点ではない**ので、完成済みと同一の点に同一の検査が掛かる。
-		//
-		// **上の `forming_pattern_height_below_min`（両脚チェック）は残す。** `validateBottomSize`
-		// の高さは `|leftValley − midPeak| / max(...)` ＝ **左脚しか見ない**ので、置き換えると
-		// 右脚の要求が消える。両脚チェックを残したうえで深さを足すと、`validateBottomSize` の
-		// 高さ（左脚 ≥ heightPct）は両脚チェックに包含されるため、ここで実際に発火しうるのは
-		// `peak_too_shallow` だけになる。結果として **形成中 ⊇ 完成済みの厳しさ**が成立し、
-		// 「形成中は通るのに完成した瞬間にサイズ検査で落ちる」候補が閉じる。
-		//
-		// 配置が最後なのは `validatePatternSize` の docstring の規約（「既存の棄却検査をすべて
-		// 通過した後」）に従ったもの。理由は {@link tryFormingDoubleTop} の同じ検査のコメント参照。
-		const sizeReason = validateBottomSize(leftValley, midPeak, rightValley, ctx.sizeThresholds);
-		if (sizeReason) {
-			rejectForming(formingSizeReason(sizeReason));
-			continue;
-		}
-
-		const gate = validateReversalStructure({
-			candles,
-			pivots: ctx.pivots,
-			first: leftValley,
-			mid: midPeak,
-			// 形成中ダブルボトムのネックラインは midPeak.price（下の neckline 配列と同じ値）
-			necklinePrice: midPeak.price,
-			side: 'bottom',
-		});
-		if (!gate.ok) {
-			ctx.debugCandidates.push({
-				type: 'double_bottom',
-				accepted: false,
-				reason: gate.reason,
-				indices: [leftValley.idx, midPeak.idx, rightValley.idx, lastIdx],
-				points: [
-					...(gate.priorExtreme
-						? [
-								{
-									role: 'prior_extreme',
-									idx: gate.priorExtreme.idx,
-									price: gate.priorExtreme.extremePrice,
-									isoTime: candles[gate.priorExtreme.idx]?.isoTime,
-								},
-							]
-						: []),
-					{ role: 'valley1', idx: leftValley.idx, price: leftValley.price, isoTime: candles[leftValley.idx]?.isoTime },
-					{ role: 'peak', idx: midPeak.idx, price: midPeak.price, isoTime: candles[midPeak.idx]?.isoTime },
-					{
-						role: 'valley2',
-						idx: rightValley.idx,
-						price: rightValley.price,
-						isoTime: candles[rightValley.idx]?.isoTime,
-					},
-				],
-			});
-			continue;
-		}
-
-		// 谷2 確定後の再下落（issue #126 G5）。ネックライン突破前に谷ゾーンへ戻っていたら
-		// ダブルとしては無効。同水準の第3の谷があれば triple 側に委ねる。
-		const post = checkPostPivotInvalidation({
-			candles,
-			pivots: ctx.pivots,
-			a: leftValley,
-			b: midPeak,
-			c: rightValley,
-			untilIdx: lastIdx,
-			side: 'bottom',
-		});
-		if (post.verdict === 'reclassify') {
-			ctx.debugCandidates.push({
-				type: 'double_bottom',
-				accepted: false,
-				reason: 'reclassified_as_triple_bottom',
-				indices: [leftValley.idx, midPeak.idx, rightValley.idx, lastIdx],
-			});
-			continue;
-		}
-
-		// 主構成点とネックラインの位置関係（issue #261）。主構成点は**確定 2 谷**で、`midPeak` は
-		// ネックラインの定義点そのものなので渡さない。検査水準は上の構造ゲート・下の `neckline`・
-		// `formDbTarget` と同じ `midPeak.price`。配置・根拠は `rejectFormingNecklineSide` の docstring。
-		if (
-			rejectFormingNecklineSide(
-				'bottom',
-				'double_bottom',
-				[leftValley, rightValley],
-				midPeak.price,
-				formingIdxs,
-				formingPts,
-				(arg) => pushCand(ctx, arg),
-			)
-		) {
-			continue;
-		}
-
-		// 期限切れ（issue #126 G4）。谷2 確定から突破探索窓を過ぎた候補は、以後
-		// `completed` になりようがない——`forming` を名乗らせない。
-		const barsSinceRightValley = lastIdx - rightValley.idx;
-		const terminal: { status: string; invalidReason: string } | null =
-			post.verdict === 'invalid'
-				? { status: 'invalid', invalidReason: post.reason }
-				: barsSinceRightValley > FORMING_EXPIRY_BARS
-					? { status: 'expired', invalidReason: 'forming_expired' }
-					: null;
-
-		const neckline = [
-			{ x: midPeak.idx, y: midPeak.price },
-			{ x: lastIdx, y: midPeak.price },
-		];
-		const confidence = Number(Math.min(1, 0.5 + 0.5 * progress).toFixed(2));
-		const start = isoAt(leftValley.idx);
-		const end = isoAt(lastIdx);
-		const formDbAvgValley = (leftValley.price + rightValley.price) / 2;
-		const formDbTarget = Math.round(midPeak.price + (midPeak.price - formDbAvgValley));
-		// 形成中ダブルボトムは確定済みの leftValley〜rightValley が構成点。
-		// 現在足は構成点に含めない（range は lastIdx までを含むが、structureRange は構成点に閉じる）
-		const structStart = isoAt(leftValley.idx);
-		const structEnd = isoAt(rightValley.idx);
-		const structureRange = structStart && structEnd ? { start: structStart, end: structEnd } : undefined;
-		const precedingTrend = buildPrecedingTrend(candles, trend, leftValley.idx);
-
-		const structureGate = buildStructureGate(gate);
-
-		// 成功エントリ（issue #158）。`status` は組み立て時点の値なので、`terminal` が付いた
-		// （= invalid / expired）ケースはその値を出す。'forming' 決め打ちにすると
-		// 「まだ形成中」と誤読させる。
-		pushCand(ctx, {
-			type: 'double_bottom',
-			accepted: true,
-			status: terminal ? terminal.status : 'forming',
-			idxs: formingIdxs,
-			pts: formingPts,
-		});
-
-		return {
-			type: 'double_bottom',
-			confidence,
-			scoreComponents: {
-				symmetry: Number(clamp01(1 - relDev(leftValley.price, rightValley.price)).toFixed(4)),
-				...(retracementScore(gate.retracementRatio) !== undefined
-					? { retracement: Number((retracementScore(gate.retracementRatio) as number).toFixed(4)) }
-					: {}),
-			},
-			...(structureGate ? { structureGate } : {}),
-			range: { start, end },
-			...(structureRange ? { structureRange } : {}),
-			confirmation: { type: 'not_confirmed' },
-			...(precedingTrend ? { precedingTrend } : {}),
-			status: terminal ? terminal.status : 'forming',
-			...(terminal ? { invalidReason: terminal.invalidReason } : {}),
-			pivots: [
-				{ idx: leftValley.idx, price: leftValley.price, kind: 'L' as const, extremePrice: leftValley.extremePrice },
-				{ idx: midPeak.idx, price: midPeak.price, kind: 'H' as const, extremePrice: midPeak.extremePrice },
-				{ idx: rightValley.idx, price: rightValley.price, kind: 'L' as const, extremePrice: rightValley.extremePrice },
-			],
-			neckline,
-			trendlineLabel: 'ネックライン',
-			breakoutTarget: formDbTarget,
-			targetMethod: 'neckline_projection' as const,
-			// 形成中は定義上ブレイクしていないので進捗は測れない。**それを言う**（#224 症状 2）——
-			// `breakoutTarget` は出るので、黙ると LLM が「進捗 0%」と読み違える。
-			...targetReachFields(omittedTargetReach('not_broken_out')),
-			completionPct: Math.round(completion * 100),
-			_method: 'forming_double_bottom',
-		};
-	}
-	return null;
-}
-
 // ── Main ──
 
 export function detectDoubles(ctx: DetectContext): DetectResult {
 	const { candles, pivots, tolerancePct, want, includeForming, near, minDist } = ctx;
 	const pcand: Pcand = (arg) => pushCand(ctx, arg);
+	// 未ブレイク構造（`near_completion` / `expired` / `invalid`）の期限・再進入の走査終端（issue #262）。
+	const lastIdx = candles.length - 1;
 	// strict 経路の同水準判定の実効値。`near`（tolerancePct）と `isSameLevel`
 	// （DOUBLE_LEVEL_MAX_PCT）が同じ量を見るので min が実効閾値になる
 	// （`rejectByLevelDiff` の docstring）。`details.levelTolerancePct` に載せるだけで、
@@ -1619,10 +1410,16 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					});
 					continue;
 				}
-				// ネックライン下抜け（終値ベース1.5%バッファ）必須
+				// ネックライン下抜け（終値ベース1.5%バッファ）。**未検出でも棄却しない**（issue #262）——
+				// 構造が揃っていてブレイクを待っている状態は `near_completion` として出す。
 				const necklinePrice = b.price;
 				const breakoutIdx = findBreakoutIdx(candles, c.idx, necklinePrice, 'below');
-				if (breakoutIdx < 0) {
+				const isCompleted = breakoutIdx >= 0;
+				// `includeForming` が false なら未ブレイクの構造は出力対象外
+				// （`detect_patterns.ts` のライフサイクル絞り込みでも落ちる）。
+				// **その場合は従来どおり `no_breakout` で棄却して抜ける**——出力に出ないものを
+				// 組み立てても `view=debug` の cap（#158 / #124）を食うだけで診断の役に立たない。
+				if (!isCompleted && !includeForming) {
 					pcand({
 						type: 'double_top',
 						accepted: false,
@@ -1636,7 +1433,13 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					});
 					continue;
 				}
-				const trend = validatePriorTrend(candles, a.idx, breakoutIdx - a.idx, 'up_or_sideways');
+				// 先行トレンドの参照終端。未ブレイクではブレイク足が無いので最新足まで見る。
+				const trend = validatePriorTrend(
+					candles,
+					a.idx,
+					(isCompleted ? breakoutIdx : lastIdx) - a.idx,
+					'up_or_sideways',
+				);
 				if (!trend.ok) {
 					pcand({
 						type: 'double_top',
@@ -1661,13 +1464,15 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 				}
 				const gate = applyStructuralGate(candles, pivots, 'top', a, b, c, necklinePrice, 'double_top', pcand);
 				if (!gate) continue;
+				// 未ブレイクでは走査終端が最新足になる（#126 G5 を `near_completion` へ引き継ぐ。
+				// `unbrokenStatusFields` の docstring）。
 				const post = checkPostPivotInvalidation({
 					candles,
 					pivots,
 					a,
 					b,
 					c,
-					untilIdx: breakoutIdx - 1,
+					untilIdx: isCompleted ? breakoutIdx - 1 : lastIdx,
 					side: 'top',
 				});
 				if (post.verdict === 'reclassify') {
@@ -1682,20 +1487,25 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 				if (rejectByLevelDiff('top', 'double_top', a, b, c, levelTolerancePct, pcand)) continue;
 				if (rejectByNecklineSide('top', 'double_top', a, b, c, necklinePrice, pcand)) continue;
 				// 最終構成点 → ブレイクの経路検証（issue #242）。既に `invalid` が付いている候補には掛けない。
+				// **未ブレイク（`near_completion`）にも掛けない**——検証する経路がまだ存在しない（#262）。
 				const pathTerminal =
-					post.verdict === 'ok'
+					isCompleted && post.verdict === 'ok'
 						? checkBreakoutPath({ pivots, side: 'top', type: 'double_top', a, b, c, breakoutIdx, pcand })
 						: null;
 				const start = candles[a.idx].isoTime;
-				const end = candles[breakoutIdx].isoTime;
+				// 未ブレイクの `range.end` は第2構成点（＝`structureRange.end`）。
+				// `detect_triples` の `near_completion` と同じ取り方。
+				const end = isCompleted ? candles[breakoutIdx]?.isoTime : candles[c.idx]?.isoTime;
 				if (!start || !end) continue;
 				const neckline = [
 					{ x: a.idx, y: necklinePrice },
-					{ x: breakoutIdx, y: necklinePrice },
+					{ x: isCompleted ? breakoutIdx : c.idx, y: necklinePrice },
 				];
 				const per = periodScoreDays(start, end);
 				const dtAvgPeak = (a.price + c.price) / 2;
-				const dtBp = Number(candles[breakoutIdx]?.close ?? NaN);
+				// 未ブレイクでは `NaN`。`breakoutQualityScore` は算出不能として軸から外れる
+				// （`scoring.ts` の docstring）。
+				const dtBp = isCompleted ? Number(candles[breakoutIdx]?.close ?? NaN) : NaN;
 				const { components: dtScoreComponents, base } = buildDoubleScore({
 					outer1: a.price,
 					outer2: c.price,
@@ -1719,17 +1529,24 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					{ tz: ctx.tz, type: ctx.type },
 				);
 				const dtTarget = Math.round(necklinePrice - (dtAvgPeak - necklinePrice));
-				// ブレイク足の終値が非有限なら**理由を名乗って**畳む（#224 症状 2）。
-				const dtReach = Number.isFinite(dtBp)
-					? computeTargetReach(candles, breakoutIdx, dtBp, dtTarget, 'down', dtAvgPeak - necklinePrice)
-					: omittedTargetReach('invalid_breakout_price');
+				// 未ブレイクなら進捗は測れない。**それを言う**（#224 症状 2）——`breakoutTarget` は
+				// 出るので、黙ると LLM が「進捗 0%」と読み違える。
+				// ブレイク足の終値が非有限なら**理由を名乗って**畳む（同）。
+				const dtReach = !isCompleted
+					? omittedTargetReach('not_broken_out')
+					: Number.isFinite(dtBp)
+						? computeTargetReach(candles, breakoutIdx, dtBp, dtTarget, 'down', dtAvgPeak - necklinePrice)
+						: omittedTargetReach('invalid_breakout_price');
 				const dtStructureRange =
 					candles[a.idx]?.isoTime && candles[c.idx]?.isoTime
 						? { start: candles[a.idx].isoTime as string, end: candles[c.idx].isoTime as string }
 						: undefined;
-				const dtConfirmation = buildNecklineConfirmation(candles, breakoutIdx);
+				const dtConfirmation = isCompleted
+					? buildNecklineConfirmation(candles, breakoutIdx)
+					: ({ type: 'not_confirmed' } as const);
 				const dtPrecedingTrend = buildPrecedingTrend(candles, trend, a.idx);
 				const dtStructureGate = buildStructureGate(gate);
+				const dtUnbroken = isCompleted ? null : unbrokenStatusFields({ post, lastPivotIdx: c.idx, lastIdx });
 				push(patterns, {
 					type: 'double_top',
 					confidence,
@@ -1739,29 +1556,34 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					...(dtStructureRange ? { structureRange: dtStructureRange } : {}),
 					...(dtConfirmation ? { confirmation: dtConfirmation } : {}),
 					...(dtPrecedingTrend ? { precedingTrend: dtPrecedingTrend } : {}),
-					...(post.verdict === 'invalid'
-						? { status: 'invalid' as const, invalidReason: post.reason }
-						: (pathTerminal ?? {})),
+					...(dtUnbroken ??
+						(post.verdict === 'invalid'
+							? { status: 'invalid' as const, invalidReason: post.reason }
+							: (pathTerminal ?? {}))),
 					pivots: [a, b, c],
 					neckline,
 					trendlineLabel: 'ネックライン',
-					breakout: { idx: breakoutIdx, price: dtBp },
-					breakoutBarIndex: breakoutIdx,
+					...(isCompleted ? { breakout: { idx: breakoutIdx, price: dtBp }, breakoutBarIndex: breakoutIdx } : {}),
 					breakoutTarget: dtTarget,
 					targetMethod: 'neckline_projection' as const,
 					...targetReachFields(dtReach),
 					structureDiagram: diagram,
 				});
-				foundDoubleTop = true;
+				// **`found` は完成済みだけで立てる。** これを未ブレイクでも立てると、strict が
+				// `near_completion` を 1 件出しただけで relaxed フォールバックが走らなくなり、
+				// 別の構成点で成立していた **completed な relaxed 候補が消える**。
+				if (isCompleted) foundDoubleTop = true;
 				pcand({
 					type: 'double_top',
 					accepted: true,
-					idxs: [a.idx, b.idx, c.idx, breakoutIdx],
+					// 未ブレイクは組み立て時点の status を出す（#158。'completed' と誤読させない）。
+					...(dtUnbroken ? { status: dtUnbroken.status } : {}),
+					idxs: isCompleted ? [a.idx, b.idx, c.idx, breakoutIdx] : [a.idx, b.idx, c.idx],
 					pts: [
 						{ role: 'peak1', idx: a.idx, price: a.price },
 						{ role: 'valley', idx: b.idx, price: b.price },
 						{ role: 'peak2', idx: c.idx, price: c.price },
-						{ role: 'breakout', idx: breakoutIdx, price: dtBp },
+						...(isCompleted ? [{ role: 'breakout', idx: breakoutIdx, price: dtBp }] : []),
 					],
 				});
 				continue;
@@ -1803,10 +1625,12 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					});
 					continue;
 				}
-				// ネックライン突破（終値ベース＋1.5%バッファ）を c 以降で確認
+				// ネックライン突破（終値ベース＋1.5%バッファ）を c 以降で確認。
+				// **未検出でも棄却しない**（issue #262。top 側と同じ扱い）。
 				const necklinePrice = b.price;
 				const breakoutIdx = findBreakoutIdx(candles, c.idx, necklinePrice, 'above');
-				if (breakoutIdx < 0) {
+				const isCompleted = breakoutIdx >= 0;
+				if (!isCompleted && !includeForming) {
 					pcand({
 						type: 'double_bottom',
 						accepted: false,
@@ -1820,7 +1644,12 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					});
 					continue;
 				}
-				const trend = validatePriorTrend(candles, a.idx, breakoutIdx - a.idx, 'down_or_sideways');
+				const trend = validatePriorTrend(
+					candles,
+					a.idx,
+					(isCompleted ? breakoutIdx : lastIdx) - a.idx,
+					'down_or_sideways',
+				);
 				if (!trend.ok) {
 					pcand({
 						type: 'double_bottom',
@@ -1851,7 +1680,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					a,
 					b,
 					c,
-					untilIdx: breakoutIdx - 1,
+					untilIdx: isCompleted ? breakoutIdx - 1 : lastIdx,
 					side: 'bottom',
 				});
 				if (post.verdict === 'reclassify') {
@@ -1866,20 +1695,21 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 				if (rejectByLevelDiff('bottom', 'double_bottom', a, b, c, levelTolerancePct, pcand)) continue;
 				if (rejectByNecklineSide('bottom', 'double_bottom', a, b, c, necklinePrice, pcand)) continue;
 				// 最終構成点 → ブレイクの経路検証（issue #242）。既に `invalid` が付いている候補には掛けない。
+				// **未ブレイク（`near_completion`）にも掛けない**——検証する経路がまだ存在しない（#262）。
 				const pathTerminal =
-					post.verdict === 'ok'
+					isCompleted && post.verdict === 'ok'
 						? checkBreakoutPath({ pivots, side: 'bottom', type: 'double_bottom', a, b, c, breakoutIdx, pcand })
 						: null;
 				const start = candles[a.idx].isoTime;
-				const end = candles[breakoutIdx].isoTime;
+				const end = isCompleted ? candles[breakoutIdx]?.isoTime : candles[c.idx]?.isoTime;
 				if (!start || !end) continue;
 				const neckline = [
 					{ x: a.idx, y: necklinePrice },
-					{ x: breakoutIdx, y: necklinePrice },
+					{ x: isCompleted ? breakoutIdx : c.idx, y: necklinePrice },
 				];
 				const per = periodScoreDays(start, end);
 				const dbAvgValley = (a.price + c.price) / 2;
-				const dbBp = Number(candles[breakoutIdx]?.close ?? NaN);
+				const dbBp = isCompleted ? Number(candles[breakoutIdx]?.close ?? NaN) : NaN;
 				const { components: dbScoreComponents, base } = buildDoubleScore({
 					outer1: a.price,
 					outer2: c.price,
@@ -1903,17 +1733,22 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					{ tz: ctx.tz, type: ctx.type },
 				);
 				const dbTarget = Math.round(necklinePrice + (necklinePrice - dbAvgValley));
-				// ブレイク足の終値が非有限なら**理由を名乗って**畳む（#224 症状 2）。
-				const dbReach = Number.isFinite(dbBp)
-					? computeTargetReach(candles, breakoutIdx, dbBp, dbTarget, 'up', necklinePrice - dbAvgValley)
-					: omittedTargetReach('invalid_breakout_price');
+				// 未ブレイク / ブレイク足の終値が非有限——どちらも**理由を名乗って**畳む（#224 症状 2）。
+				const dbReach = !isCompleted
+					? omittedTargetReach('not_broken_out')
+					: Number.isFinite(dbBp)
+						? computeTargetReach(candles, breakoutIdx, dbBp, dbTarget, 'up', necklinePrice - dbAvgValley)
+						: omittedTargetReach('invalid_breakout_price');
 				const dbStructureRange =
 					candles[a.idx]?.isoTime && candles[c.idx]?.isoTime
 						? { start: candles[a.idx].isoTime as string, end: candles[c.idx].isoTime as string }
 						: undefined;
-				const dbConfirmation = buildNecklineConfirmation(candles, breakoutIdx);
+				const dbConfirmation = isCompleted
+					? buildNecklineConfirmation(candles, breakoutIdx)
+					: ({ type: 'not_confirmed' } as const);
 				const dbPrecedingTrend = buildPrecedingTrend(candles, trend, a.idx);
 				const dbStructureGate = buildStructureGate(gate);
+				const dbUnbroken = isCompleted ? null : unbrokenStatusFields({ post, lastPivotIdx: c.idx, lastIdx });
 				push(patterns, {
 					type: 'double_bottom',
 					confidence,
@@ -1923,23 +1758,25 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					...(dbStructureRange ? { structureRange: dbStructureRange } : {}),
 					...(dbConfirmation ? { confirmation: dbConfirmation } : {}),
 					...(dbPrecedingTrend ? { precedingTrend: dbPrecedingTrend } : {}),
-					...(post.verdict === 'invalid'
-						? { status: 'invalid' as const, invalidReason: post.reason }
-						: (pathTerminal ?? {})),
+					...(dbUnbroken ??
+						(post.verdict === 'invalid'
+							? { status: 'invalid' as const, invalidReason: post.reason }
+							: (pathTerminal ?? {}))),
 					pivots: [a, b, c],
 					neckline,
 					trendlineLabel: 'ネックライン',
-					breakout: { idx: breakoutIdx, price: dbBp },
-					breakoutBarIndex: breakoutIdx,
+					...(isCompleted ? { breakout: { idx: breakoutIdx, price: dbBp }, breakoutBarIndex: breakoutIdx } : {}),
 					breakoutTarget: dbTarget,
 					targetMethod: 'neckline_projection' as const,
 					...targetReachFields(dbReach),
 					structureDiagram: diagram,
 				});
-				foundDoubleBottom = true;
+				// `found` を完成済みだけで立てる理由は double_top 側の同じ箇所を参照。
+				if (isCompleted) foundDoubleBottom = true;
 				pcand({
 					type: 'double_bottom',
 					accepted: true,
+					...(dbUnbroken ? { status: dbUnbroken.status } : {}),
 					idxs: [a.idx, b.idx, c.idx],
 					pts: [
 						{ role: 'valley1', idx: a.idx, price: a.price },
@@ -1962,6 +1799,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					ctx.sizeThresholds,
 					ctx.tz,
 					ctx.type,
+					includeForming,
 				);
 				if (result) {
 					push(patterns, result);
@@ -1979,6 +1817,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					ctx.sizeThresholds,
 					ctx.tz,
 					ctx.type,
+					includeForming,
 				);
 				if (result) {
 					push(patterns, result);
@@ -1990,12 +1829,15 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 		patterns = deduplicatePatterns(patterns);
 	}
 
-	// 2b) 形成中ダブルトップ/ボトム
-	if (includeForming && (want.size === 0 || want.has('double_top') || want.has('double_bottom'))) {
+	// 2b) 形成中ダブルトップ（「2 つ目の山を作っている途中」）。
+	//
+	// **ダブルボトム側の対応物は無い。** `tryFormingDoubleBottom` は「構造が揃ってブレイクを
+	// 待っている」段階を `status: 'forming'` という誤ラベルで出しており（同じ語が top と別の段階を
+	// 指していた）、その段階は上の完成済み経路の `near_completion` になったので issue #262 で削除した。
+	// bottom 側で「最終構成点が形成中」を出すかは #268 の論点。
+	if (includeForming && (want.size === 0 || want.has('double_top'))) {
 		const formingTop = tryFormingDoubleTop(ctx);
 		if (formingTop) push(patterns, formingTop);
-		const formingBottom = tryFormingDoubleBottom(ctx);
-		if (formingBottom) push(patterns, formingBottom);
 	}
 
 	return { patterns, found: { double_top: foundDoubleTop, double_bottom: foundDoubleBottom } };
