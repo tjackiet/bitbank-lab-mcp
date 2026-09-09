@@ -643,6 +643,29 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 `tests/patterns/neckline-side-hs.test.ts`（H&S 系。形成中に配線が無いことのトリップワイヤを含む）が
 固定している。
 
+### 形成中 triple の同水準判定に高さ相対のゲートは無い（#178 項目 1。意図的）
+
+形成中 `triple_top` / `triple_bottom` の同水準判定は**価格相対の 1 段だけ**
+（`tolerancePct × FORMING_TOLERANCE_MULTIPLIER × FORMING_LEVEL_SPREAD_FACTOR`）で、完成済み
+4 経路が持つ**高さ相対の hard gate**（`MAX_LEVEL_SPREAD_RATIO` = 0.5。`tools/patterns/structural.ts` の
+`validateLevelSpread`）に当たる段が無い。**未配線ではなく実測に基づく不採用**で、
+[#178 項目 1 の決定](https://github.com/tjackiet/bitbank-lab-mcp/issues/178#issuecomment-5599895375)（2026-09-09、案 C）による。
+#261 / #263 の配線後に測ると、accepted な形成中 triple 43 実体のうち 17 実体が 0.5 を超えるが、
+うち 12 実体は他ゲートの仕事（ネックライン誤側 8 / 誤側との差 0.15% 未満 3 / 単調だが閾値の直下 1）で
+別の終端窓で生き残っているものであり、配線するとそれらを「高さ相対」の理由コードで落として**帰属が誤る**。
+単独で拾う残り 5 実体のうち **3 実体は目視で妥当なトリプル**なので、入れると妥当な形を落とす。
+したがって**「形成中 ⊇ 完成済みの厳しさ」の破れはここに残る**が、見落としではない。再開条件は
+高さ相対ゲートが単独で拾う実体に「呼べない」が積み上がる実データが出たときで、根拠と数字は
+`tools/patterns/detect_triples.ts` の `FORMING_LEVEL_SPREAD_FACTOR` の docstring と
+[docs/internal/forming-triple-level-spread-178.md](internal/forming-triple-level-spread-178.md) にある。
+
+**「形成中は完成済みより緩い」を一般則として読まないこと。** #169 / PR #170 でサイズ検査を揃えたときに
+整理したとおり、緩めてよいのは**「同水準かの判定」**（3 点目が最新足の終値で暫定なぶんノイズが残る）で
+あって**「形と呼べる大きさか」ではない**——形成中 double のサイズ検査は #170 で完成済みと同じに揃えて
+あり、形成中 triple も単調性ゲート（#263）とネックライン側の検査（#261）は完成済みと同等以上に厳しい。
+本件が緩いままなのは前者に属するからではなく、**上の実測で「配線すると帰属が誤り妥当な形を落とす」ことが
+示されたから**である。
+
 ### 反転パターンのサイズ検査は高安基準（#130 / #138）
 
 構造ゲートとは別に、`double_top` / `double_bottom` / `triple_top` / `triple_bottom` /

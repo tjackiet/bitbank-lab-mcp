@@ -70,6 +70,40 @@
 | 55 | #244 Phase 2 | H&S / 逆 H&S の**肩の同水準判定**を時間足別にした（`getHsShoulderMaxPctForTf`。`1day` の 5% をアンカーに `getSizeThresholdsForTf` と同じ ATR 比。`1hour` = 1.04%）。**適用先は肩ゲートだけで、窓生成（`outerShoulderOk`）は 5% のまま**（診断性）。`DOUBLE_LEVEL_MAX_PCT` / `tolerancePct` は動かさない | `1day` 未満で**減る**（1,344 ケースで `inverse_head_and_shoulders` **構造単位で −23**。**全件が `1hour` × strict 経路**。`1day` 以上・`double_*` / `triple_*` / `head_and_shoulders` は全コーパスで 0 件差。**増加 0**） |
 | 56 | #261 | `validateMainPointsNecklineSide`（#216 Phase 2）を**形成中**の triple / double 4 経路へ配線した。**閾値を 1 つも導入していない**（完成済みと同じ判定関数を共有し、理由コードだけ `forming_` 接頭辞で分ける）。`FORMING_*` 係数 / `tolerancePct` / `MAX_LEVEL_SPREAD_RATIO` は不変 | 実データ 1hour で**減る**（12,104 ケースで accepted な形成中 triple が延べ 7,581 → 5,818 / 実体 48 → 43）。**標準コーパス 800 は全候補の JSON が完全一致で 0 件差**。形成中 double の `forming` は延べ 73 で不変（減るのは `expired` 側 1,925 → 1,182） |
 | 57 | #263 | 形成中 triple の**単調性ゲートを両向き**にした（`triple_top` の切り下がり / `triple_bottom` の切り上がりが素通りしていた）。**閾値 `FORMING_STAIR_STEP_LIMIT`（2%）は据え置き**で、見る向きを増やしただけ | 実データ 1hour で**わずかに減る**（12,104 ケースで accepted な形成中 triple が延べ 5,818 → 5,763 / 実体 43 のまま）。**標準コーパス 800 の `data.patterns` は 1 ケースも動かない**（動くのは `view=debug` の理由コードの帰属だけ） |
+| 58 | #178 項目 1 | **形成中 triple への高さ相対ゲートは案 C（不採用）で決着。文書化のみ。** #261 / #263 で帰属を正した後の残差 17 実体のうち 12 実体が他ゲートの仕事、単独で拾う 5 実体のうち 3 実体が目視で妥当なトリプル。配線すると帰属が誤り妥当な形を落とす。**#178 の 4 項目すべてが決着し issue はクローズ** | **変わらない**（docstring / docs / 内部メモのみ。コードのロジックは 1 行も触っていない） |
+
+### Docs（#178 項目 1: 形成中 triple への高さ相対ゲートは案 C（不採用）で決着。#178 クローズ）
+
+**コードのロジックは 1 行も変えていない。** 形成中 `triple_top` / `triple_bottom` の同水準判定に
+高さ相対の hard gate（`validateLevelSpread` / `MAX_LEVEL_SPREAD_RATIO` = 0.5）を**入れない**という
+決定（[#178 項目 1 の決定コメント](https://github.com/tjackiet/bitbank-lab-mcp/issues/178#issuecomment-5599895375)、
+案 C）を、次に読む人が「見落とし」と誤読しないよう文書に落とした。
+
+根拠は #261（PR #264）/ #263（PR #265）で帰属を正した後の残差 **17 実体**:
+
+| 残差 17 実体の内訳 | 実体 |
+|---|---:|
+| 本来は他ゲートの仕事（ネックライン誤側 8 / 誤側との差 0.15% 未満 3 / 単調だが閾値の直下 1）で、別の終端窓で生き残っているもの | 12 |
+| 高さ相対ゲートが単独で拾うもの | 5 |
+| うち目視（PR #260 §8）で「**呼べる**」 | **3** |
+
+配線すると 12 実体を「高さ相対」の理由コードで落として**帰属が誤り**（#178 項目 3 と同じ失敗の形）、
+単独で拾う 5 実体のうち 3 実体は**妥当な形なので巻き添えにする**。分布に空白帯が無いので
+閾値を緩める案（案 B）にも根拠が無い。**「形成中 ⊇ 完成済みの厳しさ」の破れは残るが、
+設計判断としての不採用であって見落としではない。**
+
+- `tools/patterns/detect_triples.ts` — `FORMING_LEVEL_SPREAD_FACTOR` の docstring に決定・実測値・
+  再開条件を書き、形成中 2 経路（`tryFormingTripleTop` / `tryFormingTripleBottom`）の docstring から
+  `{@link}` で辿れるようにした
+- `docs/tools.md` — 形成中の節に 1 段落。**「形成中は完成済みより緩い」を一般則として読まない**ための
+  注記（緩めてよいのは「同水準かの判定」であって「形と呼べる大きさか」ではない。#169 / PR #170 の整理）を併記
+- `docs/internal/forming-triple-level-spread-178.md` — 末尾に「決定」節（§11）。#261 / #263 の残差メモへのリンク付き
+
+**再開条件**: 高さ相対ゲートが単独で拾う実体に「呼べない」が積み上がる実データが出たとき。
+`scripts/measure_forming_triple_level_spread_178.ts` を再実行して残差の内訳を出し直す。
+
+**これで #178 の 4 項目がすべて決着**（項目 1: 案 C 不採用 / 項目 2: PR #187 で `MAX_VALLEY_SPREAD` 削除 /
+項目 3: 変更不要 / 項目 4: PR #195 で double へ配線）。
 
 ### Changed（形成中 triple の単調性ゲートを両向きにする。#263）
 
