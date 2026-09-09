@@ -562,6 +562,62 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 
 契約は `tests/patterns/structural-gates-btcjpy.test.ts`（実データ fixture）が固定している。
 
+### 主構成点とネックラインの位置関係（#216 / #261）
+
+反転パターンは、上の構造ゲートとは別に**主構成点がネックラインの正しい側にあるか**を見る。
+`top` は全主構成点が `price > necklinePrice`、`bottom` は `price < necklinePrice` を要求する。
+**等号は失格**で、許容幅（つまみ）は無い。
+
+#### 配線されている経路
+
+| 種別 | 完成済み | 形成中 | 比較相手 |
+|---|---|---|---|
+| `double_*` / `triple_*` | ✅（#216 Phase 2） | ✅（#261） | **水平スカラー** 1 つ（`validateMainPointsNecklineSide`） |
+| `head_and_shoulders` / `inverse_head_and_shoulders` | ✅（#216 の H&S 分。#211 マージ後） | **未配線** | **点ごとの線の値** `necklineAt(idx)`（`validateMainPointsAgainstNecklineAt`） |
+
+**H&S 系だけ比較相手が違うのは、ネックラインが傾きを持ち、肩が定義 2 点の外側に来て外挿が
+かかるため。** triple / double のネックラインは水平なので線として評価しても同じ値になり、
+スカラー 1 つで足りる。#216 Phase 2 の時点では #211（`necklineAt` の外挿クランプ）の是非が
+決まっておらず H&S 系を保留していたが、**#211 マージ後に線基準の別関数で配線済み**。
+**形成中 H&S / 逆 H&S は今も未配線**（暫定右肩が確定していないため。`detect_hs.ts` に呼び出しが
+無いことを `tests/patterns/neckline-side-hs.test.ts` のトリップワイヤが固定している）。
+
+#### 理由コード
+
+| 理由コード | 経路 | 意味 |
+|---|---|---|
+| `peaks_below_neckline` | 完成済み（double / triple / H&S 系） | (top) 主構成点（山）のいずれかがネックライン以下 |
+| `valleys_above_neckline` | 完成済み（同上） | (bottom) 主構成点（谷）のいずれかがネックライン以上 |
+| `forming_peaks_below_neckline` | 形成中（double / triple のみ） | 同上（`view=debug` の `▼ reason 横断合計` で完成済みと混ざらないよう語彙を分けてある） |
+| `forming_valleys_above_neckline` | 形成中（同上） | 同上 |
+
+完成済みの 2 コードは**スカラー版と線版で共通**（判定の意味が同じなので分けていない）。
+
+#### `details`（`view=debug`）
+
+**どの点がどれだけ外れたか**が 1 点ずつ載る（`offenders[].deviation` / `deviationPct` /
+`maxDeviation`）。ネックライン水準の出方だけがスカラー版と線版で違う。
+
+| | `necklinePrice` |
+|---|---|
+| スカラー版（double / triple） | **トップレベルに 1 つ** |
+| 線版（H&S 系） | **offender ごと**（点ごとに比較相手が違うので、代表値 1 つを載せると誤読される） |
+
+#### そのほか
+
+- **価格基準は `price`（終値）。** ネックライン自体が終値から作られており、ブレイク判定も終値なので、
+  高安を突き合わせると基準が混ざる。
+- **主構成点だけを渡す。** double の中間構成点はネックラインの定義点そのもの（`necklinePrice = b.price`）
+  なので、検査に含めると必ず失格になる。triple は 3 点すべてが主構成点。
+- **形成中 `double_top` だけは 2 つの検査で分担する。** 最新足の側は既存の
+  `forming_current_at_or_below_valley`（`currentPrice <= valley.price`）が同じ判定を担っており、
+  `forming_peaks_below_neckline` が見るのは確定側の山 1 点だけ。
+
+契約は `tests/patterns/neckline-side-triple-double.test.ts`（完成済み double / triple）、
+`tests/patterns/neckline-side-forming-triple-double.test.ts`（形成中 double / triple）、
+`tests/patterns/neckline-side-hs.test.ts`（H&S 系。形成中に配線が無いことのトリップワイヤを含む）が
+固定している。
+
 ### 反転パターンのサイズ検査は高安基準（#130 / #138）
 
 構造ゲートとは別に、`double_top` / `double_bottom` / `triple_top` / `triple_bottom` /

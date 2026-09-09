@@ -21,7 +21,11 @@
  *    ——H&S 側は別関数（`validateMainPointsAgainstNecklineAt`）で、回帰は
  *    `neckline-side-hs.test.ts` が持つ
  *
- * **形成中経路は対象外**（別式・別構造で、ネックラインの引き方も暫定構成点の扱いも違う）。
+ * **形成中経路は本ファイルの対象外。** #216 Phase 2 のスコープが完成済み 4 経路だったため。
+ * 形成中 4 経路への配線は **issue #261** で入り、回帰は
+ * `tests/patterns/neckline-side-forming-triple-double.test.ts` が持つ（理由コードは
+ * `forming_` 接頭辞付きの別語彙なので、本ファイルの期待値とは 1 つも重ならない）。
+ *
  * 4 の実データケースが `view=debug` の候補を見るのは、落ちた候補が `data.patterns` に
  * 残らないため——**「消えたこと」だけでは理由コードと逸脱量を検算できない。**
  */

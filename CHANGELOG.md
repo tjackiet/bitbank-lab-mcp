@@ -68,6 +68,90 @@
 | 53 | #242 PR 1/2 | `double_*` の**完成済み 4 経路**に「最終構成点（山2 / 谷2）とネックライン突破バーの**間**に同種のピボットがあれば `invalid`」という経路検証を足した。**閾値を 1 つも導入していない**（水準を問わない 0/1 判定）。triple / H&S への配線は PR 2 | 実データ C / D で**減る**（1,088 ケースで `double_top` 延べ −16（C・1 構造）/ −24（D・2 構造）。標準コーパス・実データ B は 0 件。**増加 0**） |
 | 54 | #242 PR 2/2 | 同じ経路検証を `triple_*` / H&S 系の**完成済み 4 経路ずつ**へ配線し、あわせて double にしかなかった**谷（山）ゾーン再進入チェック**（`detectTroughZoneReentry`）を triple / H&S へ横展開した（#131 → #138 の構造ゲート横展開から漏れていた分の回収） | 実データ C / D で**減る**（どちらの窓でも `head_and_shoulders` 延べ −56 / `triple_top` −12。標準コーパスは **type 別の増減 0** で 20 行が入れ替わり、実データ B は 0 件。**増加 0**） |
 | 55 | #244 Phase 2 | H&S / 逆 H&S の**肩の同水準判定**を時間足別にした（`getHsShoulderMaxPctForTf`。`1day` の 5% をアンカーに `getSizeThresholdsForTf` と同じ ATR 比。`1hour` = 1.04%）。**適用先は肩ゲートだけで、窓生成（`outerShoulderOk`）は 5% のまま**（診断性）。`DOUBLE_LEVEL_MAX_PCT` / `tolerancePct` は動かさない | `1day` 未満で**減る**（1,344 ケースで `inverse_head_and_shoulders` **構造単位で −23**。**全件が `1hour` × strict 経路**。`1day` 以上・`double_*` / `triple_*` / `head_and_shoulders` は全コーパスで 0 件差。**増加 0**） |
+| 56 | #261 | `validateMainPointsNecklineSide`（#216 Phase 2）を**形成中**の triple / double 4 経路へ配線した。**閾値を 1 つも導入していない**（完成済みと同じ判定関数を共有し、理由コードだけ `forming_` 接頭辞で分ける）。`FORMING_*` 係数 / `tolerancePct` / `MAX_LEVEL_SPREAD_RATIO` は不変 | 実データ 1hour で**減る**（12,104 ケースで accepted な形成中 triple が延べ 7,581 → 5,818 / 実体 48 → 43）。**標準コーパス 800 は全候補の JSON が完全一致で 0 件差**。形成中 double の `forming` は延べ 73 で不変（減るのは `expired` 側 1,925 → 1,182） |
+
+### Changed（主構成点とネックラインの位置関係の検査を形成中経路へ配線する。#261）
+
+`validateMainPointsNecklineSide`（#216 Phase 2）は**完成済み 4 経路にしか配線されておらず**、
+形成中経路は主構成点がネックラインの誤側にあっても素通りしていた。#178 項目 1 Phase 1（PR #260）の
+実測で、accepted な形成中 triple **48 実体のうち 37 実体**（2,698 延べ / 86 構造）が誤側だったため、
+#178 の中間決定（案 A′「先に帰属を正してから残差で判断する」）に従って本 PR で配線した。
+
+| 経路 | 主構成点 | ネックライン水準 | 新しい理由コード |
+|---|---|---|---|
+| `tryFormingTripleTop` | `peak1` / `peak2` / 最新足 | `avgValley`（2 谷の終値平均） | `forming_peaks_below_neckline` |
+| `tryFormingTripleBottom` | `valley1` / `valley2` / 最新足 | `avgPeakPrice`（2 山の終値平均） | `forming_valleys_above_neckline` |
+| `tryFormingDoubleTop` | **`leftPeak` のみ**（後述） | `valley.price` | `forming_peaks_below_neckline` |
+| `tryFormingDoubleBottom` | 確定 2 谷 | `midPeak.price` | `forming_valleys_above_neckline` |
+
+**ネックライン水準は「その経路が `neckline` 配列と `breakoutTarget` に使っている値」と同じにした。**
+別の線で検査してもゲートの意味が無い（`ReversalStructureInput.necklinePrice` の docstring）。
+最新足は確定ピボットではないので `{ idx, price: 終値 }` を組んで渡す（#169 の idiom）——
+`validateMainPointsNecklineSide` は `Pick<Pivot, 'idx' | 'price'>` しか見ないので `extremePrice` は要らない。
+
+#### `tryFormingDoubleTop` は 2 つの検査で主構成点 2 点を分担する
+
+既存の `forming_current_at_or_below_valley`（`currentPrice <= valley.price` で棄却）は、
+`necklinePrice = valley.price` に対する top 側の要求（`price > necklinePrice`）と**同値**——
+すなわち最新足に対するネックライン側検査そのものだった。本ゲートが見るのは残る `leftPeak` 1 点だけで、
+**2 つを 1 つの理由コードに統合していない**（#158 のテストが名前を固定しており、統合すると
+`view=debug` で「どちらの点が誤側だったか」も読めなくなる）。
+
+形成中 double の主構成点の取り方が top / bottom で非対称（top は最新足を含み、bottom は確定 2 谷）
+なのは #262 の対象で、**本 PR では現状のまま**扱っている。
+
+#### 理由コードは新設（完成済みの語彙を流用しない）
+
+`view=debug` の候補一覧は完成済みと形成中の棄却が同じ配列に並ぶ。同名だと
+**#193 / PR #194 の `▼ reason 横断合計`（type を畳んで reason だけで合算する行）で
+完成済みと形成中が 1 つの数字に潰れる。** 形成中の既存コードが `forming_` 接頭辞で
+揃っているのにも合わせた。写像は `structural.ts` の `formingNecklineSideReason` が単一ソースで、
+テンプレートリテラルを検出器側で手書きしていない。
+
+#### 配置は「既存の棄却検査をすべて通過した後」
+
+完成済み 4 経路と同じ規約（`validatePatternSize` の docstring）。triple はサイズ検査と構造ゲートの後、
+double は構造ゲート（bottom はさらに `checkPostPivotInvalidation`）の後。
+**12,104 ケースの実測で、新設 2 コード以外の理由コードが減ったケースは 1 件も無い**
+（増加は棄却の `continue` でループが先のペアまで回るぶんで正常）。
+
+#### 実測（`scripts/measure_forming_triple_level_spread_178.ts` の §6）
+
+配線前は同スクリプトの strip ビルド（`rejectFormingNecklineSide` の本体先頭に `return false;` を
+差し込んだ複製）で再現し、strip ビルドで新理由コードが 1 件も発火しないことを検算している。
+`main` d86fb2b をそのまま走らせた出力とも主要指標が全一致する。
+
+| 指標 | 配線前 | 配線後 |
+|---|---:|---:|
+| accepted な形成中 triple（延べ / 構造 / 実体） | 7,581 / 111 / **48** | 5,818 / 99 / **43** |
+| うち `spreadRatio > 0.5` の実体 | **34** | **18** |
+| 配線前に accepted かつ誤側だった延べ | 2,698 | **0**（取りこぼしゼロ） |
+| accepted な形成中 double（`forming` の延べ / 構造 / 実体） | 73 / 6 / 4 | **73 / 6 / 4**（集合が完全一致） |
+| 標準コーパス 800 | — | **全候補の JSON が完全一致（0 件差）** |
+
+減るのは実データ 1hour だけで、**合成 fixture は 1 バイトも動かない**。
+`view=debug` の cap（200）への影響は、新理由コードが飽和ケースでも **66.7〜100%** が cap 内に残る
+（押し出されるのは既存の棄却理由側で、飽和ケース数の増加は最大 +30 / 3,672）。
+
+#### #178 の §8（目視判定）との突き合わせ
+
+**依頼時の見込み（誤側 24 実体が落ち、残り 10 実体が残る）は実体単位では成立しない。**
+実体は延べの OR で生き残るためで、内訳は [`docs/internal/forming-neckline-side-261.md`](docs/internal/forming-neckline-side-261.md) §2。
+
+| §8 の分類 | 実体 | `spreadRatio > 0.5` が残るか |
+|---|---:|---|
+| (N) ネックライン誤側（代表窓） | 24 | 16 が落ち、**8 が残る** |
+| 呼べない 6 / 保留 1 / 呼べる 3（誤側ではない） | 10 | **10 とも残る**（見込みどおり） |
+
+**#178 項目 1 Phase 2 の残差は 10 実体ではなく 18 実体。**
+
+#### 既存テストの更新
+
+`tests/detect_patterns_triple_neckline_pivots_btcjpy.test.ts`（#224 症状 3 の実データ回帰）が
+使っていた forming `triple_bottom`（実データ B の `1hour` / 313-331-364）は、**暫定の 3 谷目が
+ネックラインより 162,908.5 円（1.28%）上**にあり本ゲートで落ちるようになった。
+`pivots` の 4 点契約は同じ fixture の `4hour` に残る forming `triple_top`（294-305-308-331）で
+引き続き実データで押さえ、**消えた理由も同ファイルで理由コード付きで固定した。**
 
 ### Changed（H&S / 逆 H&S の肩の同水準判定を時間足別にする。#244 Phase 2）
 

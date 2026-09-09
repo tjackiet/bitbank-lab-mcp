@@ -856,14 +856,19 @@ export interface MainPointNecklineSideResult {
  * 最小 0.012%（31 円）のようなゼロ近傍の集団は triple / double には無いので、
  * **閾値を置かずにゼロ許容で切れる**。
  *
- * ## 適用範囲は triple / double のみ（H&S 系には配線しない）
+ * ## 本関数（スカラー版）の適用範囲は triple / double のみ
  *
- * H&S 系は**構造ゲートにスカラーを渡し、ブレイク判定には傾きつきの線**を使う
- * （右肩は線の定義 2 点の外側にあるため外挿がかかる）。同じ構造がスカラー基準では
- * 「上に外れ」、線基準では「下に収まる」という反転が実際に起きており、
- * **#211（`necklineAt` の外挿クランプ）の是非が決まるまで基準を決められない**
- * （#216 Phase 1 の結論 2 / 3）。triple / double のネックラインは**水平スカラー**なので
- * 線として評価しても同じ値になり、この依存が無い。
+ * **H&S 系に配線されていないのは本関数であって、検査そのものではない。** あちらは
+ * {@link validateMainPointsAgainstNecklineAt}（**線版**。点ごとに `necklineAt(idx)` と比べる）で
+ * **完成済み 4 経路に配線済み**（#216 の H&S 分。形成中 2 経路は今も未配線）。
+ *
+ * 分かれている理由: H&S 系は**ブレイク判定に傾きつきの線**を使う（右肩は線の定義 2 点の外側に
+ * あるため外挿がかかる）。同じ構造がスカラー基準では「上に外れ」、線基準では「下に収まる」という
+ * 反転が実際に起きるので、**#211（`necklineAt` の外挿クランプ）が入るまで基準を決められなかった**
+ * （#216 Phase 1 の結論 2 / 3）。#211 マージ後に線版で配線した。
+ *
+ * triple / double のネックラインは**水平スカラー**なので線として評価しても同じ値になり、
+ * この依存が無い。だから本関数（スカラー 1 つを受け取る形）で足りる。
  *
  * ## 呼び出し位置
  *
@@ -920,6 +925,33 @@ export function necklineSideDetailsFrom(
 		// `Math.max()` を呼ぶと `-Infinity` が `details` に載るので明示的に潰す。
 		maxDeviation: offenders.length ? Math.max(...offenders.map((o) => o.deviation)) : null,
 	};
+}
+
+/**
+ * {@link MainPointNecklineSideRejectReason} の**形成中パス版**（issue #261）。
+ *
+ * 語彙を分ける理由は `detect_doubles.ts` の `formingSizeReason` と同じで、`view=debug` の候補一覧は
+ * 完成済みと形成中の棄却が**同じ配列に並ぶ**ため、同名だとどちらの経路で落ちたかが読めない。
+ * さらに #193 / PR #194 の **`▼ reason 横断合計`（type を畳んで reason だけで合算する行）**で
+ * 完成済みと形成中が 1 つの数字に潰れる。形成中の既存の理由コードが `forming_` 接頭辞で
+ * 揃っている（`forming_bars_out_of_range` 等）のにも合わせてある。
+ *
+ * **判定そのものは完成済みとまったく同じ**（{@link validateMainPointsNecklineSide} を共有する）。
+ * 分かれているのはラベルだけで、閾値も基準価格も経路で変えていない。
+ */
+export type FormingMainPointNecklineSideRejectReason = `forming_${MainPointNecklineSideRejectReason}`;
+
+/**
+ * {@link validateMainPointsNecklineSide} の理由コードを形成中パス用へ写す（issue #261）。
+ * 写像先の語彙と、分けてある理由は {@link FormingMainPointNecklineSideRejectReason} を参照。
+ *
+ * **形成中 2 検出器（`detect_triples.ts` / `detect_doubles.ts`）が共有する。** 各ファイルで
+ * テンプレートリテラルを手書きすると、片方だけ改名しても型が通ってしまう。
+ */
+export function formingNecklineSideReason(
+	reason: MainPointNecklineSideRejectReason,
+): FormingMainPointNecklineSideRejectReason {
+	return `forming_${reason}`;
 }
 
 /**

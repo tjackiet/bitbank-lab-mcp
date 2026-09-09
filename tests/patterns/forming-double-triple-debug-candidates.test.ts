@@ -28,6 +28,13 @@ import { FORMING_MIN_COMPLETION as TRIPLE_MIN_COMPLETION } from '../../tools/pat
 import type { CandDebugEntry, DetectContext, PatternEntry } from '../../tools/patterns/types.js';
 import { pushCand } from '../../tools/patterns/types.js';
 import { buildBtcJpy2026Candles } from '../fixtures/btc_jpy_1day_2026.js';
+import {
+	formingDoubleBottomRows,
+	formingDoubleTopRows,
+	formingTripleTopRows,
+	mirrorRows,
+	rowsToCandles,
+} from '../fixtures/forming_neckline_side_261.js';
 
 type Candle = {
 	isoTime: string;
@@ -400,6 +407,30 @@ describe('forming double / triple debug candidates (#158)', () => {
 							[7, 103.8],
 						]),
 					),
+			},
+			// issue #261: 主構成点とネックラインの位置関係。**4 経路すべてに配線されている**ことを
+			// この表で機械的に固定する（合成 fixture は `tests/fixtures/forming_neckline_side_261.ts`。
+			// 最小対の対照系列・`details` の中身・実データの実例は
+			// `neckline-side-forming-triple-double.test.ts` が持つ）。
+			{
+				reason: 'forming_peaks_below_neckline',
+				type: 'triple_top',
+				candles: () => rowsToCandles(formingTripleTopRows(98.4)),
+			},
+			{
+				reason: 'forming_valleys_above_neckline',
+				type: 'triple_bottom',
+				candles: () => rowsToCandles(mirrorRows(formingTripleTopRows(98.4))),
+			},
+			{
+				reason: 'forming_peaks_below_neckline',
+				type: 'double_top',
+				candles: () => rowsToCandles(formingDoubleTopRows()),
+			},
+			{
+				reason: 'forming_valleys_above_neckline',
+				type: 'double_bottom',
+				candles: () => rowsToCandles(formingDoubleBottomRows()),
 			},
 			{
 				reason: 'forming_completion_below_min',

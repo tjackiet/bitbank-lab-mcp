@@ -13,6 +13,7 @@ import {
 	DOUBLE_LEVEL_MAX_PCT,
 	detectPivotBeforeBreakout,
 	detectTroughZoneReentry,
+	formingNecklineSideReason,
 	isSameLevel,
 	levelSpreadDetailsFrom,
 	levelSpreadMetrics,
@@ -328,6 +329,60 @@ function rejectByNecklineSide(
 			{ role: midRole, idx: b.idx, price: b.price },
 			{ role: `${outerRole}2`, idx: c.idx, price: c.price },
 		],
+		details: necklineSideDetailsFrom(necklinePrice, offenders),
+	});
+	return true;
+}
+
+/**
+ * 形成中経路の主構成点とネックラインの位置関係の検査（issue #261）。棄却したら debug candidate を
+ * 積んで `true` を返す（呼び出し側は `continue` / `return null`）。判定の実体と根拠——価格基準を
+ * `price`（終値）にした理由、許容幅を置かない理由——は {@link validateMainPointsNecklineSide} の
+ * docstring が単一ソース。理由コードを `forming_` 接頭辞で分ける理由は
+ * {@link formingNecklineSideReason} を参照。
+ *
+ * ## 形成中 2 経路の主構成点は**非対称**（issue #262 で整理予定。本 issue では現状のまま）
+ *
+ * | 経路 | 主構成点 | ネックライン水準 | 本ゲートに渡す点 |
+ * |---|---|---|---|
+ * | {@link tryFormingDoubleTop} | 確定 1 山 ＋ **最新足** | `valley.price` | **`leftPeak` だけ** |
+ * | {@link tryFormingDoubleBottom} | **確定 2 谷** | `midPeak.price` | 2 谷とも |
+ *
+ * **`tryFormingDoubleTop` は 2 つの検査で主構成点 2 点を分担している。** 最新足の側は既存の
+ * `forming_current_at_or_below_valley`（`currentPrice <= valley.price` で棄却）が
+ * **ネックライン側検査そのもの**——`necklinePrice = valley.price` に対する `top` の要求
+ * （`price > necklinePrice`）と同値——なので、本ゲートは残る `leftPeak` だけを見る。
+ * **2 つを 1 つの理由コードに統合しない**：#158 のテストが `forming_current_at_or_below_valley`
+ * という名前を固定しており、統合すると `view=debug` で「どちらの点が誤側だったか」も消える。
+ *
+ * どちらの経路でも**中間構成点は渡さない**。`b`（top の `valley` / bottom の `midPeak`）は
+ * **ネックラインの定義点そのもの**なので、検査に含めると `deviation === 0` で必ず失格になる
+ * （{@link rejectByNecklineSide} の docstring と同じ）。
+ *
+ * ## 呼び出し位置
+ *
+ * **既存の棄却検査をすべて通過した後**——`tryFormingDoubleTop` は構造ゲートの後、
+ * `tryFormingDoubleBottom` は構造ゲート＋{@link checkPostPivotInvalidation} の後。
+ * 完成済み経路の {@link rejectByNecklineSide} と同じ配置規約で、前に置くと固有の理由コードを
+ * 持つ候補の `reason` を横取りする。
+ */
+function rejectFormingNecklineSide(
+	side: ReversalSide,
+	type: 'double_top' | 'double_bottom',
+	mainPoints: ReadonlyArray<Pick<Pivot, 'idx' | 'price'>>,
+	necklinePrice: number,
+	idxs: number[],
+	pts: Array<{ role: string; idx: number; price: number }>,
+	pcand: Pcand,
+): boolean {
+	const { reason, offenders } = validateMainPointsNecklineSide(side, mainPoints, necklinePrice);
+	if (!reason) return false;
+	pcand({
+		type,
+		accepted: false,
+		reason: formingNecklineSideReason(reason),
+		idxs,
+		pts,
 		details: necklineSideDetailsFrom(necklinePrice, offenders),
 	});
 	return true;
@@ -1147,6 +1202,17 @@ function tryFormingDoubleTop(ctx: DetectContext): PatternEntry | null {
 		return null;
 	}
 
+	// 主構成点とネックラインの位置関係（issue #261）。**見るのは `leftPeak` だけ**——最新足の側は
+	// 上の `forming_current_at_or_below_valley` が同じ判定を既に済ませている。分担の根拠と
+	// 統合しない理由は `rejectFormingNecklineSide` の docstring。
+	if (
+		rejectFormingNecklineSide('top', 'double_top', [leftPeak], valley.price, formingIdxs, formingPts, (arg) =>
+			pushCand(ctx, arg),
+		)
+	) {
+		return null;
+	}
+
 	const neckline = [
 		{ x: leftPeak.idx, y: valley.price },
 		{ x: lastIdx, y: valley.price },
@@ -1399,6 +1465,23 @@ function tryFormingDoubleBottom(ctx: DetectContext): PatternEntry | null {
 				reason: 'reclassified_as_triple_bottom',
 				indices: [leftValley.idx, midPeak.idx, rightValley.idx, lastIdx],
 			});
+			continue;
+		}
+
+		// 主構成点とネックラインの位置関係（issue #261）。主構成点は**確定 2 谷**で、`midPeak` は
+		// ネックラインの定義点そのものなので渡さない。検査水準は上の構造ゲート・下の `neckline`・
+		// `formDbTarget` と同じ `midPeak.price`。配置・根拠は `rejectFormingNecklineSide` の docstring。
+		if (
+			rejectFormingNecklineSide(
+				'bottom',
+				'double_bottom',
+				[leftValley, rightValley],
+				midPeak.price,
+				formingIdxs,
+				formingPts,
+				(arg) => pushCand(ctx, arg),
+			)
+		) {
 			continue;
 		}
 
