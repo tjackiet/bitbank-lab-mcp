@@ -78,9 +78,49 @@ const FORMING_MIN_CONFIDENCE = 0.5;
 // confidence < 0.6（detectPatternsViewsHandler の低信頼ラベル境界）に抑え、
 // 「標準的な形状（0.7-0.8）」として扱われないようにする。
 const FORMING_MAX_CONFIDENCE = 0.59;
-// 形成中トリプル: 3 山（peak1, peak2, 現在価格）/ 3 谷の max-min 水平性チェック。
-// tripleTolerancePct（既定 4.8% = 0.04 × 1.2）と揃え、階段状の切り上がり/切り下がりを弾く。
-// 完成済みは 3 山すべてに near() が掛かるため、forming でも同等の制約を入れる。
+/**
+ * 形成中トリプル: 3 山（peak1, peak2, 現在価格）/ 3 谷の max-min 水平性チェック。
+ * `tripleTolerancePct`（既定 4.8% = 0.04 × 1.2）と揃え、階段状の切り上がり / 切り下がりを弾く。
+ * 完成済みは 3 山すべてに `near()` が掛かるため、forming でも同等の制約を入れる。
+ *
+ * ## 高さ相対の hard gate（`validateLevelSpread`）は **意図的に** 入れていない（#178 項目 1）
+ *
+ * 形成中 2 経路（{@link tryFormingTripleTop} / {@link tryFormingTripleBottom}）の同水準判定は
+ * **この価格相対の 1 段だけ**で、完成済み 4 経路にある高さ相対の
+ * `validateLevelSpread`（`MAX_LEVEL_SPREAD_RATIO` = 0.5）に当たる段が無い。
+ * **未配線ではなく不採用**——[#178 項目 1 の決定コメント（2026-09-09、案 C）][decision]で
+ * 実測に基づいて決めた。
+ *
+ * ### 実測（#261 / #263 の配線後。12,104 ケース）
+ *
+ * accepted な形成中 triple **43 実体**のうち、完成済みの 0.5 を超えるのは **17 実体**。内訳:
+ *
+ * | 残差 17 実体 | 実体 |
+ * |---|---:|
+ * | 本来は他ゲートの仕事で、別の終端窓で生き残っているもの（ネックライン誤側 8 / 誤側との差 0.15% 未満 3 / 単調だが閾値の直下 1） | 12 |
+ * | 高さ相対ゲートが単独で拾うもの | 5 |
+ * | うち目視（PR #260 §8）で「**呼べる**」＝妥当なトリプル | **3** |
+ *
+ * 配線すると、**12 実体を「高さ相対」の理由コードで落として帰属が誤り**（#178 項目 3 と同じ
+ * 失敗の形）、単独で拾う 5 実体のうち **3 実体は妥当な形なので巻き添えにする**。
+ * 閾値を緩める案（案 B）も、分布に空白帯が無いので根拠が出ない。
+ *
+ * ### 「形成中 ⊇ 完成済みの厳しさ」の破れは残る
+ *
+ * 破れていること自体は事実として残るが、**設計判断としての不採用であって見落としではない。**
+ * 「形成中は完成済みより緩くてよい」が言っているのは **「同水準かの判定」であって
+ * 「形と呼べる大きさか」ではない**（#169 / PR #170 の整理）ので、その一般論だけでは
+ * 本件を正当化できない。根拠は上の実測にある。
+ *
+ * ### 再開条件
+ *
+ * **高さ相対ゲートが単独で拾う実体に「呼べない」が積み上がる実データが出たとき。**
+ * `scripts/measure_forming_triple_level_spread_178.ts` を再実行して残差の内訳を出し直す。
+ * 経緯と数字は [`docs/internal/forming-triple-level-spread-178.md`][memo]（Phase 1 と決定）。
+ *
+ * [decision]: https://github.com/tjackiet/bitbank-lab-mcp/issues/178#issuecomment-5599895375
+ * [memo]: ../../docs/internal/forming-triple-level-spread-178.md
+ */
 const FORMING_LEVEL_SPREAD_FACTOR = 1.0; // tripleTolerancePct × 1.0
 // 形成中トリプル: ネックライン構成点（peak3 用の 2 谷 / valley3 用の 2 山）の水平性。
 // tolerancePct × FACTOR。
@@ -1449,6 +1489,12 @@ function rejectFormingStairStep(
  * 揃う前の `continue`（`minDist` 不足 / `peakDiff` 超過 / `currentDiff` 超過）はペア数ぶん
  * 発火し、`detect_patterns.ts` の cap=200 を食い潰して**他の検出器の棄却理由を押し出す**。
  * #155 が `formingHsForHead` で置いた制約と同じ。
+ *
+ * ## 同水準判定は価格相対の 1 段だけ（#178 項目 1）
+ *
+ * 完成済み 4 経路にある高さ相対の hard gate（`validateLevelSpread`）を**意図的に入れていない**。
+ * 未配線ではなく実測に基づく不採用で、根拠・再開条件は
+ * {@link FORMING_LEVEL_SPREAD_FACTOR} の docstring が単一ソース。
  */
 function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
 	const { candles, pivots, allPeaks, allValleys, tolerancePct, minDist } = ctx;
@@ -1689,6 +1735,9 @@ function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
  * 形成中 Triple Bottom を組み立てる。組めなければ null。
  * debug candidate の積み方（成功エントリの意味・理由コードを積む分岐の範囲）は
  * {@link tryFormingTripleTop} の docstring が単一ソース。
+ *
+ * 同水準判定に高さ相対の hard gate（`validateLevelSpread`）を**意図的に入れていない**点も
+ * top 側と同じ。根拠・再開条件は {@link FORMING_LEVEL_SPREAD_FACTOR} の docstring（#178 項目 1）。
  */
 function tryFormingTripleBottom(ctx: DetectContext): DeduplicablePattern | null {
 	const { candles, pivots, allPeaks, allValleys, tolerancePct, minDist } = ctx;
