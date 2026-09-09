@@ -14,6 +14,14 @@
 
 ## 1. 読み方
 
+> **本メモは 3 フェーズぶんの記録。** §1〜§9 が Phase 1（計測のみ。PR #255）、
+> §10 が Phase 1.5（目視判定のみ。PR #256）、**§11 が Phase 2 の実装値での再計測**。
+> **§2〜§9 の「候補テーブル」は Phase 1 の ablation の値**で、実装値ではない——
+> Phase 1 の候補ビルドは `HS_SHOULDER_MAX_PCT` と `tolerancePct` を同時に締めるので、
+> `1hour` の肩の**実効**閾値は 0.830%（`tolerancePct` 律速）だった。実装は
+> `tolerancePct` を動かさないので実効閾値は cap の **1.040%**。§11 を読むこと。
+
+
 - **「同水準判定の実測値」**は、その検出器の同水準ゲートが実際に見ている量。
   - double: `relDiff(peak1.price, peak2.price)`（終値基準。`near` / `isSameLevel` と同じ量）
   - triple: 3 山（3 谷）の pairwise `relDiff` の**最大**（検出器は 3 組すべてに `near` を掛ける）
@@ -884,3 +892,259 @@ B では `242-249-272`、これが #218 の二重出力）。3 つの谷が **30
 3. `4hour` 以降は ATR 未実測
 
 **本節は判定のみで、決定はしていない。**
+
+## 11. 実装値での再計測（Phase 2）
+
+`HS_SHOULDER_MAX_PCT` の時間足別化を**実装した後**の再計測。Phase 1 の候補ビルド
+（§9）は `structural.ts` の定数リテラルを差し替えた ablation なので、`HS_SHOULDER_MAX_PCT` を
+読む 2 箇所（肩ゲートと窓生成 `outerShoulderOk`）が同時に締まる。**実装はそうなっていない**
+——時間足別の値は肩ゲートにだけ掛かり、窓生成は 5% のまま（#244 決定コメントの宿題 1）。
+`tolerancePct` と `DOUBLE_LEVEL_MAX_PCT` も動かしていない（中間決定 1 / 2）。
+
+- スクリプト: `scripts/measure_hs_shoulder_tf_244_phase2.ts`
+- コーパス: §9 と同一（標準 800 ＋ 実データ B / C / D 各 96 ＋ 実データ C の窓長スイープ 256）。**プールしない**（#219）
+- before: `origin/main`（`b3d01a3`）の `tools/patterns/` を展開したビルド / after: 作業ツリー
+- どちらも**書き換えなしの展開**で、after が作業ツリーの本物と一致することはスクリプト内で検算している
+
+```bash
+npx tsx scripts/measure_hs_shoulder_tf_244_phase2.ts
+```
+
+### 11-1. 要約
+
+| # | 結果 |
+|---|---|
+| 1 | **落ちたのは延べ 23 構造で、全件が `inverse_head_and_shoulders` × `1hour` × strict 経路。** うち実データ B / C / D の **14 構造が Phase 1.5 §10 で目視判定した延べ 14 構造と完全一致**（B 5 / C 4 / D 5）。残り 9 は標準コーパスの実データ A `1hour` ラベル 5（#178 により独立系列ではない — 参考）と実データ C 窓長スイープ 4（実データ C 本体と同じ値動きの別窓） |
+| 2 | **窓生成の据え置きが効いている。** 落ちた 23 構造は全件が `view=debug` の候補として**残り**、`shoulders_not_near:cap` の理由コードと `details.shoulderMaxPct = 0.0104` が付く。**無音になったものは 0 件** |
+| 3 | **`1day` 以上は全コーパスで 0 件差**（落ち 0 / 増え 0）。受け入れ条件を満たす |
+| 4 | **`double_*` / `triple_*` は全コーパスで 0 件差。** 肩ゲートしか触っていないので当然だが機械的に確認した |
+| 5 | **relaxed accepted は不変**（窓長スイープの `head_and_shoulders` 24 → 24）。Phase 1 結果 5 の再確認。逆 H&S の strict 0 件率は窓長スイープで 24 → 88 に上がるが accepted は 0 のまま |
+| 6 | **0.830% と 1.040% の間にある構造は全コーパスで 0 件**（＝ Phase 1 の ablation と実装で落ちる集合が同じ）。Phase 1 の `1hour` の**実効**閾値 0.830% は `tolerancePct` 候補（0.04 × 0.2073）が律速した値で、肩の cap 候補は当時から 1.040% だった。実装は `tolerancePct` を動かさない（5% のまま）ので実効閾値は cap の **1.040%** になり、その差分の帯が空かどうかが問題になる。§9 の隙間表（`inverse_head_and_shoulders` / `1hour` / 実データ 14 構造）では accepted の直下が **0.460%**・直上が **1.356%** で、**0.830〜1.040% には標本が 1 つも無い。** なお §9 と本 issue のコメントに出る `0.896%` は**隙間の幅**（1.356 − 0.460）であって構造の `relDiff` ではない |
+| 7 | **Phase 1 の ablation と結果が食い違う唯一の点が、窓生成の据え置きによるもの。** §9 / 結果 11(b) の `btc_jpy_1day_2026` / `4hour` / `20-24-27-53-80`（肩 1.228% < `4hour` の閾値 2.040%）は、候補ビルドでは窓生成で消えていたが**実装では残る**。宿題 1 の判断の直接の効果 |
+
+### 11-2. 落ちた 23 構造と Phase 1.5 §10 の形との対応
+
+| Phase 1.5 の形 | 判定（§10） | 実データ B / C / D の構成点 | 肩 `relDiff` | 件数 |
+|---|---|---|---|---:|
+| **形 X** | 呼べない | D `42-45-49-83-85` / `30-32-49-83-85` / `42-45-49-83-91` / `30-39-49-83-91`（B は idx +200・C は idx +19） | 2.473〜2.719% | 12（B 4 / C 4 / D 4） |
+| **形 X'** | 呼べない | D `25-39-49-83-91` | 2.076% | 1（D のみ） |
+| **形 Y** | 呼べない | B `3-9-42-147-154` | 1.356% | 1（B のみ） |
+
+**延べ 14 構造が 1 件ずつ一致した。** §10 の目視判定がそのまま本 PR で落ちる集合の判定になっている。
+
+### 11-3. スクリプトの出力（そのまま）
+
+- before: `origin/main`（肩ゲート = `HS_SHOULDER_MAX_PCT` 5% 固定）
+- after: 作業ツリー（肩ゲート = `ctx.hsShoulderMaxPct` 時間足別 / 窓生成 = 5% 据え置き / `tolerancePct` 不変）
+
+#### 1. `getHsShoulderMaxPctForTf` の表と検算
+
+| 時間足 | ATR 比 | 由来 | 実装値 | ATR 換算 | `depthPct`（一致確認） | Phase 1 候補値との一致 |
+|---|---:|---|---:|---:|---:|---|
+| `1min` | 0.0264 | √t 推定 | **0.130%** | 1.79 ATR | 0.130% ✅ | 0.130% ✅ |
+| `5min` | 0.0589 | √t 推定 | **0.290%** | 1.79 ATR | 0.290% ✅ | 0.290% ✅ |
+| `15min` | 0.1021 | √t 推定 | **0.510%** | 1.82 ATR | 0.510% ✅ | 0.510% ✅ |
+| `30min` | 0.1443 | √t 推定 | **0.720%** | 1.81 ATR | 0.720% ✅ | 0.720% ✅ |
+| `1hour` | 0.2073 | **実測** | **1.040%** | 1.82 ATR | 1.040% ✅ | 1.040% ✅ |
+| `4hour` | 0.4082 | √t 推定 | **2.040%** | 1.82 ATR | 2.040% ✅ | 2.040% ✅ |
+| `8hour` | 0.5774 | √t 推定 | **2.890%** | 1.82 ATR | 2.890% ✅ | 2.890% ✅ |
+| `12hour` | 0.7071 | √t 推定 | **3.540%** | 1.82 ATR | 3.540% ✅ | 3.540% ✅ |
+| `1day` | 1.0000 | 据え置き | **5.000%** | 1.82 ATR | 5.000% ✅ | 5.000% ✅ |
+| `1week` | 1.0000 | 据え置き | **5.000%** | 1.82 ATR | 5.000% ✅ | 5.000% ✅ |
+| `1month` | 1.0000 | 据え置き | **5.000%** | 1.82 ATR | 5.000% ✅ | 5.000% ✅ |
+
+`depthPct` との一致は**偶然**（アンカーが `MIN_DEPTH_PCT` と同じ 5%）。測っている量が違う（谷の深さの下限 vs 肩の同水準の上限）ので流用していない。
+
+ATR 換算が全時間足で 1.82 ATR に揃うことが本変更の狙い（現行は `1day` 1.82 ATR / `1hour` **8.77 ATR**）。
+
+#### 2. type 別・時間足別の accepted 増減（構造単位。before → after）
+
+### 標準コーパス 800（合成 704 + 実データ A 96）（#178: 時間足別の結論には使えない — 参考）
+
+| type | `1hour` | `4hour` | `1day` | 計 |
+|---|---:|---:|---:|---:|
+| `double_top` | 2 → 2 | 1 → 1 | 1 → 1 | 4 → 4 |
+| `double_bottom` | 3 → 3 | 2 → 2 | 2 → 2 | 7 → 7 |
+| `triple_top` | 1 → 1 | 0 → 0 | 1 → 1 | 2 → 2 |
+| `triple_bottom` | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 |
+| `head_and_shoulders` | 1 → 1 | 0 → 0 | 1 → 1 | 2 → 2 |
+| `inverse_head_and_shoulders` | **8 → 3（-5）** | 4 → 4 | 0 → 0 | **12 → 7（-5）** |
+
+### 実データ B 96（`btc_jpy_1hour_2026_08`）
+
+| type | `1hour` | 計 |
+|---|---:|---:|
+| `double_top` | 0 → 0 | 0 → 0 |
+| `double_bottom` | 0 → 0 | 0 → 0 |
+| `triple_top` | 0 → 0 | 0 → 0 |
+| `triple_bottom` | 2 → 2 | 2 → 2 |
+| `head_and_shoulders` | 0 → 0 | 0 → 0 |
+| `inverse_head_and_shoulders` | **14 → 9（-5）** | **14 → 9（-5）** |
+
+### 実データ C 96（`btc_jpy_1hour_2026_09`）
+
+| type | `1hour` | 計 |
+|---|---:|---:|
+| `double_top` | 1 → 1 | 1 → 1 |
+| `double_bottom` | 0 → 0 | 0 → 0 |
+| `triple_top` | 0 → 0 | 0 → 0 |
+| `triple_bottom` | 2 → 2 | 2 → 2 |
+| `head_and_shoulders` | 0 → 0 | 0 → 0 |
+| `inverse_head_and_shoulders` | **10 → 6（-4）** | **10 → 6（-4）** |
+
+### 実データ D 96（`btc_jpy_1hour_2026_09_05`）
+
+| type | `1hour` | 計 |
+|---|---:|---:|
+| `double_top` | 1 → 1 | 1 → 1 |
+| `double_bottom` | 0 → 0 | 0 → 0 |
+| `triple_top` | 0 → 0 | 0 → 0 |
+| `triple_bottom` | 2 → 2 | 2 → 2 |
+| `head_and_shoulders` | 0 → 0 | 0 → 0 |
+| `inverse_head_and_shoulders` | **11 → 6（-5）** | **11 → 6（-5）** |
+
+### 実データ C 窓長スイープ 256（`btc_jpy_1hour_2026_09` の末尾 60 / 90 / 120 / 150 / 200 / 250 / 300 / 365 本 × 1hour）
+
+| type | `1hour` | 計 |
+|---|---:|---:|
+| `double_top` | 1 → 1 | 1 → 1 |
+| `double_bottom` | 0 → 0 | 0 → 0 |
+| `triple_top` | 0 → 0 | 0 → 0 |
+| `triple_bottom` | 2 → 2 | 2 → 2 |
+| `head_and_shoulders` | 0 → 0 | 0 → 0 |
+| `inverse_head_and_shoulders` | **10 → 6（-4）** | **10 → 6（-4）** |
+
+#### 3. 落ちた構造の明細（1 件ずつ）
+
+### 標準コーパス 800（合成 704 + 実データ A 96）
+
+| # | 系列 | tf | `swingDepth` | type | 構成点 | 肩 / 主構成点の価格 | 肩 `relDiff` | 実装閾値 | 経路 | `view=debug` に残るか | 理由コード | `details.shoulderMaxPct` |
+|---:|---|---|---|---|---|---|---:|---:|---|---|---|---:|
+| 1 | `btc_jpy_1day_2026` | `1hour` | auto | `inverse_head_and_shoulders` | `7-17-27-42-45` | 9,799,980 / 10,121,318 | **3.175%** | 1.040% | strict | **残る** | `shoulders_not_near:cap` | 0.0104 |
+| 2 | `btc_jpy_1day_2026` | `1hour` | auto | `inverse_head_and_shoulders` | `13-17-27-53-77` | 10,181,668 / 10,044,907 | **1.343%** | 1.040% | strict | **残る** | `shoulders_not_near:cap` | 0.0104 |
+| 3 | `btc_jpy_1day_2026` | `1hour` | auto | `inverse_head_and_shoulders` | `7-17-27-53-77` | 9,799,980 / 10,044,907 | **2.438%** | 1.040% | strict | **残る** | `shoulders_not_near:cap` | 0.0104 |
+| 4 | `btc_jpy_1day_2026` | `1hour` | 2 | `inverse_head_and_shoulders` | `20-24-27-53-80` | 10,152,026 / 10,278,279 | **1.228%** | 1.040% | strict | **残る** | `shoulders_not_near:cap` | 0.0104 |
+| 5 | `btc_jpy_1day_2026` | `1hour` | 2 | `inverse_head_and_shoulders` | `7-17-27-53-80` | 9,799,980 / 10,278,279 | **4.653%** | 1.040% | strict | **残る** | `shoulders_not_near:cap` | 0.0104 |
+
+### 実データ B 96（`btc_jpy_1hour_2026_08`）
+
+| # | 系列 | tf | `swingDepth` | type | 構成点 | 肩 / 主構成点の価格 | 肩 `relDiff` | 実装閾値 | 経路 | `view=debug` に残るか | 理由コード | `details.shoulderMaxPct` |
+|---:|---|---|---|---|---|---|---:|---:|---|---|---|---:|
+| 1 | `btc_jpy_1hour_2026_08` | `1hour` | auto | `inverse_head_and_shoulders` | `242-245-249-283-285` | 12,219,869 / 12,529,686 | **2.473%** | 1.040% | strict | **残る** | `shoulders_not_near:cap` | 0.0104 |
+| 2 | `btc_jpy_1hour_2026_08` | `1hour` | auto | `inverse_head_and_shoulders` | `230-232-249-283-285` | 12,215,999 / 12,529,686 | **2.504%** | 1.040% | strict | **残る** | `shoulders_not_near:cap` | 0.0104 |
+| 3 | `btc_jpy_1hour_2026_08` | `1hour` | auto | `inverse_head_and_shoulders` | `3-9-42-147-154` | 10,112,502 / 10,251,555 | **1.356%** | 1.040% | strict | **残る** | `shoulders_not_near:cap` | 0.0104 |
+| 4 | `btc_jpy_1hour_2026_08` | `1hour` | 2 | `inverse_head_and_shoulders` | `242-245-249-283-291` | 12,219,869 / 12,557,431 | **2.688%** | 1.040% | strict | **残る** | `shoulders_not_near:cap` | 0.0104 |
+| 5 | `btc_jpy_1hour_2026_08` | `1hour` | 2 | `inverse_head_and_shoulders` | `230-239-249-283-291` | 12,215,999 / 12,557,431 | **2.719%** | 1.040% | strict | **残る** | `shoulders_not_near:cap` | 0.0104 |
+
+### 実データ C 96（`btc_jpy_1hour_2026_09`）
+
+| # | 系列 | tf | `swingDepth` | type | 構成点 | 肩 / 主構成点の価格 | 肩 `relDiff` | 実装閾値 | 経路 | `view=debug` に残るか | 理由コード | `details.shoulderMaxPct` |
+|---:|---|---|---|---|---|---|---:|---:|---|---|---|---:|
+| 1 | `btc_jpy_1hour_2026_09` | `1hour` | auto | `inverse_head_and_shoulders` | `61-64-68-102-104` | 12,219,869 / 12,529,686 | **2.473%** | 1.040% | strict | **残る** | `shoulders_not_near:cap` | 0.0104 |
+| 2 | `btc_jpy_1hour_2026_09` | `1hour` | auto | `inverse_head_and_shoulders` | `49-51-68-102-104` | 12,215,999 / 12,529,686 | **2.504%** | 1.040% | strict | **残る** | `shoulders_not_near:cap` | 0.0104 |
+| 3 | `btc_jpy_1hour_2026_09` | `1hour` | 2 | `inverse_head_and_shoulders` | `61-64-68-102-110` | 12,219,869 / 12,557,431 | **2.688%** | 1.040% | strict | **残る** | `shoulders_not_near:cap` | 0.0104 |
+| 4 | `btc_jpy_1hour_2026_09` | `1hour` | 2 | `inverse_head_and_shoulders` | `49-58-68-102-110` | 12,215,999 / 12,557,431 | **2.719%** | 1.040% | strict | **残る** | `shoulders_not_near:cap` | 0.0104 |
+
+### 実データ D 96（`btc_jpy_1hour_2026_09_05`）
+
+| # | 系列 | tf | `swingDepth` | type | 構成点 | 肩 / 主構成点の価格 | 肩 `relDiff` | 実装閾値 | 経路 | `view=debug` に残るか | 理由コード | `details.shoulderMaxPct` |
+|---:|---|---|---|---|---|---|---:|---:|---|---|---|---:|
+| 1 | `btc_jpy_1hour_2026_09_05` | `1hour` | auto | `inverse_head_and_shoulders` | `42-45-49-83-85` | 12,219,869 / 12,529,686 | **2.473%** | 1.040% | strict | **残る** | `shoulders_not_near:cap` | 0.0104 |
+| 2 | `btc_jpy_1hour_2026_09_05` | `1hour` | auto | `inverse_head_and_shoulders` | `30-32-49-83-85` | 12,215,999 / 12,529,686 | **2.504%** | 1.040% | strict | **残る** | `shoulders_not_near:cap` | 0.0104 |
+| 3 | `btc_jpy_1hour_2026_09_05` | `1hour` | 2 | `inverse_head_and_shoulders` | `42-45-49-83-91` | 12,219,869 / 12,557,431 | **2.688%** | 1.040% | strict | **残る** | `shoulders_not_near:cap` | 0.0104 |
+| 4 | `btc_jpy_1hour_2026_09_05` | `1hour` | 2 | `inverse_head_and_shoulders` | `30-39-49-83-91` | 12,215,999 / 12,557,431 | **2.719%** | 1.040% | strict | **残る** | `shoulders_not_near:cap` | 0.0104 |
+| 5 | `btc_jpy_1hour_2026_09_05` | `1hour` | 2 | `inverse_head_and_shoulders` | `25-39-49-83-91` | 12,296,676 / 12,557,431 | **2.076%** | 1.040% | strict | **残る** | `shoulders_not_near:cap` | 0.0104 |
+
+### 実データ C 窓長スイープ 256（`btc_jpy_1hour_2026_09` の末尾 60 / 90 / 120 / 150 / 200 / 250 / 300 / 365 本 × 1hour）
+
+| # | 系列 | tf | `swingDepth` | type | 構成点 | 肩 / 主構成点の価格 | 肩 `relDiff` | 実装閾値 | 経路 | `view=debug` に残るか | 理由コード | `details.shoulderMaxPct` |
+|---:|---|---|---|---|---|---|---:|---:|---|---|---|---:|
+| 1 | `btc_jpy_1hour_2026_09@last365` | `1hour` | auto | `inverse_head_and_shoulders` | `61-64-68-102-104` | 12,219,869 / 12,529,686 | **2.473%** | 1.040% | strict | **残る** | `shoulders_not_near:cap` | 0.0104 |
+| 2 | `btc_jpy_1hour_2026_09@last365` | `1hour` | auto | `inverse_head_and_shoulders` | `49-51-68-102-104` | 12,215,999 / 12,529,686 | **2.504%** | 1.040% | strict | **残る** | `shoulders_not_near:cap` | 0.0104 |
+| 3 | `btc_jpy_1hour_2026_09@last365` | `1hour` | 2 | `inverse_head_and_shoulders` | `61-64-68-102-110` | 12,219,869 / 12,557,431 | **2.688%** | 1.040% | strict | **残る** | `shoulders_not_near:cap` | 0.0104 |
+| 4 | `btc_jpy_1hour_2026_09@last365` | `1hour` | 2 | `inverse_head_and_shoulders` | `49-58-68-102-110` | 12,215,999 / 12,557,431 | **2.719%** | 1.040% | strict | **残る** | `shoulders_not_near:cap` | 0.0104 |
+
+#### 4. Phase 1 候補 0.830% と実装値 1.040% の間にある `1hour` の H&S 構造
+
+Phase 1 の候補ビルドでは落ち、実装値では**残る**帯。before で accepted だったものを母集団にする。
+
+- 標準コーパス 800（合成 704 + 実データ A 96）: **0 件**
+- 実データ B 96（`btc_jpy_1hour_2026_08`）: **0 件**
+- 実データ C 96（`btc_jpy_1hour_2026_09`）: **0 件**
+- 実データ D 96（`btc_jpy_1hour_2026_09_05`）: **0 件**
+- 実データ C 窓長スイープ 256（`btc_jpy_1hour_2026_09` の末尾 60 / 90 / 120 / 150 / 200 / 250 / 300 / 365 本 × 1hour）: **0 件**
+
+#### 5. 窓生成の据え置き（5%）の確認
+
+落ちた H&S 構造が `view=debug` の候補として**現れる**なら、窓生成（`outerShoulderOk`）は締まっていない。消えていれば無音の偽陰性。
+
+- 落ちた H&S 構造: **23 件**
+- うち `view=debug` から消えた（無音）: **0 件**
+
+#### 6. relaxed 経路（Phase 1 結果 5 の再確認）
+
+### 標準コーパス 800（合成 704 + 実データ A 96）
+
+| type | strict 0 件（before → after） | relaxed accepted（before → after） |
+|---|---|---|
+| `head_and_shoulders` | 712 → 736（/ 800） | 0 → 0 |
+| `inverse_head_and_shoulders` | 712 → 712（/ 800） | 0 → 0 |
+
+### 実データ B 96（`btc_jpy_1hour_2026_08`）
+
+| type | strict 0 件（before → after） | relaxed accepted（before → after） |
+|---|---|---|
+| `head_and_shoulders` | 32 → 32（/ 96） | 0 → 0 |
+| `inverse_head_and_shoulders` | 64 → 64（/ 96） | 0 → 0 |
+
+### 実データ C 96（`btc_jpy_1hour_2026_09`）
+
+| type | strict 0 件（before → after） | relaxed accepted（before → after） |
+|---|---|---|
+| `head_and_shoulders` | 32 → 32（/ 96） | 0 → 0 |
+| `inverse_head_and_shoulders` | 32 → 32（/ 96） | 0 → 0 |
+
+### 実データ D 96（`btc_jpy_1hour_2026_09_05`）
+
+| type | strict 0 件（before → after） | relaxed accepted（before → after） |
+|---|---|---|
+| `head_and_shoulders` | 32 → 32（/ 96） | 0 → 0 |
+| `inverse_head_and_shoulders` | 32 → 32（/ 96） | 0 → 0 |
+
+### 実データ C 窓長スイープ 256（`btc_jpy_1hour_2026_09` の末尾 60 / 90 / 120 / 150 / 200 / 250 / 300 / 365 本 × 1hour）
+
+| type | strict 0 件（before → after） | relaxed accepted（before → after） |
+|---|---|---|
+| `head_and_shoulders` | 96 → 96（/ 256） | 24 → 24 |
+| `inverse_head_and_shoulders` | 24 → 88（/ 256） | 0 → 0 |
+
+#### 7. `1day` 以上の 0 件差
+
+- 標準コーパス 800（合成 704 + 実データ A 96）: 落ちた **0** 件 / 増えた **0** 件
+- 実データ B 96（`btc_jpy_1hour_2026_08`）: 落ちた **0** 件 / 増えた **0** 件
+- 実データ C 96（`btc_jpy_1hour_2026_09`）: 落ちた **0** 件 / 増えた **0** 件
+- 実データ D 96（`btc_jpy_1hour_2026_09_05`）: 落ちた **0** 件 / 増えた **0** 件
+- 実データ C 窓長スイープ 256（`btc_jpy_1hour_2026_09` の末尾 60 / 90 / 120 / 150 / 200 / 250 / 300 / 365 本 × 1hour）: 落ちた **0** 件 / 増えた **0** 件
+
+**`1day` 以上は全コーパスで 0 件差。** 受け入れ条件を満たす。
+
+#### 8. H&S 以外が動いていないことの確認
+
+- 標準コーパス 800（合成 704 + 実データ A 96）: double / triple の落ち **0** 件 / 増え **0** 件
+- 実データ B 96（`btc_jpy_1hour_2026_08`）: double / triple の落ち **0** 件 / 増え **0** 件
+- 実データ C 96（`btc_jpy_1hour_2026_09`）: double / triple の落ち **0** 件 / 増え **0** 件
+- 実データ D 96（`btc_jpy_1hour_2026_09_05`）: double / triple の落ち **0** 件 / 増え **0** 件
+- 実データ C 窓長スイープ 256（`btc_jpy_1hour_2026_09` の末尾 60 / 90 / 120 / 150 / 200 / 250 / 300 / 365 本 × 1hour）: double / triple の落ち **0** 件 / 増え **0** 件
+
+**double / triple は全コーパスで 0 件差。** 肩ゲートしか触っていないので当然だが、機械的に確認した。
+
+#### 9. Phase 1 の ablation（窓生成も締めた版）との既知の差
+
+Phase 1 結果 11(b) の構造 `btc_jpy_1day_2026` / `4hour` / `20-24-27-53-80`（肩 1.228% < `4hour` の閾値 2.040%）は、Phase 1 の候補ビルドでは**窓生成で消えていた**。
+
+- before で accepted: **はい**（肩 1.228%）
+- after で accepted: **はい**
+
+**窓生成を 5% に据え置いたので、この構造は実装では残る。** Phase 1 の ablation と結果が食い違う唯一の既知の点で、宿題 1（窓生成と肩ゲートで定数を分ける）の直接の効果。
+
+

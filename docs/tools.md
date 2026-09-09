@@ -592,6 +592,65 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 パラメータどおり）。日足の既定は 4 本・1時間足は 2 本なので、**既定パラメータでも上書きが
 起きていた**。上書きを外したので、日足で 4 本間隔の構成も検出される。
 
+### H&S / 逆 H&S の肩の同水準判定は時間足別（#244）
+
+左右の肩が「同じ水準」かの上限は **時間足ごとに違う**（`tools/patterns/config.ts` の
+`getHsShoulderMaxPctForTf`）。`1day` の 5% をアンカーに、`getSizeThresholdsForTf` と同じ
+ATR 比テーブルを掛けたもの。
+
+| 時間足 | 肩の同水準の上限 |
+|---|---:|
+| `1min` / `5min` | 0.13% / 0.29% |
+| `15min` / `30min` | 0.51% / 0.72% |
+| **`1hour`** | **1.04%** |
+| `4hour` | 2.04% |
+| `8hour` / `12hour` | 2.89% / 3.54% |
+| `1day` / `1week` / `1month` / 未知 | 5%（据え置き） |
+
+以前は全時間足で 5% 固定だった。ATR 換算すると `1day` の 1.8 ATR に対し **`1hour` では
+8.8 ATR** で、1 時間足では同水準判定が実質機能していなかった（日足で 14% 離れた高値を
+「同水準」と呼ぶのと同じ）。この表では全時間足が約 1.8 ATR に揃う。
+
+**`1day` 以上の挙動は変わっていない。** 検出が減るのは `1day` 未満だけで、実測でも
+`1day` / `1week` / `1month` は全コーパスで 0 件差。`double_*` / `triple_*` の同水準判定
+（`DOUBLE_LEVEL_MAX_PCT` / `tolerancePct`）も**動かしていない**——実データの 1 時間足では
+高さ相対の無次元ゲート（`MAX_LEVEL_SPREAD_RATIO`）が律速していて、価格相対の上限は効いて
+いないため（#244 中間決定 1 / 2）。
+
+**値は「つまみ」で、非恣意性は主張していない。** 分布の空白帯に置いた線ではなく、
+「同じ形の判定を全時間足で同じ ATR 本数で行う」という次元の一貫性だけが根拠。
+この閾値で落ちる構造が実際に H&S と呼べない形であることは目視で確認してある
+（[docs/internal/level-pct-tf-244.md](internal/level-pct-tf-244.md) §10）。
+
+#### 窓生成（候補の列挙）は 5% のまま
+
+肩の候補窓を作る段（`enumerateHsWindows` の `outerShoulderOk`）は**全時間足で 5% 固定**で、
+時間足別の値は**肩ゲートにだけ**掛かる。理由は診断性——窓生成で落とすと `view=debug` の
+`candidates` に何も残らず無音になるが、肩ゲートで落とせば理由コードが残る。
+
+そのため 1 時間足では「肩が 1.04〜5% 離れた 5 点」は**候補としては現れ、
+`shoulders_not_near:cap` で落ちる**。`view=debug` で理由コードを集計するときはこれが見える。
+
+#### 肩の棄却理由コード
+
+肩の判定は「相対差が `tolerancePct` 以内」AND「相対差が上表の上限以内」で、
+**実効閾値は 2 つの `min`**。どちらで落ちたかが接尾辞に出る。
+
+| 理由コード | 意味 | 緩めれば通るか |
+|---|---|---|
+| `shoulders_not_near:tolerance` | `tolerancePct` のみ超過 | `tolerancePct` を緩めれば通る |
+| `shoulders_not_near:cap` | **上表の時間足別の上限のみ超過** | パラメータでは通らない（定数側） |
+| `shoulders_not_near:both` | 両方超過 | どちらを緩めても通らない |
+
+`relaxed_*` 接頭辞の同じ 3 つが relaxed フォールバック経路にある（そちらの「許容誤差」は
+`tolerancePct × 段の係数`）。
+
+**`:cap` の出方が #244 で変わった。** 以前は `tolerancePct`（`1hour` 5% / `15min` `30min` 6%）が
+5% を超える `15min` / `30min` でしか既定パスで出なかったが、上限が時間足別になった今は
+**`1day` 未満の全時間足で既定パスから普通に出る**（`1hour` なら上限 1.04% < `tolerancePct` 5%）。
+`1day` 以上では従来どおり、呼び出し側が `tolerancePct` を 5% 超で明示したときだけ。
+`view=debug` の `details.shoulderMaxPct` にはその時間足の**実効値**が入る（`1hour` なら `0.0104`）。
+
 ### 完成済み H&S のブレイク探索窓は 30 本固定（#249）
 
 右肩からのブレイク探索窓は `HS_BREAKOUT_MAX_BARS = 30`（`tools/patterns/detect_hs.ts`）で、
@@ -605,8 +664,9 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 
 逆 H&S は右肩 → ブレイクが短く（#242 前の同コーパスで中央値 8 本 / max 9 本）、この組み合わせの
 影響を受けていない。また**完成済み経路にはパターン全長の上限が無い**（形成中経路には
-`getHsFormingBarParams(tf).maxBars` がある）。上限の追加は #249 案 C として保留し、
-issue #244（時間足別テーブル）で再検討する。
+`getHsFormingBarParams(tf).maxBars` がある）。上限の追加（#249 案 C）は **#244 で見送り確定**
+——標準コーパスと実データ B / C / D で落ちるのは実データ B の 1 構造だけで、判断材料が
+増えていない（#244 中間決定 3）。
 
 ### `status` に `expired` がある
 

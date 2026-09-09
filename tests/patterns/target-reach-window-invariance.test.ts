@@ -34,6 +34,7 @@ import {
 	getDefaultParamsForTf,
 	getDefaultToleranceForTf,
 	getHeadProminenceForTf,
+	getHsShoulderMaxPctForTf,
 	getSizeThresholdsForTf,
 } from '../../tools/patterns/config.js';
 import { detectHeadAndShoulders } from '../../tools/patterns/detect_hs.js';
@@ -64,6 +65,7 @@ function buildHsCtx(): DetectContext {
 		tolerancePct: tol,
 		headProminencePct: getHeadProminenceForTf('1hour'),
 		sizeThresholds: getSizeThresholdsForTf('1hour'),
+		hsShoulderMaxPct: getHsShoulderMaxPctForTf('1hour'),
 		minDist: minBarsBetweenSwings,
 		want: new Set(['head_and_shoulders', 'inverse_head_and_shoulders']),
 		includeForming: false,
@@ -176,9 +178,16 @@ describe('targetReachedPct は系列の末尾に依存しない（issue #210 (3)
 			// **14,401 円上**にあり、逆 H&S の左肩がネックラインの上に乗っている形だった
 			// （パターン高さ 245,081 円の 5.876%）。**このリストから消えたのは 1 件だけ**で、
 			// 残る 6 件は `breakoutTarget` を含めて不変。
+			//
+			// **#244 Phase 2（肩の同水準判定の時間足別化）で 6 件 → 5 件**。
+			// `inverse_head_and_shoulders` 230-232-249-283-285 が肩ゲートで落ちた——左肩
+			// (idx 230 / 終値 12,215,999) と右肩 (idx 285 / 終値 12,529,686) の `relDiff` が
+			// **2.504%** で、`1hour` の肩の上限（`getHsShoulderMaxPctForTf('1hour')` = 1.04%）を
+			// 超える。この構造は Phase 1.5 §10 の**形 X**（実データ D の `30-32-49-83-85`。
+			// B の idx − 200 = D の idx）で、目視で「呼べない」と判定済み。
+			// **残る 5 件は `breakoutTarget` を含めて不変。**
 			['inverse_head_and_shoulders', '242-245-249-265-272', 12558124],
 			['inverse_head_and_shoulders', '230-232-249-265-272', 12602209],
-			['inverse_head_and_shoulders', '230-232-249-283-285', 12888440],
 			['inverse_head_and_shoulders', '20-26-42-106-109', 10279567],
 			['inverse_head_and_shoulders', '15-18-42-106-109', 10302900],
 			['inverse_head_and_shoulders', '3-9-42-106-109', 10304386],

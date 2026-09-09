@@ -4,7 +4,7 @@
  * パターン検出で使用するデフォルトパラメータを時間軸ごとに提供する。
  */
 
-import { MIN_DEPTH_PCT, MIN_PATTERN_HEIGHT_PCT, type SizeThresholds } from './structural.js';
+import { HS_SHOULDER_MAX_PCT, MIN_DEPTH_PCT, MIN_PATTERN_HEIGHT_PCT, type SizeThresholds } from './structural.js';
 
 /**
  * パターンごとの最小整合度（下限ゲート）。
@@ -128,7 +128,30 @@ export function getDefaultParamsForTf(tf: string): { swingDepth: number; minBars
 }
 
 /**
- * 時間軸に応じた許容誤差（tolerancePct）を返す
+ * 時間軸に応じた許容誤差（`tolerancePct`）を返す。
+ *
+ * ## ⚠️ 短い足ほど**緩い**のは意図（#244 中間決定 2。動かさないこと）
+ *
+ * 表は `1day` 4% に対し `1hour` 5% / `15min` `30min` 6% と、**短い足ほど緩くなっている**。
+ * ATR で正規化すると `1hour` の 5% は **8.8 ATR**（`1day` の 4% は 1.5 ATR）で、#152 が
+ * サイズ下限に入れた ATR 比補正とは**向きが逆**。これは #244 で明示的に検討したうえで
+ * **動かさないと決めた**（issue #244 の中間決定コメント 2）。理由は 3 つ:
+ *
+ * 1. **公開スキーマパラメータ**（`detect_patterns` の `tolerancePct`）で、値の意味を
+ *    時間足ごとに差し替えると外部クライアントの契約が黙って変わる
+ * 2. **同水準判定以外へ波及する。** triple の `confidence` の採点軸（`levelMargin`）・
+ *    形成中パターンの倍率（`FORMING_TOLERANCE_MULTIPLIER` 等）・他検出器の `near` に
+ *    そのまま入っており、締めると `confidence_below_min` で落ちる構造が出る
+ *    （#244 Phase 1 結果 9(a)）。#198 の「向きの逆な表の無検証流用」と同じ形になりうる
+ * 3. **同水準判定の時間足追従は本関数の仕事ではない。** H&S の肩については
+ *    {@link getHsShoulderMaxPctForTf} が担い（#244 Phase 2）、double / triple については
+ *    高さ相対の無次元ゲート（`MAX_LEVEL_SPREAD_RATIO`）が実データ 1hour で律速している
+ *    （#178 / PR #176 / PR #195。#244 Phase 1 結果 1 で 8/8 構造）
+ *
+ * つまり本関数は**上限側の天井**（{@link getHsShoulderMaxPctForTf} /
+ * `HS_SHOULDER_MAX_PCT` / `DOUBLE_LEVEL_MAX_PCT`）と `min` を取られる側で、
+ * **緩さの実効値はそちらが決める**。本関数を締めても同水準判定は締まらず、
+ * 採点軸と forming だけが動く。
  */
 export function getDefaultToleranceForTf(tf: string): number {
 	const t = String(tf);
@@ -209,6 +232,108 @@ export function getSizeThresholdsForTf(tf: string): SizeThresholds {
 	if (t === '12hour') return { heightPct: 0.0212, depthPct: 0.0354 };
 	// 1day / 1week / 1month / 未知の時間足: アンカーの現行値を据え置く
 	return { heightPct: MIN_PATTERN_HEIGHT_PCT, depthPct: MIN_DEPTH_PCT };
+}
+
+/**
+ * 時間軸に応じた H&S / 逆 H&S の**左右肩の同水準判定の上限**を返す（issue #244）。
+ *
+ * `structural.ts` の {@link HS_SHOULDER_MAX_PCT}（5% 固定）は時間足に依らない価格相対の
+ * 上限だったため、ATR で正規化すると 1day の 1.8 ATR に対し **1hour では 8.8 ATR** に
+ * 相当し、**同水準判定が実質機能していなかった**（#244 Phase 1 結果 3。accepted な
+ * 逆 H&S の肩 `relDiff` は実データ 1hour で max 2.719% = 4.77 ATR ＝ 現行閾値の 54%）。
+ * サイズ下限（{@link getSizeThresholdsForTf}）と頭の突出（{@link getHeadProminenceForTf}）は
+ * #152 / #198 で ATR 比カーブに乗ったが、肩の同水準判定だけがこのカーブから漏れていた。
+ *
+ * **導出は {@link getSizeThresholdsForTf} と同じ ATR 比テーブルを、アンカー 0.05
+ * （{@link HS_SHOULDER_MAX_PCT} の現行値 = 1day の値）に掛けただけ。** ATR を新たに
+ * 測り直してはいない——#152 が「1day を 1.0 とした ATR 比」を既に測定 / 推定済み
+ * （{@link getSizeThresholdsForTf} の docstring の表）で、本関数もそれをそのまま使う。
+ * #152 の 3 つの設計上の約束をそのまま踏襲する:
+ *
+ * 1. **実行時に ATR へ連動させない。** 値の導出にだけ ATR を使い、テーブルは凍結する
+ * 2. **アンカーは 1day で、現行値（5%）を据え置く。** 1day / 1week / 1month / 未知は不変
+ * 3. **種別ごとに分けない。** H&S / 逆 H&S が同じ値を共有する
+ *
+ * ## 表
+ *
+ * | 時間足 | ATR 比 | 由来 | 値 |
+ * |---|---|---|---|
+ * | `1min` | 0.0264 | √t 推定 | 0.13% |
+ * | `5min` | 0.0589 | √t 推定 | 0.29% |
+ * | `15min` | 0.1021 | √t 推定 | 0.51% |
+ * | `30min` | 0.1443 | √t 推定 | 0.72% |
+ * | `1hour` | 0.2073 | **実測**（ATR 0.57% / 2.75%） | **1.04%** |
+ * | `4hour` | 0.4082 | **√t 推定**（未実測） | **2.04%** |
+ * | `8hour` | 0.5774 | √t 推定 | 2.89% |
+ * | `12hour` | 0.7071 | √t 推定 | 3.54% |
+ * | `1day` | 1.0 | **実測**（アンカー） | **5%（据え置き）** |
+ * | `1week` / `1month` / 未知 | — | 据え置き | 5% |
+ *
+ * **`4hour` 以降は実測ではない。** BTC/JPY の 4hour ATR は測っておらず、1day の 2.75% から
+ * √t で推定した比（`1/√6 = 0.4082`）を使っている。`1hour` の 0.57% は実測で、√t 整合も
+ * 取れている（`0.57 × √24 = 2.79 ≈ 2.75`）。4hour の ATR を実測したら比を差し替えること。
+ * `1min` / `5min` / `15min` / `30min` / `8hour` / `12hour` も同じ √t 規則で導出した推定値で、
+ * この限界は {@link getSizeThresholdsForTf} 自身の `1hour` 以外の行と同じ位置づけ。
+ *
+ * ## ⚠️ 非恣意性は主張しない——値は「つまみ」
+ *
+ * **本関数の値が分布の空白帯に落ちているという主張はしていない**（`MIN_CONFIDENCE` の
+ * ⚠️ 節と同じ扱い）。#244 Phase 1 §9 が実データ 1hour の accepted な逆 H&S について
+ * 観測した隙間（B は肩 `relDiff` 0.460% と 1.356% の間の **0.896% 幅**、C / D は 0.460% と
+ * 2.473% の間の **2.013% 幅**）は、**標本が 10〜14 構造しかないための空き**であって
+ * 「ゼロから離れた集団」を分ける谷ではない。#214 の非恣意性テストの意味では**不合格**。
+ *
+ * 正当化は分布ではなく**次元の一貫性**にある: 同じ形の判定を全時間足で同じ ATR 本数で
+ * 行う、という #152 の方針を肩の同水準判定にも適用しただけ。落ちる集合が構造として
+ * 失格であることは #244 Phase 1.5 で**目視により**確認した（延べ 14 構造すべて「呼べない」。
+ * `docs/internal/level-pct-tf-244.md` §10）——値の非恣意性ではなく、**この値で落ちるものの
+ * 妥当性**が根拠。
+ *
+ * ## 適用先は肩ゲートだけ。窓生成（`outerShoulderOk`）は 5% のまま
+ *
+ * {@link HS_SHOULDER_MAX_PCT} は `detect_hs.ts` の 2 箇所で使われている:
+ *
+ * | 使用箇所 | 本関数を適用するか |
+ * |---|---|
+ * | 肩ゲート（strict 2 経路 + relaxed 2 経路の `shouldersWithinCap`） | **する** |
+ * | 窓生成（`enumerateHsWindows` → `outerShoulderOk`） | **しない**（5% 固定のまま） |
+ *
+ * **理由は診断性**（#244 決定コメントの宿題 1）。窓生成で落とすと `view=debug` に候補が
+ * 現れず**無音**になるが、肩ゲートで落とせば `shoulders_not_near:cap` の理由コードが残る。
+ * #178 の「誤って弾けば理由コードが出るが、誤って通せば無音」の非対称と同じ判断で、
+ * **窓生成は緩く、肩ゲートで落として理由コードを残す**。
+ *
+ * **この分離は出力にも効く**（＝ 純粋に診断性だけの話ではない）。#244 Phase 1 の ablation は
+ * 定数リテラルを差し替えたので両方が同時に締まり、**肩ゲートは通るのに窓生成で消える構造**が
+ * 出ていた（結果 9(b) / §9 の `btc_jpy_1day_2026` / `4hour` / `20-24-27-53-80`。肩 1.228% <
+ * `4hour` の閾値 2.040%）。窓生成を据え置いた本実装ではこの構造は**残る**——Phase 2 の
+ * 再計測（§11）で ablation と食い違う唯一の点として確認してある。
+ *
+ * ## `getSizeThresholdsForTf(tf).depthPct` と数値が一致するのは偶然
+ *
+ * アンカーが {@link MIN_DEPTH_PCT} と同じ 5% なので、本関数の返り値は全時間足で
+ * `getSizeThresholdsForTf(tf).depthPct` と**数値が一致する**。**流用しないこと。**
+ * 測っている量が違う:
+ *
+ * - `depthPct`: 山と山に挟まれた**谷の深さ**の下限（大きいほど厳しい）
+ * - 本関数: 左右**肩の同水準**の上限（大きいほど緩い）
+ *
+ * 極性すら逆なので、片方のアンカーを動かしたときにもう片方が黙って追従すると
+ * #198 と同じ「向きの逆な表の無検証流用」になる。**別関数として持つ。**
+ */
+export function getHsShoulderMaxPctForTf(tf: string): number {
+	const t = String(tf);
+	// 1day より短い足は ATR 比（1day = 1.0、getSizeThresholdsForTf と同じ表）で締める。
+	if (t === '1min') return 0.0013;
+	if (t === '5min') return 0.0029;
+	if (t === '15min') return 0.0051;
+	if (t === '30min') return 0.0072;
+	if (t === '1hour') return 0.0104;
+	if (t === '4hour') return 0.0204; // 推定（4hour の ATR は未実測。getSizeThresholdsForTf と同じ限界）
+	if (t === '8hour') return 0.0289;
+	if (t === '12hour') return 0.0354;
+	// 1day / 1week / 1month / 未知の時間足: アンカー（HS_SHOULDER_MAX_PCT）を据え置く
+	return HS_SHOULDER_MAX_PCT;
 }
 
 /**

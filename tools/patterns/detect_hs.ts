@@ -586,6 +586,24 @@ function extremeBetween(list: ReadonlyArray<Pivot>, loIdx: number, hiIdx: number
  * 「明確に超える」は `HS_SHOULDER_MAX_PCT` を超えて高い（逆 H&S は低い）こと。同水準なら
  * 幅のある肩の一部として通す——双子の山で肩がわずかに低い側に当たっただけで窓が消えると、
  * 実在する H&S を落とすため（`enumerateHsWindows` の呼び出し箇所のコメント）。
+ *
+ * ## ここだけモジュール定数 5% のまま（時間足別にしない。issue #244 Phase 2）
+ *
+ * 肩ゲート（strict / relaxed の `shouldersWithinCap`）は #244 で
+ * `ctx.hsShoulderMaxPct`（`getHsShoulderMaxPctForTf`。`1hour` で 1.04%）へ移したが、
+ * **本関数だけは `HS_SHOULDER_MAX_PCT`（5%）を読み続ける。意図的な非対称。**
+ *
+ * **窓生成は緩く、肩ゲートで落として理由コードを残す。** 本関数で落とすと窓自体が
+ * 生成されず、`view=debug` の candidates にも棄却理由が 1 行も残らない（**無音の偽陰性**）。
+ * 肩ゲートまで通せば `shoulders_not_near:cap` が残り、LLM も呼び出し側も
+ * 「なぜ出なかったか」を理由コードで追える。#178 の「誤って弾けば理由コードが出るが、
+ * 誤って通せば無音」の非対称と同じ判断（#244 決定コメントの宿題 1）。
+ *
+ * **両者は落ちる集合が同じではない。** #244 Phase 1 の ablation は定数リテラルを差し替えたので
+ * 窓生成も同時に締まり、**肩ゲートは通るのに窓生成で消える構造**が出ていた（結果 9(b) /
+ * `docs/internal/level-pct-tf-244.md` §9 の `btc_jpy_1day_2026` / `4hour` /
+ * `20-24-27-53-80`。肩 1.228% < `4hour` の閾値 2.040%）。窓生成を据え置いた現行では
+ * この構造は**残る**——Phase 2 の再計測（同 §11）で確認済み。
  */
 function outerShoulderOk(
 	shoulders: ReadonlyArray<Pivot>,
@@ -620,9 +638,23 @@ function outerShoulderOk(
  * | `shoulders_not_near:cap` | {@link HS_SHOULDER_MAX_PCT} のみ超過 | 定数を緩めれば通る |
  * | `shoulders_not_near:both` | 両方超過 | **どちらを緩めても通らない** |
  *
- * `:cap` は `tolerancePct > HS_SHOULDER_MAX_PCT` のときしか発火しない。tf-auto でそう
- * なるのは `15min` / `30min`（0.06 > 0.05）だけで、他の時間足では呼び出し側が
- * `tolerancePct` を 0.05 超で明示したときに限る（{@link HS_SHOULDER_MAX_PCT} の docstring）。
+ * `:cap` は `tolerancePct > 肩の上限` のときしか発火しない。**#244 Phase 2 で肩の上限が
+ * 時間足別（`ctx.hsShoulderMaxPct` = `getHsShoulderMaxPctForTf`）になったので、発火条件が
+ * 変わっている**——`1hour` 以下では tf-auto の `tolerancePct`（`1hour` 5% / `15min` `30min` 6%）が
+ * 肩の上限（`1hour` 1.04% / `30min` 0.72% / `15min` 0.51%）を大きく上回るため、
+ * **`:cap` が既定パスで普通に発火する。**
+ *
+ * | 時間足 | `tolerancePct`（tf-auto） | 肩の上限 | 既定パスで `:cap` が出るか |
+ * |---|---|---|---|
+ * | `1min` / `5min` / `15min` / `30min` | 0.04 / 0.04 / 0.06 / 0.06 | 0.13% / 0.29% / 0.51% / 0.72% | **出る** |
+ * | `1hour` | 0.05 | **1.04%** | **出る** |
+ * | `4hour` | 0.05 | 2.04% | **出る** |
+ * | `8hour` / `12hour` | 0.045 | 2.89% / 3.54% | **出る** |
+ * | `1day` / `1week` / `1month` | 0.04 / 0.035 / 0.03 | 5%（据え置き） | 出ない（`tolerancePct` が律速） |
+ *
+ * **#244 以前は「tf-auto では `15min` / `30min` だけ」だった。** 古い集計（`:cap` 0 件など）を
+ * 読み替えるときはこの差に注意すること。`1day` 以上の発火条件は変わっていない——
+ * そこでは今も呼び出し側が `tolerancePct` を 0.05 超で明示したときに限る。
  *
  * **strict 経路専用。** relaxed 経路は閾値が `tolerancePct × factors.shoulder` なので
  * {@link relaxedShouldersNotNearReason} を使う（issue #174）。分類そのものは
@@ -660,9 +692,11 @@ function shouldersNotNearSuffix(withinTolerance: boolean, withinCap: boolean): '
  * | `relaxed_shoulders_not_near:cap` | {@link HS_SHOULDER_MAX_PCT} のみ超過 | 定数を緩めれば通る |
  * | `relaxed_shoulders_not_near:both` | 両方超過 | **どちらを緩めても通らない** |
  *
- * relaxed の実効閾値は `min(tolerancePct × factors.shoulder, HS_SHOULDER_MAX_PCT)` で、
- * **既定パスではほぼ全時間足で `HS_SHOULDER_MAX_PCT` が律速する**（{@link HS_SHOULDER_MAX_PCT}
- * の docstring の表）。したがって strict と違い `:cap` は既定パスでも普通に出る。
+ * relaxed の実効閾値は `min(tolerancePct × factors.shoulder, ctx.hsShoulderMaxPct)` で、
+ * **既定パスでは全時間足で肩の上限が律速する**（{@link HS_SHOULDER_MAX_PCT} の docstring の表）。
+ * したがって `:cap` は既定パスでも普通に出る。#244 Phase 2 で肩の上限が時間足別になり、
+ * `1hour` 以下では strict 側でも `:cap` が既定パスで出るようになった（strict と relaxed の
+ * 違いは `:cap` の出る / 出ないではなく、`tolerance` が指す閾値の実体だけになっている）。
  */
 function relaxedShouldersNotNearReason(withinTolerance: boolean, withinCap: boolean): string {
 	return `relaxed_shoulders_not_near:${shouldersNotNearSuffix(withinTolerance, withinCap)}`;
@@ -744,7 +778,9 @@ function enumerateHsWindows(ctx: DetectContext, side: 'top' | 'bottom'): HsWindo
 			// （取り違えていない読みは別の組として列挙されるので、パターンを落とすのではなく
 			// 誤った anchor を落とすだけ）。
 			//
-			// **「明確に超える」を `HS_SHOULDER_MAX_PCT` で測るのが肝。** 単純な `>` にすると、
+			// **「明確に超える」を `HS_SHOULDER_MAX_PCT`（5% 固定。`ctx.hsShoulderMaxPct` ではない）で
+			// 測るのが肝。** 窓生成をここで締めると `view=debug` が無音になるので、時間足別の値は
+			// 肩ゲートにだけ適用する（#244 Phase 2。`outerShoulderOk` の docstring）。単純な `>` にすると、
 			// 双子の山（実データの BTC/JPY 日足 idx 38 と 42 は差 0.08%）で肩がわずかに低い側に
 			// 当たっただけで窓が消え、**実在する H&S を落とす**（実測で実データの改善が全て消えた）。
 			// 同水準なら「幅のある肩」の一部とみなして通し、肩として別格に高いものだけを弾く。
@@ -774,7 +810,7 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 		// 肩は 2 ゲートの AND。どちらの conjunct で落ちたかを `reason` に出すため短絡評価をやめて
 		// 別々に評価する（`near` / `isSameLevel` とも副作用の無い純粋比較なので判定は不変。issue #172）。
 		const shouldersWithinTolerance = near(p0.price, p4.price);
-		const shouldersWithinCap = isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
+		const shouldersWithinCap = isSameLevel(p0.price, p4.price, ctx.hsShoulderMaxPct);
 		const shouldersNear = shouldersWithinTolerance && shouldersWithinCap;
 		const headLower = p2.price < Math.min(p0.price, p4.price) * (1 - headProminencePct);
 		const necklineCheck = validateHorizontalNeckline(p1.price, p3.price, HS_NECKLINE_MAX_PCT);
@@ -1002,7 +1038,7 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 					rightShoulder: p4.price,
 					shouldersDiff: Math.abs(p0.price - p4.price),
 					shouldersDiffPct: Math.abs(p0.price - p4.price) / Math.max(1, Math.max(p0.price, p4.price)),
-					shoulderMaxPct: HS_SHOULDER_MAX_PCT,
+					shoulderMaxPct: ctx.hsShoulderMaxPct,
 					tolerancePct,
 					head: p2.price,
 					headProminencePct,
@@ -1030,7 +1066,7 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 		// 肩は 2 ゲートの AND。どちらの conjunct で落ちたかを `reason` に出すため短絡評価をやめて
 		// 別々に評価する（`near` / `isSameLevel` とも副作用の無い純粋比較なので判定は不変。issue #172）。
 		const shouldersWithinTolerance = near(p0.price, p4.price);
-		const shouldersWithinCap = isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
+		const shouldersWithinCap = isSameLevel(p0.price, p4.price, ctx.hsShoulderMaxPct);
 		const shouldersNear = shouldersWithinTolerance && shouldersWithinCap;
 		const headHigher = p2.price > Math.max(p0.price, p4.price) * (1 + headProminencePct);
 		const necklineCheck = validateHorizontalNeckline(p1.price, p3.price, HS_NECKLINE_MAX_PCT);
@@ -1247,7 +1283,7 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 					rightShoulder: p4.price,
 					shouldersDiff: Math.abs(p0.price - p4.price),
 					shouldersDiffPct: Math.abs(p0.price - p4.price) / Math.max(1, Math.max(p0.price, p4.price)),
-					shoulderMaxPct: HS_SHOULDER_MAX_PCT,
+					shoulderMaxPct: ctx.hsShoulderMaxPct,
 					tolerancePct,
 					head: p2.price,
 					headProminencePct,
@@ -1300,7 +1336,7 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 			const relaxedTolerancePct = tolerancePct * factors.shoulder;
 			const shouldersWithinRelaxedTolerance =
 				Math.abs(p0.price - p4.price) / Math.max(1, Math.max(p0.price, p4.price)) <= relaxedTolerancePct;
-			const shouldersWithinCap = isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
+			const shouldersWithinCap = isSameLevel(p0.price, p4.price, ctx.hsShoulderMaxPct);
 			const shouldersNearRelaxed = shouldersWithinRelaxedTolerance && shouldersWithinCap;
 			const headHigherRelaxed = p2.price > Math.max(p0.price, p4.price) * (1 + headProminencePct * factors.head);
 			const necklineCheck = validateHorizontalNeckline(p1.price, p3.price, HS_NECKLINE_MAX_PCT);
@@ -1322,7 +1358,7 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 							rightShoulder: p4.price,
 							shouldersDiff: Math.abs(p0.price - p4.price),
 							shouldersDiffPct: Math.abs(p0.price - p4.price) / Math.max(1, Math.max(p0.price, p4.price)),
-							shoulderMaxPct: HS_SHOULDER_MAX_PCT,
+							shoulderMaxPct: ctx.hsShoulderMaxPct,
 							tolerancePct,
 							relaxedShoulderFactor: factors.shoulder,
 							relaxedTolerancePct,
@@ -1584,7 +1620,7 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 			const relaxedTolerancePct = tolerancePct * factors.shoulder;
 			const shouldersWithinRelaxedTolerance =
 				Math.abs(p0.price - p4.price) / Math.max(1, Math.max(p0.price, p4.price)) <= relaxedTolerancePct;
-			const shouldersWithinCap = isSameLevel(p0.price, p4.price, HS_SHOULDER_MAX_PCT);
+			const shouldersWithinCap = isSameLevel(p0.price, p4.price, ctx.hsShoulderMaxPct);
 			const shouldersNearRelaxed = shouldersWithinRelaxedTolerance && shouldersWithinCap;
 			const headLowerRelaxed = p2.price < Math.min(p0.price, p4.price) * (1 - headProminencePct * factors.head);
 			const necklineCheck = validateHorizontalNeckline(p1.price, p3.price, HS_NECKLINE_MAX_PCT);
@@ -1606,7 +1642,7 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 							rightShoulder: p4.price,
 							shouldersDiff: Math.abs(p0.price - p4.price),
 							shouldersDiffPct: Math.abs(p0.price - p4.price) / Math.max(1, Math.max(p0.price, p4.price)),
-							shoulderMaxPct: HS_SHOULDER_MAX_PCT,
+							shoulderMaxPct: ctx.hsShoulderMaxPct,
 							tolerancePct,
 							relaxedShoulderFactor: factors.shoulder,
 							relaxedTolerancePct,

@@ -17,7 +17,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { dayjs } from '../../lib/datetime.js';
-import { getSizeThresholdsForTf } from '../../tools/patterns/config.js';
+import { getHsShoulderMaxPctForTf, getSizeThresholdsForTf } from '../../tools/patterns/config.js';
 import { detectDoubles } from '../../tools/patterns/detect_doubles.js';
 import { detectHeadAndShoulders } from '../../tools/patterns/detect_hs.js';
 import { detectTriples } from '../../tools/patterns/detect_triples.js';
@@ -59,6 +59,7 @@ function buildCtx(opts: {
 		debugCandidates: [],
 		type: opts.type,
 		sizeThresholds: getSizeThresholdsForTf(opts.type),
+		hsShoulderMaxPct: getHsShoulderMaxPctForTf(opts.type),
 		swingDepth: 7,
 		tz: 'Asia/Tokyo',
 		near: (a: number, b: number) => Math.abs(a - b) <= Math.max(a, b) * tol,

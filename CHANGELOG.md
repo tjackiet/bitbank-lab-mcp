@@ -67,6 +67,124 @@
 | 52 | #227 Phase 2 | relaxed フォールバックの `headProminence` 軸を、**緩めた側のゲート**（`headProminencePct × factors.head`）ではなく **strict のゲート**で採点するようにした。**ゲートは緩いまま（`RELAXED_FACTORS` は 1 つも変えていない）、点数だけ正直にする。** 段2 を削る案は Phase 1 で膝が観測できず却下 | **件数は変わらない**（1,248 ケースで延べ 4,070 → 4,070。追加 0 / 削除 0、type × コーパス 53 組すべて件数差 0）。動くのは実データ C の窓長スイープの `head_and_shoulders`（`relaxed_hs_x2.0_0.4`）**24 行の `confidence` と `scoreComponents` だけ** |
 | 53 | #242 PR 1/2 | `double_*` の**完成済み 4 経路**に「最終構成点（山2 / 谷2）とネックライン突破バーの**間**に同種のピボットがあれば `invalid`」という経路検証を足した。**閾値を 1 つも導入していない**（水準を問わない 0/1 判定）。triple / H&S への配線は PR 2 | 実データ C / D で**減る**（1,088 ケースで `double_top` 延べ −16（C・1 構造）/ −24（D・2 構造）。標準コーパス・実データ B は 0 件。**増加 0**） |
 | 54 | #242 PR 2/2 | 同じ経路検証を `triple_*` / H&S 系の**完成済み 4 経路ずつ**へ配線し、あわせて double にしかなかった**谷（山）ゾーン再進入チェック**（`detectTroughZoneReentry`）を triple / H&S へ横展開した（#131 → #138 の構造ゲート横展開から漏れていた分の回収） | 実データ C / D で**減る**（どちらの窓でも `head_and_shoulders` 延べ −56 / `triple_top` −12。標準コーパスは **type 別の増減 0** で 20 行が入れ替わり、実データ B は 0 件。**増加 0**） |
+| 55 | #244 Phase 2 | H&S / 逆 H&S の**肩の同水準判定**を時間足別にした（`getHsShoulderMaxPctForTf`。`1day` の 5% をアンカーに `getSizeThresholdsForTf` と同じ ATR 比。`1hour` = 1.04%）。**適用先は肩ゲートだけで、窓生成（`outerShoulderOk`）は 5% のまま**（診断性）。`DOUBLE_LEVEL_MAX_PCT` / `tolerancePct` は動かさない | `1day` 未満で**減る**（1,344 ケースで `inverse_head_and_shoulders` **構造単位で −23**。**全件が `1hour` × strict 経路**。`1day` 以上・`double_*` / `triple_*` / `head_and_shoulders` は全コーパスで 0 件差。**増加 0**） |
+
+### Changed（H&S / 逆 H&S の肩の同水準判定を時間足別にする。#244 Phase 2）
+
+左右の肩が「同水準」かの上限を、全時間足一律の `HS_SHOULDER_MAX_PCT = 0.05` から
+**時間足別のテーブル**（`tools/patterns/config.ts` の `getHsShoulderMaxPctForTf`）に移した。
+導出は `getSizeThresholdsForTf` と同じ ATR 比を `1day` の 5% に掛けただけで、**ATR を新たに
+測り直してはいない**（#152 が測定 / 推定済みの表をそのまま使う。#198 と同じ流儀）。
+
+| 時間足 | 1min | 5min | 15min | 30min | **1hour** | 4hour | 8hour | 12hour | 1day 以上 / 未知 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 肩の同水準の上限 | 0.13% | 0.29% | 0.51% | 0.72% | **1.04%** | 2.04% | 2.89% | 3.54% | **5%（据え置き）** |
+
+5% 固定は ATR 換算で `1day` 1.8 ATR に対し **`1hour` 8.8 ATR** で、1 時間足では同水準判定が
+実質機能していなかった（#244 Phase 1 結果 3。accepted な逆 H&S の肩 `relDiff` は実データ 1hour で
+max 2.719% = 4.77 ATR ＝ 現行閾値の 54%）。本テーブルでは全時間足が約 1.8 ATR に揃う。
+
+`HS_SHOULDER_MAX_PCT` の**値は変えていない**（0.05 のまま）。`1day` のアンカーとして、
+および後述の窓生成用として残る。
+
+#### `DOUBLE_LEVEL_MAX_PCT` / `tolerancePct` は動かしていない（#244 中間決定 1 / 2）
+
+issue #244 本文は価格相対の 3 閾値すべてを時間足別にする案だったが、Phase 1 の実測で 2 つは却下した。
+
+- **`DOUBLE_LEVEL_MAX_PCT`**: 実データの 1 時間足では double / triple の律速が高さ相対の
+  無次元ゲート（`MAX_LEVEL_SPREAD_RATIO`）で、価格相対の上限は効いていない（8 / 8 構造）。
+  締める積極的な理由が実測から出てこず、候補 0.620% は発見元ケース（0.627%）を
+  **0.007 ポイント差**で切る線になる
+- **`tolerancePct`**: 公開スキーマパラメータで、triple の `confidence` 採点軸・forming の倍率・
+  他検出器の `near` にも入っており、締めると同水準判定以外へ波及する（Phase 1 結果 9(a)）。
+  短い足ほど**緩い**表になっている点は `getDefaultToleranceForTf` の docstring に
+  「意図」として書いた
+
+#### 窓生成（`outerShoulderOk`）は 5% のまま。理由は診断性
+
+`HS_SHOULDER_MAX_PCT` は 2 箇所で使われていた。時間足別の値を掛けるのは**肩ゲートだけ**で、
+窓の列挙（`enumerateHsWindows` → `outerShoulderOk`）は全時間足で 5% のまま残す。
+
+| 使用箇所 | 閾値 |
+|---|---|
+| 肩ゲート（strict 2 経路 + relaxed 2 経路の `shouldersWithinCap`） | **`ctx.hsShoulderMaxPct`（時間足別）** |
+| 窓生成（`outerShoulderOk`） | `HS_SHOULDER_MAX_PCT`（5% 固定） |
+
+**窓生成で落とすと `view=debug` の候補に何も残らず無音になるが、肩ゲートで落とせば
+`shoulders_not_near:cap` の理由コードが残る。** #178 の「誤って弾けば理由コードが出るが、
+誤って通せば無音」の非対称と同じ判断（#244 決定コメントの宿題 1）。実測でも、落ちた 23 構造は
+**全件が候補として残り**、無音になったものは 0 件だった。
+
+**この分離は出力にも効く。** Phase 1 の ablation は定数リテラルを差し替えたので両方が同時に
+締まり、**肩ゲートは通るのに窓生成で消える構造**が出ていた（結果 9(b)）。窓生成を据え置いた
+本実装ではその構造は残る（下の実測の最終行）。
+
+解決は `DetectContext.hsShoulderMaxPct` 経由で、`sizeThresholds`（#152）と同じ流儀。
+**時間足を知っている層（`tools/detect_patterns.ts`）で 1 回だけ解決する。**
+
+#### ⚠️ 値の非恣意性は主張していない
+
+**分布の空白帯に置いた線ではない。** #244 Phase 1 §9 で観測した逆 H&S の肩 `relDiff` の隙間
+（accepted の直下 0.460% / 直上 1.356%）は**標本 10〜14 構造による空き**であって「ゼロから
+離れた集団」を分ける谷ではなく、#214 の非恣意性テストの意味では**不合格**。
+
+正当化は分布ではなく**次元の一貫性**——「同じ形の判定を全時間足で同じ ATR 本数で行う」という
+#152 の方針を肩の同水準判定にも適用しただけ。そのうえで、**この値で落ちる構造が実際に
+H&S と呼べない形であること**を Phase 1.5 で目視確認してある（延べ 14 構造すべて「呼べない」。
+`docs/internal/level-pct-tf-244.md` §10）。`MIN_CONFIDENCE` の ⚠️ 節と同じ扱いで docstring に明記した。
+
+`4hour` 以降が ATR 未実測である限界は `getSizeThresholdsForTf` からそのまま引き継ぐ。
+
+#### 実測（`scripts/measure_hs_shoulder_tf_244_phase2.ts`。1,344 ケース）
+
+Phase 1 の候補ビルドは定数リテラルを差し替えた ablation で肩ゲートと窓生成が同時に締まる。
+実装はそうではないので、**`origin/main` と作業ツリーを同じコーパスで走らせ直した**
+（標準 800 ＋ 実データ B / C / D 各 96 ＋ 実データ C の窓長スイープ 256。プールしない #219）。
+
+| | before → after |
+|---|---|
+| 落ちた構造 | **23**（構造単位。標準コーパス 5 / B 5 / C 4 / D 5 / 窓長スイープ 4）。**全件が `inverse_head_and_shoulders` × `1hour` × strict** |
+| 増えた構造 | **0** |
+| `1day` / `1week` / `1month` | **全コーパスで 0 件差**（アンカー据え置きの確認） |
+| `double_*` / `triple_*` / `head_and_shoulders` | **全コーパスで 0 件差** |
+| relaxed accepted | **不変**（窓長スイープの `head_and_shoulders` 24 → 24。Phase 1 結果 5 の再確認） |
+| 落ちた構造のうち `view=debug` から消えたもの | **0 件**（窓生成の据え置きが効いている） |
+
+**実データ B / C / D の 14 構造は Phase 1.5 §10 で目視判定した延べ 14 構造と 1 件ずつ一致した**
+（形 X 12 / 形 X' 1 / 形 Y 1。肩 `relDiff` 1.356〜2.719%）。残る 9 件は標準コーパスの実データ A の
+`1hour` ラベル 5 件（#178 により独立系列ではない — 参考）と、実データ C 本体と同じ値動きを
+別窓で拾った窓長スイープ 4 件。
+
+**Phase 1 の ablation と食い違う点が 1 つあり、それが窓生成を据え置いた効果そのもの**——
+Phase 1 結果 11(b) の `btc_jpy_1day_2026` / `4hour` / `20-24-27-53-80`（肩 1.228% <
+`4hour` の閾値 2.040%）は、候補ビルドでは窓生成で消えていたが**実装では残る**。
+
+#### 理由コード `shoulders_not_near:cap` の出方が変わった
+
+コード文字列は変えていないが、**`1day` 未満では既定パスで発火するようになった**。
+以前は `tolerancePct > 5%` になる `15min` / `30min` の tf-auto でしか出なかったが、
+上限が時間足別になった今は `1hour` でも上限 1.04% < `tolerancePct` 5% で普通に出る。
+`1day` 以上の発火条件は変わっていない（呼び出し側が `tolerancePct` を 5% 超で明示したときだけ）。
+`view=debug` の `details.shoulderMaxPct` にはその時間足の**実効値**が入る（`1hour` なら `0.0104`）。
+古い集計（`:cap` 0 件など）を読み替えるときはこの差に注意すること。
+
+#### ベースライン更新（#207）
+
+`tests/fixtures/detect_patterns_1hour_data_patterns_baseline.json` を更新した。
+**件数は 10 のまま**で、`inverse_head_and_shoulders` の `globalDedup` 代表が
+`3-9-42-147-154`（肩 `relDiff` **1.356%** で肩ゲート超過。Phase 1.5 の**形 Y**）から
+`3-9-42-106-109`（同 **0.325%**）へ入れ替わり、`rankPatterns` の並びが 1 つずれただけ。
+履歴表に 1 行足してある。
+
+#### 影響を受けた既存テスト 2 件
+
+- `tests/patterns/neckline-side-hs.test.ts`: `peaks_below_neckline` で落ちる窓が
+  右肩 325-330 を共有する 4 つの左肩候補（283 / 257 / 211 / 204）から **257 だけ**になった。
+  283 / 211 / 204 は肩 `relDiff` 1.386% / 1.188% / 1.306% で、**本ゲートより手前の
+  `shoulders_not_near:cap` で落ちる**（257 は 0.844% で通る）
+- `tests/patterns/target-reach-window-invariance.test.ts`: 退化分母の逆 H&S が 6 件 → 5 件。
+  消えた `230-232-249-283-285` は肩 `relDiff` **2.504%** で、Phase 1.5 §10 の**形 X**
+  （実データ D の `30-32-49-83-85`。B の idx − 200 = D の idx）
 
 ### Changed（triple / H&S に経路検証とゾーン再進入チェックを横展開する。#242 PR 2/2）
 

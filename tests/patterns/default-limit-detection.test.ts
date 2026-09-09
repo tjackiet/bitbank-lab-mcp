@@ -26,6 +26,7 @@ import { CandleTypeEnum } from '../../src/schema/base.js';
 import {
 	getDefaultParamsForTf,
 	getDefaultToleranceForTf,
+	getHsShoulderMaxPctForTf,
 	getSizeThresholdsForTf,
 } from '../../tools/patterns/config.js';
 import { detectDoubles, getDoubleFormingBarParams } from '../../tools/patterns/detect_doubles.js';
@@ -87,6 +88,7 @@ function buildCtx(tf: string, candles: CandleData[], includeForming: boolean): D
 		debugCandidates: [],
 		type: tf,
 		sizeThresholds: getSizeThresholdsForTf(tf),
+		hsShoulderMaxPct: getHsShoulderMaxPctForTf(tf),
 		swingDepth,
 		near: (a, b) => Math.abs(a - b) <= Math.max(a, b) * tolerancePct,
 		pct: (a, b) => ((b - a) / Math.max(1, a)) * 100,

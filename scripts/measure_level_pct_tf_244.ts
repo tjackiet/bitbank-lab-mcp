@@ -87,7 +87,12 @@ import { buildBtcJpy2026Candles } from '../tests/fixtures/btc_jpy_1day_2026.js';
 import { buildBtcJpy1hour202608Candles } from '../tests/fixtures/btc_jpy_1hour_2026_08.js';
 import { buildBtcJpy1hour202609Candles } from '../tests/fixtures/btc_jpy_1hour_2026_09.js';
 import * as synth from '../tests/fixtures/synthetic_pattern_candles.js';
-import { getDefaultToleranceForTf, getSizeThresholdsForTf, resolveParams } from '../tools/patterns/config.js';
+import {
+	getDefaultToleranceForTf,
+	getHsShoulderMaxPctForTf,
+	getSizeThresholdsForTf,
+	resolveParams,
+} from '../tools/patterns/config.js';
 import { detectDoubles as realDetectDoubles } from '../tools/patterns/detect_doubles.js';
 import { detectHeadAndShoulders as realDetectHs } from '../tools/patterns/detect_hs.js';
 import { detectTriples as realDetectTriples } from '../tools/patterns/detect_triples.js';
@@ -488,6 +493,7 @@ function buildCtx(spec: CaseSpec, debugCandidates: CandDebugEntry[], tolerancePc
 		tolerancePct,
 		headProminencePct: resolved.headProminencePct,
 		sizeThresholds: getSizeThresholdsForTf(spec.tf),
+		hsShoulderMaxPct: getHsShoulderMaxPctForTf(spec.tf),
 		minDist: resolved.minBarsBetweenSwings,
 		want: new Set(),
 		includeForming: spec.opts.includeForming,

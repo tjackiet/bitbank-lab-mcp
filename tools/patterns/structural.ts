@@ -30,20 +30,34 @@ import type { Pivot } from './swing.js';
 export const DOUBLE_LEVEL_MAX_PCT = 0.03;
 
 /**
- * H&S / IHS の左右肩同水準の構造上限。**「肩の許容誤差」そのものではない**（issue #172）。
+ * H&S / IHS の左右肩同水準の構造上限の **`1day` アンカー値**。**「肩の許容誤差」そのものではない**（issue #172）。
+ *
+ * ## ⚠️ 本定数を肩ゲートで直接読まないこと（issue #244 Phase 2）
+ *
+ * 肩ゲートの実効上限は **`ctx.hsShoulderMaxPct`（`config.ts` の `getHsShoulderMaxPctForTf`）**で、
+ * 本定数はその **`1day` アンカー**（および `1week` / `1month` / 未知の時間足の値）としてだけ残っている。
+ * 値は 0.05 のまま変えていない。5% 固定は ATR 換算で `1day` 1.8 ATR に対し **`1hour` 8.8 ATR** で、
+ * 同水準判定が短い足で実質機能していなかった（#244 Phase 1 結果 3）。
+ *
+ * 本定数を**そのまま読み続けている箇所は 1 つだけ**——`detect_hs.ts` の `outerShoulderOk`
+ * （`enumerateHsWindows` の窓生成）。**窓生成は 5% のまま緩く残す**のが #244 の決定で、
+ * 理由は診断性（窓生成で落とすと `view=debug` が無音、肩ゲートで落とせば
+ * `shoulders_not_near:cap` が残る）。詳細は `getHsShoulderMaxPctForTf` の docstring。
  *
  * ## 肩の判定における役割: 許容誤差に対する天井
  *
  * `detect_hs.ts` の 4 経路（strict 2 + relaxed 2）はいずれも肩の同水準判定を
- * **「相対差が許容誤差以内」AND `isSameLevel(p0, p4, HS_SHOULDER_MAX_PCT)`** で行う。
+ * **「相対差が許容誤差以内」AND `isSameLevel(p0, p4, ctx.hsShoulderMaxPct)`** で行う。
  * どちらの conjunct も同じ指標（左右肩の相対差 {@link relDiff}）を測っているので、
  * **実効閾値は 2 つの閾値の `min`**。**ただし許容誤差の実体が strict と relaxed で違う**
  * （issue #174。#173 の docstring は両経路を同一と書いていたが誤り）:
  *
  * | 経路 | 許容誤差の式 | 実効閾値 |
  * |---|---|---|
- * | strict（`findStrictHS` / `findStrictInverseHS`） | `near(p0, p4)` = `tolerancePct` | `min(tolerancePct, HS_SHOULDER_MAX_PCT)` |
- * | relaxed（`findRelaxedHS` / `findRelaxedInverseHS`） | **`near()` を呼ばず** `tolerancePct × factors.shoulder` をインライン比較 | `min(tolerancePct × factors.shoulder, HS_SHOULDER_MAX_PCT)` |
+ * | strict（`findStrictHS` / `findStrictInverseHS`） | `near(p0, p4)` = `tolerancePct` | `min(tolerancePct, cap)` |
+ * | relaxed（`findRelaxedHS` / `findRelaxedInverseHS`） | **`near()` を呼ばず** `tolerancePct × factors.shoulder` をインライン比較 | `min(tolerancePct × factors.shoulder, cap)` |
+ *
+ * `cap` = `ctx.hsShoulderMaxPct`（時間足別。`1day` 以上は本定数と同値の 0.05）。
  *
  * `factors` は `detect_hs.ts` の `RELAXED_FACTORS` の 2 段（`shoulder: 1.6` → `2.0`）。
  * `tolerancePct` は `config.ts` の `getDefaultToleranceForTf` が時間足ごとに返す
@@ -53,37 +67,42 @@ export const DOUBLE_LEVEL_MAX_PCT = 0.03;
  * relaxed のインライン比較だけが分母を `Math.max(1, M)` にクランプしており、
  * `isSameLevel` は {@link relDiff} なので分母は素の `M`。したがって **`M < 1`
  * （1 円未満の建値）では 2 つの conjunct が別の分母を見る**——相対差に対する実効閾値は
- * `min(tolerancePct × factors.shoulder / M, HS_SHOULDER_MAX_PCT)` になる。`1/M > 1` なので
- * **緩むのは許容誤差側だけで、本定数が律速するという下表の結論は変わらない**（むしろ強まる）。
- * strict の `near()` にはこのクランプが無いため `min(tolerancePct, HS_SHOULDER_MAX_PCT)` は
+ * `min(tolerancePct × factors.shoulder / M, cap)` になる。`1/M > 1` なので
+ * **緩むのは許容誤差側だけで、`cap` が律速するという下表の結論は変わらない**（むしろ強まる）。
+ * strict の `near()` にはこのクランプが無いため `min(tolerancePct, cap)` は
  * `M` によらず厳密。`view=debug` の `details.shouldersDiffPct` は strict / relaxed とも
  * `Math.max(1, M)` で割った値なので、`M < 1` では {@link relDiff} と一致しない。
  *
- * ### strict: 既定パスで本定数が律速するのは `15min` / `30min` だけ
+ * ### strict: `1day` 未満は `cap` が律速、`1day` 以上は `tolerancePct` が律速（#244 Phase 2 で更新）
  *
- * | 時間足 | `tolerancePct`（tf-auto） | `HS_SHOULDER_MAX_PCT` | 実効値 | 律速側 |
+ * | 時間足 | `tolerancePct`（tf-auto） | `cap` = `getHsShoulderMaxPctForTf` | 実効値 | 律速側 |
  * |---|---|---|---|---|
- * | `1hour` / `4hour` | 0.05 | 0.05 | 0.05 | 同値 |
- * | `1day`（他） | 0.04 | 0.05 | **0.04** | **`tolerancePct`** |
- * | `8hour` / `12hour` | 0.045 | 0.05 | 0.045 | `tolerancePct` |
- * | `1week` / `1month` | 0.035 / 0.03 | 0.05 | 0.035 / 0.03 | `tolerancePct` |
- * | **`15min` / `30min`** | **0.06** | 0.05 | **0.05** | **本定数** |
+ * | `1min` / `5min` | 0.04 | **0.0013 / 0.0029** | **0.0013 / 0.0029** | **`cap`** |
+ * | `15min` / `30min` | 0.06 | **0.0051 / 0.0072** | **0.0051 / 0.0072** | **`cap`** |
+ * | **`1hour`** | 0.05 | **0.0104** | **0.0104** | **`cap`** |
+ * | `4hour` | 0.05 | **0.0204** | **0.0204** | **`cap`** |
+ * | `8hour` / `12hour` | 0.045 | **0.0289 / 0.0354** | **0.0289 / 0.0354** | **`cap`** |
+ * | `1day`（他） | 0.04 | 0.05（本定数） | **0.04** | **`tolerancePct`** |
+ * | `1week` / `1month` | 0.035 / 0.03 | 0.05（本定数） | 0.035 / 0.03 | `tolerancePct` |
  *
- * `resolveParams` は明示値をそのまま通すので、他の時間足では `tolerancePct: 0.08` のように
- * 呼び出し側が明示的に緩めて初めて本定数が効く。
+ * **`1day` 以上の行は #244 以前と同一。** 変わったのは `1day` 未満で、以前は
+ * 「`15min` / `30min` だけが本定数律速、`1hour` / `4hour` は 0.05 で同値」だった。
+ * `resolveParams` は明示値をそのまま通すので、`1day` 以上では `tolerancePct: 0.08` のように
+ * 呼び出し側が明示的に緩めて初めて `cap`（= 本定数）が効く。
  *
- * ### relaxed: `×1.6` 段で `1month` 以外の全時間足、`×2.0` 段では全時間足で本定数が律速する
+ * ### relaxed: `×1.6` 段で `1month` 以外の全時間足、`×2.0` 段では全時間足で `cap` が律速する
  *
- * | 時間足 | `tolerancePct` | `× 1.6` | `× 2.0` | `×1.6` の実効値 | `×2.0` の実効値 |
- * |---|---|---|---|---|---|
- * | `1hour` / `4hour` | 0.05 | 0.08 | 0.10 | **0.05（本定数）** | **0.05（本定数）** |
- * | `1day`（他） | 0.04 | 0.064 | 0.08 | **0.05（本定数）** | **0.05（本定数）** |
- * | `8hour` / `12hour` | 0.045 | 0.072 | 0.09 | **0.05（本定数）** | **0.05（本定数）** |
- * | `1week` | 0.035 | 0.056 | 0.07 | **0.05（本定数）** | **0.05（本定数）** |
- * | `1month` | 0.03 | 0.048 | 0.06 | 0.048（`tolerancePct`） | **0.05（本定数）** |
- * | `15min` / `30min` | 0.06 | 0.096 | 0.12 | **0.05（本定数）** | **0.05（本定数）** |
+ * | 時間足 | `tolerancePct` | `× 1.6` | `× 2.0` | `cap` | `×1.6` の実効値 | `×2.0` の実効値 |
+ * |---|---|---|---|---|---|---|
+ * | `15min` / `30min` | 0.06 | 0.096 | 0.12 | 0.0051 / 0.0072 | **`cap`** | **`cap`** |
+ * | `1hour` / `4hour` | 0.05 | 0.08 | 0.10 | 0.0104 / 0.0204 | **`cap`** | **`cap`** |
+ * | `8hour` / `12hour` | 0.045 | 0.072 | 0.09 | 0.0289 / 0.0354 | **`cap`** | **`cap`** |
+ * | `1day`（他） | 0.04 | 0.064 | 0.08 | 0.05（本定数） | **0.05（本定数）** | **0.05（本定数）** |
+ * | `1week` | 0.035 | 0.056 | 0.07 | 0.05（本定数） | **0.05（本定数）** | **0.05（本定数）** |
+ * | `1month` | 0.03 | 0.048 | 0.06 | 0.05（本定数） | 0.048（`tolerancePct`） | **0.05（本定数）** |
  *
- * **つまり「既定パスで本定数が律速するのは `15min` / `30min` だけ」は strict 限定の話。**
+ * **relaxed は #244 の前後で「`cap` が律速」という結論が変わらない**（`1month` の `×1.6` 段を除く）。
+ * 変わったのは strict 側で、**#244 以降は `1day` 未満なら strict でも `cap` が律速する。**
  *
  * ## 実測: `:cap` 0 件は strict の観測で、relaxed を 1 件も映していない
  *
@@ -121,12 +140,19 @@ export const DOUBLE_LEVEL_MAX_PCT = 0.03;
  * **緩めても動かない / 締めると動く**という非対称。#167 の「肩を 5.5% まで緩めて増える検出は
  * 0 件」と同じ結論で、**「律速している = 重要な定数」と読み替えないこと。**
  *
+ * **この ablation は #244 以前の測定で、本定数が肩ゲートと窓生成の両方を駆動していたときのもの。**
+ * 今の本定数は窓生成専用なので、同じ表を再測すると意味が変わる（肩ゲートの ablation は
+ * `getHsShoulderMaxPctForTf` 側で行う）。値の比較に使うときは注意すること。
+ *
  * ## もう 1 つの役割: 窓生成での「同水準の肩」判定
  *
  * `detect_hs.ts` の `outerShoulderOk`（`enumerateHsWindows` から呼ばれる）でも使う。
  * こちらは**外側の脚にある肩が anchor の肩を「明確に」超えているか**の判定で、
  * **`tolerancePct` と AND を取らない単独の閾値**。同水準（本定数以内）なら「幅のある肩」の
  * 一部として窓を通す。詳細は `outerShoulderOk` のコメントを参照。
+ *
+ * **#244 Phase 2 以降、本定数を実行時に読むのはこの 1 箇所だけ**（肩ゲートは
+ * `ctx.hsShoulderMaxPct` へ移った）。窓生成は全時間足で 5% のまま。
  *
  * ## {@link HS_NECKLINE_MAX_PCT} との違い
  *
@@ -146,8 +172,10 @@ export const HS_SHOULDER_MAX_PCT = 0.05;
  * `tolerancePct` description が「ネックライン水平度は本パラメータに依存しない固定閾値」
  * として公開している契約。
  *
- * 肩側の {@link HS_SHOULDER_MAX_PCT} は同じ 0.05 でも肩の許容誤差と `min` を取る
- * ため効き方が違う（その許容誤差自体も strict と relaxed で式が違う）。**混同しないこと。**
+ * 肩側は同じ 0.05 でも肩の許容誤差と `min` を取るため効き方が違う（その許容誤差自体も
+ * strict と relaxed で式が違う）し、**#244 Phase 2 以降は時間足別**
+ * （`config.ts` の `getHsShoulderMaxPctForTf`。{@link HS_SHOULDER_MAX_PCT} はその `1day`
+ * アンカー）。本定数は全時間足で 5% 固定のまま。**混同しないこと。**
  */
 export const HS_NECKLINE_MAX_PCT = 0.05;
 

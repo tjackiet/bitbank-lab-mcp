@@ -38,6 +38,7 @@ import {
 	getDefaultParamsForTf,
 	getDefaultToleranceForTf,
 	getHeadProminenceForTf,
+	getHsShoulderMaxPctForTf,
 	getSizeThresholdsForTf,
 } from '../../tools/patterns/config.js';
 import { detectHeadAndShoulders } from '../../tools/patterns/detect_hs.js';
@@ -88,6 +89,7 @@ function buildCtx(opts?: { swingDepth?: number; headProminencePct?: number }): D
 		tolerancePct: tol,
 		headProminencePct: opts?.headProminencePct ?? TF_HEAD_PROMINENCE,
 		sizeThresholds: getSizeThresholdsForTf(TF),
+		hsShoulderMaxPct: getHsShoulderMaxPctForTf(TF),
 		minDist: TF_MIN_DIST,
 		want: new Set(['head_and_shoulders']),
 		includeForming: false,

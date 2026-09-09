@@ -41,7 +41,7 @@ import { describe, expect, it } from 'vitest';
 import { dayjs } from '../../lib/datetime.js';
 import { generatePatternDiagram } from '../../lib/pattern-diagrams.js';
 import { formatPatternLine } from '../../src/handlers/detectPatternsViewsHandler.js';
-import { getSizeThresholdsForTf } from '../../tools/patterns/config.js';
+import { getHsShoulderMaxPctForTf, getSizeThresholdsForTf } from '../../tools/patterns/config.js';
 import { detectHeadAndShoulders } from '../../tools/patterns/detect_hs.js';
 import { linearRegressionWithR2 } from '../../tools/patterns/regression.js';
 import type { Pivot } from '../../tools/patterns/swing.js';
@@ -76,6 +76,7 @@ function buildCtx(opts: {
 		tolerancePct: tol,
 		headProminencePct: 0.04,
 		sizeThresholds: getSizeThresholdsForTf('1day'),
+		hsShoulderMaxPct: getHsShoulderMaxPctForTf('1day'),
 		minDist: 5,
 		want: new Set(),
 		includeForming: false,
