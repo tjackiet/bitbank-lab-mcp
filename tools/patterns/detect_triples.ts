@@ -10,6 +10,7 @@ import { clamp01, relDev } from './regression.js';
 import { applyPostBreakoutGates, applyReversalGate, buildStructureGate } from './reversal-gate.js';
 import { averageDefinedAxes, breakoutQualityScore, retracementScore } from './scoring.js';
 import {
+	formingNecklineSideReason,
 	levelSpreadDetailsFrom,
 	levelSpreadMetrics,
 	necklineSideDetailsFrom,
@@ -1312,6 +1313,56 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 	return terminalFallback;
 }
 
+/**
+ * 形成中経路の主構成点とネックラインの位置関係の検査（issue #261）。棄却したら debug candidate を
+ * 積んで `true` を返す（呼び出し側は `continue`）。判定の実体と根拠——価格基準を `price`（終値）に
+ * した理由、許容幅を置かない理由、H&S 系に配線しない理由——は
+ * {@link validateMainPointsNecklineSide} の docstring が単一ソース。理由コードを
+ * `forming_` 接頭辞で分ける理由は {@link formingNecklineSideReason} を参照。
+ *
+ * ## 主構成点は確定 2 点 ＋ 最新足の 3 点
+ *
+ * 完成済み 4 経路が `[a, b, c]` の**全 3 点**を渡すのに揃える（中間点を除外する理由が無い、という
+ * `detect_triples.ts:336` のコメントがそのまま当たる）。3 点目は確定ピボットではないので
+ * `{ idx: lastIdx, price: currentPrice }` を組んで渡す（#169 の idiom）——
+ * {@link validateMainPointsNecklineSide} は `Pick<Pivot, 'idx' | 'price'>` しか見ないので
+ * `extremePrice` は要らない。
+ *
+ * ## ネックライン水準は**その経路が出力に使っている値**と同じ
+ *
+ * top は `avgValley`（2 谷の `price` の平均）、bottom は `avgPeakPrice`（2 山の `price` の平均）。
+ * どちらも `neckline` 配列・`breakoutTarget` と同じ値で、
+ * {@link ReversalStructureInput.necklinePrice} の docstring が要求する
+ * 「ゲートとブレイク判定は同じ線を使う」に揃う。**別の線で検査しても意味が無い。**
+ *
+ * ## 呼び出し位置
+ *
+ * **既存の棄却検査（`forming_neckline_not_horizontal` / `formationBars` / サイズ検査 /
+ * 構造ゲート）をすべて通過した後。** 完成済み 4 経路と同じ配置規約で、前に置くと固有の理由
+ * コードを持つ候補の `reason` を横取りする（{@link validatePatternSize} の docstring）。
+ */
+function rejectFormingNecklineSide(
+	side: ReversalSide,
+	type: 'triple_top' | 'triple_bottom',
+	mainPoints: ReadonlyArray<Pick<Pivot, 'idx' | 'price'>>,
+	necklinePrice: number,
+	idxs: number[],
+	pts: Array<{ role: string; idx: number; price: number }>,
+	pcand: Pcand,
+): boolean {
+	const { reason, offenders } = validateMainPointsNecklineSide(side, mainPoints, necklinePrice);
+	if (!reason) return false;
+	pcand({
+		type,
+		accepted: false,
+		reason: formingNecklineSideReason(reason),
+		idxs,
+		pts,
+		details: necklineSideDetailsFrom(necklinePrice, offenders),
+	});
+	return true;
+}
+
 // ── Helper: 形成中 Triple Top ──
 
 /**
@@ -1499,6 +1550,30 @@ function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
 			debugCandidates: ctx.debugCandidates,
 		});
 		if (!gate) continue;
+
+		// 主構成点とネックラインの位置関係（issue #261。#216 Phase 2 の形成中への配線）。
+		// 検査水準は下の `neckline` / `formTtTarget` と同じ `avgValley`。配置・根拠は
+		// `rejectFormingNecklineSide` の docstring。
+		if (
+			rejectFormingNecklineSide(
+				'top',
+				'triple_top',
+				[peak1, peak2, { idx: lastIdx, price: currentPrice }],
+				avgValley,
+				[peak1.idx, peak2.idx, lastIdx],
+				[
+					{ role: 'peak1', idx: peak1.idx, price: peak1.price },
+					{ role: 'valley1', idx: v1.idx, price: v1.price },
+					{ role: 'peak2', idx: peak2.idx, price: peak2.price },
+					{ role: 'valley2', idx: v2.idx, price: v2.price },
+					{ role: 'current', idx: lastIdx, price: currentPrice },
+				],
+				pcand,
+			)
+		) {
+			continue;
+		}
+
 		const structureGate = buildStructureGate(gate);
 
 		const neckline = [
@@ -1729,6 +1804,29 @@ function tryFormingTripleBottom(ctx: DetectContext): DeduplicablePattern | null 
 			debugCandidates: ctx.debugCandidates,
 		});
 		if (!gate) continue;
+
+		// 主構成点とネックラインの位置関係（issue #261）。top 側の対称。検査水準は下の
+		// `neckline` / `formTbTarget` と同じ `avgPeakPrice`。
+		if (
+			rejectFormingNecklineSide(
+				'bottom',
+				'triple_bottom',
+				[valley1, valley2, { idx: lastIdx, price: currentPrice }],
+				avgPeakPrice,
+				[valley1.idx, valley2.idx, lastIdx],
+				[
+					{ role: 'valley1', idx: valley1.idx, price: valley1.price },
+					{ role: 'peak1', idx: pTop1.idx, price: pTop1.price },
+					{ role: 'valley2', idx: valley2.idx, price: valley2.price },
+					{ role: 'peak2', idx: pTop2.idx, price: pTop2.price },
+					{ role: 'current', idx: lastIdx, price: currentPrice },
+				],
+				pcand,
+			)
+		) {
+			continue;
+		}
+
 		const structureGate = buildStructureGate(gate);
 
 		const neckline = [

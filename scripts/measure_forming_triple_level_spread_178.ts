@@ -2,6 +2,14 @@
  * issue #178 項目 1 Phase 1: **形成中 triple の同水準判定**が価格相対のままである件を実測する。
  * **検出器・`structural.ts`・`config.ts`・ベースラインは 1 行も変更しない**（計測とドキュメントだけ）。
  *
+ * ## §6 は issue #261 の計測（後から足したもの）
+ *
+ * #178 中間決定（案 A′）の順序に従って **#261（`validateMainPointsNecklineSide` の形成中への配線）が
+ * 先に入った**ので、本スクリプトの `base`（= 作業ツリー）は **Phase 1 当時の base ではない**。
+ * §1〜§5 の数字は配線後の値で、`docs/internal/forming-triple-level-spread-178.md` §10 に
+ * 貼ってある Phase 1 当時の出力とは一致しない（あちらは `main` d86fb2b 時点）。
+ * §6 が配線前後を並べて出すので、**Phase 1 の数字を再現したいときは §6 の「配線前」列を見る。**
+ *
  * ## 問題設定（コードの事実）
  *
  * `tools/patterns/detect_triples.ts` の形成中 2 経路（`tryFormingTripleTop` /
@@ -32,6 +40,7 @@
  * | 3 | 逆向き: `validateLevelSpread` を形成中に配線した ablation（`maxRatio` = 0.5 / 0.6 / 0.75 / 1.0） |
  * | 4 | 形成中 double の同じ量（実装対象は本 Phase では決めない） |
  * | 5 | 波及の確認（`FORMING_*` 係数の独立性 / `view=debug` の cap / `confidence` との整合） |
+ * | 6 | **issue #261**: `validateMainPointsNecklineSide` を形成中 4 経路に配線した効果（配線前後） |
  *
  * ## ハーネス
  *
@@ -51,6 +60,11 @@
  *   挿入後にマーカーが**ちょうど 2 回**（top / bottom）現れることを確認する。
  *   `maxRatio = 999`（実質無効）のビルドが `base` と全ケースで一致することも検算するので、
  *   **差分はゲートのみに帰属する**（#178 項目 3 のコメントと同じ流儀）。
+ * - **strip ビルド（§6）**: issue #261 が入れたネックライン側検査を**外した**ビルド。
+ *   `rejectFormingNecklineSide` の本体先頭に `return false;` を差し込むだけで、アンカーが
+ *   `detect_triples.ts` / `detect_doubles.ts` に**それぞれちょうど 1 回**現れることを挿入前に確認する。
+ *   ablation（§3）と**向きが逆**なのは、#261 が既に作業ツリーに入っているため。
+ *   strip ビルドで新理由コードが 1 件も発火しないことを検算する。
  *
  * **作業ツリーは 1 バイトも変えない。** 展開先は `mkdtemp` の一時ディレクトリ。
  *
@@ -231,13 +245,46 @@ function ablationBlock(spec: (typeof ABLATION_ANCHORS)[number], maxRatio: number
 }
 
 /**
+ * issue #261 の ablation（**配線を外す**方向）で書き換える 1 行。形成中経路のネックライン側検査
+ * （`rejectFormingNecklineSide`）の本体先頭で、`detect_triples.ts` / `detect_doubles.ts` に
+ * **それぞれちょうど 1 回**現れる。完成済み経路の `rejectByNecklineSide`（double）は
+ * `validateMainPointsNecklineSide(side, [a, c], necklinePrice)` という別の実引数なので衝突しない。
+ *
+ * §3 の `validateLevelSpread`（**足す**方向）と向きが逆なのは、#261 が既にマージされていて
+ * **作業ツリーが「配線後」だから**。「配線前」を再現するにはこちらを外すしかない。
+ */
+const NECKLINE_STRIP_ANCHOR =
+	'\tconst { reason, offenders } = validateMainPointsNecklineSide(side, mainPoints, necklinePrice);';
+
+/** strip ビルドに埋める目印。挿入後に各ファイルでちょうど 1 回現れることを確認する。 */
+const NECKLINE_STRIP_MARKER = '__strip261_disabled';
+
+/** {@link NECKLINE_STRIP_ANCHOR} を持つファイル（形成中経路を実装している 2 つ）。 */
+const NECKLINE_STRIP_FILES = ['detect_triples.ts', 'detect_doubles.ts'] as const;
+
+/** issue #261 が新設した理由コード（形成中パス版）。 */
+const NECKLINE_SIDE_FORMING_REASONS = new Set(['forming_peaks_below_neckline', 'forming_valleys_above_neckline']);
+
+const isNecklineSideFormingReason = (reason: unknown): boolean =>
+	typeof reason === 'string' && NECKLINE_SIDE_FORMING_REASONS.has(reason);
+
+/** 展開ビルドの作り分け。両方同時に指定してもよい（本スクリプトでは使わない）。 */
+interface BuildVariantOpts {
+	/** 指定したら形成中 triple 2 経路へ `validateLevelSpread` の ablation ブロックを挿入する（§3）。 */
+	ablationMaxRatio?: number;
+	/** `true` なら issue #261 のネックライン側検査を**無効化**する（§6 の「配線前」）。 */
+	stripNecklineSide?: boolean;
+}
+
+/**
  * 作業ツリーの `tools/patterns/` を**ディレクトリごと**一時領域へ展開する
  * （`measure_hs_shoulder_window_249.ts` / `measure_level_pct_tf_244.ts` の同名関数と同じ流儀）。
  *
  * @param variant 展開先ディレクトリ名の識別子
- * @param ablationMaxRatio 指定したら形成中 2 経路へ ablation ブロックを挿入する
+ * @param opts ablation の作り分け（{@link BuildVariantOpts}）
  */
-function materializePatternsDir(variant: string, ablationMaxRatio?: number): string {
+function materializePatternsDir(variant: string, opts: BuildVariantOpts = {}): string {
+	const { ablationMaxRatio, stripNecklineSide } = opts;
 	const files = execFileSync('git', ['ls-tree', '-r', '--name-only', 'HEAD', '--', 'tools/patterns/'], {
 		cwd: ROOT,
 		encoding: 'utf8',
@@ -283,6 +330,26 @@ function materializePatternsDir(variant: string, ablationMaxRatio?: number): str
 			}
 		}
 
+		if (stripNecklineSide && (NECKLINE_STRIP_FILES as readonly string[]).includes(name)) {
+			const hits = src.split(NECKLINE_STRIP_ANCHOR).length - 1;
+			if (hits !== 1) {
+				throw new Error(
+					`issue #261 の strip アンカーが ${name} に ${hits} 回現れる（期待 1 回）。` +
+						'形成中経路のネックライン側検査の実装が変わったので、アンカーを取り直すこと。',
+				);
+			}
+			src = src.replace(
+				NECKLINE_STRIP_ANCHOR,
+				`\t// [ablation issue #261] 形成中経路のネックライン側検査を無効化した「配線前」ビルド。\n` +
+					`\t// 計測ハーネスが挿入した行で、作業ツリーには存在しない。\n` +
+					`\tconst ${NECKLINE_STRIP_MARKER} = true;\n` +
+					`\tif (${NECKLINE_STRIP_MARKER}) return false;\n${NECKLINE_STRIP_ANCHOR}`,
+			);
+			if (src.split(`const ${NECKLINE_STRIP_MARKER} = `).length - 1 !== 1) {
+				throw new Error(`strip ブロックが ${name} に 1 箇所入っていない。`);
+			}
+		}
+
 		const rewritten = src
 			// ディレクトリ外への import は作業ツリーの絶対パスへ。
 			.replace(/from '\.\.\/\.\.\//g, `from '${ROOT}/`)
@@ -296,8 +363,8 @@ function materializePatternsDir(variant: string, ablationMaxRatio?: number): str
 }
 
 /** 1 ビルドぶんの検出器と係数を、**同じ展開ディレクトリから**読む。 */
-async function loadBuild(variant: string, ablationMaxRatio?: number): Promise<Build> {
-	const dir = materializePatternsDir(variant, ablationMaxRatio);
+async function loadBuild(variant: string, opts: BuildVariantOpts = {}): Promise<Build> {
+	const dir = materializePatternsDir(variant, opts);
 	const triples = (await import(pathToFileURL(join(dir, 'detect_triples.ts')).href)) as unknown as Build;
 	const doubles = (await import(pathToFileURL(join(dir, 'detect_doubles.ts')).href)) as unknown as {
 		detectDoubles: Detector;
@@ -883,7 +950,15 @@ async function main(): Promise<void> {
 	const base = await loadBuild('base');
 
 	// ── §0 検算 ──
-	say('# issue #178 項目 1 Phase 1 — 形成中 triple の levelSpread 計測');
+	say('# 形成中 triple / double の同水準・ネックライン側の計測（issue #178 項目 1 Phase 1 ＋ issue #261）');
+	say();
+	say(
+		'**§1〜§5 は issue #178 項目 1 Phase 1**（形成中 triple の `levelSpread`）、' +
+			'**§6 は issue #261**（`validateMainPointsNecklineSide` の形成中への配線）。' +
+			'#261 が先にマージされたので、§1〜§5 の `base` は**配線後**の値であり、' +
+			'`docs/internal/forming-triple-level-spread-178.md` §10 に貼ってある Phase 1 当時の出力' +
+			'（`main` d86fb2b 時点）とは一致しない。Phase 1 の数字は §6 の「配線前」列に出る。',
+	);
 	say();
 	say('## 0. 検算（展開ビルド ≡ 作業ツリー）');
 	say();
@@ -1249,7 +1324,7 @@ async function main(): Promise<void> {
 	say();
 
 	// 冪等性: maxRatio = 999 は実質無効なので base と全ケース一致するはず。
-	const guard = await loadBuild('abl_999', 999);
+	const guard = await loadBuild('abl_999', { ablationMaxRatio: 999 });
 	let guardMismatch = 0;
 	for (const part of corpus) {
 		for (const row of byCorpusRows.get(part.label) ?? []) {
@@ -1304,7 +1379,7 @@ async function main(): Promise<void> {
 	];
 
 	const runAblation = async (ratio: number): Promise<AblResult> => {
-		const b = await loadBuild(`abl_${String(ratio).replace('.', '')}`, ratio);
+		const b = await loadBuild(`abl_${String(ratio).replace('.', '')}`, { ablationMaxRatio: ratio });
 		const res: AblResult = {
 			ratio,
 			after: 0,
@@ -1709,6 +1784,369 @@ async function main(): Promise<void> {
 		);
 	} else {
 		say('accepted な形成中 triple が 0 件のため算出できない。');
+	}
+	say();
+
+	// ── §6 issue #261 の配線前後 ──
+	say('## 6. issue #261 — `validateMainPointsNecklineSide` を形成中 4 経路に配線した効果');
+	say();
+	say(
+		'**§1〜§5 の `base` は「配線後」**（作業ツリー = #261 マージ済み）。「配線前」は ' +
+			'`rejectFormingNecklineSide` の本体先頭に `return false;` を差し込んだ strip ビルドで再現する。' +
+			'§3 の ablation と**向きが逆**（あちらは足す / こちらは外す）なのは、#261 が既に作業ツリーに' +
+			'入っているため。',
+	);
+	say();
+
+	const before = await loadBuild('before261', { stripNecklineSide: true });
+	const beforeRecs: FormingRec[] = [];
+	const beforeRows = new Map<string, Row[]>();
+	for (const part of corpus) {
+		const rows: Row[] = [];
+		for (const spec of part.cases) {
+			const r = runCase(before, spec);
+			rows.push({ spec, corpus: part, cands: r.cands, patterns: r.patterns });
+			const collected = collectFromCase(before, spec, part, r.cands);
+			for (const rec of collected) {
+				const p = r.patterns.find((x) => x.type === rec.type && x.status === 'forming');
+				rec.confidence = typeof p?.confidence === 'number' ? p.confidence : null;
+			}
+			beforeRecs.push(...collected);
+		}
+		beforeRows.set(part.label, rows);
+	}
+
+	// 検算: strip ビルドでは新理由コードが 1 件も出ない（＝配線が本当に外れている）。
+	let strippedFired = 0;
+	for (const rows of beforeRows.values()) {
+		for (const row of rows) for (const c of row.cands) if (isNecklineSideFormingReason(c.reason)) strippedFired++;
+	}
+	if (strippedFired > 0) {
+		throw new Error(`strip ビルドで新理由コードが ${strippedFired} 件発火した。配線が外れていない。`);
+	}
+	say(`- ✅ strip ビルドでは \`forming_peaks_below_neckline\` / \`forming_valleys_above_neckline\` が 0 件。`);
+	say('  **差分はゲートのみに帰属する。**');
+	say();
+
+	const beforeTriples = beforeRecs.filter((r) => r.family === 'triple');
+	const beforeDoubles = beforeRecs.filter((r) => r.family === 'double');
+	const afterTriples = triples;
+	const afterDoubles = doubles;
+	const overMaxRatio = (rs: readonly FormingRec[]): FormingRec[] =>
+		rs.filter((r) => r.spreadRatio !== null && (r.spreadRatio as number) > base.MAX_LEVEL_SPREAD_RATIO);
+
+	say('### 6-1. accepted な形成中 triple');
+	say();
+	say('| 指標 | 配線前 | 配線後 | 差 |');
+	say('|---|---:|---:|---:|');
+	const triRows: ReadonlyArray<readonly [string, number, number]> = [
+		['延べ', beforeTriples.length, afterTriples.length],
+		['構造', new Set(beforeTriples.map(structKey)).size, new Set(afterTriples.map(structKey)).size],
+		['**実体**', new Set(beforeTriples.map(tsKey)).size, new Set(afterTriples.map(tsKey)).size],
+		[
+			'実体のうち `spreadRatio > 0.5`',
+			new Set(overMaxRatio(beforeTriples).map(tsKey)).size,
+			new Set(overMaxRatio(afterTriples).map(tsKey)).size,
+		],
+		['延べのうち `spreadRatio > 0.5`', overMaxRatio(beforeTriples).length, overMaxRatio(afterTriples).length],
+	];
+	for (const [label, b, a] of triRows) say(`| ${label} | ${b} | ${a} | ${a - b >= 0 ? '+' : ''}${a - b} |`);
+	say();
+	let newTotal = 0;
+	for (const rows of byCorpusRows.values()) {
+		for (const row of rows) for (const c of row.cands) if (isNecklineSideFormingReason(c.reason)) newTotal++;
+	}
+	say(`新理由コードの発火（配線後・cap 前の生の \`debugCandidates\`）: **延べ ${newTotal} 件**。`);
+	say();
+
+	say('### 6-2. 静的判定との突き合わせ（延べ単位）');
+	say();
+	say(
+		'「配線前に accepted で、かつ本ゲートを静的に当てると誤側」の**延べ**が、配線後に 1 件も' +
+			'accepted で残っていなければ、ゲートは「今 accepted だった候補だけを落としている」。' +
+			'**発火数が静的判定より多いのは正常**——棄却で `continue` するぶんループが先の（より古い）ペアまで' +
+			'回り、そこで新たに組み上がった候補も同じゲートに掛かるため（§3-1 と同じ構造）。',
+	);
+	say();
+	{
+		const wrongSideBefore = beforeTriples.filter((r) => r.necklineSideReason !== null);
+		const afterKeys = new Set(afterTriples.map((r) => `${r.caseKey}|${structKey(r)}`));
+		const stillAccepted = wrongSideBefore.filter((r) => afterKeys.has(`${r.caseKey}|${structKey(r)}`)).length;
+		const wrongSideAfter = afterTriples.filter((r) => r.necklineSideReason !== null).length;
+		say('| 数え方 | 件数 |');
+		say('|---|---:|');
+		say(`| 配線前に accepted かつ静的判定で誤側（延べ） | ${wrongSideBefore.length} |`);
+		say(`| そのうち配線後も accepted で残っている（延べ） | **${stillAccepted}** |`);
+		say(`| 配線後に accepted な形成中 triple で誤側のもの（延べ） | **${wrongSideAfter}** |`);
+		say(`| 新理由コードの発火（triple + double。延べ） | ${newTotal} |`);
+		say();
+		say(
+			stillAccepted === 0 && wrongSideAfter === 0
+				? '**取りこぼしゼロ。** 誤側の候補は 1 件も accepted に残っていない。'
+				: '⚠️ **誤側のまま accepted に残った候補がある。** 配線が経路のどれかで漏れている。',
+		);
+	}
+	say();
+
+	say('### 6-3. §8 の目視判定（`spreadRatio > 0.5` の実体）との突き合わせ');
+	say();
+	say(
+		'配線前に `spreadRatio > 0.5` だった実体を、**§3-3 と同じ並び**（`spreadRatio` の降順）で出す。' +
+			'番号は §3-3 / §8 の行番号に対応する。`ネックライン側` は本ゲートを**代表窓**（`spreadRatio` が' +
+			'中央値の延べ）に静的に当てた結果。',
+	);
+	say();
+	say(
+		'⚠️ **実体は延べの OR で生き残る。** 1 つの実体（= 同じ 2 つの主構成点）はローリング窓の終端ぶん' +
+			'何十件もの延べを持ち、**終端が違えば 3 点目（最新足）も違う**。代表窓で誤側でも、別の終端では' +
+			'正しい側に来ることがある。したがって「代表窓で誤側の 24 実体」がそのまま消えるわけではない——' +
+			'**消えるのはその実体の延べのうち誤側の分だけ**で、正しい側の延べが 1 つでも残れば実体は残る。' +
+			'#178 項目 1 Phase 2 の残差を数えるときは、実体の生死ではなく' +
+			'**`spreadRatio > 0.5` の実体数**（下の集計の最終行）で見ること。',
+	);
+	say();
+	{
+		const overBefore = overMaxRatio(beforeTriples);
+		const entities = [...new Set(overBefore.map(tsKey))].sort((a, b) => {
+			const ma = Math.max(...overBefore.filter((r) => tsKey(r) === a).map((r) => r.spreadRatio ?? 0));
+			const mb = Math.max(...overBefore.filter((r) => tsKey(r) === b).map((r) => r.spreadRatio ?? 0));
+			return mb - ma;
+		});
+		const afterEntities = new Set(afterTriples.map(tsKey));
+		say(`実体: **${entities.length} 件**`);
+		say();
+		const overAfterEntities = new Set(overMaxRatio(afterTriples).map(tsKey));
+		say(
+			'| # | 実体（tf / type / 主構成点の時刻） | 代表窓の `spreadRatio` | ネックライン側（代表窓） | 全延べ 前 → 後 | うち誤側の延べ | 実体 | `> 0.5` の実体 |',
+		);
+		say('|---:|---|---|---|---|---:|---|---|');
+		let dropped = 0;
+		let noLongerOver = 0;
+		let wrongSide = 0;
+		entities.forEach((k, i) => {
+			const g = overBefore.filter((r) => tsKey(r) === k).sort((a, b) => (a.spreadRatio ?? 0) - (b.spreadRatio ?? 0));
+			const rep = g[Math.floor(g.length / 2)];
+			const allBefore = beforeTriples.filter((r) => tsKey(r) === k);
+			const allAfter = afterTriples.filter((r) => tsKey(r) === k);
+			const wrong = allBefore.filter((r) => r.necklineSideReason !== null).length;
+			const survives = afterEntities.has(k);
+			const stillOver = overAfterEntities.has(k);
+			if (!survives) dropped++;
+			if (!stillOver) noLongerOver++;
+			if (rep.necklineSideReason !== null) wrongSide++;
+			say(
+				`| ${i + 1} | ${rep.tf} / ${rep.type} / ${rep.main1Iso.slice(0, 16)} + ${rep.main2Iso.slice(0, 16)} | ` +
+					`${f4(rep.spreadRatio)} | ${rep.necklineSideReason ? `❌ \`${rep.necklineSideReason}\`` : '✅'} | ` +
+					`${allBefore.length} → ${allAfter.length} | ${wrong} | ${survives ? '残る' : '**落ちる**'} | ` +
+					`${stillOver ? '残る' : '**落ちる**'} |`,
+			);
+		});
+		say();
+		say('| 集計（実体単位） | 件数 |');
+		say('|---|---:|');
+		say(`| 代表窓でネックライン誤側 | ${wrongSide} |`);
+		say(`| 配線後に accepted な形成中 triple として 1 延べも残らない | **${dropped}** |`);
+		say(`| 配線後に \`spreadRatio > 0.5\` の延べが 1 件も残らない | **${noLongerOver}** |`);
+		say(`| **#178 項目 1 Phase 2 に残る残差**（\`> 0.5\` の実体） | **${entities.length - noLongerOver}** |`);
+	}
+	say();
+
+	say('### 6-4. 既存の理由コードを 1 件も横取りしていない（ケース単位）');
+	say();
+	say(
+		'新ゲートは**既存の棄却検査をすべて通過した後**に置いてある。位置が正しければ、' +
+			'**新設した 2 コード以外の理由コードは、どのケースでも件数が減らない**（増えるのは正常——' +
+			'棄却で `continue` するぶんループが先のペアまで回る）。',
+	);
+	say();
+	{
+		const perCase = (rows: Map<string, Row[]>): Map<string, Map<string, number>> => {
+			const m = new Map<string, Map<string, number>>();
+			for (const rs of rows.values()) {
+				for (const row of rs) {
+					const counts = new Map<string, number>();
+					for (const c of row.cands) {
+						if (typeof c.reason !== 'string' || isNecklineSideFormingReason(c.reason)) continue;
+						counts.set(c.reason, (counts.get(c.reason) ?? 0) + 1);
+					}
+					m.set(caseKeyOf(row.spec), counts);
+				}
+			}
+			return m;
+		};
+		const b = perCase(beforeRows);
+		const a = perCase(byCorpusRows);
+		const decreased = new Map<string, number>();
+		const totalsBefore = new Map<string, number>();
+		const totalsAfter = new Map<string, number>();
+		for (const [key, counts] of b) {
+			const after = a.get(key) ?? new Map<string, number>();
+			for (const [reason, n] of counts) {
+				totalsBefore.set(reason, (totalsBefore.get(reason) ?? 0) + n);
+				if ((after.get(reason) ?? 0) < n) decreased.set(reason, (decreased.get(reason) ?? 0) + 1);
+			}
+		}
+		for (const counts of a.values()) {
+			for (const [reason, n] of counts) totalsAfter.set(reason, (totalsAfter.get(reason) ?? 0) + n);
+		}
+		const reasons = [...new Set([...totalsBefore.keys(), ...totalsAfter.keys()])]
+			.filter((r) => (totalsAfter.get(r) ?? 0) !== (totalsBefore.get(r) ?? 0) || decreased.has(r))
+			.sort();
+		say('| 理由コード | 配線前（延べ） | 配線後（延べ） | 増減 | 減ったケース数 |');
+		say('|---|---:|---:|---:|---:|');
+		if (reasons.length === 0) say('| （件数が動いた理由コードは無い） | — | — | — | — |');
+		for (const r of reasons) {
+			const bn = totalsBefore.get(r) ?? 0;
+			const an = totalsAfter.get(r) ?? 0;
+			say(`| \`${r}\` | ${bn} | ${an} | ${an - bn >= 0 ? '+' : ''}${an - bn} | ${decreased.get(r) ?? 0} |`);
+		}
+		say();
+		const stolenTotal = [...decreased.values()].reduce((x, y) => x + y, 0);
+		say(
+			stolenTotal === 0
+				? '**減ったケースは 1 件も無い。** 新ゲートは既存の棄却理由を横取りしていない。'
+				: `**${stolenTotal} ケースで既存理由が減った。** 挿入位置が既存の理由を横取りしている——配置を見直すこと。`,
+		);
+	}
+	say();
+
+	say('### 6-5. 形成中 double');
+	say();
+	say('| 指標 | 配線前 | 配線後 | 差 |');
+	say('|---|---:|---:|---:|');
+	const dblRows: ReadonlyArray<readonly [string, number, number]> = [
+		['延べ', beforeDoubles.length, afterDoubles.length],
+		['構造', new Set(beforeDoubles.map(structKey)).size, new Set(afterDoubles.map(structKey)).size],
+		['実体', new Set(beforeDoubles.map(tsKey)).size, new Set(afterDoubles.map(tsKey)).size],
+		[
+			'うち `double_top`（延べ）',
+			beforeDoubles.filter((r) => r.type === 'double_top').length,
+			afterDoubles.filter((r) => r.type === 'double_top').length,
+		],
+	];
+	for (const [label, bn, an] of dblRows) say(`| ${label} | ${bn} | ${an} | ${an - bn >= 0 ? '+' : ''}${an - bn} |`);
+	say();
+	{
+		let dTop = 0;
+		let dBottom = 0;
+		for (const rows of byCorpusRows.values()) {
+			for (const row of rows) {
+				for (const c of row.cands) {
+					if (!isNecklineSideFormingReason(c.reason)) continue;
+					if (c.type === 'double_top') dTop++;
+					if (c.type === 'double_bottom') dBottom++;
+				}
+			}
+		}
+		const bKeys = new Set(beforeDoubles.map((r) => `${r.caseKey}|${structKey(r)}`));
+		const aKeys = new Set(afterDoubles.map((r) => `${r.caseKey}|${structKey(r)}`));
+		const same = bKeys.size === aKeys.size && [...bKeys].every((k) => aKeys.has(k));
+		say(`形成中 double の新理由コード（配線後・延べ）: \`double_top\` ${dTop} 件 / \`double_bottom\` ${dBottom} 件。`);
+		say();
+		say(
+			`accepted（\`status = 'forming'\`）な延べの集合（ケース × 構造）は配線前後で` +
+				`${same ? '**完全に一致**する' : '**入れ替わっている**'}。`,
+		);
+		say();
+		say(
+			'**棄却は起きているのに `forming` の件数が動かない**のは、形成中ダブルボトムの成功エントリが' +
+				'`forming` だけではないため（`status` は `invalid` / `expired` にもなる。#126 G4 / G5）。' +
+				'`status` 別に数えると内訳が読める:',
+		);
+		say();
+		const byStatus = (rows: Map<string, Row[]>): Map<string, number> => {
+			const m = new Map<string, number>();
+			for (const rs of rows.values()) {
+				for (const row of rs) {
+					for (const c of row.cands) {
+						if (!c.accepted || typeof c.status !== 'string') continue;
+						if (c.type !== 'double_top' && c.type !== 'double_bottom') continue;
+						const k = `${c.type}:${c.status}`;
+						m.set(k, (m.get(k) ?? 0) + 1);
+					}
+				}
+			}
+			return m;
+		};
+		const sb = byStatus(beforeRows);
+		const sa = byStatus(byCorpusRows);
+		say('| `type:status` | 配線前（延べ） | 配線後（延べ） | 差 |');
+		say('|---|---:|---:|---:|');
+		for (const k of [...new Set([...sb.keys(), ...sa.keys()])].sort()) {
+			const bn = sb.get(k) ?? 0;
+			const an = sa.get(k) ?? 0;
+			say(`| \`${k}\` | ${bn} | ${an} | ${an - bn >= 0 ? '+' : ''}${an - bn} |`);
+		}
+	}
+	say();
+
+	say('### 6-6. 母集団別の差');
+	say();
+	say(
+		'**標準コーパス 800（合成 704 + 実データ A 96）が 0 件差**なら、既存の合成 fixture の' +
+			'スナップショットは動かない——影響は実データ側に閉じる。',
+	);
+	say();
+	say(
+		'| 母集団 | ケース | 全候補の digest 一致 | accepted な形成中 triple（前 → 後） | 同 double（前 → 後） | 新理由コード（延べ） |',
+	);
+	say('|---|---:|---|---|---|---:|');
+	for (const part of corpus) {
+		const bRows = beforeRows.get(part.label) ?? [];
+		const aRows = byCorpusRows.get(part.label) ?? [];
+		if (bRows.length === 0) continue;
+		let same = 0;
+		let fired = 0;
+		for (let i = 0; i < bRows.length; i++) {
+			if (
+				digest(bRows[i].cands) === digest(aRows[i].cands) &&
+				digest(bRows[i].patterns) === digest(aRows[i].patterns)
+			) {
+				same++;
+			}
+			for (const c of aRows[i].cands) if (isNecklineSideFormingReason(c.reason)) fired++;
+		}
+		const bt = beforeRecs.filter((r) => r.corpus === part.label && r.family === 'triple').length;
+		const at = recs.filter((r) => r.corpus === part.label && r.family === 'triple').length;
+		const bd = beforeRecs.filter((r) => r.corpus === part.label && r.family === 'double').length;
+		const ad = recs.filter((r) => r.corpus === part.label && r.family === 'double').length;
+		say(
+			`| ${part.label} | ${bRows.length} | ${same === bRows.length ? '✅ 全件' : `${same} / ${bRows.length}`} | ` +
+				`${bt} → ${at} | ${bd} → ${ad} | ${fired} |`,
+		);
+	}
+	say();
+
+	say('### 6-7. `view=debug` の cap（200 件）への影響');
+	say();
+	say(
+		'`detect_patterns.ts` の並べ替え（`[...accepted, ...型間排他の棄却, ...検出器の棄却].slice(0, 200)`）を' +
+			'再現して、新理由コードのエントリが cap 内に残るかを測る。**新ゲートの棄却は検出器の棄却の末尾側に' +
+			'積まれる**ので、飽和しているケースでは押し出される側になる。',
+	);
+	say();
+	say('| 母集団 | ケース | 飽和ケース（前） | 飽和ケース（後） | 新理由コードが cap 内 / 全延べ |');
+	say('|---|---:|---:|---:|---|');
+	for (const part of corpus) {
+		const bRows = beforeRows.get(part.label) ?? [];
+		const aRows = byCorpusRows.get(part.label) ?? [];
+		if (bRows.length === 0) continue;
+		const satBefore = bRows.filter((r) => filterCandidatesByWant([...r.cands], new Set()).length > DEBUG_CAP).length;
+		const satAfter = aRows.filter((r) => filterCandidatesByWant([...r.cands], new Set()).length > DEBUG_CAP).length;
+		let total = 0;
+		let visible = 0;
+		for (const row of aRows) {
+			const capped = applyDebugCap(row.cands, new Set());
+			for (const c of row.cands) {
+				if (!isNecklineSideFormingReason(c.reason)) continue;
+				total++;
+				if (capped.has(c)) visible++;
+			}
+		}
+		say(
+			`| ${part.label} | ${aRows.length} | ${satBefore} | ${satAfter} | ` +
+				`${visible} / ${total}${total > 0 ? ` (${((visible / total) * 100).toFixed(1)}%)` : ''} |`,
+		);
 	}
 	say();
 

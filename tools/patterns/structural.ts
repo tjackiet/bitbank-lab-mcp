@@ -923,6 +923,33 @@ export function necklineSideDetailsFrom(
 }
 
 /**
+ * {@link MainPointNecklineSideRejectReason} の**形成中パス版**（issue #261）。
+ *
+ * 語彙を分ける理由は `detect_doubles.ts` の `formingSizeReason` と同じで、`view=debug` の候補一覧は
+ * 完成済みと形成中の棄却が**同じ配列に並ぶ**ため、同名だとどちらの経路で落ちたかが読めない。
+ * さらに #193 / PR #194 の **`▼ reason 横断合計`（type を畳んで reason だけで合算する行）**で
+ * 完成済みと形成中が 1 つの数字に潰れる。形成中の既存の理由コードが `forming_` 接頭辞で
+ * 揃っている（`forming_bars_out_of_range` 等）のにも合わせてある。
+ *
+ * **判定そのものは完成済みとまったく同じ**（{@link validateMainPointsNecklineSide} を共有する）。
+ * 分かれているのはラベルだけで、閾値も基準価格も経路で変えていない。
+ */
+export type FormingMainPointNecklineSideRejectReason = `forming_${MainPointNecklineSideRejectReason}`;
+
+/**
+ * {@link validateMainPointsNecklineSide} の理由コードを形成中パス用へ写す（issue #261）。
+ * 写像先の語彙と、分けてある理由は {@link FormingMainPointNecklineSideRejectReason} を参照。
+ *
+ * **形成中 2 検出器（`detect_triples.ts` / `detect_doubles.ts`）が共有する。** 各ファイルで
+ * テンプレートリテラルを手書きすると、片方だけ改名しても型が通ってしまう。
+ */
+export function formingNecklineSideReason(
+	reason: MainPointNecklineSideRejectReason,
+): FormingMainPointNecklineSideRejectReason {
+	return `forming_${reason}`;
+}
+
+/**
  * 主構成点とネックラインの位置関係の検査（**線基準**。issue #216 Phase 2 の H&S 分）。
  *
  * {@link validateMainPointsNecklineSide} の**線バージョン**。判定の意味・理由コード・
