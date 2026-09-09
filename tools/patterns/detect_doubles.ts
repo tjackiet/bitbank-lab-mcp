@@ -658,6 +658,17 @@ function breakoutPathDetails(
 
 // ── Helper: relaxed fallback ダブルトップ検索 ──
 
+/**
+ * 同水準判定を `factor` 倍に緩めたダブルトップ検索。**strict が `completed` を 1 件も出さなかったときだけ**
+ * 呼ばれるフォールバックで、**1 件しか返さない**（最初に組み上がった `completed` 候補でその場で打ち切る）。
+ *
+ * 緩めているのは山どうしの同水準判定（`nearRelaxed`）だけで、サイズ検査・構造ゲート・
+ * 高さ相対・ネックライン側・経路検証は strict と同じものが同じ順で掛かる。整合度には
+ * {@link RELAXED_CONFIDENCE_PENALTY} を掛け、provenance を `_fallback` に残す。
+ *
+ * `completed` 以外の status が付いた候補（`invalid` / `expired` / `near_completion`）は
+ * 即 return せず退避する——理由は関数内 `nonCompletedFallback` の docstring。
+ */
 function findRelaxedDoubleTop(
 	pivots: Pivot[],
 	candles: CandleData[],
@@ -890,6 +901,7 @@ function findRelaxedDoubleTop(
 
 // ── Helper: relaxed fallback ダブルボトム検索 ──
 
+/** {@link findRelaxedDoubleTop} の上下対称。契約・緩める範囲・退避の理由は同関数の docstring を参照。 */
 function findRelaxedDoubleBottom(
 	pivots: Pivot[],
 	candles: CandleData[],
@@ -1350,6 +1362,20 @@ function tryFormingDoubleTop(ctx: DetectContext): PatternEntry | null {
 
 // ── Main ──
 
+/**
+ * ダブルトップ / ダブルボトムを検出する。
+ *
+ * 1. **strict**: `pivots` の連続 3 点（H-L-H / L-H-L）を総当たりし、ブレイクが確定していれば
+ *    完成済み、していなければ未ブレイクの構造として {@link unbrokenStatusFields} が status を決める
+ *    （`near_completion` / `expired` / `invalid`。issue #262）。
+ * 2. **relaxed フォールバック**: その type の `completed` が 1 件も出なかったときだけ
+ *    {@link findRelaxedDoubleTop} / {@link findRelaxedDoubleBottom} を走らせ、1 件だけ足す。
+ * 3. `deduplicatePatterns` で重なりを畳む。
+ * 4. `includeForming` のときだけ {@link tryFormingDoubleTop}（「2 つ目の山を作っている途中」）を足す。
+ *
+ * 戻り値の `found` は **`completed` が出たかどうか**で、`near_completion` では立てない
+ * （立てると relaxed フォールバックが走らなくなり、別の構成点で成立していた `completed` が消える）。
+ */
 export function detectDoubles(ctx: DetectContext): DetectResult {
 	const { candles, pivots, tolerancePct, want, includeForming, near, minDist } = ctx;
 	const pcand: Pcand = (arg) => pushCand(ctx, arg);

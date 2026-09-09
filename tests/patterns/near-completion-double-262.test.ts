@@ -91,6 +91,11 @@ function doubleTop(tail: Array<[bars: number, endPrice: number]>): Candle[] {
 	return toCandles(legs(70, [[9, 100], [8, 88], [8, 100], [1, 94], ...tail]));
 }
 
+/**
+ * 1 系列を `detect_patterns` に流し、要求した種別の `data.patterns` だけを返す。
+ * `includeInvalid: true` を既定にしてあるのは、`expired` / `invalid` も同じ表で見たいため
+ * （`includeForming: false` のケースでは意図的に両方を渡し、それでも出ないことを確かめている）。
+ */
 async function detect(
 	candles: Candle[],
 	want: 'double_top' | 'double_bottom',

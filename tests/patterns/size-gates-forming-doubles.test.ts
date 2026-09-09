@@ -110,6 +110,10 @@ function buildCompletedShapeDoubleTop(valley: number): Candle[] {
 	return closes.map((c, i) => mkCandle(i, c));
 }
 
+/**
+ * 1 系列を `view=debug` で流し、`data.patterns` と候補の理由コード / accepted な status を返す。
+ * サイズ検査は棄却側で見るので、理由コードの配列がこのファイルの主な検査対象。
+ */
 async function detect(candles: Candle[], tf: string, want: 'double_top' | 'double_bottom') {
 	vi.mocked(analyzeIndicators).mockResolvedValueOnce(
 		asMockResult({ ok: true, summary: 'ok', data: { chart: { candles } } }),

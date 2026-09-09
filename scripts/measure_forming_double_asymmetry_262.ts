@@ -146,6 +146,7 @@ const DOUBLES_INTERNAL_SYMBOLS = [
 	'FORMING_EXPIRY_BARS',
 ] as const;
 
+/** {@link DOUBLES_INTERNAL_SYMBOLS} のうち、そのソースに実在するものだけの `export { … }` を返す。 */
 function internalExportsFor(name: string, src: string): string {
 	if (name !== 'detect_doubles.ts') return '';
 	const present = DOUBLES_INTERNAL_SYMBOLS.filter(
@@ -1566,6 +1567,7 @@ interface Phase2Agg {
 	diffSamples: Set<string>;
 }
 
+/** 空の {@link Phase2Agg}。1 回の走行で 1 つだけ作り、全ケースを流し込む。 */
 function newPhase2Agg(): Phase2Agg {
 	return {
 		unbroken: new Map(),
@@ -1583,12 +1585,17 @@ function newPhase2Agg(): Phase2Agg {
 	};
 }
 
+/** `Map<キー, Set<値>>` に 1 件足す（同じ実体が窓ごとに別の status を取るので集合で持つ）。 */
 function addTo(map: Map<string, Set<string>>, k: string, v: string): void {
 	const cur = map.get(k);
 	if (cur) cur.add(v);
 	else map.set(k, new Set([v]));
 }
 
+/**
+ * 棄却候補の理由コードを延べで数える。**accepted は数えない**——§8-3 は「棄却がどこへ移ったか」の表で、
+ * accepted 側の増減は §8-1 の status 表が持つ。
+ */
 function countReasons(map: Map<string, number>, cands: readonly CandDebugEntry[]): void {
 	for (const c of cands) {
 		if (c.accepted) continue;
@@ -1665,6 +1672,10 @@ function summarizePatterns(patterns: readonly DeduplicablePattern[]): string {
 	return patterns.map((p) => `${p.type}:${statusOf(p)}`).join(', ');
 }
 
+/**
+ * 全ビルドを組み、コーパスを 1 周して §0〜§8 を Markdown で標準出力へ書く。
+ * `--json <path>` で accepted 候補の明細を、`--no-rolling` でローリング窓を外す。
+ */
 async function main(): Promise<void> {
 	const argv = process.argv.slice(2);
 	const jsonAt = argv.indexOf('--json');
@@ -1771,35 +1782,50 @@ async function main(): Promise<void> {
 
 	// ── §0 ──
 	const header: string[] = [];
-	header.push('# 形成中 double の「形成中」の定義の非対称の計測（issue #262 Phase 1）');
+	header.push('# 形成中 double の「形成中」の定義の非対称の計測（issue #262）');
 	header.push('');
 	header.push(
-		'**検出器・ベースラインは 1 行も変更していない。** 本スクリプトは `tools/patterns/` を' +
-			'一時領域へ展開し、形成中 2 経路を差し替えたビルドを別に作って走らせるだけ。',
+		'**作業ツリーは 1 バイトも変更しない。** 本スクリプトは `tools/patterns/` を一時領域へ展開し、' +
+			`形成中 2 経路を差し替えたビルドと、\`detect_doubles.ts\` だけを \`${stripRef}\` から取った ` +
+			'strip ビルドを別に作って走らせるだけ。**§1〜§7（Phase 1）は strip、§8（Phase 2）は作業ツリー。**',
 	);
 	header.push('');
-	header.push('## 0. 検算（展開ビルド ≡ 作業ツリー）');
+	header.push('## 0. 検算');
 	header.push('');
 	header.push(
-		'`tools/patterns/` を一時領域へディレクトリごと展開し、`detect_doubles.ts` の末尾に ' +
-			'`export { … }` を 1 行足しただけのビルド（`base`）が、作業ツリーの本物と ' +
-			'`patterns` / `debugCandidates` の JSON 全キーで一致することを**全ケースで**確かめる。',
+		'**(a) 展開ビルド ≡ 作業ツリー**: `tools/patterns/` を一時領域へディレクトリごと展開し、' +
+			'`detect_doubles.ts` の末尾に `export { … }` を 1 行足しただけのビルド（**`pr`**）が、' +
+			'作業ツリーの本物と `patterns` / `debugCandidates` の JSON 全キーで一致することを' +
+			'**全ケースで**確かめる。',
 	);
 	header.push('');
-	header.push(`- ✅ ${caseCount} ケース全件で一致（\`patterns\` / \`debugCandidates\` とも）`);
+	header.push(
+		`**(b) strip ≡ \`${stripRef}\`**: strip 系のビルド（\`base\` / \`noTop\` / \`noBottom\` / ` +
+			`\`ablA\` / \`ablB\`）は \`detect_doubles.ts\` だけを \`${stripRef}\` から取り、` +
+			'`tools/patterns/` の残りは作業ツリーのまま。この組み方が等価になるのは' +
+			'**作業ツリーが `tools/patterns/` で `detect_doubles.ts` 以外を触っていない**ときだけなので、' +
+			'`git diff --name-only` で確かめてから走る（違反したらその場で例外）。',
+	);
+	header.push('');
+	header.push(`- ✅ ${caseCount} ケース全件で \`pr\` ≡ 作業ツリー（\`patterns\` / \`debugCandidates\` とも）`);
 	header.push(`- うち \`includeForming: true\` は ${formingCases} ケース（形成中経路が呼ばれるのはここだけ）`);
+	header.push(
+		`- \`${stripRef}\` との \`tools/patterns/\` の差分: ` +
+			`${stripScope.length === 0 ? 'なし' : stripScope.map((f) => `\`${f}\``).join(' / ')}`,
+	);
 	header.push(`- 展開先: \`${TMP_DIR}\`（作業ツリーは 1 バイトも変更していない）`);
 	header.push(
-		`- 形成中の係数（展開ビルドから読んだ値）: \`DOUBLE_LEVEL_MAX_PCT\` = ${base.DOUBLE_LEVEL_MAX_PCT} / ` +
+		`- 形成中の係数（**strip ビルドから読んだ値**。§1〜§7 はこれで測っている）: ` +
+			`\`DOUBLE_LEVEL_MAX_PCT\` = ${base.DOUBLE_LEVEL_MAX_PCT} / ` +
 			`\`FORMING_PEAK_TOLERANCE_PCT\` = ${base.FORMING_PEAK_TOLERANCE_PCT} / ` +
-			`\`FORMING_TOLERANCE_MULTIPLIER\` = ${base.FORMING_TOLERANCE_MULTIPLIER} / ` +
-			`\`FORMING_VALLEY_INVALID_PCT\` = ${base.FORMING_VALLEY_INVALID_PCT} / ` +
+			`\`FORMING_TOLERANCE_MULTIPLIER\` = ${base.FORMING_TOLERANCE_MULTIPLIER ?? '（そのビルドに無い）'} / ` +
+			`\`FORMING_VALLEY_INVALID_PCT\` = ${base.FORMING_VALLEY_INVALID_PCT ?? '（そのビルドに無い）'} / ` +
 			`\`FORMING_EXPIRY_BARS\` = ${base.FORMING_EXPIRY_BARS} / ` +
 			`\`MIN_FORMING_COMPLETION\` = ${base.MIN_FORMING_COMPLETION}`,
 	);
 	header.push(
 		'- 4 つの差し替えビルド（`noTop` / `noBottom` / `ablA` / `ablB`）は、対照ビルドの候補列が ' +
-			'base の**部分列**であることを毎ケース検算している（崩れたらその場で例外）。',
+			'`base` の**部分列**であることを毎ケース検算している（崩れたらその場で例外）。',
 	);
 	{
 		const unmatched = [aggBaseTop, aggBaseBottom, aggA, aggB]

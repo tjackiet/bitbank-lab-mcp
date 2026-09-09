@@ -61,6 +61,7 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
+/** 1 系列を `includeForming: true` / `view=debug` で流し、`data.patterns` と候補一覧を返す。 */
 async function detectForming(
 	candles: Candle[],
 	tf: string,

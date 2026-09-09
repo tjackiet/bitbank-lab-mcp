@@ -72,7 +72,7 @@
 | 57 | #263 | 形成中 triple の**単調性ゲートを両向き**にした（`triple_top` の切り下がり / `triple_bottom` の切り上がりが素通りしていた）。**閾値 `FORMING_STAIR_STEP_LIMIT`（2%）は据え置き**で、見る向きを増やしただけ | 実データ 1hour で**わずかに減る**（12,104 ケースで accepted な形成中 triple が延べ 5,818 → 5,763 / 実体 43 のまま）。**標準コーパス 800 の `data.patterns` は 1 ケースも動かない**（動くのは `view=debug` の理由コードの帰属だけ） |
 | 58 | #178 項目 1 | **形成中 triple への高さ相対ゲートは案 C（不採用）で決着。文書化のみ。** #261 / #263 で帰属を正した後の残差 17 実体のうち 12 実体が他ゲートの仕事、単独で拾う 5 実体のうち 3 実体が目視で妥当なトリプル。配線すると帰属が誤り妥当な形を落とす。**#178 の 4 項目すべてが決着し issue はクローズ** | **変わらない**（docstring / docs / 内部メモのみ。コードのロジックは 1 行も触っていない） |
 | 59 | #262 Phase 1 | **形成中 double の「形成中」の定義が top / bottom で違う件の計測。コード変更なし。** top は「最終構成点が形成中」（確定 2 点 + 最新足）、bottom は「構造完成・ブレイク待ち」（確定 3 点）で、**同じ `status: 'forming'` が別の段階を指している**。形成中 `double_top` が 0 件になる律速は `forming_bars_out_of_range`（到達 4,303 のうち 4,159 = 96.7% が**全件下限割れ**）で、issue が疑っていた `DOUBLE_LEVEL_MAX_PCT` ではない（172 件 = 3.2%） | **変わらない**（計測スクリプトと内部メモのみ。検出器・`structural.ts`・`config.ts`・`status` の enum は 1 行も触っていない） |
-| 60 | #262 Phase 2 | **double の「構造完成・ブレイク待ち」を `near_completion` で出すようにし、誤ラベルだった `tryFormingDoubleBottom` を削除した。** 完成済み 4 経路（strict / relaxed × top / bottom）は `findBreakoutIdx` が −1 のとき `no_breakout` で棄却していたが、triple / H&S と同じく `near_completion` を組むようにした。**`status` の enum も `FORMING_*` 係数も 1 つも変えていない** | **既定（`includeForming: false`）は 544 ケース全件で完全一致**（未ブレイク構造は forming バケットなので、検出器は従来どおり `no_breakout` で抜ける）。`includeForming: true` は 11,560 ケース中 2,791 ケースで変わる |
+| 60 | #262 Phase 2 | **double の「構造完成・ブレイク待ち」を `near_completion` で出すようにし、誤ラベルだった `tryFormingDoubleBottom` を削除した。** 完成済み 4 経路（strict / relaxed × top / bottom）は `findBreakoutIdx` が −1 のとき `no_breakout` で棄却していたが、triple / H&S と同じく `near_completion` を組むようにした。**`status` の enum も `FORMING_*` 係数も 1 つも変えていない** | **既定（`includeForming: false`）は 544 ケース全件で完全一致**（**検出器は `includeForming` を「エントリを組み立てる前」に見る**ので、`false` のときは `near_completion` / `expired` / `invalid` をそもそも作らず、従来どおり `no_breakout` で抜ける）。`includeForming: true` は 11,560 ケース中 2,791 ケースで変わる |
 
 ### Changed（#262 Phase 2: double の「ブレイク待ち」を `near_completion` で出す）
 
@@ -113,7 +113,7 @@
 
 | 何を | 実測 |
 |---|---|
-| `includeForming: false`（既定） | **544 ケース全件で `data.patterns` が完全一致**。未ブレイク構造は forming バケットなので、検出器は従来どおり `no_breakout` で抜ける |
+| `includeForming: false`（既定） | **544 ケース全件で `data.patterns` が完全一致**。**検出器は `includeForming` を「エントリを組み立てる前」に見る**ので、`false` のときは `near_completion` / `expired` / `invalid` をそもそも作らず、従来どおり `no_breakout` で抜ける（未ブレイクの構造は `detect_patterns.ts` のライフサイクル絞り込みで forming バケットに入るため、組み立てても出力されない） |
 | `includeForming: true` | 11,560 ケース中 **2,791 ケース**で変わる |
 | 未ブレイク構造の実体（strip → PR） | `double_bottom` は `forming` 6 / `expired` 9 / `invalid` 5 → `near_completion` 7 / `expired` 3 / `invalid` 7。`double_top` は 0 → `near_completion` 12 / `expired` 6 / `invalid` 11 |
 | 既定で利用者に見える `near_completion` の 3 値判定 | Phase 1 §8-2 の 5 段の基準を数値で当てた結果は PR 本文の §8-6 |

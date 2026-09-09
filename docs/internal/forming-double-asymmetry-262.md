@@ -1282,7 +1282,7 @@ accepted は **0 件**。
 
 | 何を | 実測 |
 |---|---|
-| 既定（`includeForming: false`）の `data.patterns` | **544 ケース全件で完全一致**。未ブレイクの構造は forming バケットなので、検出器は従来どおり `no_breakout` で抜ける |
+| 既定（`includeForming: false`）の `data.patterns` | **544 ケース全件で完全一致**。**検出器は `includeForming` を「エントリを組み立てる前」に見る**ので、`false` のときは `near_completion` / `expired` / `invalid` をそもそも作らず、従来どおり `no_breakout` で抜ける |
 | `includeForming: true` | 11,560 ケース中 **2,791 ケース**で変わる |
 | 理由コードの減少 | `forming_*` の減少は**全件が削除した `tryFormingDoubleBottom` のぶん**（残差 0）。それ以外の減少は `no_breakout` / `no_breakout_relaxed` だけで、これは未ブレイク構造が accepted に移ったぶん |
 | 既定で見える `near_completion` の 3 値判定 | **呼べる 4 / 保留 9 / 呼べない 6**（計 19 実体）。Phase 1 §8 で「呼べる」だった 形 07 / 形 09 は両方とも本 PR でも `near_completion` として出て「呼べる」のまま |

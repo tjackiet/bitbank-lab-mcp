@@ -39,6 +39,7 @@ import {
 	UPTREND_FAKE_DOUBLE_BOTTOM_BARS,
 } from './fixtures/synthetic_pattern_candles.js';
 
+/** `analyze_indicators` の成功レスポンスの最小形（`detect_patterns` はここから `chart.candles` だけを読む）。 */
 function indicatorsOk(candles: Candle[]) {
 	return {
 		ok: true,
