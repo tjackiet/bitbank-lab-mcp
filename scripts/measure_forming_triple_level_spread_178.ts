@@ -2429,9 +2429,27 @@ async function main(): Promise<void> {
 			.filter((r) => isStairStepReason(r))
 			.reduce((acc, r) => acc + Math.max(0, (totalsA.get(r) ?? 0) - (totalsB.get(r) ?? 0)), 0);
 		say(
-			`単調性以外の理由コードが失った延べの合計は **${lostTotal}**、単調性ゲートが得た延べは **${gainedStair}**。` +
-				'**帰属が移っただけで、どこにも行き場の無い候補は生まれていない**——移動先は理由コードの名前で追える。',
+			`単調性以外の理由コードが失った延べの合計は **${lostTotal}**、単調性ゲートが得た延べは **${gainedStair}**` +
+				`（差 ${gainedStair - lostTotal}）。**失った側はすべて単調性ゲートへ移っている**——` +
+				'ゲートは棄却時に `continue` するので、`accepted` になって `return` していた周回が先の（より古い）' +
+				'ペアまで回り続け、**その追加の周回が新たに単調性ゲートに掛かる**ぶんだけ得た側が多くなる' +
+				'（§3-1 / §6-2 と同じ構造）。**どこにも行き場の無い候補は生まれていない。**',
 		);
+		say();
+		say('依頼文が名指しした「理由が移る候補」の実測値（**横取りではなく、前段のゲートへの設計どおりの帰属変更**）:');
+		say();
+		say('| 移動元の理由コード | 配線前（延べ） | 配線後（延べ） | 差 |');
+		say('|---|---:|---:|---:|');
+		for (const r of [
+			'forming_peaks_not_level',
+			'forming_valleys_not_level',
+			'forming_peaks_below_neckline',
+			'forming_valleys_above_neckline',
+		]) {
+			const bn = totalsB.get(r) ?? 0;
+			const an = totalsA.get(r) ?? 0;
+			say(`| \`${r}\` | ${bn} | ${an} | ${an - bn >= 0 ? '+' : ''}${an - bn} |`);
+		}
 	}
 	say();
 

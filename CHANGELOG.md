@@ -69,6 +69,89 @@
 | 54 | #242 PR 2/2 | 同じ経路検証を `triple_*` / H&S 系の**完成済み 4 経路ずつ**へ配線し、あわせて double にしかなかった**谷（山）ゾーン再進入チェック**（`detectTroughZoneReentry`）を triple / H&S へ横展開した（#131 → #138 の構造ゲート横展開から漏れていた分の回収） | 実データ C / D で**減る**（どちらの窓でも `head_and_shoulders` 延べ −56 / `triple_top` −12。標準コーパスは **type 別の増減 0** で 20 行が入れ替わり、実データ B は 0 件。**増加 0**） |
 | 55 | #244 Phase 2 | H&S / 逆 H&S の**肩の同水準判定**を時間足別にした（`getHsShoulderMaxPctForTf`。`1day` の 5% をアンカーに `getSizeThresholdsForTf` と同じ ATR 比。`1hour` = 1.04%）。**適用先は肩ゲートだけで、窓生成（`outerShoulderOk`）は 5% のまま**（診断性）。`DOUBLE_LEVEL_MAX_PCT` / `tolerancePct` は動かさない | `1day` 未満で**減る**（1,344 ケースで `inverse_head_and_shoulders` **構造単位で −23**。**全件が `1hour` × strict 経路**。`1day` 以上・`double_*` / `triple_*` / `head_and_shoulders` は全コーパスで 0 件差。**増加 0**） |
 | 56 | #261 | `validateMainPointsNecklineSide`（#216 Phase 2）を**形成中**の triple / double 4 経路へ配線した。**閾値を 1 つも導入していない**（完成済みと同じ判定関数を共有し、理由コードだけ `forming_` 接頭辞で分ける）。`FORMING_*` 係数 / `tolerancePct` / `MAX_LEVEL_SPREAD_RATIO` は不変 | 実データ 1hour で**減る**（12,104 ケースで accepted な形成中 triple が延べ 7,581 → 5,818 / 実体 48 → 43）。**標準コーパス 800 は全候補の JSON が完全一致で 0 件差**。形成中 double の `forming` は延べ 73 で不変（減るのは `expired` 側 1,925 → 1,182） |
+| 57 | #263 | 形成中 triple の**単調性ゲートを両向き**にした（`triple_top` の切り下がり / `triple_bottom` の切り上がりが素通りしていた）。**閾値 `FORMING_STAIR_STEP_LIMIT`（2%）は据え置き**で、見る向きを増やしただけ | 実データ 1hour で**わずかに減る**（12,104 ケースで accepted な形成中 triple が延べ 5,818 → 5,763 / 実体 43 のまま）。**標準コーパス 800 の `data.patterns` は 1 ケースも動かない**（動くのは `view=debug` の理由コードの帰属だけ） |
+
+### Changed（形成中 triple の単調性ゲートを両向きにする。#263）
+
+`FORMING_STAIR_STEP_LIMIT` の判定は **`triple_top` の切り上がりと `triple_bottom` の切り下がりしか
+見ておらず**、逆向きの単調列（`triple_top` の切り下がり / `triple_bottom` の切り上がり）が素通り
+していた。#178 項目 1 Phase 1（PR #260）の目視判定 §8 の **#14**（切り下がり 2.77%）が実データの実例で、
+「呼べない」判定なのに accepted になっていた。#178 の中間決定の順序 2。
+
+| 3 点の並び | 読み | 理由コード | #263 以前 |
+|---|---|---|---|
+| `main1 < main2 < current` | 上昇継続 / 上昇トレンドの押し安値の連続 | `forming_stair_step_up` | `triple_top` のみ |
+| `main1 > main2 > current` | 下降トレンドの戻り高値の連続 / 下降継続 | `forming_stair_step_down` | `triple_bottom` のみ |
+
+**理由コードは向きの名前であって type の名前ではない。** `triple_top` に `forming_stair_step_down` が、
+`triple_bottom` に `forming_stair_step_up` が出るようになる（`view=debug` の type × reason の内訳で見える）。
+
+- 2 つの片側分岐を `rejectFormingStairStep` に畳み、`ascending || descending` で評価する。
+  **4 通りが 1 つの式から出るので、片側だけ直して非対称が再発することがない。**
+- **閾値も累積ステップの定義も変えていない。** `FORMING_STAIR_STEP_LIMIT` は 2% のまま両向きで共有し、
+  ステップは `|current − main1| / main1`（中間点は単調性の判定にだけ使い、大きさには入れない）。
+  **新しいつまみを 1 つも増やしていない。**
+- 位置は同水準判定（`forming_*_not_level`）の前のまま。「level spread より具体的な診断」という
+  元のコメントの意図を両向きに広げただけ。
+
+#### 実測（`scripts/measure_forming_triple_level_spread_178.ts` の §7）
+
+「配線前」は strip ビルド（判定式を `type === 'triple_top' ? ascending : descending` に戻した複製）で
+再現する。**strip ビルドで新しい向きが 1 件も発火しない**ことを毎回検算しており、
+`main` 56432d8 を直接走らせた出力とも主要指標が全一致する。
+
+| 指標 | 配線前 | 配線後 |
+|---|---:|---:|
+| accepted な形成中 triple（延べ / 構造 / 実体） | 5,818 / 99 / **43** | 5,763 / 100 / **43** |
+| うち `spreadRatio > 0.5` の実体 | **18** | **17** |
+| 新しい向きの発火（延べ / 構造 / 実体） | — | 36,242 / 470 / **226** |
+| 配線前に accepted だったのに落ちた | — | 延べ 109 / 構造 6 / **実体 3** |
+
+**標準コーパス 800 は `data.patterns` が 1 ケースも動かない。** 新しい向きは 32 件発火するが、
+それらは**元から別の理由（`forming_bars_out_of_range`）で落ちていた**候補で、理由コードの帰属が
+移るだけ。`view=debug` の cap（200）への影響も、飽和ケース数が全母集団で **±0**。
+
+#### 「横取り」ではなく前段への帰属変更
+
+#261 のゲートは最後尾に置いたので「既存の理由コードが 1 件も減らない」ことを要求できたが、
+**単調性ゲートは前段にある**ので後段の理由コードから件数が移るのは設計どおり。実測では
+単調性以外が失った 35,749 延べに対し単調性ゲートが得たのは 36,077 延べで、
+**差 328 は棄却の `continue` でループが先のペアまで回るぶん**（§3-1 / §6-2 と同じ構造）。
+
+| 移動元（依頼文が名指ししたもの） | 配線前 | 配線後 | 差 |
+|---|---:|---:|---:|
+| `forming_peaks_not_level` | 322 | 252 | −70 |
+| `forming_valleys_not_level` | 6,163 | 6,006 | −157 |
+| `forming_peaks_below_neckline`（#261） | 1,453 | 1,373 | −80 |
+| `forming_valleys_above_neckline`（#261） | 2,900 | 2,888 | −12 |
+
+#### #178 §8 との突き合わせ（落ちるのは #14 だけ）
+
+**閾値を動かしていないので、閾値の直下をすり抜ける形はそのまま残る。**
+
+| §8 | 形 | ステップ | #263 で落ちるか |
+|---|---|---:|---|
+| **#14** | `triple_top` の切り下がり | **2.77%** | ✅ 落ちる |
+| #20 | `triple_top` の切り上がり | 1.86% | ❌ 元から見ていた向き。閾値の直下 |
+| #23 | `triple_bottom` の切り上がり | 1.52% | ❌ 新しい向きだが閾値の直下 |
+
+**#178 項目 1 Phase 2 の残差は 18 実体 → 17 実体。** §8 が「呼べる」と判定した 3 実体は 3 件とも残る。
+明細は [`docs/internal/forming-stair-step-both-directions-263.md`](docs/internal/forming-stair-step-both-directions-263.md)。
+
+#### 合成 fixture 3 件を組み直した
+
+新しい向きに掛かるようになったため、**単調でない並びに直した**（意図した分岐を通すための最小の変更で、
+閾値・期待値は動かしていない）。
+
+| fixture | 以前 | 変更後 |
+|---|---|---|
+| `FORMING_BOTTOMS`（`forming-double-triple-debug-candidates.test.ts`） | 2 谷 100 → 101（切り上がり 3.6%） | 102 → 100.5（切り下がり） |
+| `forming_confidence_below_min` の `triple_top` | 2 山 130 → 129（切り下がり 2.69%） | 129 → 130 |
+| 同 `triple_bottom` | 2 谷 100 → 102.3（切り上がり 3.8%） | 102.3 → 100 |
+
+`FORMING_BOTTOMS` の**最終脚 103.6 は動かせない**——下げると価格が谷ゾーンへ戻り、
+`checkPostPivotInvalidation` が形成中ダブルボトムを `status: 'invalid'` にする（#126 G5）。
+単調性は谷側で崩した。
 
 ### Changed（主構成点とネックラインの位置関係の検査を形成中経路へ配線する。#261）
 

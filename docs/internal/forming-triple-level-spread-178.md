@@ -17,6 +17,11 @@ ablation は `tools/patterns/` を一時領域へディレクトリごと展開�
 > §8 の 34 実体との突き合わせは §6-3、およびメモ
 > [`forming-neckline-side-261.md`](./forming-neckline-side-261.md) §2 に出る。
 > **§8 の (N) 24 実体がそのまま消えるわけではない**（実体は延べの OR で生き残るため。同メモ §1）。
+>
+> **さらに #263**（単調性ゲートの両向き化）も入ったので、スクリプトは strip ビルドを 2 つ持つ。
+> Phase 1 の数字は §6 の「配線前」列（`stripBoth`）、#264 マージ直後の数字は §6 の「配線後」列
+> （`strip263`）に出る。#263 の効果は §7 とメモ
+> [`forming-stair-step-both-directions-263.md`](./forming-stair-step-both-directions-263.md)。
 
 ## 1. 読み方
 
