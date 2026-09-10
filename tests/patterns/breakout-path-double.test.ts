@@ -362,7 +362,8 @@ describe('窓の終端の余白: 同じ値動きが limit で completed / invali
 	 * **データも深さも同じで、変わるのは窓の終端だけ。**
 	 *
 	 * `detectSwingPoints` の走査範囲は `[swingDepth, length − swingDepth)` なので、
-	 * **窓の終端から `swingDepth` 本以内の足はピボットになれない**。経路ゲートはピボット列で
+	 * **窓の最後の `swingDepth` 本はピボットになれない**（最後にピボットになりうるのは
+	 * `length − swingDepth − 1`、つまり終端からちょうど `swingDepth` 本前の足）。経路ゲートはピボット列で
 	 * 判定するため、再上昇の足がその余白に入るとゲートは「通した」のではなく
 	 * **「見るピボットが無かった」**——`view=debug` の候補にも `peak_after_last_pivot` が 1 件も出ない。
 	 *
@@ -380,8 +381,9 @@ describe('窓の終端の余白: 同じ値動きが limit で completed / invali
 	 * `limit_too_small_for_timeframe` は出ない。
 	 *
 	 * **境界は `slice(288, 347)`**（終端 idx 346 = 09-04 14:00Z）。再上昇の足が終端から
-	 * `swingDepth`（= 3）本ちょうど内側に入った時点で `invalid` に変わる。上の 2 窓はその両側を
-	 * 余裕を持って挟んでいる。
+	 * ちょうど `swingDepth`（= 3）本前 = 走査範囲の右端 `length − swingDepth − 1` に来た時点で
+	 * `invalid` に変わる。**この 1 本だけの遷移も下でそのまま実行して固定する**——両側を
+	 * 挟むだけだと `[swingDepth + 1, length − swingDepth − 1)` を走査する実装でも通ってしまう。
 	 *
 	 * **`swingDepth` は未指定**（`1hour` の時間軸オート = 3）で通す。深さを変えずに `limit` だけで
 	 * 結果が割れることが本 describe の主張なので、`swingDepth: 6` は使わない。
@@ -487,6 +489,36 @@ describe('窓の終端の余白: 同じ値動きが limit で completed / invali
 				breakoutIdx: rel(344),
 				offenderIdx: rel(343),
 			});
+		});
+	});
+
+	describe('境界そのもの（slice(288, 347)/ 59 本）— 再上昇が余白から 1 本だけ外れる', () => {
+		/**
+		 * **上の 2 窓は境界を挟むだけなので、走査範囲を 1 本狭めた実装
+		 * （`[swingDepth + 1, length − swingDepth − 1)`）でも通ってしまう。** 遷移が起きる
+		 * その 1 本を実行して固定する。
+		 *
+		 * 終端は idx 346（`09-04 14:00Z`）で、再上昇の足（相対 55）は終端から**ちょうど
+		 * `swingDepth`（= 3）本前** = 走査範囲の右端 `length − swingDepth − 1 = 59 − 3 − 1 = 55`。
+		 * ここで初めてピボットになり、ゲートが発火する。
+		 */
+		it('終端 09-04T14:00Z で invalid / peak_after_last_pivot に変わる', async () => {
+			const { patterns, swings } = await windowEndingAt(347, { includeInvalid: true });
+			// 走査範囲の右端が再上昇の足そのもの。
+			expect(347 - START - 3 - 1).toBe(rel(343));
+			expect(swings.some((sw) => Number(sw.idx) === rel(343) && sw.kind === 'H')).toBe(true);
+
+			const doubles = patterns.filter((p) => p.type === 'double_top');
+			expect(doubles).toHaveLength(1);
+			expect(doubles[0]).toMatchObject({ status: 'invalid', invalidReason: 'peak_after_last_pivot' });
+			expect(mainIdxs(doubles[0])).toEqual(MAIN_POINTS);
+		});
+
+		it('1 本手前（slice(288, 346)）はまだ completed——遷移はこの 1 本で起きる', async () => {
+			const { patterns } = await windowEndingAt(346, { includeInvalid: true });
+			const doubles = patterns.filter((p) => p.type === 'double_top');
+			expect(doubles).toHaveLength(1);
+			expect(doubles[0].status).toBeUndefined();
 		});
 	});
 

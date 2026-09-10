@@ -363,8 +363,9 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 
 **同じピボット列の性質から、判定は `limit`（窓の終端位置）にも依存する。**
 `detectSwingPoints` は極値判定に前後 `swingDepth` 本を要求する（ループの範囲が
-`i ∈ [swingDepth, length − swingDepth)`）ので、**窓の終端から `swingDepth` 本以内の足は
-ピボットになれない**。経路ゲートと再進入チェックはピボット列で判定するため、
+`i ∈ [swingDepth, length − swingDepth)`）ので、**窓の最後の `swingDepth` 本はピボットに
+なれない**（最後にピボットになりうるのは `length − swingDepth − 1`、つまり終端からちょうど
+`swingDepth` 本前の足）。経路ゲートと再進入チェックはピボット列で判定するため、
 **再上昇（再下落）の足がこの終端の余白に入るとゲートは発火しない**。結果として、
 **同じ値動きでも `limit` の違いで `completed` / `invalid` が変わりうるのは仕様**（issue #277）。
 
@@ -377,8 +378,9 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 | `2026-09-04T13:00Z` | 終端の **2 本前**（余白の中） | **`completed`**（`data.patterns` に出る。`view=debug` にも `peak_after_last_pivot` の候補が無い） |
 | `2026-09-04T16:00Z` | 終端の **5 本前**（ピボットになる） | **`invalid` / `peak_after_last_pivot`**（既定では消え、`includeInvalid: true` で出る） |
 
-境界は「再上昇の足が終端から `swingDepth` 本より内側に入るか」で、上の例では終端が
-`2026-09-04T14:00Z`（終端の 3 本前）以降になった時点で `invalid` に変わる。
+境界は「再上昇の足が最後の `swingDepth` 本から外れるか」で、上の例では終端が
+`2026-09-04T14:00Z`（再上昇の足が終端からちょうど 3 本前 = 走査範囲の右端）になった時点で
+`invalid` に変わる。
 
 **#251 の深さ依存との違いは、利用者が選べるかどうか。** `swingDepth` は呼び出し側が明示的に
 選ぶが、窓の終端はデータの取得時刻で決まる。とはいえ本質は「**窓の終端の足はまだピボットとして
