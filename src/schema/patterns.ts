@@ -119,7 +119,9 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 				'（例: 1hour の auto は 3 なので、7 を渡すのは「深くする」ではなく「auto に戻す」）。\n' +
 				'**#242 の経路ゲート（peak_after_last_pivot / trough_after_last_pivot）と再進入チェックも' +
 				'同じ swingDepth のピボット列で判定するため、深さを増やすと発火しにくくなる**' +
-				'（同じ値動きで swingDepth=3 では invalid、6 では完成済みになりうる。issue #251）。',
+				'（同じ値動きで swingDepth=3 では invalid、6 では完成済みになりうる。issue #251）。' +
+				'窓の終端 swingDepth 本の足はピボットになれないため、そこにある戻しは経路ゲートが見ない' +
+				'（同じ値動きでも limit で completed / invalid が変わりうる。issue #277）。',
 		),
 	tolerancePct: z
 		.number()

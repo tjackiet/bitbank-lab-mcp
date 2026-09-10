@@ -153,3 +153,40 @@ describe('detectSwingPoints: price と extremePrice の関係', () => {
 		expect(peaks[0].extremePrice).toBe(peaks[0].price);
 	});
 });
+
+// ──────────────────────────────────────────────
+// 窓の前後 swingDepth 本の余白（#277）
+//   走査範囲が [swingDepth, length − swingDepth) に閉じているので、窓の終端
+//   swingDepth 本の足は**極値であってもピボットにならない**。#242 の経路ゲートは
+//   このピボット列で判定するため、終端の余白にある戻しを見ない。
+//   検出器を通した仕様の固定は tests/patterns/breakout-path-double.test.ts。
+// ──────────────────────────────────────────────
+describe('detectSwingPoints: 窓の終端 swingDepth 本はピボットにならない（issue #277）', () => {
+	const DEPTH = 3;
+	/** idx 5 が明確な極値。長さ 2 × DEPTH + 1 = 7 では終端の余白（idx 4/5/6）に入る。 */
+	const PRICES = [100, 101, 102, 103, 104, 110, 105];
+
+	function makeCandles(prices: number[]): Candle[] {
+		return prices.map((p) => ({ open: p, close: p, high: p + 1, low: p - 1 }));
+	}
+
+	it('長さ 2 × swingDepth + 1 では、終端の余白にある極値がピボットにならない', () => {
+		const candles = makeCandles(PRICES);
+		expect(candles).toHaveLength(2 * DEPTH + 1);
+		// 走査できる i は swingDepth だけ（i < 7 − 3 = 4）。idx 5 は範囲の外。
+		expect(detectSwingPoints(candles, { swingDepth: DEPTH })).toEqual([]);
+	});
+
+	it('同じ足でも、後ろに swingDepth 本足して余白から出すとピボットになる', () => {
+		const candles = makeCandles([...PRICES, 104, 103, 102]);
+		const pivots = detectSwingPoints(candles, { swingDepth: DEPTH });
+		expect(pivots.map((p) => `${p.kind}${p.idx}`)).toEqual(['H5']);
+		expect(pivots[0].extremePrice).toBe(candles[5].high);
+	});
+
+	it('窓の先頭 swingDepth 本も同じく候補から外れる（前後は対称）', () => {
+		// idx 1 が明確な極値だが、swingDepth = 3 では i < 3 を走査しない。
+		const head = makeCandles([100, 110, 104, 103, 102, 101, 100, 101, 102, 103]);
+		expect(detectSwingPoints(head, { swingDepth: DEPTH }).some((p) => p.idx === 1)).toBe(false);
+	});
+});
