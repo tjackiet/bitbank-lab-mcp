@@ -1428,13 +1428,18 @@ describe('formatPatternLine', () => {
 		expect(result).toContain('価格範囲: 80円 - 101円');
 	});
 
-	it('forming double_top には triple 用の暫定マーカーを付けない', () => {
+	// **`status` を `forming` から `near_completion` に変えた（#268 案 C）。** 検出器は
+	// `double_top` に `forming` を出さなくなったので、その組み合わせを fixture にすると
+	// 実在しない状態を固定することになる。見たいのは「暫定マーカーは type が triple の
+	// ときだけ付く」ことなので、double が実際に取る status で書く。
+	it('near_completion の double_top には triple 用の暫定マーカーを付けない', () => {
 		const p = makePattern({
 			type: 'double_top',
-			status: 'forming',
+			status: 'near_completion',
 			pivots: [
 				{ idx: 0, price: 100, kind: 'H', extremePrice: 100 },
 				{ idx: 10, price: 100, kind: 'L', extremePrice: 100 },
+				{ idx: 20, price: 100, kind: 'H', extremePrice: 100 },
 			],
 		});
 		const result = formatPatternLine(p, 0, 'detailed', emptyMeta);

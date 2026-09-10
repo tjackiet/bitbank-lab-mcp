@@ -561,7 +561,26 @@ Phase 2 で案 A を採るなら**先にトリップワイヤを足すこと。*
 
 ## 12. 計測スクリプトの出力（そのまま）
 
-`npx tsx scripts/measure_forming_double_asymmetry_262.ts` の標準出力を verbatim で貼る。
+`npx tsx scripts/measure_forming_double_asymmetry_262.ts --strip-ref a920019` の標準出力を
+verbatim で貼る。
+
+> **`--strip-ref a920019` が要る理由。** §1〜§7 は形成中 double の**2 経路を両方**差し替えるので、
+> どちらかが削除済みの ref では ablation が組めない（`tryFormingDoubleBottom` は #262 / PR #270、
+> `tryFormingDoubleTop` は #268 案 C で削除）。`a920019` は PR #267（本 Phase 1）のマージ commit で、
+> **2 経路が両方残っている最後の commit**。**#271 のマージ commit は使えない**（#270 の後なので
+> `tryFormingDoubleBottom` が無い）。付け忘れるとスクリプトが起動時に落ち、渡すべき ref を案内する。
+> `--strip-ref` は `tools/patterns/` を**丸ごと**その ref から取る（#268 案 C で `min-bars.ts` /
+> `structural.ts` も変わったため、検出器 1 ファイルだけの差し替えでは等価にならない）。
+> なお **§8（Phase 2）は作業ツリーを使う**ので、案 C 後に走らせると §8 は
+> 「#262 + #268 案 C の合計」を測ることになる（Phase 2 単独の差分は本メモ §13 と CHANGELOG が記録）。
+>
+> **下に貼ってある出力は #268 案 C より前の実行そのまま**なので、§0(b) と §8 の散文が
+> 「strip は `detect_doubles.ts` だけを ref から取る」と書いている。案 C で `fromRef` を
+> `tools/patterns/` 全ファイルへ広げたので、**今スクリプトを走らせると同じ箇所が
+> 「ディレクトリごと ref から取る」に変わる。** 数字（§1〜§7）は変わらない。
+> **貼り直していないのは §8 が Phase 2 単独の差分の記録だから**——今走らせると §8 が
+> 「#262 + #268 案 C の合計」に置き換わり、Phase 2 の記録が失われる。
+
 `--no-rolling` を付けると固定窓 1,088 ケースだけの短時間版になる。
 `--json <path>` で accepted の全明細（構成点の実値込み）が JSON で出る。
 

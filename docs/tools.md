@@ -498,14 +498,14 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 |---|---|---|---|
 | H&S / 逆 H&S | `[p0, p1, p2, p3, p4]` | `p1` / `p3` | — （H&S は傾きあり。`neckline` を参照） |
 | double（完成済み / near_completion） | `[a, b, c]` | `b` | `b.price` |
-| double（形成中。`double_top` のみ） | `[a, b]` | `b` | `b.price` |
 | triple（完成済み / near_completion） | `[a, v1, b, v2, c]` | `v1` / `v2` | `(v1.price + v2.price) / 2` |
 | triple（形成中） | `[a, v1, b, v2]` | `v1` / `v2` | 同上 |
 
-形成中 triple の 3 点目、および形成中 `double_top` の 2 山目は現在価格の暫定値なので
-`pivots` に入らない（content の「3 山目は現在価格を暫定」注記がそれを言う）。
-**`double_bottom` に形成中は無い**——構造が揃ってブレイクを待つ段階は `near_completion` として
-完成済み経路が 3 点で出す（#262。`double_top` 側で「最終構成点が形成中」を出すかは #268）。**消費者は `pivots.length` で構成を判定しないこと**——
+形成中 triple の 3 点目は現在価格の暫定値なので `pivots` に入らない
+（content の「3 山目は現在価格を暫定」注記がそれを言う）。
+**double 2 型に形成中は無い**——`double_bottom` は #262、`double_top` は #268 案 C で
+形成中経路を削除した。構造が揃ってブレイクを待つ段階は `near_completion` として
+完成済み経路が 3 点で出すので、**double の `pivots` は常に 3 点**。**消費者は `pivots.length` で構成を判定しないこと**——
 主構成点が要るなら `kind` で絞る。`view=debug` の `candidates[].points[].role` も同じ表から
 `main` / `neckline` を決めている。
 
@@ -584,11 +584,12 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 - **同水準判定（`forming_peaks_not_level` / `forming_valleys_not_level`）より前に評価する。**
   単調な階段は同水準判定でも落ちうるが、「ばらつきが大きい」より「単調に切り下がっている」の
   ほうが形を言い当てているため。`view=debug` で理由コードを集計するときはこの順序が見える。
-- **完成済み経路（`near_completion` を含む）と形成中 `double_top` にはこのゲートは無い**
-  （完成済みは 3 点すべてが確定ピボットで `tolerancePct` と高さ相対の 2 段が掛かる。
-  形成中 `double_top` は主構成点が 2 点なので「階段」が定義できない）。
-  **#262 以前は「形成中 double」と書いていたが、形成中 `double_bottom` は削除された**
-  ——同じ 3 点は完成済み経路が `near_completion` として組む（上と同じ理由でゲートは無い）。
+- **完成済み経路（`near_completion` を含む）にはこのゲートは無い**
+  （3 点すべてが確定ピボットで `tolerancePct` と高さ相対の 2 段が掛かるため）。
+  **double にはそもそも形成中経路が無い**——`double_bottom` は #262、`double_top` は #268 案 C で
+  削除され、同じ 3 点は完成済み経路が `near_completion` として組む（上と同じ理由でゲートは無い）。
+  形成中 `double_top` が残っていた頃は「主構成点が 2 点なので階段が定義できない」ことが
+  例外の理由だったが、その例外ごと消えた。
 
 契約は `tests/patterns/detect_triples.test.ts`（合成 fixture の最小対）と
 `tests/patterns/stair-step-both-directions-263.test.ts`（実データの実例）が固定している。
@@ -603,7 +604,7 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 
 | 種別 | 完成済み | 形成中 | 比較相手 |
 |---|---|---|---|
-| `double_*` / `triple_*` | ✅（#216 Phase 2。`near_completion` も同じ検査を通る） | ✅（#261。形成中経路は `double_top` / `triple_*` の 3 つ） | **水平スカラー** 1 つ（`validateMainPointsNecklineSide`） |
+| `double_*` / `triple_*` | ✅（#216 Phase 2。`near_completion` も同じ検査を通る） | ✅（#261。形成中経路は `triple_*` の 2 つだけ。double に形成中は無い） | **水平スカラー** 1 つ（`validateMainPointsNecklineSide`） |
 | `head_and_shoulders` / `inverse_head_and_shoulders` | ✅（#216 の H&S 分。#211 マージ後） | **未配線** | **点ごとの線の値** `necklineAt(idx)`（`validateMainPointsAgainstNecklineAt`） |
 
 **H&S 系だけ比較相手が違うのは、ネックラインが傾きを持ち、肩が定義 2 点の外側に来て外挿が
@@ -619,12 +620,12 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 |---|---|---|
 | `peaks_below_neckline` | 完成済み（double / triple / H&S 系） | (top) 主構成点（山）のいずれかがネックライン以下 |
 | `valleys_above_neckline` | 完成済み（同上） | (bottom) 主構成点（谷）のいずれかがネックライン以上 |
-| `forming_peaks_below_neckline` | 形成中（`double_top` / `triple_top`） | 同上（`view=debug` の `▼ reason 横断合計` で完成済みと混ざらないよう語彙を分けてある） |
-| `forming_valleys_above_neckline` | 形成中（`triple_bottom` のみ） | 同上 |
+| `forming_peaks_below_neckline` | 形成中（`triple_top`） | 同上（`view=debug` の `▼ reason 横断合計` で完成済みと混ざらないよう語彙を分けてある） |
+| `forming_valleys_above_neckline` | 形成中（`triple_bottom`） | 同上 |
 
-`forming_valleys_above_neckline` に `double_bottom` が出ないのは **#262 で形成中
-`double_bottom` の経路を削除したから**で、同じ 3 点の棄却は完成済み経路の
-`valleys_above_neckline` として出る（strict と relaxed の 2 件が並ぶ）。
+**`forming_*` の 2 コードに double が出ない**のは、形成中 `double_bottom` の経路を #262 で、
+形成中 `double_top` の経路を #268 案 C で削除したから。同じ 3 点の棄却は完成済み経路の
+`valleys_above_neckline` / `peaks_below_neckline` として出る（strict と relaxed の 2 件が並ぶ）。
 
 完成済みの 2 コードは**スカラー版と線版で共通**（判定の意味が同じなので分けていない）。
 
@@ -644,15 +645,13 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
   高安を突き合わせると基準が混ざる。
 - **主構成点だけを渡す。** double の中間構成点はネックラインの定義点そのもの（`necklinePrice = b.price`）
   なので、検査に含めると必ず失格になる。triple は 3 点すべてが主構成点。
-- **形成中 `double_top` だけは 2 つの検査で分担する。** 最新足の側は既存の
-  `forming_current_at_or_below_valley`（`currentPrice <= valley.price`）が同じ判定を担っており、
-  `forming_peaks_below_neckline` が見るのは確定側の山 1 点だけ。
-  **これは「主構成点の 1 つが確定ピボットではない」経路に固有の事情**で、#262 以降そういう経路は
-  形成中 `double_top` だけになった（形成中 `double_bottom` は削除され、3 点が揃った構造は
-  完成済み経路が `near_completion` として同じ検査を 1 回で掛ける）。
+- **1 つの検査が主構成点をまとめて見る。** 形成中 `double_top` は最新足の側を
+  `forming_current_at_or_below_valley` が、確定側の山を `forming_peaks_below_neckline` が見る、
+  という**2 つの検査の分担**を持っていたが、#268 案 C でその経路ごと消えた。残る形成中経路
+  （`triple_*`）は 3 点すべてが同じ検査を 1 回で通る。
 
 契約は `tests/patterns/neckline-side-triple-double.test.ts`（完成済み double / triple）、
-`tests/patterns/neckline-side-forming-triple-double.test.ts`（形成中 double / triple）、
+`tests/patterns/neckline-side-forming-triple-double.test.ts`（形成中 triple）、
 `tests/patterns/neckline-side-hs.test.ts`（H&S 系。形成中に配線が無いことのトリップワイヤを含む）が
 固定している。
 
@@ -674,8 +673,9 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 
 **「形成中は完成済みより緩い」を一般則として読まないこと。** #169 / PR #170 でサイズ検査を揃えたときに
 整理したとおり、緩めてよいのは**「同水準かの判定」**（3 点目が最新足の終値で暫定なぶんノイズが残る）で
-あって**「形と呼べる大きさか」ではない**——形成中 double のサイズ検査は #170 で完成済みと同じに揃えて
-あり、形成中 triple も単調性ゲート（#263）とネックライン側の検査（#261）は完成済みと同等以上に厳しい。
+あって**「形と呼べる大きさか」ではない**——形成中 double のサイズ検査は #170 で完成済みと同じに揃えた
+（その後 #262 / #268 案 C で形成中 double の経路ごと無くなり、double のサイズ検査は完成済みだけになった）。
+形成中 triple も単調性ゲート（#263）とネックライン側の検査（#261）は完成済みと同等以上に厳しい。
 本件が緩いままなのは前者に属するからではなく、**上の実測で「配線すると帰属が誤り妥当な形を落とす」ことが
 示されたから**である。
 
@@ -708,6 +708,10 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 ローカル定数 5 本でこのパラメータを上書きしていた（`detect_triples` / `detect_hs` は当時から
 パラメータどおり）。日足の既定は 4 本・1時間足は 2 本なので、**既定パラメータでも上書きが
 起きていた**。上書きを外したので、日足で 4 本間隔の構成も検出される。
+
+**double の主構成点間の `minDist` は完成済み経路（`near_completion` を含む）で掛かる**
+——形成中経路が無いので、この間隔検査に漏れる経路も無い（#269。形成中 `double_top` が
+中間構成点との距離を見ていなかった件は、#268 案 C で経路ごと削除して解消した）。
 
 ### H&S / 逆 H&S の肩の同水準判定は時間足別（#244）
 
@@ -789,7 +793,7 @@ ATR 比テーブルを掛けたもの。
 
 | `status` | 意味 | 既定で出るか |
 |---|---|---|
-| `forming` | 形成途上。まだネックライン突破の余地がある | `includeForming: true` で |
+| `forming` | 形成途上。まだネックライン突破の余地がある（反転系では `triple_*` / H&S 系だけ。**double 2 型は出さない**。#268 案 C） | `includeForming: true` で |
 | `near_completion` | **構造は揃い、ネックライン突破を待っている**（double / triple / H&S 系。#262 で double 2 型にも出るようになった） | `includeForming: true` で |
 | `completed` | 検出器がネックライン突破を確認済み | ○ |
 | `invalid` | 構成点確定後に形が崩れて無効化された（理由は `invalidReason`） | `includeInvalid: true` で |
@@ -804,6 +808,11 @@ ATR 比テーブルを掛けたもの。
 以前は形成中 `double_bottom` 専用の経路が出していたもので、判定（`FORMING_EXPIRY_BARS` の
 期限切れ / 谷ゾーン再進入）は同じまま置き場所だけが移っている。未ブレイクの構造なので
 `includeForming: false` では `expired` / `invalid` も返らない（`includeInvalid: true` でも同じ）。
+
+**double 2 型が取りうる `status` は `near_completion` / `completed` / `invalid` / `expired` の
+4 つで、`forming` は含まれない**（#268 案 C）。最終構成点が 1 つしか無く「形成中」を定義できない
+ためで、未配線ではなく仕様。`includeForming: true` を渡しても double に `forming` は出ない
+（トリップワイヤ: `tests/patterns/no-forming-double-268.test.ts`）。
 
 ### 整合度は「ゲート通過後の形の良さ」
 
@@ -993,35 +1002,37 @@ accepted も押し出されうる（`content` はこの 2 つを区別して書�
 
 > **表の値は閾値そのものではなく「必要なスキャン窓の本数」**（`limit` と同じ単位）。上の式が返すのは
 > パターンの大きさの閾値で、**表はそこに各検出器の走査ループが要求する端点ぶんを足した値**である。
-> 形成中の反転 3 種と完成済み wedge は **+1**（`formationBars` / 窓サイズはいずれも添字の差なので、
+> 形成中の反転 2 種と完成済み wedge は **+1**（`formationBars` / 窓サイズはいずれも添字の差なので、
 > 本数としては 1 本多く要る）、flag / pennant も **+1**（旗竿と保ち合いの境界の 1 本）、三角形は **+6**。
-> 例: `1day` の forming double は式が `clamp(round(14 × 1), 23, 46) = 23`（= `formationBars` の下限）で、
-> 表は **24**。`12hour` は式が `clamp(round(14 × 2), 21, 42) = 28` で表は **29**。
+> 例: `1day` の forming triple は式が `clamp(round(21 × 1), 23, 46) = 23`（= `formationBars` の下限）で、
+> 表は **24**。`12hour` は式が `clamp(round(21 × 2), 21, 42) = 42` で表は **43**。
 > **`limit` を式の値に合わせると 1 本足りない**ので、下限として使うのは表の値のほう。
 > 導出は `tools/patterns/min-bars.ts` の `minBarsForDetector` にあり、端点の根拠も各 case に書いてある。
 
-| 時間足 | forming double（14日由来） | forming triple（21日由来） | forming H&S（21日由来） | 完成済み wedge（25日窓由来） | flag / pennant（最小 1+2日由来） |
-|---|---|---|---|---|---|
-| `1min` | 31 | 31 | 31 | 31 | 61 |
-| `5min` | 31 | 31 | 31 | 31 | 61 |
-| `15min` | 35 | 35 | 35 | 35 | 69 |
-| `30min` | 35 | 35 | 35 | 35 | 69 |
-| `1hour` | 35 | 35 | 35 | 35 | 59 |
-| `4hour` | 43 | 43 | 43 | 43 | 19 |
-| `8hour` | 43 | 43 | 43 | 43 | 10 |
-| `12hour` | 29 | 43 | 43 | 43 | 7 |
-| `1day` | 24 | 24 | 24 | 26 | 6 |
-| `1week` | 26 | 26 | 26 | 26 | 6 |
-| `1month` | 30 | 30 | 30 | 30 | 6 |
+| 時間足 | forming triple（21日由来） | forming H&S（21日由来） | 完成済み wedge（25日窓由来） | flag / pennant（最小 1+2日由来） |
+|---|---|---|---|---|
+| `1min` | 31 | 31 | 31 | 61 |
+| `5min` | 31 | 31 | 31 | 61 |
+| `15min` | 35 | 35 | 35 | 69 |
+| `30min` | 35 | 35 | 35 | 69 |
+| `1hour` | 35 | 35 | 35 | 59 |
+| `4hour` | 43 | 43 | 43 | 19 |
+| `8hour` | 43 | 43 | 43 | 10 |
+| `12hour` | 43 | 43 | 43 | 7 |
+| `1day` | 24 | 24 | 26 | 6 |
+| `1week` | 26 | 26 | 26 | 6 |
+| `1month` | 30 | 30 | 30 | 6 |
 
 `detect_triangles` も同じ換算に乗っている（最小窓 = 構造的下限。要求本数は `1min` / `5min` が 21、
 `1hour` 以下が 23、`4hour`〜`12hour` が 27、`1day` 29、`1week` 31、`1month` 35）。
-**形成中の反転パターン 3 種（double / triple / H&S）は同じ換算・同じ形の判定**で、
-形成バー数（double / triple は `lastIdx - 左ピボット.idx`、H&S は `右肩.idx - 左肩.idx`）を
-バー数レンジと突き合わせる。
-日数由来が同じ 21 日の triple と H&S は全時間足で同値になり、14 日由来の double だけが
-`12hour` で下側に外れる（`formationBars` の下限が `round(14 × 2) = 28` で、上限クランプ 42 の
-内側に収まるため。表の値はこれに端点 1 本を足した 29）。
+**形成中の反転パターン 2 種（triple / H&S）は同じ換算・同じ形の判定**で、
+形成バー数（triple は `lastIdx - 左ピボット.idx`、H&S は `右肩.idx - 左肩.idx`）を
+バー数レンジと突き合わせる。日数由来が同じ 21 日なので全時間足で同値になる。
+
+**double の列は無い。** #268 案 C で形成中 double の経路が無くなり、この種別に
+「パターンサイズ由来の下限」が存在しなくなった（完成済み経路＝`near_completion` を含む が
+要求するのはピボット 3 点の間隔だけで、それは §1 の一般式が担う）。
+14 日由来の double は `12hour` だけ他の 2 種より下側に外れる列で、消える前の値は 29 だった。
 
 > 上の 2 つの表は手書きではない。構造的下限は `tools/patterns/scan-window.ts`（`assessScanWindow`）、
 > パターンサイズ由来の下限は `tools/patterns/min-bars.ts`（`minBarsForDetector`）から導出した値で、
@@ -1044,11 +1055,12 @@ accepted も押し出されうる（`content` はこの 2 つを区別して書�
 
 > 形成中 double / H&S も以前は独自の換算（`1day`→1 / `1week`→7 / **それ以外→1**）を使っており、
 > この表の対象外だった（#118 問題 3）。**バー数への統一で閾値の向きが時間足ごとに変わる**:
-> 最小側は全時間足で厳しくなり（例: `1day` の double は `formationBars` の下限が 14 → 23 本。
-> スキャン窓の要求本数では 15 → 24 本）、最大側は緩む
+> 最小側は全時間足で厳しくなり（例: `1day` の H&S は `formationBars` の下限が 21 → 23 本。
+> スキャン窓の要求本数では 22 → 24 本）、最大側は緩む
 > （旧実装は全時間足で `formationBars ≤ 90` に張り付いていた）。`1week` は旧実装の受理域が
 > `formationBars ∈ [2, 12]` と構造的下限（25 本）を下回っており、**形成中 double / H&S が
-> 実質検出不能**だった。詳細は CHANGELOG を参照。
+> 実質検出不能**だった。詳細は CHANGELOG を参照。**double 側は #268 案 C で経路ごと消えた**ので、
+> この換算が効くのは H&S / triple だけになった。
 
 #### `limit` を上げる動機
 

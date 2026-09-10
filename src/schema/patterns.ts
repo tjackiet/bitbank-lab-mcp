@@ -648,6 +648,9 @@ export const DetectedPatternSchema = z.object({
 		.describe(
 			'パターンの状態。' +
 				'`forming` = 形成途上（最終構成点がまだ確定しておらず、ネックライン突破の余地がある）。' +
+				'**double 2 型は `forming` を出さない**——最終構成点が 1 つしか無く形成中を定義できないため' +
+				'（issue #268）。double は `near_completion` から始まり、' +
+				'`near_completion` / `completed` / `invalid` / `expired` の 4 段を取る。' +
 				'`near_completion` = **構成点は揃い、ネックライン突破を待っている**。' +
 				'反転系（double / triple / H&S）はいずれもこの状態を取る' +
 				'（double 2 型は issue #262 まで出しておらず、同じ段階を `forming` と呼んでいた）。' +

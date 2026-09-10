@@ -73,6 +73,159 @@
 | 58 | #178 項目 1 | **形成中 triple への高さ相対ゲートは案 C（不採用）で決着。文書化のみ。** #261 / #263 で帰属を正した後の残差 17 実体のうち 12 実体が他ゲートの仕事、単独で拾う 5 実体のうち 3 実体が目視で妥当なトリプル。配線すると帰属が誤り妥当な形を落とす。**#178 の 4 項目すべてが決着し issue はクローズ** | **変わらない**（docstring / docs / 内部メモのみ。コードのロジックは 1 行も触っていない） |
 | 59 | #262 Phase 1 | **形成中 double の「形成中」の定義が top / bottom で違う件の計測。コード変更なし。** top は「最終構成点が形成中」（確定 2 点 + 最新足）、bottom は「構造完成・ブレイク待ち」（確定 3 点）で、**同じ `status: 'forming'` が別の段階を指している**。形成中 `double_top` が 0 件になる律速は `forming_bars_out_of_range`（到達 4,303 のうち 4,159 = 96.7% が**全件下限割れ**）で、issue が疑っていた `DOUBLE_LEVEL_MAX_PCT` ではない（172 件 = 3.2%） | **変わらない**（計測スクリプトと内部メモのみ。検出器・`structural.ts`・`config.ts`・`status` の enum は 1 行も触っていない） |
 | 60 | #262 Phase 2 | **double の「構造完成・ブレイク待ち」を `near_completion` で出すようにし、誤ラベルだった `tryFormingDoubleBottom` を削除した。** 完成済み 4 経路（strict / relaxed × top / bottom）は `findBreakoutIdx` が −1 のとき `no_breakout` で棄却していたが、triple / H&S と同じく `near_completion` を組むようにした。**`status` の enum も `FORMING_*` 係数も 1 つも変えていない** | **既定（`includeForming: false`）は 544 ケース全件で完全一致**（**検出器は `includeForming` を「エントリを組み立てる前」に見る**ので、`false` のときは `near_completion` / `expired` / `invalid` をそもそも作らず、従来どおり `no_breakout` で抜ける）。`includeForming: true` は 11,560 ケース中 2,791 ケースで変わる |
+| 61 | #268 Phase 1 | **形成中 `double_top` の左の山の探索を「パターン長」基準に変える ablation の計測。コード変更なし。** 現行は `[...allPeaks].reverse().find(...)` で**最新の確定山 1 つ**を取るので `formationBars` が「直近の山からの距離」を測っており、`forming_bars_out_of_range` の下限割れで accepted が 0 件になる。探索を「谷を挟んで最新足と同水準の最初の確定山」に変えても目視で呼べる形は増えなかった | **変わらない**（計測スクリプトと内部メモのみ） |
+| 62 | #268 案 C | **`tryFormingDoubleTop` を削除し、double は `forming` を持たないパターンにした。** double の `status` は `near_completion` / `completed` / `invalid` / `expired` の 4 段で、`forming` は**仕様として持たない**（最終構成点が 1 つしか無く形成中を定義できない）。**triple / H&S の形成中検知は 1 行も触っていない** | **既定（`includeForming: false`）は変わらない。** `includeForming: true` でも 12,104 ケース全件で**変わらない**（削除した経路の accepted が全母集団で 0 件のため）。減るのは `view=debug` の候補だけ |
+
+### Removed（#268 案 C: double の `forming` を廃止し、`near_completion` から始まるパターンにする）
+
+**`triple_*` / H&S 系の形成中検知は 1 行も触っていない。** `git diff --stat` で
+`tools/patterns/detect_triples.ts` / `tools/patterns/detect_hs.ts` とそれらのテストが
+無変更であることを PR 本文に示してある。
+
+`tools/patterns/detect_doubles.ts` の `tryFormingDoubleTop`（「2 つ目の山を作っている途中」）を
+削除した。`tryFormingDoubleBottom` は #262 で削除済みなので、**double 2 型は形成中経路を
+1 つも持たなくなった。** 契約としては `status` の取りうる値が double で 1 つ減り、
+`near_completion` / `completed` / `invalid` / `expired` の **4 段** になる。
+**`forming` を出さないことを仕様にする**——未配線や「たまたま 0 件」ではない。
+
+#### なぜ消すのか
+
+- **実データで 1 件も出ていない。** 12,104 ケース（標準 800 + 実データ B / C / D 各 96 +
+  ローリング窓 3,672 × 3）で accepted は**全母集団 0 件**。律速は `forming_bars_out_of_range` の
+  **下限割れ**で、左の主構成点に**最新の確定山**を取るため `formationBars` が「パターン長」では
+  なく「直近の山からの距離」を測っていた（#262 Phase 1 §4 / #268 Phase 1 §1）。
+- **探索を直しても呼べる形は増えなかった。** #268 Phase 1 は左の山の取り方を「谷を挟んで最新足と
+  同水準の最初の確定山」に変える ablation（`ablP`）を実測し、増える実体の目視判定で
+  「`tryFormingDoubleTop` を残す積極的な理由は無い」と結論している（PR #271 /
+  [docs/internal/forming-double-top-268.md](docs/internal/forming-double-top-268.md)）。
+- **double だけの例外を仕様のあちこちに抱えていた。** 主構成点 2 点のうち 1 点が確定ピボットでは
+  ないので、(a) ネックライン側検査を 2 つの理由コードに分担する（#261）、(b) 単調性ゲートが
+  「階段」を定義できない（#263）、(c) `pivots` が 2 点になる（#224 症状 3 の表の例外）、
+  (d) 主構成点間の `minDist` が掛からない（#269）——という分岐が `docs/tools.md` と
+  検出器の docstring に散っていた。**経路を消すとこれらが一斉に消える**（#269 も対象経路が
+  無くなるので同時にクローズ）。
+- **`triple_*` / H&S は中間構成点が 2 つある**ので最終構成点を暫定にしても形が決まり、上の例外が
+  生じない。だからそちらの `forming` は据え置く。**「形成中を出すか」は検出器ごとの設計判断**で、
+  反転系で揃える対象ではない（[#268 の決定コメント](https://github.com/tjackiet/bitbank-lab-mcp/issues/268)）。
+
+#### 消えた理由コード（`view=debug` の `candidates[].reason`）
+
+**double 専用だったもの**（他のどの経路も出さないので、コードベースから完全に消えた）:
+
+| 理由コード | 意味 |
+|---|---|
+| `forming_no_confirmed_peak` | 確定した山が 1 つも無い |
+| `forming_no_valley_after_peak` | 山はあったが、その後に谷が無い |
+| `forming_peak_level_out_of_tolerance` | 最新足が山1 から `FORMING_PEAK_TOLERANCE_PCT`（5%）以上離れている |
+| `forming_current_at_or_below_valley` | 最新足がネックライン（谷の終値）以下 |
+| `forming_pattern_too_small` / `forming_valley_too_shallow` / `forming_peak_too_shallow` | サイズ検査（#169。`formingSizeReason` が `forming_` 接頭辞を付けていた） |
+
+**triple と共有していたもの**は **triple 側で出続ける**（`docs/tools.md` の理由コード表の
+「形成中」欄を `triple_*` だけに直した）:
+`forming_peaks_not_level` / `forming_completion_below_min` / `forming_bars_out_of_range` /
+`forming_peaks_below_neckline`。
+
+#### 整理した定数 / ヘルパ
+
+- 削除: `MIN_PATTERN_DAYS` / `MAX_FORMING_DAYS` / `FORMING_PEAK_TOLERANCE_PCT` /
+  `FORMING_BASE_COMPLETION` / `FORMING_COMPLETION_RANGE` / `MIN_FORMING_COMPLETION`（export）/
+  `getDoubleFormingBarParams`（export）/ `formingSizeReason` / `rejectFormingNecklineSide`。
+- **`MIN_FORMING_COMPLETION` の docstring は「現行の定数では到達しない」と明記していた**
+  （`completion = min(1, 0.66 + progress × 0.34)` で `progress ∈ [0, 1]` なので下限は 0.66 > 0.4）。
+  **それ自体が死にコードの証明**なので、経路ごと消えるこの PR で一緒に整理した。
+- **残したもの**: `FORMING_EXPIRY_BARS`（= `MAX_BARS_FROM_EXTREMUM` = 20 本）。未ブレイク構造が
+  `near_completion` を名乗れる期限の判定（#262 / #270）で使う。`structural.ts` の
+  `formingNecklineSideReason` も triple が使うので残す。
+
+#### `min-bars.ts` から `forming_double` を外した
+
+`MIN_BARS_DETECTORS` の `forming_double` は `getDoubleFormingBarParams(tf).minBars + 1` を
+返していた。形成中 double が無くなった以上、**この検出器種別の「パターンサイズ由来の下限」は
+存在しない。** double の下限は完成済み経路（`near_completion` を含む）が要求するピボット 3 点の
+間隔で決まり、それは `docs/tools.md` §1 の構造的下限の一般式
+（`2 × swingDepth + 2 × max(minBarsBetweenSwings, 5) + 1`）が既に担っている。
+§2 の表から `forming double（14日由来）`の列を落とした（消える前の値は `12hour` だけ
+他の 2 種と違う 29）。
+
+#### 計測スクリプトは**どちらも削除しない**
+
+`scripts/measure_forming_double_asymmetry_262.ts` と `scripts/measure_forming_double_top_268.ts` は
+`function tryFormingDoubleTop(ctx: DetectContext): PatternEntry | null {` をアンカー文字列にして
+ablation を組むので、削除後の作業ツリーでは `base` ビルドが組めない。**再計測の根拠として残し、
+起動時に明示的に落とすようにした**（黙って部分結果を出すのは PR #260 のレビューで直した
+「コーパスが縮んだまま正常終了」と同じ失敗の形）。
+
+- `requireFormingTopAnchors` / `requireFormingAnchors` が、**strip-ref 側**（`--strip-ref` 未指定なら
+  作業ツリー）の `detect_doubles.ts` にアンカーがあるかを数字を 1 つも出す前に確認し、
+  無ければ渡すべき ref を名指しして落ちる。
+- 渡すべき ref は 2 本で**違う**:
+  `measure_forming_double_top_268.ts` は `tryFormingDoubleTop` だけを要るので **`27337eb`（#271 の
+  マージ commit）**、`measure_forming_double_asymmetry_262.ts` は形成中 2 経路の**両方**を要るので
+  **`a920019`（#267 のマージ commit）**。後者に `27337eb` は使えない（#270 の後なので
+  `tryFormingDoubleBottom` が無い）。
+- **`--strip-ref` の適用範囲を `detect_doubles.ts` 1 ファイルから `tools/patterns/` 全ファイルへ
+  広げた。** 元は「検出器 1 ファイルだけを ref から取り、残りは作業ツリー」で、`verifyStripScope` が
+  「作業ツリーが同ディレクトリの他のファイルを触っていない」ことをゲートしていた。本 PR は
+  `min-bars.ts` / `structural.ts` も触るのでその前提が崩れる——**当時のエラーメッセージが案内していた
+  対処（`fromRef` を全ファイルに広げる）をそのまま採った。** `verifyStripScope` は差分の申告に変わり、
+  ゲートとして残したのは**ファイルの追加 / 削除**（構成がずれると ref 側の import が解決できない）だけ。
+- `measure_forming_double_top_268.ts` の §0(a)（展開ビルド ≡ 作業ツリー）は、`--strip-ref` を渡すと
+  `base` が ref 側になるので**作業ツリービルド `work` を別に組んで**突き合わせる
+  （#262 版の `pr` ビルドと同じ役割）。これを怠ると「strip を渡すと §0 が必ず不一致で落ちる」。
+
+#### 実測
+
+再計測は**2 本とも走らせた**（これが計測スクリプトの案内が機能していることの検算も兼ねる）。
+**どちらも数字がそのまま再現した。**
+
+| コマンド | 再現するもの |
+|---|---|
+| `npx tsx scripts/measure_forming_double_top_268.ts --strip-ref 27337eb` | **#268 Phase 1 全体**（と #262 Phase 1 §1 = 形成中 top のファネル） |
+| `npx tsx scripts/measure_forming_double_asymmetry_262.ts --strip-ref a920019` | **#262 Phase 1 全体**（形成中 2 経路 + ablation A / B） |
+
+**どちらも全 12,104 ケースで走らせ、値が 1 つも動かなかった**:
+形成中 top は accepted 0 / `forming_bars_out_of_range` 下限割れ 4,159 件・上限超え 0 件 /
+`formationBars` min 3・p50 11・max 38。形成中 bottom は `forming` 6 実体 / `expired` 9 / `invalid` 5。
+ablation B は 13 実体（`expired` 8 / `invalid` 5 / `forming` 2）。
+
+下の表は 1 本目の §1（形成中 top 経路のファネル）から取った。
+
+| 何を | 実測 |
+|---|---|
+| `includeForming: false`（既定） | **変わらない。** 形成中経路は `includeForming` が true のときしか呼ばれていなかった |
+| `includeForming: true` の `data.patterns` | **12,104 ケース全件で変わらない。** 削除した経路（`base` と対照 `noTop` の差集合で同定）の accepted が**全母集団 0 件**。律速は `forming_bars_out_of_range` で **下限割れ 4,159 件 / 上限超え 0 件**、`formationBars` は min 3 / p50 11 / max 38（要求は `1day` 23 / `1hour` 34 / `4hour` 42 本） |
+| 合成 fixture | **同じく 0 件差。** 標準コーパス（合成 704 + 実データ A 96）でも accepted は 0 件（§1-1 の 11 段すべてが棄却で閉じる: `forming_no_valley_after_peak` 140 / `forming_peak_level_out_of_tolerance` 116 / `forming_peaks_not_level` 16 / `forming_bars_out_of_range` 96 = 到達 368 件） |
+| `view=debug` の候補総数 | **延べ 11,528 件減る**（削除した経路が積んでいた棄却候補。1 呼び出しにつき高々 1 件なので、内訳は標準 368 / 実データ B・C・D 各 48 / ローリング窓 各 3,672）。`data.patterns` は動かないので、減るのは診断情報だけ |
+
+`tests/detect_patterns_data_patterns_regression.test.ts` のベースラインは既定オプションなので
+**差分なし**（履歴表に行を足す必要も無かった）。
+
+#### トリップワイヤ
+
+`tests/patterns/no-forming-double-268.test.ts` が「`includeForming: true` でも `double_*` に
+`status: 'forming'` が 1 件も出ない」を固定する。**将来 `forming` を再導入するときは意図的に外す。**
+3 層で見る:
+
+1. **削除前に実際に `forming` を出していた形**（削除したテストの fixture を写したもの）。
+   標準コーパスは削除前から 0 件なので、**判別力があるのはこの層だけ**。
+2. 合成 fixture 全件（`build*Candles` を機械的に集める）と凍結済み実データ B の横断。
+   `data.patterns` と `view=debug` の候補の両方を見る（`data.patterns` は dedup 後なので、
+   候補側まで見ないと「組まれたが畳まれた」と区別できない）。
+3. `detect_doubles.ts` に `function tryFormingDoubleTop` / `function tryFormingDoubleBottom` が
+   復活していないこと。
+
+#### 契約の更新
+
+- `src/schema/patterns.ts` の `status` description に「double 2 型は `forming` を出さない。
+  `near_completion` から始まる」を明記。
+- `docs/tools.md`: `pivots` の点数表から形成中 double の行を削除 / 単調性ゲートとネックライン側検査の
+  注記から形成中 `double_top` の例外を削除 / 理由コード表の「形成中」欄を `triple_*` だけに /
+  `status` の表に「double が取りうるのは 4 段」を追記 / §2 の下限表から forming double の列を削除 /
+  double の節に「主構成点間の `minDist` は完成済み経路で掛かる」（#269 分）を 1 文。
+- `src/handlers/detectPatternsViewsHandler.ts` の「形成中 double_top は 2 点なので元々出ない」の
+  注記を削除（前提が消えたため）。
+
+closes #268 / closes #269。
 
 ### Changed（#262 Phase 2: double の「ブレイク待ち」を `near_completion` で出す）
 

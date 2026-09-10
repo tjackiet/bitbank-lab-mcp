@@ -18,7 +18,8 @@
  * | `1hour` | **0 件** | **0 件** |
  *
  * 問題 3（形成中 double / H&S）は最大側の問題で、最小側だけを見る到達性テストをすり抜けていた。
- * 下の専用 describe を参照。
+ * 下の専用 describe を参照。**double 側は #268 案 C で形成中経路ごと削除されたので、
+ * 残っているのは H&S だけ**（形成中 triple は上の describe が既定 `limit` だけを見ている）。
  */
 import { describe, expect, it } from 'vitest';
 import { dayjs } from '../../lib/datetime.js';
@@ -29,7 +30,6 @@ import {
 	getHsShoulderMaxPctForTf,
 	getSizeThresholdsForTf,
 } from '../../tools/patterns/config.js';
-import { detectDoubles, getDoubleFormingBarParams } from '../../tools/patterns/detect_doubles.js';
 import { detectHeadAndShoulders, getHsFormingBarParams } from '../../tools/patterns/detect_hs.js';
 import { detectTriples } from '../../tools/patterns/detect_triples.js';
 import { detectWedges } from '../../tools/patterns/detect_wedges.js';
@@ -153,32 +153,6 @@ function buildFormingTripleTopCandles(nBars: number): CandleData[] {
 }
 
 /**
- * 形成中ダブルトップ形状。左山を `FORMING_LEAD_BARS` に置き、谷を挟んで直近足を山の水準まで戻す。
- *
- * **`formationBars` を唯一の可変要素にしてある**（形状の内部配置は `formationBars` に対する比で
- * 決まる）ので、`formationBars` だけを動かした 2 本の結果の差はバー数レンジの判定に帰属できる。
- *
- * @param formationBars `lastIdx - 左山.idx`。返るローソク足は `FORMING_LEAD_BARS + formationBars + 1` 本。
- */
-function buildFormingDoubleTopCandles(formationBars: number): CandleData[] {
-	const nBars = FORMING_LEAD_BARS + formationBars + 1;
-	const last = nBars - 1;
-	const peak = FORMING_LEAD_BARS;
-	const valley = Math.round((peak + last) / 2);
-	const ramp = Math.max(2, Math.round(formationBars / 6));
-	const out: CandleData[] = [];
-	for (let i = 0; i < nBars; i++) {
-		let close = 100 + 20 * bump(i, peak, (valley - peak) * 0.7) - 18 * bump(i, valley, (last - valley) * 0.8);
-		// 左山の前は上昇トレンド（validatePriorTrend の up_or_sideways を満たす）
-		if (i < peak) close = 100 - 12 * ((peak - i) / peak);
-		// 直近 ramp 本で山の水準まで戻す（2 山目 = 現在価格）
-		if (i >= last - ramp) close = 100 + 20 * ((i - (last - ramp)) / ramp);
-		out.push(mkCandle(i, close, close + 0.4, close - 0.4, close));
-	}
-	return out;
-}
-
-/**
  * 形成中 H&S 形状。左肩を `FORMING_LEAD_BARS` に置き、頭 → 頭後谷 → 直近を左肩水準（暫定右肩）にする。
  * 暫定右肩は最終足なので `formationBars = 右肩.idx - 左肩.idx = lastIdx - 左肩.idx`。
  *
@@ -201,12 +175,6 @@ function buildFormingHeadAndShouldersCandles(formationBars: number): CandleData[
 		out.push(mkCandle(i, close, close + 0.4, close - 0.4, close));
 	}
 	return out;
-}
-
-/** 形成中 double_top を返した件数。 */
-function countFormingDoubleTop(tf: string, formationBars: number): number {
-	const ctx = buildCtx(tf, buildFormingDoubleTopCandles(formationBars), true);
-	return detectDoubles(ctx).patterns.filter((p) => p.type === 'double_top' && p.status === 'forming').length;
 }
 
 /** 形成中 head_and_shoulders を返した件数。 */
@@ -241,28 +209,21 @@ describe('既定 limit（90 本）での検出可能性 — issue #118 問題 1 
 });
 
 // ──────────────────────────────────────────────
-// 形成中 double / H&S — issue #118 問題 3 の回帰
+// 形成中 H&S — issue #118 問題 3 の回帰
 //
 // 旧実装は手書きの bars-per-day（`1day`→1 / `1week`→7 / **それ以外→1**）で
-// `patternDays = Math.round(formationBars × daysPerBar)` を作り 14〜90 日 / 21〜90 日で判定していた。
-// `1week` の受理域は `formationBars ∈ [2, 12]` / `[3, 12]` で、構造的下限（25 本）を下回るため
-// **形成中 double / H&S が実質検出不能**だった。バー数へ統一して解消したことを固定する。
+// `patternDays = Math.round(formationBars × daysPerBar)` を作り 21〜90 日で判定していた。
+// `1week` の受理域は `formationBars ∈ [3, 12]` で、構造的下限（25 本）を下回るため
+// **形成中 H&S が実質検出不能**だった。バー数へ統一して解消したことを固定する。
+// **形成中 double は同じ問題を抱えていたが、#268 案 C で経路ごと削除された**ので回帰対象外。
 // ──────────────────────────────────────────────
 
-describe('既定 limit（90 本）での検出可能性 — issue #118 問題 3（形成中 double / H&S）', () => {
+describe('既定 limit（90 本）での検出可能性 — issue #118 問題 3（形成中 H&S）', () => {
 	it('既定 limit の形状はちょうど 90 本になる（助走 + 形成 + 端点 1 本）', () => {
-		expect(buildFormingDoubleTopCandles(DEFAULT_FORMATION_BARS)).toHaveLength(DEFAULT_SCAN_WINDOW);
 		expect(buildFormingHeadAndShouldersCandles(DEFAULT_FORMATION_BARS)).toHaveLength(DEFAULT_SCAN_WINDOW);
 	});
 
 	for (const tf of ALL_TIMEFRAMES) {
-		it(`${tf}: 形成中 double_top が既定スキャン窓で検出できる`, () => {
-			expect(
-				countFormingDoubleTop(tf, DEFAULT_FORMATION_BARS),
-				`${tf}: 形成中 double_top が 0 件`,
-			).toBeGreaterThanOrEqual(1);
-		});
-
 		it(`${tf}: 形成中 head_and_shoulders が既定スキャン窓で検出できる`, () => {
 			expect(
 				countFormingHeadAndShoulders(tf, DEFAULT_FORMATION_BARS),
@@ -273,7 +234,7 @@ describe('既定 limit（90 本）での検出可能性 — issue #118 問題 3�
 });
 
 // ──────────────────────────────────────────────
-// 形成中 double / H&S — バー数レンジの境界
+// 形成中 H&S — バー数レンジの境界
 //
 // 既定 limit のテスト（上）は `formationBars = 60` の 1 点しか見ないので、下限 / 上限を
 // 取り違えていても 60 を受理する限り通ってしまう。ここでは `patternBarRange` が返す
@@ -284,13 +245,10 @@ describe('既定 limit（90 本）での検出可能性 — issue #118 問題 3�
 // 判定に帰属できる（形が壊れて 0 件になったのではない）。
 // ──────────────────────────────────────────────
 
-describe('形成中 double / H&S — バー数レンジの境界', () => {
+describe('形成中 H&S — バー数レンジの境界', () => {
+	// **`double_top` の行は #268 案 C で削除した。** 形成中 double の経路が無くなり、
+	// `getDoubleFormingBarParams`（バー数レンジ）も一緒に消えたので、固定する境界が無い。
 	const cases = [
-		{
-			label: 'double_top',
-			params: getDoubleFormingBarParams,
-			count: countFormingDoubleTop,
-		},
 		{
 			label: 'head_and_shoulders',
 			params: getHsFormingBarParams,

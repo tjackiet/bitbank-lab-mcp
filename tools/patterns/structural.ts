@@ -930,8 +930,8 @@ export function necklineSideDetailsFrom(
 /**
  * {@link MainPointNecklineSideRejectReason} の**形成中パス版**（issue #261）。
  *
- * 語彙を分ける理由は `detect_doubles.ts` の `formingSizeReason` と同じで、`view=debug` の候補一覧は
- * 完成済みと形成中の棄却が**同じ配列に並ぶ**ため、同名だとどちらの経路で落ちたかが読めない。
+ * 語彙を分ける理由は、`view=debug` の候補一覧が完成済みと形成中の棄却を**同じ配列に並べる**ため、
+ * 同名だとどちらの経路で落ちたかが読めないこと。
  * さらに #193 / PR #194 の **`▼ reason 横断合計`（type を畳んで reason だけで合算する行）**で
  * 完成済みと形成中が 1 つの数字に潰れる。形成中の既存の理由コードが `forming_` 接頭辞で
  * 揃っている（`forming_bars_out_of_range` 等）のにも合わせてある。

@@ -498,14 +498,27 @@ accepted を変えないので、「保険として入れる」以上の根拠�
 
 ## 13. 計測スクリプトの出力（そのまま）
 
-再現:
+再現（**#268 案 C の実装後は `--strip-ref` が必須**。下の注記を参照）:
 
 ```bash
-npx tsx scripts/measure_forming_double_top_268.ts                    # 本メモ §13 の出力
-npx tsx scripts/measure_forming_double_top_268.ts --json /tmp/268.json
-npx tsx scripts/measure_forming_double_top_268.ts --no-rolling       # 短時間確認用
-npx tsx scripts/measure_forming_double_top_268.ts --emit ablP /tmp/detect_doubles.ablP.ts
+npx tsx scripts/measure_forming_double_top_268.ts --strip-ref 27337eb                    # 本メモ §13 の出力
+npx tsx scripts/measure_forming_double_top_268.ts --strip-ref 27337eb --json /tmp/268.json
+npx tsx scripts/measure_forming_double_top_268.ts --strip-ref 27337eb --no-rolling       # 短時間確認用
+npx tsx scripts/measure_forming_double_top_268.ts --strip-ref 27337eb --emit ablP /tmp/detect_doubles.ablP.ts
 ```
+
+> **`--strip-ref 27337eb` が要る理由。** #268 案 C で `tryFormingDoubleTop` を削除したので、
+> 作業ツリーの `detect_doubles.ts` には ablation のアンカーが無く `base` ビルドが組めない。
+> `27337eb` は PR #271（本 Phase 1）のマージ commit で、**削除前で #270 マージ後**
+> （`near_completion` 導入後なので本メモの数字と突き合わせられる）。
+> 付け忘れるとスクリプトが起動時に落ち、渡すべき ref を案内する——**黙って部分結果は出さない。**
+> `--strip-ref` は `tools/patterns/` を**丸ごと**その ref から取る（案 C で `min-bars.ts` /
+> `structural.ts` も触ったため、検出器 1 ファイルだけの差し替えでは等価にならない）。
+> §0(a) の「展開ビルド ≡ 作業ツリー」は、`--strip-ref` があるときは作業ツリービルド `work` と
+> 突き合わせる（`base` は ref 側なので比較相手にならない）。
+>
+> **案 C 後の再計測では §1〜§7 の数字が本メモのまま再現する**（accepted 0 /
+> `forming_bars_out_of_range` 下限割れ 4,159 件 / `formationBars` min 3 / p50 11 / max 38）。
 
 最後の `--emit` は ablation の `detect_doubles.ts` を書き出すだけで計測はしない。
 §11-1 のテスト実測は、これを作業ツリーへ当てて `npx vitest run` を回し、

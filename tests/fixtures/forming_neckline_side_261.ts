@@ -1,7 +1,11 @@
 /**
  * issue #261 の合成 fixture（形成中 triple / double の**主構成点がネックラインの誤側**）。
  *
- * 4 経路それぞれについて、**誤側の 1 点だけを動かした最小対**（棄却系列と対照系列）を作る。
+ * 各経路について、**誤側の 1 点だけを動かした最小対**（棄却系列と対照系列）を作る。
+ *
+ * **`formingDoubleTopRows` は #268 案 C で削除した**（形成中 `double_top` の経路ごと消えたので
+ * 呼び手が無くなった）。`formingDoubleBottomRows` は #262 以降、形成中ではなく完成済み経路の
+ * `near_completion` を見る fixture として残っている（形は #261 のまま）。
  * 回帰は `tests/patterns/neckline-side-forming-triple-double.test.ts`、
  * 理由コードの表駆動テストは `tests/patterns/forming-double-triple-debug-candidates.test.ts` が
  * それぞれ import する——**同じ形を 2 箇所で書き直すと、片方だけ直したときに黙って乖離する。**
@@ -91,34 +95,18 @@ export function formingTripleTopRows(currentClose: number): Row[] {
 export const mirrorRows = (rows: readonly Row[]): Row[] => rows.map(([c, h, l]) => [200 - c, 200 - l, 200 - h]);
 
 /**
- * 形成中ダブルトップ（構成点 `[12, 24, 35]`）。100 → 102 の緩い上昇に、山バー（idx 12・上ヒゲ 8）と
- * 谷バー（idx 24・下ヒゲ 8）を 1 本ずつ置いたもの。ネックラインは `valley.price`（終値）。
- *
- * | 引数 | 期待 |
- * |---|---|
- * | （既定） | 谷の終値 101.371 > 山1 の終値 100.686 → `forming_peaks_below_neckline` |
- * | `valleyClose = 100.2` | 山1 がネックラインより上 → accepted な形成中 `double_top` |
- * | `valleyClose = 100.2, currentClose = 100.1` | 最新足が谷以下 → 既存の `forming_current_at_or_below_valley` |
- *
- * 3 つ目が本ゲートの**担当外**であることの回帰になる（2 つの検査で主構成点 2 点を分担している。
- * `detect_doubles.ts` の `rejectFormingNecklineSide` の docstring）。
- */
-export function formingDoubleTopRows(valleyClose?: number, currentClose?: number): Row[] {
-	const closes = ramp(100, 102);
-	if (valleyClose !== undefined) closes[24] = valleyClose;
-	if (currentClose !== undefined) closes[35] = currentClose;
-	return closes.map((c, i) => [c, c + (i === 12 ? 8 : 0.5), c - (i === 24 ? 8 : 0.5)]);
-}
-
-/**
- * 形成中ダブルボトム（構成点 `[8, 16, 24]` ＋ 最新足 35）。102 → 100 の緩い下降に、谷バー 2 本
+ * ブレイク待ちダブルボトム（構成点 `[8, 16, 24]`）。102 → 100 の緩い下降に、谷バー 2 本
  * （idx 8 / 24・下ヒゲ 8）と山バー（idx 16・上ヒゲ 8）を置いたもの。ネックラインは
- * `midPeak.price`（終値）。
+ * 中間構成点（山）の終値。
  *
  * | 引数 | 期待 |
  * |---|---|
- * | （既定） | 谷1 の終値 101.543 > 山の終値 101.086 → `forming_valleys_above_neckline` |
- * | `peakClose = 102.5` | 2 谷ともネックラインより下 → accepted な形成中 `double_bottom` |
+ * | （既定） | 谷1 の終値 101.543 > 山の終値 101.086 → `valleys_above_neckline` |
+ * | `peakClose = 102.5` | 2 谷ともネックラインより下 → accepted な `near_completion` の `double_bottom` |
+ *
+ * **#261 当時は形成中経路（`tryFormingDoubleBottom`）を見ていた。** #262 でその経路が消え、
+ * 同じ 3 点を完成済み経路の未ブレイク分岐が組むようになったので、理由コードは `forming_` 接頭辞の
+ * 無いほうに、`status` は `near_completion` になった。**形そのものは #261 のまま**。
  */
 export function formingDoubleBottomRows(peakClose?: number): Row[] {
 	const closes = ramp(102, 100);

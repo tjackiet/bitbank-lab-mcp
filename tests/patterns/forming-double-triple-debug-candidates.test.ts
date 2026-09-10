@@ -6,12 +6,19 @@
  * 4 経路への横展開。
  *
  * カバーするもの:
- *   1. 4 経路それぞれで、`data.patterns` に出た形成中パターンと**同じ構成点**を持つ
- *      `accepted: true` / `status: 'forming'` の candidate が積まれる
+ *   1. 各経路で、`data.patterns` に出たパターンと**同じ構成点**を持つ
+ *      `accepted: true` / `status` 付きの candidate が積まれる
  *   2. 新設した理由コードが、それぞれ発火する最小ケースを持つ
- *   3. 算術的に到達しないガード（`forming_completion_below_min` の 3 経路）は、
+ *   3. 算術的に到達しないガード（`forming_completion_below_min` の triple top）は、
  *      fixture ではなく「なぜ fixture を置けないか」の境界を固定する
  *   4. `pushCand` の `status` は**渡さなければ出ない**（共有ヘルパの additive 性）
+ *
+ * ## double 2 型の「形成中」経路は**もう無い**（#262 / #268 案 C）
+ *
+ * `tryFormingDoubleBottom` は #262、`tryFormingDoubleTop` は **#268 案 C** で削除した。
+ * どちらも同じ構造は完成済み経路が組むので、#158 が守りたかったこと（**この経路が `view=debug` で
+ * 無音でない**）は据え置きのまま、`status` が `forming` → `near_completion` に、
+ * top 側の理由コード 6 件は**経路ごと消えた**（削除分の一覧は CHANGELOG の #268 節）。
  */
 import { describe, expect, it, vi } from 'vitest';
 import { dayjs } from '../../lib/datetime.js';
@@ -23,16 +30,10 @@ vi.mock('../../tools/analyze_indicators.js', () => ({
 
 import analyzeIndicators from '../../tools/analyze_indicators.js';
 import detectPatterns from '../../tools/detect_patterns.js';
-import { MIN_FORMING_COMPLETION } from '../../tools/patterns/detect_doubles.js';
 import { FORMING_MIN_COMPLETION as TRIPLE_MIN_COMPLETION } from '../../tools/patterns/detect_triples.js';
 import type { CandDebugEntry, DetectContext, PatternEntry } from '../../tools/patterns/types.js';
 import { pushCand } from '../../tools/patterns/types.js';
-import {
-	formingDoubleTopRows,
-	formingTripleTopRows,
-	mirrorRows,
-	rowsToCandles,
-} from '../fixtures/forming_neckline_side_261.js';
+import { formingTripleTopRows, mirrorRows, rowsToCandles } from '../fixtures/forming_neckline_side_261.js';
 
 type Candle = {
 	isoTime: string;
@@ -94,14 +95,11 @@ async function runDebug(
 	};
 }
 
-// ── 4 経路の fixture ──
-// 価格は 100 前後のスケール。形成バー数の下限（1day: double 23 本 / triple 23 本）を
+// ── 各経路の fixture ──
+// 価格は 100 前後のスケール。形成バー数の下限（1day: triple 23 本）を
 // 満たすために各脚を長めに取ってある——短いと `forming_bars_out_of_range` に落ちる。
-const FORMING_DOUBLE_TOP = legs(100, [
-	[10, 130],
-	[10, 112],
-	[13, 128.05],
-]);
+//
+// **`FORMING_DOUBLE_TOP` は #268 案 C で削除した**（形成中 `double_top` の経路ごと消えた）。
 /**
  * 形成中ダブルボトムと形成中トリプルボトムが同時に立つ列（構成点を共有する）。
  *
@@ -139,30 +137,7 @@ function formingAcceptedFor(candidates: Candidate[], type: string): Candidate[] 
 }
 
 describe('forming double / triple debug candidates (#158)', () => {
-	describe('成功エントリ — data.patterns に出た形成中パターンと同じ構成点が積まれる', () => {
-		it('double_top', async () => {
-			const { patterns, candidates } = await runDebug(fromCloses(FORMING_DOUBLE_TOP));
-
-			const pattern = patterns.find((p) => p.type === 'double_top' && p.status === 'forming');
-			expect(pattern).toBeDefined();
-			expect(pattern?.pivots?.map((p) => p.idx)).toEqual([10, 20]);
-
-			// #158 以前はこの経路が完全に無音で、candidates に痕跡が 1 件も無かった
-			const hits = formingAcceptedFor(candidates, 'double_top');
-			expect(hits).toHaveLength(1);
-			// 完成済みとして採用されたと誤読させないための印
-			expect(hits[0].status).toBe('forming');
-			// 確定ピボット 2 点 ＋ 暫定の山2（最新足）。indices は既存の棄却エントリと同じ並び
-			expect(hits[0].indices).toEqual([10, 20, 33]);
-			expect(hits[0].points?.map((p) => [p.role, p.idx])).toEqual([
-				['peak1', 10],
-				['valley', 20],
-				['forming_peak', 33],
-			]);
-			// isoTime は pushCand が候補足から埋める
-			expect(hits[0].points?.every((p) => typeof p.isoTime === 'string')).toBe(true);
-		});
-
+	describe('成功エントリ — data.patterns に出たパターンと同じ構成点が積まれる', () => {
 		/**
 		 * **`status` を `forming` から `near_completion` に、`indices` を 4 点から 3 点に変えた
 		 * （issue #262）。** `tryFormingDoubleBottom` は削除され、同じ構造を完成済み経路の
@@ -249,83 +224,17 @@ describe('forming double / triple debug candidates (#158)', () => {
 			candles: () => Candle[];
 			opts?: Parameters<typeof detectPatterns>[3];
 		}> = [
-			// tryFormingDoubleTop の 7 分岐（うち 6 つが到達可能。残り 1 つは下の算術テスト）
-			{
-				reason: 'forming_no_confirmed_peak',
-				type: 'double_top',
-				// 最後の山が lastIdx-2 にあり「確定済み」の条件（idx < lastIdx-2）を満たさない列。
-				// 既定 swingDepth では山が必ず lastIdx-swingDepth 以前になるため swingDepth=2 で作る。
-				candles: () =>
-					fromCloses(
-						legs(100, [
-							[4, 95],
-							[24, 130],
-							[2, 128],
-						]),
-					),
-				opts: { swingDepth: 2 },
-			},
-			{
-				reason: 'forming_no_valley_after_peak',
-				type: 'double_top',
-				candles: () => fromCloses(FORMING_BOTTOMS),
-			},
-			{
-				reason: 'forming_peak_level_out_of_tolerance',
-				type: 'double_top',
-				candles: () =>
-					fromCloses(
-						legs(100, [
-							[10, 130],
-							[10, 112],
-							[13, 117],
-						]),
-					),
-			},
-			{
-				reason: 'forming_peaks_not_level',
-				type: 'double_top',
-				// 山許容（±5%）は通るが同水準判定（3%）で落ちる帯
-				candles: () =>
-					fromCloses(
-						legs(100, [
-							[10, 130],
-							[10, 112],
-							[13, 124.8],
-						]),
-					),
-			},
-			{
-				reason: 'forming_current_at_or_below_valley',
-				type: 'double_top',
-				candles: () =>
-					fromCloses(
-						legs(100, [
-							[12, 130],
-							[10, 127],
-							[9, 128],
-							[4, 126.4],
-						]),
-					),
-			},
-			{
-				reason: 'forming_bars_out_of_range',
-				type: 'double_top',
-				candles: () =>
-					fromCloses(
-						legs(100, [
-							[10, 130],
-							[6, 112],
-							[8, 128],
-						]),
-					),
-			},
+			// **double 2 型の形成中分岐はこの表から全部消えた。**
 			// `tryFormingDoubleBottom` の 4 分岐（`forming_pattern_height_below_min` /
 			// `forming_valleys_not_level` / `forming_current_below_valley_zone` /
-			// `forming_bars_out_of_range`）は issue #262 で経路ごと削除した。同じ形の棄却は
-			// 完成済み経路の理由コードが担う（対応表は #262 の PR 本文。回帰は
-			// `size-gates-forming-doubles.test.ts` と `neckline-side-forming-triple-double.test.ts`）。
-			// tryFormingTripleTop / tryFormingTripleBottom（同上）
+			// `forming_bars_out_of_range`）は issue #262 で、`tryFormingDoubleTop` の 6 分岐
+			// （`forming_no_confirmed_peak` / `forming_no_valley_after_peak` /
+			// `forming_peak_level_out_of_tolerance` / `forming_peaks_not_level` /
+			// `forming_current_at_or_below_valley` / `forming_bars_out_of_range`）は #268 案 C で、
+			// いずれも経路ごと削除した。同じ形の棄却は完成済み経路の理由コードが担う
+			// （対応表は #262 / #268 の PR 本文。回帰は `size-gates-forming-doubles.test.ts` と
+			// `neckline-side-forming-triple-double.test.ts`、出ないことは `no-forming-double-268.test.ts`）。
+			// tryFormingTripleTop / tryFormingTripleBottom
 			{
 				reason: 'forming_bars_out_of_range',
 				type: 'triple_top',
@@ -437,13 +346,10 @@ describe('forming double / triple debug candidates (#158)', () => {
 				type: 'triple_bottom',
 				candles: () => rowsToCandles(mirrorRows(formingTripleTopRows(98.4))),
 			},
-			{
-				reason: 'forming_peaks_below_neckline',
-				type: 'double_top',
-				candles: () => rowsToCandles(formingDoubleTopRows()),
-			},
-			// `double_bottom` の `forming_valleys_above_neckline` は #262 で完成済み経路の
-			// `valleys_above_neckline` になった（`neckline-side-forming-triple-double.test.ts`）。
+			// `double_top` の `forming_peaks_below_neckline` は #268 案 C で、`double_bottom` の
+			// `forming_valleys_above_neckline` は #262 で、それぞれ完成済み経路の
+			// `peaks_below_neckline` / `valleys_above_neckline` になった
+			// （`neckline-side-forming-triple-double.test.ts` / `neckline-side-triple-double.test.ts`）。
 			{
 				reason: 'forming_completion_below_min',
 				type: 'triple_bottom',
@@ -475,14 +381,8 @@ describe('forming double / triple debug candidates (#158)', () => {
 	});
 
 	describe('到達しないガード — fixture ではなく算術境界を固定する', () => {
-		// #262 で `tryFormingDoubleBottom` を削除したので、この境界が意味を持つのは **top だけ**。
-		it('double top の forming_completion_below_min は現行の重みでは発火しない', () => {
-			// completion = min(1, 0.66 + progress * 0.34)、progress は [0, 1] にクランプ済み。
-			// 下限は progress=0 のときの 0.66 で、しきい値 0.4 を割れない。
-			const baseCompletion = 0.66;
-			expect(baseCompletion).toBeGreaterThan(MIN_FORMING_COMPLETION);
-		});
-
+		// double の 2 経路は #262 / #268 案 C で削除済みなので、この境界が意味を持つのは
+		// **triple だけ**（top は到達しない / bottom は上の表に fixture がある）。
 		it('triple top の forming_completion_below_min は現行の重みでは発火しない', () => {
 			// top 側の progress = min(1, currentPrice / avgPeakPrice) は価格が正である限り正。
 			// completion > 0.66 になり、しきい値を割れない（bottom 側は progress が負を取りうる）。
