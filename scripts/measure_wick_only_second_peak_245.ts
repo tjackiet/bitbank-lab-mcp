@@ -836,7 +836,13 @@ function widestGap(values: readonly number[]): { lo: number; hi: number; width: 
 async function main(): Promise<void> {
 	const argv = process.argv.slice(2);
 	const jsonAt = argv.indexOf('--json');
-	const jsonPath = jsonAt >= 0 ? argv[jsonAt + 1] : null;
+	const jsonPath = jsonAt >= 0 ? (argv[jsonAt + 1] ?? null) : null;
+	// **引数の検査は計測の前に置く。** `--json` にパスが続いていないと、以前は 12,104 ケースを
+	// 回しきってから何も書かずに正常終了していた（22 分待って出力が無い）。次の要素が別のフラグの
+	// ときも弾く——`--json --no-rolling` は `--no-rolling` という名前のファイルを作ってしまう。
+	if (jsonAt >= 0 && (jsonPath === null || jsonPath.startsWith('--'))) {
+		throw new Error(`--json には出力先パスが要る（受け取った値: ${jsonPath ?? 'なし'}）。`);
+	}
 	const includeRolling = !argv.includes('--no-rolling');
 
 	// **数字を 1 つも出す前に**自己検算する。
