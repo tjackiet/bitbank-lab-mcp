@@ -108,15 +108,20 @@ elicitation を送ってしまう。** 本サーバーの確認フロー（`with
 | `elicitation` の値 | 判定 | 理由 |
 |---|---|---|
 | 無い / `null` / `undefined` | `false` | 宣言なし（現行どおり） |
-| オブジェクト以外（`true` 等） | `false` | 仕様に無い形。fail-closed（**現行は `true` を返していた**） |
+| オブジェクト以外（`true` / 配列 等） | `false` | 仕様に無い形。fail-closed（**現行は `true` を返していた**） |
 | `{}` | `true` | 2025 系の宣言形。後方互換 |
 | `{ form: {} }` | `true` | form を宣言 |
 | `{ form: {}, url: {} }` | `true` | form を宣言 |
+| `{ form: {}, 未知のキー }` | `true` | 未知のキーは無視し、form の有無だけ見る |
 | `{ url: {} }` | `false` | url のみ。form リクエストを処理できない（**本 issue**） |
-| `{ form: {}, 未知のキー }` | `true` | 未知のモードは無視し、form の有無だけ見る |
+| `{ 未知のキーのみ }`（`{ voice: {} }` 等） | `false` | モードを宣言しているのに form が無い |
+| `{ form: null }` / `{ form: true }` | `false` | form の値が仕様の形でない。fail-closed |
 
-未知のキー**だけ**を持つ宣言（`{ voice: {} }` 等）は `{}` と同じく `true`。`ELICITATION_MODE_KEYS` に
-既知のモード（`form` / `url`）しか入れていないためで、後方互換を優先した意図的な扱い。
+境界は **form キーの有無ではなく「空オブジェクトか否か」**で引く。form キーの有無で引くと 2025 系の
+`{}` まで非対応になり、既存ホストが全部 fallback へ落ちる。逆に「未知のキーはモード宣言に数えない」と
+すると、`{ voice: {} }` のような **form 以外のモードだけを宣言したホスト**が本 issue と同じ経路で
+form リクエストを受け取る。空でない宣言は 2026-07-28 系のモード宣言とみなし、**form の値まで検証**して
+fail-closed に倒す（PR #284 の CodeRabbit 指摘を反映）。
 
 #### 変えていないもの
 
@@ -126,10 +131,10 @@ elicitation を送ってしまう。** 本サーバーの確認フロー（`with
 
 #### テスト
 
-修正前のコードでは `tests/private/elicitation.test.ts` の新規 7 ケースが落ちる（`url のみ → false` と
-`オブジェクト以外（true） → false` の 5 ケース + `withElicitedConfirmation` の 2 ケース）。
+修正前のコードでは `tests/private/elicitation.test.ts` の新規ケースが落ちる（初版の 7 ケースは
+`url のみ → false` と `オブジェクト以外（true） → false` の 5 ケース + `withElicitedConfirmation` の 2 ケース）。
 
-- `clientSupportsElicitation`: 上の判定表 7 行を **initialize 側・envelope 側それぞれで**回す
+- `clientSupportsElicitation`: 上の判定表の全行を **initialize 側・envelope 側それぞれで**回す（`{ voice: {} }` / `{ form: null }` / `{ form: true }` / `{ form: [] }` / `elicitation` が配列、の負ケースを含む）
 - 両取得元の OR: init が `{ form: {} }` / envelope なし → true、init なし / envelope が `{ url: {} }` → false、init が `{ url: {} }` / envelope が `{ form: {} }` → true（**OR を変えていないことの固定**）
 - `withElicitedConfirmation`: envelope が `{ url: {} }` のみのホストで fallback が返り、`input_required` にならず `onConfirmed` も呼ばれない。fallback に `confirmation_token` が混入しないこと（`.claude/rules/sensitive-data.md`）も同じ assertion で見る
 - 同条件 + `BITBANK_MCP_APPS_EXECUTE=1` + UI 宣言で、`_meta` にトークンが載る（url のみホストが MCP Apps 経路に正しく倒れること）

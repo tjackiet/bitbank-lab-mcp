@@ -120,8 +120,15 @@ const FORM_MODE_CASES: Array<{ label: string; elicitation: unknown; expected: bo
 	{ label: '空オブジェクト（2025 系の宣言形）', elicitation: {}, expected: true },
 	{ label: 'form のみ', elicitation: { form: {} }, expected: true },
 	{ label: 'form + url', elicitation: { form: {}, url: {} }, expected: true },
-	{ label: 'url のみ', elicitation: { url: {} }, expected: false },
 	{ label: 'form + 未知のキー', elicitation: { form: {}, voice: {} }, expected: true },
+	{ label: 'url のみ', elicitation: { url: {} }, expected: false },
+	// 未知のモードだけを宣言したホストも url のみと同じ扱い（form を処理できない）
+	{ label: '未知のキーのみ', elicitation: { voice: {} }, expected: false },
+	// form の値が仕様の形（オブジェクト）でない宣言は fail-closed
+	{ label: 'form が null', elicitation: { form: null }, expected: false },
+	{ label: 'form が true', elicitation: { form: true }, expected: false },
+	{ label: 'form が配列', elicitation: { form: [] }, expected: false },
+	{ label: 'elicitation が配列', elicitation: [], expected: false },
 ];
 
 /** initialize 時 capabilities で elicitation を宣言する ctx。 */

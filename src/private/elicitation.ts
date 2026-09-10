@@ -124,15 +124,10 @@ export function isAppUiExecuteAllowed(extra: ToolHandlerExtra | undefined): bool
 	return isAppUiExecuteEnabled() && clientSupportsAppUi(extra);
 }
 
-/**
- * MCP 2026-07-28（SEP-2322）で elicitation capability が宣言しうるモードキー。
- *
- * `declaresFormElicitation` が「モードキーを 1 つ以上持つのに form が無い」で
- * url のみのホストを弾くために使う。未知のキー（将来のモード）は**数えない**ので、
- * 未知のモードだけを宣言したホストは 2025 系の `{}` と同じく form 対応とみなす
- * （後方互換を優先する。ここを推測で狭めると既存ホストを巻き込む）。
- */
-const ELICITATION_MODE_KEYS = ['form', 'url'] as const;
+/** capability の値が「仕様どおりのオブジェクト」か（配列・null・プリミティブは除く）。 */
+function isCapabilityObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 /**
  * 与えられた client capabilities が **form モードの elicitation** を扱えると
@@ -146,23 +141,27 @@ const ELICITATION_MODE_KEYS = ['form', 'url'] as const;
  * | `elicitation` の値 | 判定 | 理由 |
  * |---|---|---|
  * | 無い / `null` / `undefined` | `false` | 宣言なし |
- * | オブジェクト以外（`true` 等） | `false` | 仕様に無い形。fail-closed |
+ * | オブジェクト以外（`true` / 配列 等） | `false` | 仕様に無い形。fail-closed |
  * | `{}` | `true` | 2025 系の宣言形。後方互換 |
  * | `{ form: {} }` / `{ form: {}, url: {} }` | `true` | form を宣言 |
+ * | `{ form: {}, 未知のキー }` | `true` | 未知のキーは無視し、form の有無だけ見る |
  * | `{ url: {} }` | `false` | url のみ。form リクエストを処理できない |
- * | `{ form: {}, 未知のキー }` | `true` | 未知のモードは無視し、form の有無だけ見る |
+ * | `{ 未知のキーのみ }`（`{ voice: {} }` 等） | `false` | モードを宣言しているのに form が無い |
+ * | `{ form: null }` / `{ form: true }` | `false` | form の値が仕様の形でない。fail-closed |
  *
- * 境界は **form キーの有無ではなく「モードキーを 1 つ以上持つのに form が無い」**で引く。
- * 前者で引くと 2025 系の `{}` まで非対応になり、既存ホストが全部 fallback へ落ちる。
+ * 境界は **form キーの有無ではなく「空オブジェクトか否か」**で引く。form キーの有無で引くと
+ * 2025 系の `{}` まで非対応になり、既存ホストが全部 fallback へ落ちる。逆に「未知のキーは
+ * モード宣言に数えない」としてしまうと、`{ voice: {} }` のような**form 以外のモードだけを
+ * 宣言したホスト**が本 issue と同じ経路で form リクエストを受け取る。空でない宣言は
+ * 2026-07-28 系のモード宣言とみなし、**form の値まで検証**して fail-closed に倒す。
  */
 function declaresFormElicitation(caps: unknown): boolean {
 	const elicitation = (caps as { elicitation?: unknown } | undefined)?.elicitation;
-	if (!elicitation || typeof elicitation !== 'object' || Array.isArray(elicitation)) return false;
-	const modes = elicitation as Record<string, unknown>;
-	if (Object.hasOwn(modes, 'form')) return true;
-	// モードキーを 1 つも持たない = 2025 系の `{}`（後方互換で form 対応とみなす）。
-	// 1 つ以上持つのに form が無い = url のみ等（form リクエストを処理できない）。
-	return !ELICITATION_MODE_KEYS.some((key) => Object.hasOwn(modes, key));
+	if (!isCapabilityObject(elicitation)) return false;
+	// 空オブジェクト = 2025 系の宣言形。モードという概念が無かった世代なので form 対応とみなす。
+	if (Object.keys(elicitation).length === 0) return true;
+	// 空でない = 2026-07-28 系のモード宣言。form を宣言し、かつ値が仕様の形のときだけ true。
+	return isCapabilityObject(elicitation.form);
 }
 
 /**
