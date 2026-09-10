@@ -77,6 +77,48 @@
 | 62 | #268 案 C | **`tryFormingDoubleTop` を削除し、double は `forming` を持たないパターンにした。** double の `status` は `near_completion` / `completed` / `invalid` / `expired` の 4 段で、`forming` は**仕様として持たない**（最終構成点が 1 つしか無く形成中を定義できない）。**triple / H&S の形成中検知は 1 行も触っていない** | **既定（`includeForming: false`）は変わらない。** `includeForming: true` でも 12,104 ケース全件で**変わらない**（削除した経路の accepted が全母集団で 0 件のため）。減るのは `view=debug` の候補だけ |
 | 63 | #252 | **`wedge_*` に `pivots`（構成点）を出すようにした。** 中身は上下トレンドラインの**非ブレイクタッチ点すべて**で、`price` は高安（`extremePrice` と同値）。`triangle_*` と同じ基準に揃えた。**検出ロジック・閾値は 1 つも触っていない**（回帰パスも形成中パスも、採否が決まった後に出力用の点を組むだけ） | **判定は変わらない**（実データ 1hour の回帰 fixture 10 件を全フィールド突き合わせて、**差分は `wedge_*` 4 件に `pivots` が増えたぶんだけ**。他のキーは 1 バイトも動かない） |
 | 64 | #245 Phase 1 | **「ヒゲだけの山2（谷2）」が accepted に混ざるかの計測。コード変更なし。** 12,104 ケースで仮の閾値（`closeGap` ≤ 0.2 かつ `wickShare` ≥ 0.5）に当たったのは**値動き 1 つだけ**で、それは **issue #245 本文の発端の形そのもの**（`btc_jpy` / `1hour` / 2026-09-04）。3 値判定は**保留**——山2 の後にネックラインは割るが、その前に山2 の終値を越えて戻しており **#242 が `peak_after_last_pivot` で落とすのと同じ値動き**。**#245 が残していた問い（「再上昇せずそのまま割る形」）に該当する形は 0 件** | **変わらない**（計測スクリプトと内部メモのみ。検出器・`structural.ts`・`config.ts`・`status` の enum は 1 行も触っていない） |
+| 65 | #245 案 B | **double の `content` に「山2 / 谷2 の位置」行を常に出すようにした（表示層のみ）。** 山2 の終値がネックラインからパターン高さの何割離れているか（`closeGap`）と、ヒゲがパターン高さの何割か（`wickShare`）を**閾値なしで毎回 1 行**出す。Phase 1 の結論どおり**検出側は変えない**（案 A の `scoreComponents` 減点軸は不採用、案 C を併せて採る） | **変わらない**（`structuredContent` / `data.patterns` が 1 バイトも動かない。値は `pivots` から表示層で導出しており、検出器に新しいフィールドを足していない） |
+
+### Added（#245 案 B: double の `content` に「山2 / 谷2 の位置」行を常に出す。表示層のみ）
+
+**検出器・`structuredContent`・回帰ベースライン（`data.patterns`）は 1 行も変えていない。**
+変わるのは `content[0].text` の組み立てと docs / テストだけで、`closes #245`。
+
+`double_top` / `double_bottom` の明細に、pivot 明細行の直後・ネックライン行の直前に 1 行入る:
+
+```text
+   - 山2 の位置: 終値はネックラインの +9.9%（パターン高さ比）/ ヒゲ 73.3%
+```
+
+| 項目 | 中身 |
+|---|---|
+| 分母 | `levelSpreadMetrics([a, c], [a, b, c]).heightAbs`（構成点 3 点の `extremePrice` の全振幅）。**表示層で式を再実装せず `tools/patterns/structural.ts` から import する** |
+| 終値の位置 | `(山2 / 谷2 の終値 − ネックライン) ÷ パターン高さ`。**符号は価格の向き**（`+` が上 / `-` が下）に固定した——「正常な向きを正」にすると `double_bottom` で `+` が「下」を意味することになり、#245 が問題にしている混合基準の読み違いを 1 つ増やす |
+| ヒゲ | top `(高値 − 終値) ÷ パターン高さ` / bottom `(終値 − 安値) ÷ パターン高さ`。向きを持たないので符号は付けない |
+| 適用範囲 | double の `status` 4 段すべて（`completed` / `near_completion` / `expired` / `invalid`）。**`view` にも依らない**（`pivotLines` は `full` / `debug` 限定だが、本行は 1 行なので全 view に出して規約 3 の上位集合を保つ） |
+| 出さない条件 | `pivots` が 3 点でない / `extremePrice` 欠損 / パターン高さが 0。**`n/a` は出さない**（`formatPivotPrices` の `n/a` は「この点の価格が読めない」の申告だが、本行が出せないのは「この形では量が定義できない」で申告すべき観測値が存在しない） |
+
+**#245 の Phase 1 の結論（検出側は変えない）をそのまま採っている。** ヒゲだけの山2 の直後に
+再上昇せずそのまま割る形は 12,104 ケースで **0 件**で、仮の閾値に当たった唯一の値動きは #242 が
+`peak_after_last_pivot` で落とすと決めた形と同型だった。よって `scoreComponents` の
+減点軸（案 A）も hard reject も入れない——残っていた症状は「報告が間違っている」ではなく
+**「報告に情報が足りない」**で、`content[0].text` が LLM への唯一のチャネルである以上、
+そこに量を出せば「山2 はヒゲだけだった」と読める。**閾値を持たないので #214 の
+「非恣意性を主張できない境界を入れない」基準にも触れない。**
+
+`triple_*` / H&S 系には出さない。H&S はパターン高さの端点が頭と谷で肩が端点にならないため
+同じ比が肩について何も言わず（#178 項目 3 で「不要」決着済み）、`triple_*` は Phase 1 の実測で
+該当が 0 件だった。必要になれば別 issue で足す。
+
+- `src/handlers/detectPatternsViewsHandler.ts` — `formatSecondExtremePositionLine()` を追加し、
+  per-entry の組み立てに差し込んだ
+- `docs/tools.md` — 「double の content には「山2 / 谷2 の位置」行が必ず出る（#245）」節
+- `src/schema/patterns.ts` — `pivots` の description に「content の当該行はここから導出」を 1 文
+- `tests/patterns/second-extreme-position-245.test.ts`（新規） — **実データ D の `limit=72` 窓 /
+  `swingDepth: 6`**（#251 のテストと同じ切り出し）で `+9.9%` / `73.3%` を指名して固定。
+  PR #276 の計測スクリプトの自己検算と同じ値
+- `tests/detectPatternsViewsHandler.test.ts` — 合成 double の値の定義、4 view、`status` 4 段、
+  行の位置、出さない 3 条件、triple / H&S に出ないこと
 
 ### Docs（#245 Phase 1: ヒゲだけの山2 が accepted に混ざるかを計測。決定はしない）
 

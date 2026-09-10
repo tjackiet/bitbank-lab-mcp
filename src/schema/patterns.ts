@@ -636,6 +636,10 @@ export const DetectedPatternSchema = z.object({
 				'形成中 triple は 3 点目が現在価格の暫定値なので `[a,v1,b,v2]` の 4 点）。' +
 				'triple の水平ネックラインの y は中間側 `kind` の 2 点の `price` の平均で再現できる' +
 				'（double は `b.price` そのもの。H&S は傾きを持つので `neckline` を参照）。' +
+				'**double 2 型の content に出る「山2 / 谷2 の位置」行はここから導出している**（issue #245）——' +
+				'終値の位置は `(c.price − b.price) ÷ パターン高さ`、ヒゲは `|c.extremePrice − c.price| ÷ パターン高さ` で、' +
+				'分母は構成点 3 点の `extremePrice` の全振幅。構造化データ側に専用フィールドは足していないので、' +
+				'同じ値が要るなら本配列から再計算すること。' +
 				`${PATTERN_INDEX_NOTE}`,
 		),
 	neckline: z
