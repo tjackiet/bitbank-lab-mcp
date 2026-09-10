@@ -178,14 +178,15 @@ ablation を組むので、削除後の作業ツリーでは `base` ビルドが
 再計測は**2 本とも走らせた**（これが計測スクリプトの案内が機能していることの検算も兼ねる）。
 **どちらも数字がそのまま再現した。**
 
-| コマンド | 再現するもの | 走らせた範囲 |
-|---|---|---|
-| `npx tsx scripts/measure_forming_double_top_268.ts --strip-ref 27337eb` | **#268 Phase 1 全体**（と #262 Phase 1 §4 = 形成中 top のファネル） | 全 12,104 ケース |
-| `npx tsx scripts/measure_forming_double_asymmetry_262.ts --strip-ref a920019` | **#262 Phase 1 全体**（形成中 2 経路 + ablation A / B） | `--no-rolling` の固定窓 1,088 ケース |
+| コマンド | 再現するもの |
+|---|---|
+| `npx tsx scripts/measure_forming_double_top_268.ts --strip-ref 27337eb` | **#268 Phase 1 全体**（と #262 Phase 1 §1 = 形成中 top のファネル） |
+| `npx tsx scripts/measure_forming_double_asymmetry_262.ts --strip-ref a920019` | **#262 Phase 1 全体**（形成中 2 経路 + ablation A / B） |
 
-**2 本目を `--no-rolling` にしたのは、こちらで確かめたいのが「案内した ref で走るか」と
-「§1 のファネルが Phase 1 と一致するか」だけだから。** 削除の根拠になる数字（形成中 top の
-accepted が全母集団 0 件）は 1 本目が全コーパスで出している。
+**どちらも全 12,104 ケースで走らせ、値が 1 つも動かなかった**:
+形成中 top は accepted 0 / `forming_bars_out_of_range` 下限割れ 4,159 件・上限超え 0 件 /
+`formationBars` min 3・p50 11・max 38。形成中 bottom は `forming` 6 実体 / `expired` 9 / `invalid` 5。
+ablation B は 13 実体（`expired` 8 / `invalid` 5 / `forming` 2）。
 
 下の表は 1 本目の §1（形成中 top 経路のファネル）から取った。
 
