@@ -258,6 +258,8 @@ MCP 仕様（SEP-1624 の整理）では `CallToolResult.content` と `structure
 | `preview_cancel_order` | `cancel_order` | 注文キャンセル（単一） |
 | `preview_cancel_orders` | `cancel_orders` | 注文キャンセル（一括、最大30件） |
 
+`preview_cancel_order` は注文詳細を取得できた場合、**終端状態（全量約定 `FULLY_FILLED` / キャンセル済み `CANCELED_*` / 拒否 `REJECTED`）の注文を確認トークン発行前に拒否します。** 押しても bitbank 側で必ず失敗する確認ボタンを出さないためです。判定は拒否リスト方式で、`INACTIVE`（逆指値のトリガー前）と `TRIGGERED`（トリガー発動済み）は正当にキャンセル可能なため通します。注文詳細が取得できなかった場合（ネットワーク不調・3ヶ月超過の照会不可等）はプレビューを通します。
+
 ### 対応注文タイプ
 
 `preview_order` / `create_order` で発注できる `type` は以下の 4 種類のみです。

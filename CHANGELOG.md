@@ -81,6 +81,56 @@
 | 66 | #277 | **窓の終端 `swingDepth` 本の余白でゲートが発火しないことを仕様として明文化した。docs / docstring / テストのみで検出器は 1 行も変えていない。** `detectSwingPoints` の走査範囲が `[swingDepth, length − swingDepth)` に閉じているため、**窓の最後の `swingDepth` 本はピボットになれず**、#242 の経路ゲートと再進入チェックはその区間の戻しを見ない。結果として**同じ値動きでも `limit`（窓の終端位置）によって `completed` / `invalid` が変わりうる**のを #251 と同じく仕様として固定した | **変わらない**（`tools/` / `src/` の変更は `swing.ts` の JSDoc と `swingDepth` の description 1 文だけ） |
 | 67 | #274 Phase 1 | **`wedge_*` の `pivots` 点数を案 A 相当の絞り方ごとに計測。コード変更なし（`preparePivots` の `export` 追加のみ）。** 12,104 ケースで accepted wedge 延べ 24,692 / 実体 212 を測り、A0（現行）に対し A1 / A2 / A3 がどれだけ絞れるかと、PR #273 の不変条件を満たすかを並べた。**終端の上下幅が 0.5% を切る実体では A0 の中央値が 65（帯が広い側は 34）・充填率 0.88** で、issue の原因説明は裏付けられた。ただし帯が狭い実体が A0 合計に占めるのは 26.6%（延べ 37.0%）で、残りは窓の長さが効く。**決定はしていない** | **変わらない**（計測スクリプトと内部メモのみ。検出器・`helpers.ts`・`buildTouchPivots`・ベースラインは 1 行も触っていない） |
 | 68 | #281 | **`wedge_*` の `pivots` から**ブレイク足以降**を線を問わず落とした（出力のみ）。** `evaluateTouchesEx` は `isBreak` を**線ごとに独立に**立てるので、下側ラインを割った足でも高値が上側ラインの 0.5% 以内なら `upperTouches` 側は非ブレイクのまま残り、`kind: 'H'` の構成点として出ていた（PR #280 §5-1 で実体 8 / 59、うち 7 件が `rising_wedge`）。`buildTouchPivots` に `breakIdx` を渡して `idx >= breakIdx` を落とす。**`helpers.ts` は無変更で、`evaluateTouchesEx` の判定・タッチ数・`score`・`alternation`・採否は 1 つも動かない** | **判定は変わらない**（実データ 1hour の回帰 fixture 10 件を全フィールド突き合わせて**バイト単位で完全一致**——本 fixture の `wedge_*` 4 件はブレイク足より 3 〜 13 本手前で `pivots` が止まっており、打ち切りが 1 点も当たらない。**ベースライン更新は不要だった**。計測（`--no-rolling`）では「ブレイク足を含む」が実体 5 → **0** / 延べ 160 → **0**） |
+| 69 | #28 | **（`detect_patterns` 系ではない。読む順の連番だけ引き継ぐ）** `preview_cancel_order` の status ガードを `startsWith('CANCELED')` から**終端 4 状態の拒否リスト**（`TERMINAL_ORDER_STATUSES`）に広げた。`FULLY_FILLED` / `REJECTED` にも確認トークンが出ていた（＝押せるのに必ず失敗するボタン）のを、トークン生成より前で止める | **対象外**（`detect_patterns` は 1 行も触っていない） |
+
+### Fixed（#28: `preview_cancel_order` が終端状態の注文にも確認トークンを発行していた）
+
+**確認トークンを発行する前に終端状態を弾く。`preview_cancel_orders`（一括）と `get_order` 失敗時のフォールバックは無変更。**
+
+`tools/private/preview_cancel_order.ts` のガードは `status.startsWith('CANCELED')` しか見ておらず、
+**全量約定（`FULLY_FILLED`）・システム拒否（`REJECTED`）の注文にも `confirmation_token` を発行していた。**
+ユーザーが確認ボタンを押した後に bitbank 側が弾く形になり、「押せるのに必ず失敗するボタン」が出る。
+確認トークンはワンショット消費なので、失敗するとプレビューからやり直しになる。
+プレビューの役割は **bitbank へ届く前に止めること**なので、終端状態を通すのは目的に反する。
+
+| | |
+|---|---|
+| 原因 | ガードが「キャンセル済み」という 1 つの事象だけを、しかも **status 文字列の前方一致**で見ていた。終端状態という分類そのものは `OrderStatusEnum` の docstring（「終端」と注記した 4 つ）に既にあったが、コードには落ちていなかった |
+| 修正 | `src/private/schemas.ts` に `TERMINAL_ORDER_STATUSES`（`Set<z.infer<typeof OrderStatusEnum>>`）を置き、ガードを `TERMINAL_ORDER_STATUSES.has(status)` に差し替えた。**判定は `generateToken` より前**なので、終端状態ではトークンが 1 つも生成されない |
+| **なぜ拒否リスト方式か** | **許可リスト（`UNFILLED` / `PARTIALLY_FILLED` だけ許す）にすると `INACTIVE`（逆指値のトリガー前）/ `TRIGGERED`（トリガー発動済み）を誤って拒否する。** どちらも正当にキャンセル可能な状態で、拒否すると「キャンセルできる注文がキャンセルできない」というより重い障害になる。未知の status（API が enum 外の値を返した場合）を通すのも同じ理由 |
+| 型の担保 | 集合の型を `z.infer<typeof OrderStatusEnum>` から導出したので、enum に無い文字列を書くと typecheck が落ちる。分類の単一ソースは `OrderStatusEnum` の docstring と本集合で、ツール側に別の分類を作らない |
+| メッセージ | 状態ごとに書き分ける（`content` に出た文を LLM がそのままユーザーへの説明に使うため、全部「キャンセル済み」にはしない） |
+
+#### 状態 × 結果（`OrderStatusEnum` の 8 値すべて）
+
+| status | 終端 | プレビュー | `confirmation_token` | メッセージ |
+|---|---|---|---|---|
+| `INACTIVE`（トリガー前） | | ✅ 通す | 発行 | — |
+| `UNFILLED` | | ✅ 通す | 発行 | — |
+| `PARTIALLY_FILLED` | | ✅ 通す | 発行 | — |
+| `TRIGGERED`（トリガー発動済み） | | ✅ 通す | 発行 | — |
+| `FULLY_FILLED` | ● | ❌ 拒否 | **発行しない** | この注文は既に全量約定しているためキャンセルできません（status: …） |
+| `CANCELED_UNFILLED` | ● | ❌ 拒否 | **発行しない** | この注文は既にキャンセル済みです（status: …）（現行どおり） |
+| `CANCELED_PARTIALLY_FILLED` | ● | ❌ 拒否 | **発行しない** | この注文は既にキャンセル済みです（status: …）（現行どおり） |
+| `REJECTED` | ● | ❌ 拒否 | **発行しない** | この注文はシステムに拒否されており、キャンセル対象ではありません（status: …） |
+
+`errorType` は現行どおり `validation_error`。elicitation 対応ホストでも、確認ダイアログを出す前に fail が返る。
+
+#### 変えていないもの
+
+- **`get_order` 失敗時のフォールバック**（注文詳細が取れなくてもプレビューは通す）。詳細不明で止めるより、キャンセル不能にする方が UX として悪い。既存テスト「get_order 失敗時もキャンセルプレビューは ok を返す」がこの挙動を守っている
+- **`preview_cancel_orders`（一括）**。あちらは注文詳細をそもそも取得しておらず、N 件ぶんの `get_order` を足すかどうかは別の設計判断（レート制限・部分的に終端が混ざったときの扱い）になる。#28 の指摘対象でもない
+- `detect_patterns` 系・公開ツール・依存関係の宣言は 1 行も触っていない
+
+#### テスト
+
+`tests/private/preview_cancel_order.test.ts` に以下を追加した。
+
+- 終端 4 状態で `ok: false` / `confirmation_token` 未発行 / メッセージが上表どおり
+- `INACTIVE` / `TRIGGERED` / `UNFILLED` / `PARTIALLY_FILLED` が通ること（**許可リスト化への退行ガード**。ここが #28 の要点）
+- **`OrderStatusEnum.options` の網羅テスト**——各値が「終端で拒否」「プレビューを通る」のどちらか一方に分類されることを列挙で固定した。enum に status が増えたら、分類を書き足さない限り落ちる
+- 拒否メッセージに API キー / シークレット / トークン表記が混入しないこと（`.claude/rules/sensitive-data.md`）
+- elicitation 対応ホストで、終端状態では確認ダイアログを出す前に fail が返ること（`fetch` は `get_order` の 1 回のみ）
 
 ### Fixed（#281: `wedge_*` の `pivots` からブレイク足以降を落とす。検出ロジックは不変）
 
