@@ -385,10 +385,23 @@ interface Recon {
 	upper: Line;
 	lower: Line;
 	inputs: InputPt[];
-	/** 同じ A0 を再現する候補が複数あり、終端の上下幅が一致しなかったか。 */
+	/** 同じ A0 を再現する候補が複数あり、**上下幅か入力点のどちらかが割れた**か。 */
 	ambiguous: boolean;
+	/** 候補間で終端の上下幅が割れたか。 */
+	ambiguousGap: boolean;
+	/**
+	 * 候補間で **A1 の入力点**（`inputs`）が割れたか。
+	 *
+	 * 上下幅は `touchEndIdx` での 1 点しか見ないので、**別々の線が同じ幅を持ちうる**。
+	 * `inputs` は `lineEndIdx` と線を決めた点で決まり、**`counts.A1` を直接決める**ので、
+	 * 幅だけを見て `ambiguous` を立てないと A1 の数字が黙って 1 つに決まる
+	 * （PR #280 の CodeRabbit 指摘）。
+	 */
+	ambiguousInputs: boolean;
 	/** 候補間で終端の上下幅がどれだけ割れたか（絶対値。一意なら 0）。 */
 	gapSpread: number;
+	/** 候補間で A1 の点数がどれだけ割れたか（max − min。一意なら 0）。 */
+	inputCountSpread: number;
 }
 
 /** `(kind, idx)` 列。A0 との突き合わせの鍵。 */
@@ -481,7 +494,10 @@ function reconstructRegression(cc: CaseCtx, entry: DeduplicablePattern, startIdx
 				...lowsIn.map((s) => ({ idx: s.index, price: s.price, kind: 'L' as const, basis })),
 			],
 			ambiguous: false,
+			ambiguousGap: false,
+			ambiguousInputs: false,
 			gapSpread: 0,
+			inputCountSpread: 0,
 		});
 	}
 	return pickRecon(hits);
@@ -554,7 +570,10 @@ function reconstructForming(
 						...ls.map((p) => ({ idx: p.idx, price: p.price, kind: 'L' as const, basis })),
 					],
 					ambiguous: false,
+					ambiguousGap: false,
+					ambiguousInputs: false,
 					gapSpread: 0,
+					inputCountSpread: 0,
 				});
 			}
 		}
@@ -599,8 +618,11 @@ function matchLines(
 }
 
 /**
- * 候補から 1 つ選ぶ。**終端の上下幅が一致しない候補が複数あれば `ambiguous`** を立てる
- * （数字を黙って 1 つに決めない）。
+ * 候補から 1 つ選ぶ。**終端の上下幅か A1 の入力点が割れた候補が複数あれば `ambiguous`** を
+ * 立てる（数字を黙って 1 つに決めない）。
+ *
+ * **2 軸を別々に見る。** 上下幅は `touchEndIdx` での 1 点しか見ないので、別々の線が同じ幅を
+ * 持ちうる——幅だけで判定すると、`counts.A1` を決める `inputs` が割れていても素通りする。
  */
 function pickRecon(hits: readonly Recon[]): Recon | null {
 	if (hits.length === 0) return null;
@@ -609,8 +631,25 @@ function pickRecon(hits: readonly Recon[]): Recon | null {
 	const gaps = hits.map(gap);
 	const g0 = gaps[0];
 	const gapSpread = Math.max(...gaps) - Math.min(...gaps);
-	const ambiguous = gapSpread > Math.max(1e-6, Math.abs(g0) * 1e-9);
-	return { ...first, ambiguous, gapSpread };
+	const ambiguousGap = gapSpread > Math.max(1e-6, Math.abs(g0) * 1e-9);
+
+	const inputSig = (r: Recon): string =>
+		r.inputs
+			.map((v) => `${v.kind}:${v.idx}`)
+			.sort()
+			.join(',');
+	const ambiguousInputs = new Set(hits.map(inputSig)).size > 1;
+	const counts = hits.map((r) => r.inputs.length);
+	const inputCountSpread = Math.max(...counts) - Math.min(...counts);
+
+	return {
+		...first,
+		ambiguous: ambiguousGap || ambiguousInputs,
+		ambiguousGap,
+		ambiguousInputs,
+		gapSpread,
+		inputCountSpread,
+	};
 }
 
 /** エントリから復元を試みる。`range` が引けなければ `null`。 */
@@ -795,6 +834,11 @@ interface Rec {
 	inv: Record<VariantKey, Invariants | null>;
 	reconOk: boolean;
 	reconAmbiguous: boolean;
+	/** 上下幅が割れたか / A1 の入力点が割れたか（2 軸を別に持つ）。 */
+	reconAmbiguousGap: boolean;
+	reconAmbiguousInputs: boolean;
+	/** 候補間で A1 の点数がどれだけ割れたか（max − min）。 */
+	a1CountSpread: number | null;
 	debugVerify: 'ok' | 'mismatch' | 'none';
 	/** 実体キー（`(group, type, range.start, range.end)` の絶対時刻）。 */
 	entity: string;
@@ -1024,6 +1068,9 @@ async function main(): Promise<void> {
 					inv,
 					reconOk: recon !== null,
 					reconAmbiguous: recon?.ambiguous ?? false,
+					reconAmbiguousGap: recon?.ambiguousGap ?? false,
+					reconAmbiguousInputs: recon?.ambiguousInputs ?? false,
+					a1CountSpread: recon?.inputCountSpread ?? null,
 					debugVerify,
 					entity: `${spec.series.group}|${p.type}|${p.range?.start}|${p.range?.end}`,
 				};
@@ -1067,19 +1114,24 @@ async function main(): Promise<void> {
 	say();
 	say(`- **復元できなかった**: ${reconFailed} / ${recs.length}（${pctStr(reconFailed, recs.length)}）`);
 	say(
-		`- **候補が複数で終端の上下幅が割れた**: ${reconAmbiguous} / ${recs.length}（${pctStr(reconAmbiguous, recs.length)}）`,
+		`- **候補が複数で割れた（上下幅または A1 の入力点）**: ${reconAmbiguous} / ${recs.length}` +
+			`（${pctStr(reconAmbiguous, recs.length)}）` +
+			`——うち上下幅が割れた ${recs.filter((r) => r.reconAmbiguousGap).length} 件 / ` +
+			`A1 の入力点が割れた ${recs.filter((r) => r.reconAmbiguousInputs).length} 件`,
 	);
 	say(
 		`- **\`debug.candidates\` の申告値と食い違い**（回帰パスのみ突き合わせ可）: ${debugMismatch} 件` +
-			`（突き合わせできたのは ${recs.filter((r) => r.debugVerify === 'ok').length} 件）`,
+			`（突き合わせできたのは ${recs.filter((r) => r.debugVerify !== 'none').length} 件、` +
+			`うち一致 ${recs.filter((r) => r.debugVerify === 'ok').length} 件）`,
 	);
+	const a1Spreads = recs.map((r) => r.a1CountSpread).filter((v): v is number => v !== null);
 	say(
-		`- **候補が割れた entry の上下幅の振れ幅**: ${
+		`- **候補が割れた entry の振れ幅**: ${
 			reconAmbiguous === 0
 				? '—（割れた entry が無い）'
-				: `最大 ${f2(
+				: `上下幅 最大 ${f2(
 						Math.max(...recs.filter((r) => r.bandSpreadPct !== null).map((r) => r.bandSpreadPct as number)),
-					)} %ポイント`
+					)} %ポイント / A1 の点数 最大 ${a1Spreads.length === 0 ? '—' : Math.max(...a1Spreads)} 点`
 		}`,
 	);
 	say();
@@ -1186,6 +1238,27 @@ async function main(): Promise<void> {
 				const vals = sel.map((r) => r.counts.A0 as number);
 				say(`| ${label} | ${PATH_LABEL[path]} | ${bandLabel} | ${vals.length} | ${distCells(vals)} |`);
 			}
+		}
+	}
+	say();
+	// **実体数の割合と A0 点数の寄与率は別物**（PR #280 の CodeRabbit 指摘）。
+	// 「帯を直せば点数の膨らみがどれだけ減るか」は**点数の合計**でしか言えない。
+	say('帯ごとの **A0 の合計**と、A0 全体に占める寄与率（実体数の割合と並べる）:');
+	say();
+	say('| 単位 | 帯 | entry 数 | entry 数の割合 | A0 合計 | **A0 の寄与率** |');
+	say('|---|---|---:|---:|---:|---:|');
+	for (const [label, pool] of [
+		['延べ', withBand],
+		['実体', withBandEnt],
+	] as const) {
+		const totalA0 = pool.reduce((a, r) => a + (r.counts.A0 as number), 0);
+		for (const [bandLabel, pred] of BANDS) {
+			const sel = pool.filter(pred);
+			const sum = sel.reduce((a, r) => a + (r.counts.A0 as number), 0);
+			say(
+				`| ${label} | ${bandLabel} | ${sel.length} | ${pctStr(sel.length, pool.length)} | ` +
+					`${sum.toLocaleString('en-US')} | **${pctStr(sum, totalA0)}** |`,
+			);
 		}
 	}
 	say();
