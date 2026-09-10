@@ -159,7 +159,7 @@ type WedgeBarParams = ReturnType<typeof getWedgeBarParams>;
 // ── Intermediate types ──
 
 /** preparePivots の戻り値 */
-interface PivotData {
+export interface PivotData {
 	smoothHigh: number[];
 	smoothLow: number[];
 	sgPeaks: Array<{ index: number; price: number }>;
@@ -187,7 +187,9 @@ interface RegressionValidation {
 
 // ── Phase 1: ピボット準備 ──
 
-function preparePivots(ctx: DetectContext): PivotData {
+// #274 計測用 export（`scripts/measure_wedge_pivot_count_274.ts` が SG 平滑化列と SG ピボットを
+// 写しではなく本体から取るため。**本体は 1 行も変えていない。**）
+export function preparePivots(ctx: DetectContext): PivotData {
 	const { candles, swingDepth } = ctx;
 
 	const sgWindowSize = Math.max(
