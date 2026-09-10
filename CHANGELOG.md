@@ -77,6 +77,117 @@
 | 62 | #268 案 C | **`tryFormingDoubleTop` を削除し、double は `forming` を持たないパターンにした。** double の `status` は `near_completion` / `completed` / `invalid` / `expired` の 4 段で、`forming` は**仕様として持たない**（最終構成点が 1 つしか無く形成中を定義できない）。**triple / H&S の形成中検知は 1 行も触っていない** | **既定（`includeForming: false`）は変わらない。** `includeForming: true` でも 12,104 ケース全件で**変わらない**（削除した経路の accepted が全母集団で 0 件のため）。減るのは `view=debug` の候補だけ |
 | 63 | #252 | **`wedge_*` に `pivots`（構成点）を出すようにした。** 中身は上下トレンドラインの**非ブレイクタッチ点すべて**で、`price` は高安（`extremePrice` と同値）。`triangle_*` と同じ基準に揃えた。**検出ロジック・閾値は 1 つも触っていない**（回帰パスも形成中パスも、採否が決まった後に出力用の点を組むだけ） | **判定は変わらない**（実データ 1hour の回帰 fixture 10 件を全フィールド突き合わせて、**差分は `wedge_*` 4 件に `pivots` が増えたぶんだけ**。他のキーは 1 バイトも動かない） |
 
+### Security（`vitest` / `@vitest/coverage-v8` を 4.1.9 → 4.1.11 に揃えて上げた。`@vitest/mocker` の moderate 3 件を解消。#259）
+
+PR #258 が「意図的に残した」`@vitest/mocker` の moderate 3 件の**回収**。#258 の時点では
+`npm audit fix` / `npm update` で動かせなかった——`@vitest/coverage-v8@4.1.9` の
+`peerDependencies` が `vitest: 4.1.9` を**完全一致**で要求するため、片方だけ上げると
+peer が解決しない。本 PR は**両者の宣言を同じ 4.1.11 に揃えて**上げている。
+
+| | |
+|---|---|
+| 対象 | `vitest` `^4.0.18` → **`^4.1.11`**、`@vitest/coverage-v8` `^4.1.2` → **`^4.1.11`**（**どちらも直接依存の宣言変更**） |
+| アドバイザリ | GHSA-82fw-gwwq-j7x9（moderate。`@vitest/mocker` の Path Traversal / Arbitrary File Read via Redirect Mock） |
+| 脆弱範囲 | `@vitest/mocker` `2.1.0 - 4.1.10`。**4.1.10 でもまだ脆弱**なので 4.1.11 が最小の解決版 |
+| 計上件数 | 3 件（`@vitest/mocker` 本体 + `vitest` + `@vitest/coverage-v8` の循環参照ぶん） |
+| 解消後 | `npm audit --audit-level=moderate` が **exit 0 / `found 0 vulnerabilities`**（`--audit-level=low` でも 0 件） |
+
+#### 宣言を `^4.1.11` に揃える理由
+
+`@vitest/coverage-v8` の `peerDependencies` は 4.1.11 でも `vitest: 4.1.11` の**完全一致**のままで、
+両者の宣言下限が食い違うと peer 解決が壊れうる。`^4.1.2` / `^4.0.18` のような**下限だけ古い宣言**は
+lockfile を捨てて解決し直したときに 4.1.9 以前へ着地させる余地を残すので、下限を揃えて畳んだ。
+
+#### クールダウン（`min-release-age=7`）を守ったうえで直せる
+
+**2026-09-10 04:20 UTC 時点**（公開日は UTC）。4.x 系の最新は 4.1.11 で、これがクールダウンの外側に
+あるため `.npmrc` の一時書き換え（CONTRIBUTING.md「緊急パッチが必要な場合」）は不要だった。
+本件は moderate なので「security update はクールダウン対象外」の例外を持ち出す必要も無い。
+
+| 版 | 公開日（UTC） | 経過 | クールダウン | 採否 |
+|---|---|---|---|---|
+| `vitest` 4.1.11 | 2026-08-18 | 22.6 日 | 外 | **採用**（`V4` dist-tag の最新） |
+| `@vitest/coverage-v8` 4.1.11 | 2026-08-18 | 22.6 日 | 外 | **採用** |
+| `vitest` 5.0.0 | 2026-09-03 | 6.7 日 | **内** | 不採用（**メジャー更新なので本 PR の範囲外**。加えてクールダウン内側） |
+
+`vitest` の `latest` dist-tag は既に **5.0.0**（2026-09-03 公開）だが、メジャー更新は
+テストランナーの互換性検証が別物になるので本 PR では採らない。**4.x 系に 4.1.11 より新しい版は無い**
+（4.1.12 以降は未公開）ので、4.x に留まる限り 4.1.11 が最新かつ最小の解決版。
+
+**クールダウンが実際に効いていることが `tinyexec` で確認できる。** `vitest` の依存範囲は
+`tinyexec: ^1.0.2` で、レジストリの最新は **1.3.1**（2026-09-03 公開・経過 6.8 日）だが、
+解決結果は **1.3.0**（2026-08-01 公開・経過 39.5 日）に着地した。範囲内に新しい版があるのに
+掴んでいない＝`min-release-age=7` が解決時に効いている。**npm 11.19.1 で解決した**
+（`min-release-age` は npm 11.10.0 以上が必要。npm 10.x では黙って無視される）。
+
+なお `npm config get min-release-age` は `7` を返すが `npm config get before` は npm 11.19.1 でも
+`null` を返した。CONTRIBUTING.md は「npm 11.10+ は内部で `before` に変換するため設定が効いていても
+`null` になりうる」としており、**実効性の確認は `before` の表示ではなく上記 `tinyexec` の
+解決結果で取っている**（表示に頼らない検証）。
+
+#### lockfile が動いたのは `vitest` 系 15 エントリだけ
+
+`git diff --stat` の lockfile は **145 行（+76 / −73）**。パッケージエントリの
+追加・削除は **0 件**で、バージョンが動いたのは以下の 15 件のみ。**無関係なパッケージは 1 つも動いていない。**
+
+| パッケージ | 変化 | 位置づけ |
+|---|---|---|
+| `vitest` | 4.1.9 → 4.1.11 | 直接依存（宣言も変更） |
+| `@vitest/coverage-v8` | 4.1.9 → 4.1.11 | 直接依存（宣言も変更） |
+| `@vitest/{expect,mocker,pretty-format,runner,snapshot,spy,utils}` | 4.1.9 → 4.1.11 | 推移（`vitest` / `coverage-v8` がバージョン完全一致で要求） |
+| `es-module-lexer` | 2.0.0 → 2.3.2 | 推移（`vitest` の `^2.0.0`） |
+| `expect-type` | 1.3.0 → 1.4.0 | 推移（`vitest` の `^1.3.0`） |
+| `obug` | 2.1.1 → 2.1.4 | 推移（`vitest` / `coverage-v8` の `^2.1.1`） |
+| `std-env` | 4.0.0 → 4.2.0 | 推移（`vitest` / `coverage-v8` の `^4.0.0-rc.1`） |
+| `tinyexec` | 1.0.4 → 1.3.0 | 推移（`vitest` の `^1.0.2`） |
+| `tinyrainbow` | 3.1.0 → 3.1.1 | 推移（`vitest` / `coverage-v8` / `@vitest/{expect,pretty-format,utils}` の `^3.1.0`） |
+
+後半 6 件は `@vitest/*` の外だが、**lockfile 上の依存元が `vitest` / `@vitest/*` だけ**であることを
+確認済み（他のどのパッケージからも参照されていない）。`vitest` 自身の caret 範囲を
+再解決した結果としてレンジ内の最新（かつクールダウン外）へ動いたもので、**別系統の依存更新ではない**。
+
+#### テストの挙動は変わっていない（テストランナー更新なので機械的に示す）
+
+テストコードは **1 行も変更していない**（diff はマニフェストと lockfile のみ）。
+
+| 観点 | 4.1.9（更新前） | 4.1.11（更新後） | 判定 |
+|---|---|---|---|
+| `npm test` ファイル数 | 226 passed (226) | 226 passed (226) | **一致** |
+| `npm test` テスト数 | 5683 passed (5683) | 5683 passed (5683) | **一致** |
+| `tests/detect_patterns_data_patterns_regression.test.ts` | pass | pass | **ベースライン差分なし** |
+| `tests/fixtures/*.json`（5 件） | — | — | **sha256 全一致**（`sha256sum -c` で検証） |
+| coverage statements | 95.88%（17070/17802） | 95.88%（17070/17802） | **一致** |
+| coverage branches | 85.23%（12865/15093） | 85.23%（12865/15093） | **一致** |
+| coverage functions | 97.78%（2074/2121） | 97.78%（2074/2121） | **一致** |
+| coverage lines | 97.3%（15098/15516） | 97.3%（15098/15516） | **一致** |
+
+**カバレッジは率だけでなく分子・分母（実測行数）まで一致**しており、per-file テーブル 152 行を
+`diff` して**差分 0 行**。`coverage-v8` 4.1.11 に計測方法の変更は入っていない（入っていれば
+分母が動く）。fixture は**スナップショットの再生成をしていない**（差分が出ないことの確認だけ）。
+
+#### `npm run test:coverage` の既存の timeout は更新前から同じ（本 PR とは無関係）
+
+`npm run test:coverage` は **更新前（4.1.9）でも更新後（4.1.11）でも同じ 1 件**が落ちる:
+`tests/detect_patterns_triple_hs_exclusion.test.ts` の
+「8 通りのうち少なくとも 1 つで実際に排他が起きている」が `Test timed out in 10000ms`。
+v8 のカバレッジ計装で遅くなり `vitest.config.ts` の `testTimeout: 10_000` を超えるためで、
+`npm test`（計装なし）では両バージョンとも通る。**本 PR で新たに壊れたものではない**ので、
+`testTimeout` も当該テストも触っていない（「テストを緩めて通す」はしない）。
+
+上表のカバレッジ値は、この既存 timeout を避けるため**更新前・更新後の双方で同一の**
+`npm run test:coverage -- --testTimeout=60000`（CLI 上書きのみ。設定ファイルもテストも無変更）で
+取得して比較した。カバレッジレポートはテスト失敗時に出力されないため、既定のままでは
+更新前後の数値をそもそも突き合わせられない。
+
+#### 検証
+
+- `npm ci` → `npm audit --audit-level=moderate` が **exit 0**（`@vitest/mocker` の 3 件が消え、残る advisory は**無し**）
+- `npm run gen:types && npm run typecheck` 通過
+- `npm test` が **226 ファイル / 5,683 件すべて通過**（更新前と同数）
+- `npm run lint:fix` / `npm run format` 通過（`biome format` は `No fixes applied`。
+  `oxlint` の warning は **149 件で更新前後とも同数**＝既存分のみで、本 PR では増減なし。exit 0）
+- pre-commit hook 通過
+
 ### Added（#252: `wedge_*` に `pivots`（構成点）を出す）
 
 `rising_wedge` / `falling_wedge` は構成点を出力しておらず、`triangle_*` が出す `pivots` と
