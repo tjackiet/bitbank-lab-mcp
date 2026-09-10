@@ -83,6 +83,18 @@
  * `tests/detect_patterns_triple_hs_exclusion.test.ts` と
  * `tests/detect_patterns_meta_schema_parity.test.ts` が持つ）。
  *
+ * **#281 でも更新していない**（`wedge_*` の `pivots` から**ブレイク足以降**を線を問わず落とす変更。
+ * `evaluateTouchesEx` が `isBreak` を線ごとに立てるため、下方ブレイクの足の高値が上側ラインの
+ * 0.5% 以内にあると `kind: 'H'` の構成点として残っていた（PR #280 §5-1 で実体 8 / 59）。
+ * **本 fixture が含む `wedge_*` 4 件はいずれも該当しない**——`pivots` の最大 `idx` が
+ * ブレイク足より 3 〜 13 本手前で止まっている（`rising_wedge` 279 / 282、`falling_wedge` 332 / 339、
+ * `rising_wedge` 143 / 152、`falling_wedge` 102 / 115）ので、打ち切りが 1 点も当たらない。
+ * 実際に修正の前後で `data.patterns` を全フィールド突き合わせて**バイト単位で完全一致**を確認した
+ * （`pivots` の点数 37 / 31 / 68 / 107 も据え置きで、`scripts/measure_wedge_pivot_count_274.ts` の
+ * 自己検算 31 / 37 / 68 / 107 が変わらないのと同じ事実）。下方ブレイクの回帰は
+ * `tests/patterns/detect_wedges.test.ts`（合成の下方ブレイク fixture と、実データ A の
+ * `rising_wedge` `2026-06-23`〜`2026-07-13` のブレイク足 idx 45）が持つ）。
+ *
  * つまり**「不変であること」を主張できるのは各 PR の中だけ**で、ファイルとしては
  * 「現在の出力のスナップショット」に役割が変わっている。**名乗りを更新せずに中身だけ
  * 差し替えると、テスト名が嘘になる**（#202 で一度そうなった）ので、ベースラインを

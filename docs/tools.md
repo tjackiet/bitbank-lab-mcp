@@ -544,7 +544,7 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 | 検出器 | `pivots` の中身 | 点数 |
 |---|---|---:|
 | `triangle_*` | 上下トレンドラインの回帰に使った relaxed swing（peaks / valleys） | 可変 |
-| `wedge_*` | 上下トレンドラインの**非ブレイクタッチ点すべて**（ブレイク足は含めない） | 可変 |
+| `wedge_*` | 上下トレンドラインの**非ブレイクタッチ点すべて**（ブレイク足は含めない。**ブレイク足以降は線を問わず除外**。#281） | 可変 |
 
 - **役割ラベルが無い。** 点数が可変で「山1 / 谷 / 山2」のような位置の意味づけができないため、
   `view=full` の content に構成点の明細行は**出ない**（`src/handlers/detectPatternsViewsHandler.ts` の
@@ -556,6 +556,13 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
   （`helpers.ts` の `evaluateTouchesEx`）ので、収束が進んで上下の幅が 0.5% を切った区間では
   ほぼ全バーが構成点になる（BTC/JPY 1hour の実測で 31〜107 点）。**件数を「形の良さ」の
   代理指標に使わないこと**——整合度は `confidence` を見る。
+- **ブレイク足以降は線を問わず除外する**（#281）。`evaluateTouchesEx` は「線を割った / 抜けた」を
+  **線ごとに独立に**判定するので、下方ブレイクの足は下側ラインについてはブレイク扱いでも、
+  高値が上側ラインの 0.5% 以内にあれば**上側の非ブレイクタッチ点として残っていた**
+  （実データで実体 8 / 59、うち 7 件が `rising_wedge`。PR #280 §5-1）。
+  いまは `breakoutBarIndex` 以降の点を上下どちらの線からも落とすので、**`pivots` の
+  `idx` は必ず `breakoutBarIndex` より小さい**。未ブレイクのウェッジには打ち切りが無い。
+  **タッチ数・`confidence`・採否は変わっていない**——除外は出力用の構成点にだけ効く。
 - `wedge_*` の構造図（`structureDiagram`）が描く点は `pivots` とは**別に組んでいる**。
   図は 6 点まで間引いたうえで `price` に終値を入れているので、**同じ `idx` でも価格が違う**。
 
