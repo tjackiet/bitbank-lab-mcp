@@ -80,6 +80,89 @@
 | 65 | #245 案 B | **double の `content` に「山2 / 谷2 の位置」行を常に出すようにした（表示層のみ）。** 山2 の終値がネックラインからパターン高さの何割離れているか（`closeGap`）と、ヒゲがパターン高さの何割か（`wickShare`）を**閾値なしで毎回 1 行**出す。Phase 1 の結論どおり**検出側は変えない**（案 A の `scoreComponents` 減点軸は不採用、案 C を併せて採る） | **変わらない**（`structuredContent` / `data.patterns` が 1 バイトも動かない。値は `pivots` から表示層で導出しており、検出器に新しいフィールドを足していない） |
 | 66 | #277 | **窓の終端 `swingDepth` 本の余白でゲートが発火しないことを仕様として明文化した。docs / docstring / テストのみで検出器は 1 行も変えていない。** `detectSwingPoints` の走査範囲が `[swingDepth, length − swingDepth)` に閉じているため、**窓の最後の `swingDepth` 本はピボットになれず**、#242 の経路ゲートと再進入チェックはその区間の戻しを見ない。結果として**同じ値動きでも `limit`（窓の終端位置）によって `completed` / `invalid` が変わりうる**のを #251 と同じく仕様として固定した | **変わらない**（`tools/` / `src/` の変更は `swing.ts` の JSDoc と `swingDepth` の description 1 文だけ） |
 | 67 | #274 Phase 1 | **`wedge_*` の `pivots` 点数を案 A 相当の絞り方ごとに計測。コード変更なし（`preparePivots` の `export` 追加のみ）。** 12,104 ケースで accepted wedge 延べ 24,692 / 実体 212 を測り、A0（現行）に対し A1 / A2 / A3 がどれだけ絞れるかと、PR #273 の不変条件を満たすかを並べた。**終端の上下幅が 0.5% を切る実体では A0 の中央値が 65（帯が広い側は 34）・充填率 0.88** で、issue の原因説明は裏付けられた。ただし帯が狭い実体が A0 合計に占めるのは 26.6%（延べ 37.0%）で、残りは窓の長さが効く。**決定はしていない** | **変わらない**（計測スクリプトと内部メモのみ。検出器・`helpers.ts`・`buildTouchPivots`・ベースラインは 1 行も触っていない） |
+| 68 | #281 | **`wedge_*` の `pivots` から**ブレイク足以降**を線を問わず落とした（出力のみ）。** `evaluateTouchesEx` は `isBreak` を**線ごとに独立に**立てるので、下側ラインを割った足でも高値が上側ラインの 0.5% 以内なら `upperTouches` 側は非ブレイクのまま残り、`kind: 'H'` の構成点として出ていた（PR #280 §5-1 で実体 8 / 59、うち 7 件が `rising_wedge`）。`buildTouchPivots` に `breakIdx` を渡して `idx >= breakIdx` を落とす。**`helpers.ts` は無変更で、`evaluateTouchesEx` の判定・タッチ数・`score`・`alternation`・採否は 1 つも動かない** | **判定は変わらない**（実データ 1hour の回帰 fixture 10 件を全フィールド突き合わせて**バイト単位で完全一致**——本 fixture の `wedge_*` 4 件はブレイク足より 3 〜 13 本手前で `pivots` が止まっており、打ち切りが 1 点も当たらない。**ベースライン更新は不要だった**。計測（`--no-rolling`）では「ブレイク足を含む」が実体 5 → **0** / 延べ 160 → **0**） |
+
+### Fixed（#281: `wedge_*` の `pivots` からブレイク足以降を落とす。検出ロジックは不変）
+
+**検出ロジックは 1 行も触っていない / 変わるのは `PatternEntry.pivots` の中身だけ / ベースライン更新は不要だった。**
+`tools/patterns/helpers.ts` は**無変更**で、`tools/patterns/detect_wedges.ts` の差分は
+`buildTouchPivots` の実装と docstring、その呼び出し 2 箇所だけ。
+`evaluateTouchesEx` の判定・タッチ数（`upperQuality` / `lowerQuality`）・`score` /
+`alternation` / 採否・走査範囲はすべて現状維持。
+
+PR #273（#252）は `wedge_*` の `pivots` を「非ブレイクタッチ点すべて（**ブレイク足は含めない**）」と
+宣言していたが、PR #280 §5-1 の実測では**ブレイク足そのものが構成点に入っていた**（実体 8 / 59、
+延べ 2,692 / 22,188。うち 7 件が `rising_wedge` = 下方ブレイク）。**宣言を実態に合わせる**（docs を
+「含みうる」に書き換える）のではなく、**出力を宣言に合わせた。**
+
+| | |
+|---|---|
+| 原因 | `evaluateTouchesEx`（`helpers.ts`）が `isBreak` を**線ごとに独立に**立てる。下側ラインを割った足でも、**同じ足の高値が上側ラインの 0.5% 以内なら `upperTouches` 側は `isBreak: false`** のまま残る。`buildTouchPivots` は線ごとの `isBreak` しか見ないので、その点を `kind: 'H'` の構成点として通していた |
+| なぜ下方ブレイクだけか | 上方ブレイクの足は高値が上側ラインを大きく抜けるので `isBreak: true` になり、安値も下側ラインから遠い。**PR #273 のフィクスチャが上方ブレイクのみ**で、下方ブレイクの経路は 1 度も踏まれていなかった |
+| 修正 | `buildTouchPivots(candles, touches, breakIdx)` として、**`idx >= breakIdx` の点を線を問わず落とす**。`>=` はブレイク足そのものも落とす（「ラインを割った足は構成点ではない」）。線ごとの `isBreak` フィルタは**残す**（ブレイク前に一時的に線を超えた足を落とす役目が別にある） |
+| 形成中パス（`detectFormingWedges`） | `breakoutIdx !== -1` なら `breakoutIdx`、未ブレイクなら `null`。走査終端が `actualEndIdx = breakoutIdx` なので**ブレイク足は必ず走査範囲に入る** |
+| 回帰パス（`buildRegressionEntry`） | `breakInfo.detected` なら `breakInfo.breakIdx`、未検出なら `null`。このパスのタッチは `validateRegressionCandidate` が `[startIdx, endIdx]`（**窓全体**）で取っているのでブレイク後の足まで含みうるが、**走査範囲そのものは変えない**（変えるとタッチ数とスコアが動く）——`breakIdx` の打ち切りで同時に解消する |
+| `evaluateTouchesEx` の `isBreak` の意味 | **変えない。** 他の利用箇所（`validateRegressionCandidate` のタッチ数・交互性）が同じ結果に依存している |
+
+#### ベースライン更新（#207）は不要だった
+
+`tests/fixtures/detect_patterns_1hour_data_patterns_baseline.json` は**修正の前後でバイト単位で完全一致**。
+本 fixture が含む `wedge_*` 4 件は、いずれも `pivots` の最大 `idx` がブレイク足より **3 〜 13 本手前**で
+止まっており、打ち切りが 1 点も当たらない:
+
+| type | `range.start` | ブレイク足 | `pivots` の最大 `idx` | 点数 |
+|---|---|---:|---:|---:|
+| `rising_wedge` | 2026-08-23T01:00Z | 282 | 279 | 37 |
+| `falling_wedge` | 2026-08-24T19:00Z | 339 | 332 | 31 |
+| `rising_wedge` | 2026-08-16T15:00Z | 152 | 143 | 68 |
+| `falling_wedge` | 2026-08-14T21:00Z | 115 | 102 | 107 |
+
+点数 31 / 37 / 68 / 107 が据え置きなので、`scripts/measure_wedge_pivot_count_274.ts` の
+**自己検算（`SELF_CHECK_A0`）も変えていない**。ベースラインを更新していないので
+`#207` の履歴表には行を足さず、代わりに
+`tests/detect_patterns_data_patterns_regression.test.ts` の docstring に
+「**#281 でも更新していない**」の段を足した（同ファイルの既存の慣習に合わせた）。
+
+#### 計測での確認（`scripts/measure_wedge_pivot_count_274.ts --no-rolling`。スクリプトは無変更）
+
+§3 の不変条件「ブレイク足を含まない」を A0（＝現行の出力そのもの）が落とす件数:
+
+| | 修正前 | 修正後 |
+|---|---:|---:|
+| 実体 | **5 / 34** | **0 / 34** |
+| 延べ | **160 / 1,088** | **0 / 1,088** |
+
+A0 の残り 3 つの不変条件（点数 ≥ 4 / `price` が高安 / 全点が `range` 内）は動いていない
+（どれも修正前後とも 0 件）。
+
+**副作用としてスクリプトの「復元できなかった」が 0 → 160 / 1,168（13.7%）に増える。これは想定内で、
+スクリプトは無変更のまま**。`reconstruct()` はトレンドラインを**式の写しではなく候補の総当たりで特定**
+しており、その照合鍵が「候補の線に本物の `evaluateTouchesEx` を当てた非ブレイクタッチ点の
+`(idx, kind)` 列が `entry.pivots` と完全一致すること」だから——`pivots` をブレイク足で打ち切った
+いま、**打ち切りが実際に当たった 160 件だけ**が一致しなくなる（160 は修正前に「ブレイク足を含む」で
+落ちていた延べ件数と同数）。スクリプトの docstring が言う「検出器側が動けば一致しなくなって
+『復元できない』件数に出る（黙って嘘の数字を出さない）」がそのまま起きている。
+**§3 の不変条件と A0 / A2 / A3 の点数は復元を必要としない**ので影響を受けない。復元を要する
+A1 と上下幅の帯別集計だけが、その 160 件を欠いた母集団の数字になる。
+**自己検算（`SELF_CHECK_A0` の 31 / 37 / 68 / 107）は 4 件とも復元に成功しており、値も不変。**
+
+#### テスト（下方ブレイクの経路を初めて踏む）
+
+`tests/patterns/detect_wedges.test.ts` に合成フィクスチャ `buildRisingWedgeWithDownBreakout`
+（既存 `buildFallingWedgeWithUpBreakout` の**鏡像**）を足した。**要点はブレイク足の上ヒゲ**——
+idx 80 で高値 123.8 が上側ライン 124.0 の 0.5%（閾値 0.62）以内に入り、安値 114.0 は下側ライン
+120.0 を 6.0 割る。**高値を上側ラインから離すと `isBreak: true` になって修正前のコードでも
+素通りし、回帰テストにならない**ので、fixture の docstring に差の数値を書いてある。
+
+固定したのは 4 つ:
+
+- 下方ブレイク: `pivots` にブレイク足の `H` が入らず、全点が `idx < breakoutBarIndex`
+- 上方ブレイク（既存 fixture）: 同じ assertion を通す（対称性）
+- 未ブレイク（形成中）: `pivots` の点数 25 / `idx` 52〜78 が **#281 以前と同じ**（打ち切りが漏れ出していない）
+- **実データ**: `btc_jpy_1day_2026` × `1day` × 既定オプション（`swingDepth` auto = 6）の
+  `rising_wedge` `2026-06-23`〜`2026-07-13`（PR #280 §3 の実例）で、**ブレイク足 idx 45
+  （高値 10,439,626）を名指しで**固定。修正前は `{ idx: 45, kind: 'H', price: 10439626 }` が
+  入って A0 = 10 点、修正後は 9 点で**落ちるのはこの 1 点だけ**
 
 ### Docs（#274 Phase 1: `wedge_*` の `pivots` 点数を絞り方ごとに計測。決定はしない）
 

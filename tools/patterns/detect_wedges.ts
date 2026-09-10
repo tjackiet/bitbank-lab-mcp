@@ -417,10 +417,23 @@ function validateRegressionCandidate(
 // ── Phase 2b: 回帰ベース候補の結果構築 ──
 
 /**
- * トレンドラインのタッチ点から `PatternEntry.pivots`（構成点）を組む（issue #252）。
+ * トレンドラインのタッチ点から `PatternEntry.pivots`（構成点）を組む（issue #252 / #281）。
  *
  * 対象は上下トレンドラインの**非ブレイクタッチ点すべて**。ブレイク点（`isBreak: true`）は
  * ラインを**割った / 抜けた**足であって構成点ではないので除く。
+ *
+ * **線ごとの `isBreak` だけでは足りない**（#281）。`evaluateTouchesEx`（`helpers.ts`）は
+ * `isBreak` を**線ごとに独立に**立てるので、下側ラインを割った足でも、同じ足の高値が
+ * 上側ラインの 0.5% 以内にあれば `upperTouches` 側は `isBreak: false` のまま残る。
+ * そのままだと下方ブレイクの足が `kind: 'H'` の構成点として出力に入る
+ * （実データで実体 8 / 59、うち 7 件が `rising_wedge`。PR #280 §5-1）。
+ * そこで `breakIdx` を受け取り、**`idx >= breakIdx` の点を線を問わず落とす**。
+ * `>=` なのは「ラインを割った足そのものは構成点ではない」から（#281）。
+ * 線ごとの `isBreak` フィルタは残す——ブレイク前に一時的に線を超えた足を落とす役目が別にある。
+ *
+ * **`evaluateTouchesEx` の判定は 1 行も変えていない。** タッチ数（`upperQuality` /
+ * `lowerQuality`）・`score`・`alternation`・採否はすべて現状維持で、変わるのは
+ * `PatternEntry.pivots` の中身だけ。
  *
  * **間引かない。** 間引きは図（`pivForDiagram`）の都合であって、データ側の都合ではない。
  * 図とは別に組む（図は `MAX_DIAGRAM_POINTS` まで間引いた上で `price` に**終値**を入れているので、
@@ -433,11 +446,14 @@ function validateRegressionCandidate(
  *
  * 同じ `idx` が H / L 両方に現れ得る（外側バーが上下両ラインを同時に触るケース）。
  * 配列のキーは `idx` ではなく `(idx, kind)` なので dedup しない（`detect_triangles` と同じ扱い。#141）。
+ *
+ * @param breakIdx そのエントリのブレイク足の `idx`。未ブレイクなら `null`（打ち切らない）。
  */
-function buildTouchPivots(candles: readonly CandleData[], touches: TouchResult): Pivot[] {
+function buildTouchPivots(candles: readonly CandleData[], touches: TouchResult, breakIdx: number | null): Pivot[] {
 	const pick = (pts: readonly TouchPoint[], kind: 'H' | 'L'): Pivot[] =>
 		pts
 			.filter((t) => !t.isBreak)
+			.filter((t) => breakIdx === null || t.index < breakIdx)
 			.map((t) => {
 				const c = candles[t.index];
 				const price = Number(kind === 'H' ? c?.high : c?.low);
@@ -536,7 +552,10 @@ function buildRegressionEntry(
 
 	// 構成点（`pivots`）はタッチ点の非ブレイク分を**全件**、`price` は高安で出す（#252）。
 	// 下の図用の点（`pivForDiagram`）とは**別に組む**——図は間引き済みで `price` が終値なので流用できない。
-	const pivots = buildTouchPivots(candles, touches);
+	// **ブレイク足以降は線を問わず落とす**（#281）。このパスのタッチは `validateRegressionCandidate` が
+	// `[startIdx, endIdx]`（窓全体）で取っているのでブレイク後の足まで含みうるが、走査範囲そのものは
+	// 変えない——変えるとタッチ数とスコアが動く。
+	const pivots = buildTouchPivots(candles, touches, breakInfo.detected ? breakInfo.breakIdx : null);
 
 	// ダイアグラム用にタッチポイントから主要点を間引きして pivots を構成
 	const upTouchPts = (touches.upperTouches || [])
@@ -1185,8 +1204,10 @@ function detectFormingWedges(
 		// （このパスの採否は上のゲートで既に決まっている）ので、閾値も判定も動かない。
 		// 形成中パスもここで `pivots` を出さないと、同じ `wedge_*` なのに検出経路によって
 		// 構成点が有ったり無かったりする（実データの既定オプションで出る wedge はこちらのパス）。
+		// 走査終端が `actualEndIdx = breakoutIdx` なのでブレイク足は必ず走査範囲に入る。
+		// `breakoutIdx` を渡してその足以降を落とす（#281）。未ブレイクなら `null` で打ち切らない。
 		const fTouches = evaluateTouchesEx(candles, upperLine, lowerLine, startIdx, actualEndIdx);
-		const fPivots = buildTouchPivots(candles, fTouches);
+		const fPivots = buildTouchPivots(candles, fTouches, breakoutIdx !== -1 ? breakoutIdx : null);
 
 		const entry: DeduplicablePattern = {
 			type: wedgeType,

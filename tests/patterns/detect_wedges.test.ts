@@ -13,11 +13,12 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dayjs } from '../../lib/datetime.js';
-import { getHsShoulderMaxPctForTf, getSizeThresholdsForTf } from '../../tools/patterns/config.js';
+import { getHsShoulderMaxPctForTf, getSizeThresholdsForTf, resolveParams } from '../../tools/patterns/config.js';
 import { detectWedges } from '../../tools/patterns/detect_wedges.js';
 import { linearRegressionWithR2 } from '../../tools/patterns/regression.js';
-import type { Pivot } from '../../tools/patterns/swing.js';
+import { detectSwingPoints, type Pivot } from '../../tools/patterns/swing.js';
 import type { CandleData, DetectContext } from '../../tools/patterns/types.js';
+import { buildBtcJpy2026Candles } from '../fixtures/btc_jpy_1day_2026.js';
 
 // ── ヘルパー ──
 
@@ -284,6 +285,61 @@ describe('detectWedges', () => {
 		// 末尾 10 本で upper(@79)=160.5 を大きく上回るブレイク
 		for (let i = 80; i < total; i++) {
 			candles.push(mkCandle(total - i, 165, 200, 162, 180));
+		}
+		return candles;
+	}
+
+	/**
+	 * `buildFallingWedgeWithUpBreakout` の**鏡像**——rising wedge を**下方に**ブレイクさせる（#281）。
+	 *
+	 * 形状は `buildRisingWedgeCandles` と同じ upper(i) = 100 + 0.3i / lower(i) = 80 + 0.5i で、
+	 * idx 80 に**下方ブレイク足**を 1 本置く。以降 9 本は下落を続けるだけの足。
+	 *
+	 * **要点はブレイク足の上ヒゲ。** `evaluateTouchesEx`（`helpers.ts`）は `isBreak` を
+	 * **線ごとに独立に**立てるので、下側ラインを割った足でも高値が上側ラインの 0.5% 以内なら
+	 * `upperTouches` 側は `isBreak: false` のまま残る。数値で書くと（idx 80。上側ラインの
+	 * 復元値は設計値どおり upper(80) = 100 + 0.3 × 80 = **124.0**、下側は lower(80) = **120.0**）:
+	 *
+	 * - 高値 123.8 − 上側ライン 124.0 = **−0.2**。閾値は 124.0 × 0.005 = **0.62** なので
+	 *   **0.5% 以内** → `upperTouches` に `isBreak: false` で入る（＝ #281 以前は `kind: 'H'` の構成点）。
+	 * - 安値 114.0 − 下側ライン 120.0 = **−6.0**。閾値 120.0 × 0.005 = 0.60 を大きく割るので
+	 *   `lowerTouches` は `isBreak: true`。
+	 * - 終値 115.0 < lower(80) × (1 − `FORMING_BREAKOUT_FACTOR` 0.015) = 118.2 なので
+	 *   形成中パスのブレイク判定が idx 80 で成立する（`breakoutDirection: 'down'`）。
+	 *
+	 * **高値を上側ラインから離すとこのフィクスチャは回帰テストにならない**——`isBreak: true` に
+	 * なって #281 以前のコードでも構成点に入らず、素通りしてしまう。
+	 */
+	function buildRisingWedgeWithDownBreakout(): CandleData[] {
+		const candles: CandleData[] = [];
+		const total = 90;
+		for (let i = 0; i < 80; i++) {
+			const upper = 100 + 0.3 * i;
+			const lower = 80 + 0.5 * i;
+			const mid = (upper + lower) / 2;
+			const period = i % 8;
+			let h: number;
+			let l: number;
+			let c: number;
+			if (period === 0 || period === 1) {
+				h = upper;
+				l = mid - 2;
+				c = mid + 1;
+			} else if (period === 4 || period === 5) {
+				h = mid + 2;
+				l = lower;
+				c = mid - 1;
+			} else {
+				h = mid + 3;
+				l = mid - 3;
+				c = mid;
+			}
+			candles.push(mkCandle(total - i, mid, h, l, c));
+		}
+		// idx 80: 下方ブレイク足。上ヒゲが上側ライン（124.0）の 0.5% 以内に残る（上の docstring）。
+		candles.push(mkCandle(total - 80, 120, 123.8, 114, 115));
+		for (let i = 81; i < total; i++) {
+			candles.push(mkCandle(total - i, 110, 112, 95, 100));
 		}
 		return candles;
 	}
@@ -663,7 +719,7 @@ describe('detectWedges', () => {
 			expect(inverted).toEqual([]);
 		});
 
-		it('ブレイク足は pivots に含まれない', () => {
+		it('ブレイク足は pivots に含まれない（上方ブレイク）', () => {
 			// 末尾 10 本で上限を大きく上抜けるフィクスチャ。ブレイク足はラインを
 			// **抜けた**足であって構成点ではないので `isBreak: true` として除かれる。
 			const candles = buildFallingWedgeWithUpBreakout();
@@ -680,7 +736,86 @@ describe('detectWedges', () => {
 				expect(piv.some((p) => p.idx === w.breakoutBarIndex)).toBe(false);
 				// ブレイク足だけでなく、**ブレイク区間（末尾 10 本）が丸ごと入らない**ことも見る。
 				expect(piv.every((p) => p.idx < 80)).toBe(true);
+				// #281 の打ち切りを上方ブレイクでも同じ形で当てる（下方ブレイクとの対称性）。
+				expect(piv.every((p) => p.idx < (w.breakoutBarIndex as number))).toBe(true);
 			}
+		});
+
+		it('ブレイク足は pivots に含まれない（下方ブレイク。#281 の回帰）', () => {
+			// **#281 以前はここが落ちた。** 下方ブレイクの足は下側ラインについては
+			// `isBreak: true` だが、高値が上側ラインの 0.5% 以内にあるので `upperTouches` 側は
+			// `isBreak: false` のまま残り、`kind: 'H'` の構成点として出力に入っていた。
+			// 修正前の失敗（#281 のコードを外して実行した実出力）:
+			//   AssertionError: expected [ { idx: 80, price: 123.8, …(2) } ] to deeply equal []
+			const candles = buildRisingWedgeWithDownBreakout();
+			const ctx = buildCtx({ candles, pivots: [], includeForming: true });
+			const result = detectWedges(ctx);
+			const broken = result.patterns.filter((p) => p.type === 'rising_wedge' && typeof p.breakoutBarIndex === 'number');
+			expect(broken.length).toBeGreaterThan(0);
+
+			for (const w of broken) {
+				const breakIdx = w.breakoutBarIndex as number;
+				expect(w.breakoutDirection).toBe('down');
+				const piv = w.pivots ?? [];
+				expect(piv.length).toBeGreaterThanOrEqual(4);
+				// ブレイク足の**高値そのもの**（`kind: 'H'`）が入っていないこと。
+				expect(piv.filter((p) => p.idx === breakIdx)).toEqual([]);
+				// ブレイク足**以降**が線を問わず落ちること（#281 の打ち切りは `>=`）。
+				expect(piv.every((p) => p.idx < breakIdx)).toBe(true);
+			}
+		});
+
+		it('未ブレイク（形成中）の pivots は #281 で変わらない', () => {
+			// `breakIdx` が `null` なので打ち切りが効かない。**点数と終端が #281 以前と同じ**
+			// ことを固定して、打ち切りが未ブレイクに漏れ出していないことを見る。
+			const candles = buildRisingWedgeCandles(80);
+			const w = formingWedge(candles, 'rising_wedge');
+			expect(w.breakoutBarIndex).toBeUndefined();
+			expect(w.breakoutDirection).toBeUndefined();
+
+			const piv = w.pivots ?? [];
+			// #281 以前の実測値（`buildRisingWedgeCandles(80)` / `swingDepth` 7 / `includeForming`）。
+			expect(piv.length).toBe(25);
+			expect(Math.min(...piv.map((p) => p.idx))).toBe(52);
+			expect(Math.max(...piv.map((p) => p.idx))).toBe(78);
+		});
+
+		it('実データ: realA の rising_wedge からブレイク足 idx 45 が落ちる（#281 / PR #280 §3）', () => {
+			// PR #280 §5-1 の実例。`btc_jpy_1day_2026`（90 本）× `1day` × 既定オプション
+			// （`swingDepth` auto = 6）で出る `rising_wedge` `2026-06-23` 〜 `2026-07-13`。
+			// ブレイク足は idx 45（`2026-07-13`、高値 10,439,626）で、下方ブレイクなのに
+			// **その高値が上側ラインに接触**して `kind: 'H'` の構成点に入っていた（A0 = 10 点）。
+			const candles = buildBtcJpy2026Candles();
+			const resolved = resolveParams('1day', {});
+			expect(resolved.swingDepth).toBe(6);
+			const swings = detectSwingPoints(candles, { swingDepth: resolved.swingDepth, strictPivots: true });
+			const ctx = buildCtx({
+				candles,
+				pivots: swings,
+				tolerancePct: resolved.tolerancePct,
+				includeForming: true,
+				swingDepth: resolved.swingDepth,
+			});
+			const result = detectWedges(ctx);
+
+			const w = result.patterns.find(
+				(p) =>
+					p.type === 'rising_wedge' &&
+					String(p.range?.start).slice(0, 10) === '2026-06-23' &&
+					String(p.range?.end).slice(0, 10) === '2026-07-13',
+			);
+			expect(w).toBeDefined();
+			expect(w?.breakoutBarIndex).toBe(45);
+			expect(w?.breakoutDirection).toBe('down');
+			// ブレイク足の高値が fixture の値であること（別の足を指名していない保証）。
+			expect(candles[45]?.high).toBe(10439626);
+
+			const piv = w?.pivots ?? [];
+			// **idx 45 を名指しで固定する。** #281 以前は `{ idx: 45, kind: 'H', price: 10439626 }` が入り、
+			// A0 = 10 点だった。落ちるのはこの 1 点だけ。
+			expect(piv.filter((p) => p.idx === 45)).toEqual([]);
+			expect(piv.every((p) => p.idx < 45)).toBe(true);
+			expect(piv.length).toBe(9);
 		});
 
 		it('falling_wedge でも kind が上限 / 下限に対応する', () => {
