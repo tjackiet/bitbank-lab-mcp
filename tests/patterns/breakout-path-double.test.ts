@@ -4,7 +4,7 @@
  * issue #242 — double の完成済み 4 経路に「最終構成点 → ブレイクの経路検証」を配線した件の
  * 回帰テスト。純粋関数そのものの単体テストは `breakout-path.test.ts` が持つ。
  *
- * 本テストが固定するのは 4 点:
+ * 本テストが固定するのは 8 点:
  *
  * 1. 合成 fixture で**起票時の実例と同型**（山2 の後にもう 1 つ山を作ってから割る）が
  *    `status: 'invalid'` + `invalidReason: 'peak_after_last_pivot'` になること
@@ -19,6 +19,9 @@
  * 7. **ゲートの判定が `swingDepth` に依存すること**——同じ構成点が `swingDepth: 3` では
  *    `invalid`、`6` では完成済みになる（issue #251 案 3。**仕様として固定**しており、
  *    ゲートを深さ非依存に変える PR はこの期待値を意図的に更新すること）
+ * 8. **ゲートの判定が `limit`（窓の終端位置）にも依存すること**——`swingDepth` を動かさず
+ *    窓の終端だけを 3 本ずらすと、同じ構成点が `completed` / `invalid` に分かれる
+ *    （issue #277。窓の終端 `swingDepth` 本の足はピボットになれないため。**仕様として固定**）
  *
  * **既定（`includeInvalid: false`）では `data.patterns` から消える**ので、消えた理由は
  * `view=debug` の候補（`reason: 'peak_after_last_pivot'`）に残す。`re_entered_trough_zone` は
@@ -348,6 +351,210 @@ describe('起票時のライブ実例そのもの（issue #242・実データ D 
 		it('swingDepth: 6 では peak_after_last_pivot の候補が 1 件も出ない', async () => {
 			const { candidates } = await liveWindow({ swingDepth: 6 });
 			expect(candidates.every((c) => c.reason !== 'peak_after_last_pivot')).toBe(true);
+		});
+	});
+});
+
+describe('窓の終端の余白: 同じ値動きが limit で completed / invalid に分かれる（issue #277）', () => {
+	/**
+	 * **この describe は「`limit`（窓の終端位置）依存」という事実そのものを仕様として固定している
+	 * （issue #277）。** #251 の深さ依存と同じクラスだが、こちらは `swingDepth` を動かさない——
+	 * **データも深さも同じで、変わるのは窓の終端だけ。**
+	 *
+	 * `detectSwingPoints` の走査範囲は `[swingDepth, length − swingDepth)` なので、
+	 * **窓の最後の `swingDepth` 本はピボットになれない**（最後にピボットになりうるのは
+	 * `length − swingDepth − 1`、つまり終端からちょうど `swingDepth` 本前の足）。経路ゲートはピボット列で
+	 * 判定するため、再上昇の足がその余白に入るとゲートは「通した」のではなく
+	 * **「見るピボットが無かった」**——`view=debug` の候補にも `peak_after_last_pivot` が 1 件も出ない。
+	 *
+	 * 実データ D（`btc_jpy` / `1hour` / 2026-09-05）の idx 288 から、終端だけを動かす:
+	 *
+	 * | 切り出し | 終端の足 | 再上昇の足（idx 343 / 09-04 11:00Z）の位置 | 期待 |
+	 * |---|---|---|---|
+	 * | `slice(288, 346)` | idx 345 / **09-04 13:00Z** | 終端の **2 本前**（余白の中） | `completed` |
+	 * | `slice(288, 349)` | idx 348 / **09-04 16:00Z** | 終端の **5 本前**（ピボットになる） | `invalid` / `peak_after_last_pivot` |
+	 *
+	 * 切り出しの `start` は上の「起票時のライブ実例そのもの」と同じ 288 なので、
+	 * **窓の中の相対 idx（構成点 41-46-50 / 再上昇 55 / ブレイク 56）は上の describe と共通**。
+	 * 実データ D の絶対 idx に直すには一律 +288 する（構成点 329-334-338 / 再上昇 343 / ブレイク 344）。
+	 * 窓の長さは 58 / 61 本で、`1hour` の構造的下限 17 本を上回るので
+	 * `limit_too_small_for_timeframe` は出ない。
+	 *
+	 * **境界は `slice(288, 347)`**（終端 idx 346 = 09-04 14:00Z）。再上昇の足が終端から
+	 * ちょうど `swingDepth`（= 3）本前 = 走査範囲の右端 `length − swingDepth − 1` に来た時点で
+	 * `invalid` に変わる。**この 1 本だけの遷移も下でそのまま実行して固定する**——両側を
+	 * 挟むだけだと `[swingDepth + 1, length − swingDepth − 1)` を走査する実装でも通ってしまう。
+	 *
+	 * **`swingDepth` は未指定**（`1hour` の時間軸オート = 3）で通す。深さを変えずに `limit` だけで
+	 * 結果が割れることが本 describe の主張なので、`swingDepth: 6` は使わない。
+	 */
+	const START = 288;
+	/** 実データ D の絶対 idx → 窓の中の相対 idx。 */
+	const rel = (abs: number) => abs - START;
+
+	async function windowEndingAt(end: number, opts: Record<string, unknown> = {}) {
+		const candles = buildBtcJpy1hour20260905Candles().slice(START, end);
+		vi.mocked(analyzeIndicators).mockResolvedValueOnce(
+			asMockResult({ ok: true, summary: 'ok', data: { chart: { candles } } }),
+		);
+		const res = await detectPatterns('btc_jpy', '1hour', candles.length, { view: 'debug', ...opts });
+		assertOk(res);
+		const meta = res.meta as
+			| { debug?: { candidates?: Candidate[]; swings?: Array<Record<string, unknown>> } }
+			| undefined;
+		return {
+			patterns: res.data.patterns as Array<Record<string, unknown>>,
+			candidates: meta?.debug?.candidates ?? [],
+			swings: meta?.debug?.swings ?? [],
+			warnings: (res.data as { warnings?: string[] }).warnings ?? [],
+		};
+	}
+
+	/** 両窓で同一であることを固定する構成点（`double_top` の山1 / 谷 / 山2）。 */
+	const MAIN_POINTS = [rel(329), rel(334), rel(338)];
+	const MAIN_POINT_TIMES = ['2026-09-03T21:00:00.000Z', '2026-09-04T02:00:00.000Z', '2026-09-04T06:00:00.000Z'];
+
+	/**
+	 * 構成点の日時。`pivots[]` は `idx` しか持たない（`isoTime` は無い）ので、
+	 * **窓に使ったローソク足配列を通して引く**——窓が違えば同じ相対 idx が違う日時に
+	 * なりうるため、日時での突き合わせが「同じ値動きを見ている」ことの証拠になる。
+	 */
+	const timesOf = (p: Record<string, unknown>, candles: Array<{ isoTime: string }>) =>
+		mainIdxs(p).map((i) => candles[i]?.isoTime);
+
+	const windowCandles = (end: number) => buildBtcJpy1hour20260905Candles().slice(START, end);
+
+	it('切り出しの検算: 終端の足と再上昇の足の日時（両窓）', () => {
+		const candles = buildBtcJpy1hour20260905Candles();
+		expect(candles[343].isoTime).toBe('2026-09-04T11:00:00.000Z'); // 再上昇
+		expect(candles[345].isoTime).toBe('2026-09-04T13:00:00.000Z'); // slice(288, 346) の終端
+		expect(candles[348].isoTime).toBe('2026-09-04T16:00:00.000Z'); // slice(288, 349) の終端
+		// 余白（swingDepth = 3）の中か外か。
+		expect(345 - 343).toBe(2);
+		expect(348 - 343).toBe(5);
+	});
+
+	describe('終端 09-04T13:00Z（slice(288, 346)/ 58 本）— 再上昇が余白の中', () => {
+		it('double_top が completed で data.patterns に出る（swingDepth 未指定）', async () => {
+			const { patterns, warnings } = await windowEndingAt(346);
+			const doubles = patterns.filter((p) => p.type === 'double_top');
+			expect(doubles).toHaveLength(1);
+			expect(mainIdxs(doubles[0])).toEqual(MAIN_POINTS);
+			expect(timesOf(doubles[0], windowCandles(346))).toEqual(MAIN_POINT_TIMES);
+			// double の完成済みは `status` を持たない（`invalid` / `near_completion` のときだけ付く）。
+			expect(doubles[0].status).toBeUndefined();
+			expect(doubles[0].invalidReason).toBeUndefined();
+			expect(doubles[0].confirmation).toMatchObject({ type: 'neckline_breakout', idx: rel(344) });
+			// 窓が構造的下限（1hour = 17 本）を割っていないこと。
+			expect(warnings).not.toContain('limit_too_small_for_timeframe');
+		});
+
+		it('再上昇の足（idx 55）がピボット列に無い——ゲートは「通した」のではなく見る点が無い', async () => {
+			const { swings } = await windowEndingAt(346, { includeInvalid: true, includeForming: true });
+			const around = swings.filter((s) => Number(s.idx) >= rel(329)).map((s) => `${s.kind}${s.idx}@${s.price}`);
+			expect(around).toEqual(['H41@12718980', 'L46@12617594', 'H50@12639245']);
+			expect(swings.some((s) => Number(s.idx) === rel(343))).toBe(false);
+		});
+
+		it('view=debug の候補に peak_after_last_pivot が 1 件も出ない', async () => {
+			const { candidates } = await windowEndingAt(346);
+			expect(candidates.every((c) => c.reason !== 'peak_after_last_pivot')).toBe(true);
+		});
+	});
+
+	describe('終端 09-04T16:00Z（slice(288, 349)/ 61 本）— 再上昇がピボットになる', () => {
+		it('既定では data.patterns から double_top が消える', async () => {
+			const { patterns, warnings } = await windowEndingAt(349);
+			expect(patterns.filter((p) => p.type === 'double_top')).toHaveLength(0);
+			expect(warnings).not.toContain('limit_too_small_for_timeframe');
+		});
+
+		it('includeInvalid: true で invalid / peak_after_last_pivot として出る（構成点は同一）', async () => {
+			const { patterns } = await windowEndingAt(349, { includeInvalid: true });
+			const doubles = patterns.filter((p) => p.type === 'double_top');
+			expect(doubles).toHaveLength(1);
+			expect(doubles[0]).toMatchObject({ status: 'invalid', invalidReason: 'peak_after_last_pivot' });
+			expect(mainIdxs(doubles[0])).toEqual(MAIN_POINTS);
+			expect(timesOf(doubles[0], windowCandles(349))).toEqual(MAIN_POINT_TIMES);
+		});
+
+		it('view=debug の候補に余白から出てきた idx 55 が offender として載る', async () => {
+			const { candidates, swings } = await windowEndingAt(349);
+			expect(swings.some((s) => Number(s.idx) === rel(343) && s.kind === 'H')).toBe(true);
+			const hit = candidates.find((c) => c.type === 'double_top' && c.reason === 'peak_after_last_pivot');
+			expect(hit).toBeDefined();
+			expect(hit?.indices).toEqual(MAIN_POINTS);
+			expect(hit?.details).toMatchObject({
+				lastPivotIdx: rel(338),
+				breakoutIdx: rel(344),
+				offenderIdx: rel(343),
+			});
+		});
+	});
+
+	describe('境界そのもの（slice(288, 347)/ 59 本）— 再上昇が余白から 1 本だけ外れる', () => {
+		/**
+		 * **上の 2 窓は境界を挟むだけなので、走査範囲を 1 本狭めた実装
+		 * （`[swingDepth + 1, length − swingDepth − 1)`）でも通ってしまう。** 遷移が起きる
+		 * その 1 本を実行して固定する。
+		 *
+		 * 終端は idx 346（`09-04 14:00Z`）で、再上昇の足（相対 55）は終端から**ちょうど
+		 * `swingDepth`（= 3）本前** = 走査範囲の右端 `length − swingDepth − 1 = 59 − 3 − 1 = 55`。
+		 * ここで初めてピボットになり、ゲートが発火する。
+		 */
+		it('終端 09-04T14:00Z で invalid / peak_after_last_pivot に変わる', async () => {
+			const { patterns, swings } = await windowEndingAt(347, { includeInvalid: true });
+			// 走査範囲の右端が再上昇の足そのもの。
+			expect(347 - START - 3 - 1).toBe(rel(343));
+			expect(swings.some((sw) => Number(sw.idx) === rel(343) && sw.kind === 'H')).toBe(true);
+
+			const doubles = patterns.filter((p) => p.type === 'double_top');
+			expect(doubles).toHaveLength(1);
+			expect(doubles[0]).toMatchObject({ status: 'invalid', invalidReason: 'peak_after_last_pivot' });
+			expect(mainIdxs(doubles[0])).toEqual(MAIN_POINTS);
+		});
+
+		it('1 本手前（slice(288, 346)）はまだ completed——遷移はこの 1 本で起きる', async () => {
+			const { patterns } = await windowEndingAt(346, { includeInvalid: true });
+			const doubles = patterns.filter((p) => p.type === 'double_top');
+			expect(doubles).toHaveLength(1);
+			expect(doubles[0].status).toBeUndefined();
+		});
+	});
+
+	describe('実データ C の 365 本窓も既定パラメータで completed（終端が同じ 09-04T13:00Z）', () => {
+		/**
+		 * 実データ C（`btc_jpy_1hour_2026_09`）の終端は `2026-09-04T13:00:00.000Z` で、
+		 * 上の `slice(288, 346)` の終端と**同じ 1 時間**（C の末尾は取得時点の未確定足なので
+		 * OHLC は一致しない。fixture D の docstring を参照）。同じ形が C では構成点
+		 * **348-353-357**（= D の 329-334-338。`i + 19` の対応）として入っており、
+		 * **既定パラメータのまま `completed`** になる——issue #277 本文の観察そのもの。
+		 * 上の 58 本窓と結果が一致することの検算でもある。
+		 */
+		async function realDataC(opts: Record<string, unknown> = {}) {
+			vi.mocked(analyzeIndicators).mockResolvedValueOnce(
+				asMockResult({ ok: true, summary: 'ok', data: { chart: { candles: buildBtcJpy1hour202609Candles() } } }),
+			);
+			const res = await detectPatterns('btc_jpy', '1hour', 365, { view: 'debug', patterns: ['double_top'], ...opts });
+			assertOk(res);
+			const meta = res.meta as { debug?: { candidates?: Candidate[] } } | undefined;
+			return {
+				patterns: res.data.patterns as Array<Record<string, unknown>>,
+				candidates: meta?.debug?.candidates ?? [],
+			};
+		}
+
+		it('構成点 348-353-357 の double_top が既定で completed として出る', async () => {
+			const { patterns, candidates } = await realDataC();
+			const hit = patterns.find((p) => mainIdxs(p).join('-') === '348-353-357');
+			expect(hit, JSON.stringify(patterns.map(mainIdxs))).toBeDefined();
+			expect(timesOf(hit as Record<string, unknown>, buildBtcJpy1hour202609Candles())).toEqual(MAIN_POINT_TIMES);
+			expect(hit?.status).toBeUndefined();
+			expect(hit?.invalidReason).toBeUndefined();
+			// 再上昇の足は C の idx 362（= D の 343）で、終端 364 の 2 本前＝余白の中。
+			expect(
+				candidates.every((c) => !(c.reason === 'peak_after_last_pivot' && c.indices?.join('-') === '348-353-357')),
+			).toBe(true);
 		});
 	});
 });

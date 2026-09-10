@@ -60,6 +60,15 @@ export interface DetectSwingePointsOptions {
 /**
  * ローソク足データからスイングポイント（ピボット）を検出する
  *
+ * **窓の前後 `swingDepth` 本はピボットにならない**——極値判定が前後 `swingDepth` 本との比較を
+ * 要求するため、走査する `i` の範囲が `[swingDepth, candles.length − swingDepth)` に閉じている。
+ * これは「窓の終端の足はまだピボットとして確定していない」という正しい制約だが、
+ * **#242 の経路ゲート（`peak_after_last_pivot` / `trough_after_last_pivot`）と再進入チェックは
+ * この列で判定するため、終端の余白にある戻しを見ない**。結果として同じ値動きでも
+ * `limit`（窓の終端位置）によって `completed` / `invalid` が変わりうる
+ * （issue #277。`docs/tools.md` の「スイング検出パラメータは時間軸オート」の節に実例がある。
+ * 深さ側の同型の依存は issue #251）。
+ *
  * @param candles - ローソク足データ
  * @param options - 検出オプション
  * @returns 検出されたピボットの配列

@@ -361,6 +361,34 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 立てるが、深さ 6 では idx 343 が極値にならない（`high[337] = 12,750,000` が上にある）ため
 完成済みのまま残る。この深さ依存は `tests/patterns/breakout-path-double.test.ts` が仕様として固定している。
 
+**同じピボット列の性質から、判定は `limit`（窓の終端位置）にも依存する。**
+`detectSwingPoints` は極値判定に前後 `swingDepth` 本を要求する（ループの範囲が
+`i ∈ [swingDepth, length − swingDepth)`）ので、**窓の最後の `swingDepth` 本はピボットに
+なれない**（最後にピボットになりうるのは `length − swingDepth − 1`、つまり終端からちょうど
+`swingDepth` 本前の足）。経路ゲートと再進入チェックはピボット列で判定するため、
+**再上昇（再下落）の足がこの終端の余白に入るとゲートは発火しない**。結果として、
+**同じ値動きでも `limit` の違いで `completed` / `invalid` が変わりうるのは仕様**（issue #277）。
+
+実例: 上と同じ `double_top`（山1 `2026-09-03T21:00Z` / 谷 `2026-09-04T02:00Z` /
+山2 `2026-09-04T06:00Z`、再上昇 `2026-09-04T11:00Z`、ブレイク `2026-09-04T12:00Z`）を
+**`swingDepth` は既定（`1hour` の auto = 3）のまま**、窓の終端だけ動かすと:
+
+| 窓の終端 | 再上昇の足の位置 | 結果 |
+|---|---|---|
+| `2026-09-04T13:00Z` | 終端の **2 本前**（余白の中） | **`completed`**（`data.patterns` に出る。`view=debug` にも `peak_after_last_pivot` の候補が無い） |
+| `2026-09-04T16:00Z` | 終端の **5 本前**（ピボットになる） | **`invalid` / `peak_after_last_pivot`**（既定では消え、`includeInvalid: true` で出る） |
+
+境界は「再上昇の足が最後の `swingDepth` 本から外れるか」で、上の例では終端が
+`2026-09-04T14:00Z`（再上昇の足が終端からちょうど 3 本前 = 走査範囲の右端）になった時点で
+`invalid` に変わる。
+
+**#251 の深さ依存との違いは、利用者が選べるかどうか。** `swingDepth` は呼び出し側が明示的に
+選ぶが、窓の終端はデータの取得時刻で決まる。とはいえ本質は「**窓の終端の足はまだピボットとして
+確定していない**」という正しい制約で、ゲートが未確定の足を無視するのは設計どおり——問題は
+それを申告していなかったことで、本節がその申告にあたる。この `limit` 依存も
+`tests/patterns/breakout-path-double.test.ts` が仕様として固定している。
+なお終端の余白そのものは `limit` の実効下限（下の「`limit` の実効下限」の節 §1）にも効く。
+
 `headProminencePct`（H&S / 逆 H&S 専用。頭が両肩よりどれだけ突出すべきかの最小要求率）は
 `tolerancePct` とは**独立の専用時間軸オート表**（`getHeadProminenceForTf`）を持つ
 （issue #198。#149〜#197 は誤って `tolerancePct` の表を流用しており、`1hour` が `1day` より
@@ -1034,6 +1062,11 @@ accepted も押し出されうる（`content` はこの 2 つを区別して書�
 | `1day` | 6 | 23 |
 | `1week` | 7 | 25 |
 | `1month` | 8 | 29 |
+
+**この余白は下限だけでなく判定結果にも効く。** 窓の終端 `swingDepth` 本の足はピボットに
+なれないので、#242 の経路ゲートと再進入チェックはその区間の戻しを見ない——同じ値動きでも
+`limit` によって `completed` / `invalid` が変わりうる（issue #277。上の
+「スイング検出パラメータは時間軸オート」の節に実例と根拠がある）。
 
 > 式の `max(minBarsBetweenSwings, 5)` の **5**（`patterns/scan-window.ts` の
 > `STRUCTURAL_PIVOT_GAP_FLOOR_BARS`）は**検出器の挙動の写しではない**。ピボット間隔そのものは

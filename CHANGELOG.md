@@ -78,6 +78,55 @@
 | 63 | #252 | **`wedge_*` に `pivots`（構成点）を出すようにした。** 中身は上下トレンドラインの**非ブレイクタッチ点すべて**で、`price` は高安（`extremePrice` と同値）。`triangle_*` と同じ基準に揃えた。**検出ロジック・閾値は 1 つも触っていない**（回帰パスも形成中パスも、採否が決まった後に出力用の点を組むだけ） | **判定は変わらない**（実データ 1hour の回帰 fixture 10 件を全フィールド突き合わせて、**差分は `wedge_*` 4 件に `pivots` が増えたぶんだけ**。他のキーは 1 バイトも動かない） |
 | 64 | #245 Phase 1 | **「ヒゲだけの山2（谷2）」が accepted に混ざるかの計測。コード変更なし。** 12,104 ケースで仮の閾値（`closeGap` ≤ 0.2 かつ `wickShare` ≥ 0.5）に当たったのは**値動き 1 つだけ**で、それは **issue #245 本文の発端の形そのもの**（`btc_jpy` / `1hour` / 2026-09-04）。3 値判定は**保留**——山2 の後にネックラインは割るが、その前に山2 の終値を越えて戻しており **#242 が `peak_after_last_pivot` で落とすのと同じ値動き**。**#245 が残していた問い（「再上昇せずそのまま割る形」）に該当する形は 0 件** | **変わらない**（計測スクリプトと内部メモのみ。検出器・`structural.ts`・`config.ts`・`status` の enum は 1 行も触っていない） |
 | 65 | #245 案 B | **double の `content` に「山2 / 谷2 の位置」行を常に出すようにした（表示層のみ）。** 山2 の終値がネックラインからパターン高さの何割離れているか（`closeGap`）と、ヒゲがパターン高さの何割か（`wickShare`）を**閾値なしで毎回 1 行**出す。Phase 1 の結論どおり**検出側は変えない**（案 A の `scoreComponents` 減点軸は不採用、案 C を併せて採る） | **変わらない**（`structuredContent` / `data.patterns` が 1 バイトも動かない。値は `pivots` から表示層で導出しており、検出器に新しいフィールドを足していない） |
+| 66 | #277 | **窓の終端 `swingDepth` 本の余白でゲートが発火しないことを仕様として明文化した。docs / docstring / テストのみで検出器は 1 行も変えていない。** `detectSwingPoints` の走査範囲が `[swingDepth, length − swingDepth)` に閉じているため、**窓の最後の `swingDepth` 本はピボットになれず**、#242 の経路ゲートと再進入チェックはその区間の戻しを見ない。結果として**同じ値動きでも `limit`（窓の終端位置）によって `completed` / `invalid` が変わりうる**のを #251 と同じく仕様として固定した | **変わらない**（`tools/` / `src/` の変更は `swing.ts` の JSDoc と `swingDepth` の description 1 文だけ） |
+
+### Docs（#277: 窓の終端 `swingDepth` 本の余白を仕様として明文化する）
+
+**検出器・`structural.ts`・`swing.ts` の判定ロジック・`status` の enum・ベースライン回帰は 1 行も
+変えていない。** `tools/` / `src/` の変更は `tools/patterns/swing.ts` の JSDoc と
+`src/schema/patterns.ts` の `swingDepth` description 1 文だけで、`closes #277`。
+
+`detectSwingPoints` の走査範囲は `[swingDepth, length − swingDepth)` に閉じているので、
+**窓の最後の `swingDepth` 本はピボットになれない**（最後にピボットになりうるのは
+`length − swingDepth − 1`、つまり終端からちょうど `swingDepth` 本前の足）。#242 の経路ゲート
+（`peak_after_last_pivot` / `trough_after_last_pivot`）と再進入チェック（`re_entered_trough_zone`）は
+ピボット列で判定するため、**再上昇の足がその余白に入るとゲートは発火しない**——「通した」のではなく
+**見るピボットが無い**（`view=debug` の候補にも理由コードが出ない）。
+
+**#251 で固定した深さ依存と同じクラスの `limit` 依存**を、同じく**仕様として固定**した。
+実データ D（`btc_jpy` / `1hour` / 2026-09-05）の idx 288 から、**`swingDepth` は未指定
+（`1hour` の auto = 3）のまま終端だけ動かすと**:
+
+| 切り出し | 窓の長さ | 終端の足 | 再上昇の足（09-04 11:00Z）の位置 | 結果 |
+|---|---:|---|---|---|
+| `slice(288, 346)` | 58 | `2026-09-04T13:00Z` | 終端の **2 本前**（余白の中） | **`completed`** |
+| `slice(288, 349)` | 61 | `2026-09-04T16:00Z` | 終端の **5 本前**（ピボット） | **`invalid` / `peak_after_last_pivot`** |
+
+構成点は両窓で同一（山1 `09-03 21:00Z` / 谷 `09-04 02:00Z` / 山2 `09-04 06:00Z` = 実データ D の
+329-334-338）。**境界は `slice(288, 347)`**（終端 `09-04T14:00Z`）で、再上昇の足が終端から
+ちょうど `swingDepth` 本前 = 走査範囲の右端に来た時点で `invalid` に変わる。実データ C の 365 本窓
+（終端が同じ `09-04T13:00Z`）でも同じ形（構成点 348-353-357）が**既定パラメータのまま
+`completed`** になり、issue #277 本文の観察と一致する。
+
+**issue 本文の「直す側の案」（終端の余白の足を経路ゲートだけ暫定ピボットとして見る）は採らない。**
+確定 / 暫定の区別が判定に混ざり、#251 で固定した「構成点と同じ `swingDepth` のピボット列で
+判定する」という仕様と衝突する。本質は「**窓の終端の足はまだピボットとして確定していない**」
+という正しい制約で、ゲートが未確定の足を無視するのは設計どおり——問題は申告していなかったこと。
+
+**「終端に近い最終構成点」を `meta.warnings` / `data.warnings` に申告するかは本変更の範囲外。**
+すべての `near_completion` が該当しうるので、入れるなら発火頻度の計測が先（必要なら別 issue）。
+
+- `docs/tools.md` — 「スイング検出パラメータは時間軸オート」の節に `limit` 依存の段落と実例表を追加。
+  「`limit` の実効下限」§1 からその段落へ相互参照を 1 文（余白が下限だけでなく判定結果にも効くこと）
+- `tools/patterns/swing.ts` — `detectSwingPoints` の JSDoc に走査範囲と経路ゲートへの波及
+- `src/schema/patterns.ts` — `swingDepth` の description に 1 文
+- `tests/patterns/breakout-path-double.test.ts` — 終端だけ違う 2 窓（`swingDepth` 未指定）の
+  `completed` / `invalid`、**遷移が起きる 1 本そのもの**（`slice(288, 347)`）、
+  実データ C の 365 本窓の `completed` を固定
+- `tests/patterns/swing.test.ts` — 終端の余白にある極値がピボットにならないこと、および
+  **両端の境界そのもの**（走査範囲の左端 `swingDepth` と右端 `length − swingDepth − 1` が
+  採用され、その 1 つ外は落ちる）の単体テスト——余白の内外を挟むだけだと
+  `[swingDepth + 1, length − swingDepth − 1)` を走査する実装でも通ってしまうため
 
 ### Added（#245 案 B: double の `content` に「山2 / 谷2 の位置」行を常に出す。表示層のみ）
 
