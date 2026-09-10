@@ -458,6 +458,14 @@ function downsamplePoints(pts: Array<{ idx: number; kind: 'H' | 'L' }>, maxPoint
 	return out.filter((p, i, arr) => arr.findIndex((q) => q.idx === p.idx && q.kind === p.kind) === i);
 }
 
+/**
+ * 検証を通った回帰ベース候補（4b）から出力エントリを 1 件組む。
+ *
+ * ブレイク検出・ターゲット価格・`aftermath`・構造図・`pivots` をここでまとめて作る。
+ * **`aftermath` を持つのはこのパスだけ**なので、出力から 4b 由来か 4d 由来かを判別できる。
+ *
+ * @returns 開始 / 終了のローソク足が取れなかった場合は `null`
+ */
 function buildRegressionEntry(
 	candles: CandleData[],
 	wedgeType: 'rising_wedge' | 'falling_wedge',
@@ -933,6 +941,15 @@ function findLowerTrendlineF(
 
 // ── Phase 3: 形成中ウェッジ検出 ──
 
+/**
+ * 形成中ウェッジ（4d）を検出する。回帰ベース（4b）より緩い条件で、SG 平滑化した
+ * リラックスピボットから 2 点でトレンドラインを引き、収束・Apex・包含だけを見る。
+ *
+ * ブレイクを確認できた候補は `status: 'completed'` になるため、**`includeForming: false`
+ * でも出力に残る**（実データの既定オプションで出てくる `wedge_*` はほぼこれ）。
+ *
+ * @param existingPatterns 回帰パスの結果。期間が近い同型を重複として捨てるために参照する
+ */
 function detectFormingWedges(
 	pivotData: PivotData,
 	barParams: WedgeBarParams,

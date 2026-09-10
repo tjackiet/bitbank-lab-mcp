@@ -578,18 +578,27 @@ describe('detectWedges', () => {
 	// **両パスとも同じ `buildTouchPivots` を通す**ので、契約はここで固定できる。
 
 	describe('pivots（構成点）', () => {
-		/** `pivots` を持つ最初のウェッジを取る。 */
-		function firstWedgeWithPivots(candles: CandleData[]) {
+		/**
+		 * 指定した型の**形成中パス（4d）由来**のウェッジを 1 件取る。
+		 *
+		 * **型と検出経路の両方で絞る。** `detectWedges` は回帰パス（4b）の結果を先に並べるので、
+		 * `_wedge` で終わる最初の 1 件を拾うと、別の型や 4b の結果が assert を満たしてしまい
+		 * 「4d の `pivots` を見ている」つもりのテストが黙って別物を見る（PR #273 のレビュー指摘）。
+		 * 4b が踏めるようになったらここが落ちるので、そのとき経路ごとにテストを分ければよい。
+		 */
+		function formingWedge(candles: CandleData[], type: 'rising_wedge' | 'falling_wedge') {
 			const ctx = buildCtx({ candles, pivots: [], includeForming: true });
 			const result = detectWedges(ctx);
-			const w = result.patterns.find((p) => String(p.type).endsWith('_wedge'));
+			const w = result.patterns.find(
+				(p) => p.type === type && (p as { _method?: string })._method === 'forming_relaxed',
+			);
 			expect(w).toBeDefined();
 			return w as NonNullable<typeof w>;
 		}
 
 		it('rising_wedge に pivots が出る（idx 昇順・上下 2 点ずつ以上）', () => {
 			const candles = buildRisingWedgeCandles(80);
-			const w = firstWedgeWithPivots(candles);
+			const w = formingWedge(candles, 'rising_wedge');
 			const piv = w.pivots ?? [];
 
 			// 上下 2 点ずつ以上（ウェッジの成立条件と整合）。
@@ -606,7 +615,7 @@ describe('detectWedges', () => {
 
 		it('price は高安（H=high / L=low）で extremePrice と一致する', () => {
 			const candles = buildRisingWedgeCandles(80);
-			const w = firstWedgeWithPivots(candles);
+			const w = formingWedge(candles, 'rising_wedge');
 			const piv = w.pivots ?? [];
 			expect(piv.length).toBeGreaterThan(0);
 
@@ -623,7 +632,7 @@ describe('detectWedges', () => {
 			// `pivForDiagram` は同じタッチ点から組むが `price` に**終値**を入れており、
 			// 間引きもする。ここが終値になっていたら図の配列を流用した回帰。
 			const candles = buildRisingWedgeCandles(80);
-			const w = firstWedgeWithPivots(candles);
+			const w = formingWedge(candles, 'rising_wedge');
 			const piv = w.pivots ?? [];
 			expect(piv.some((p) => p.price !== candles[p.idx].close)).toBe(true);
 		});
@@ -632,7 +641,7 @@ describe('detectWedges', () => {
 			// フィクスチャの設計値は upper(i) = 100 + 0.3i / lower(i) = 80 + 0.5i。
 			// H の点だけ・L の点だけを回帰すると、それぞれの線が復元できるはず。
 			const candles = buildRisingWedgeCandles(80);
-			const w = firstWedgeWithPivots(candles);
+			const w = formingWedge(candles, 'rising_wedge');
 			const piv = w.pivots ?? [];
 
 			const fitH = linearRegressionWithR2(piv.filter((p) => p.kind === 'H').map((p) => ({ x: p.idx, y: p.price })));
@@ -677,11 +686,8 @@ describe('detectWedges', () => {
 		it('falling_wedge でも kind が上限 / 下限に対応する', () => {
 			// upper(i) = 200 − 0.5i / lower(i) = 180 − 0.25i。両ライン下向きで**上側がより急**。
 			const candles = buildFallingWedgeWithUpBreakout();
-			const ctx = buildCtx({ candles, pivots: [], includeForming: true });
-			const result = detectWedges(ctx);
-			const w = result.patterns.find((p) => p.type === 'falling_wedge');
-			expect(w).toBeDefined();
-			const piv = w?.pivots ?? [];
+			const w = formingWedge(candles, 'falling_wedge');
+			const piv = w.pivots ?? [];
 
 			const fitH = linearRegressionWithR2(piv.filter((p) => p.kind === 'H').map((p) => ({ x: p.idx, y: p.price })));
 			const fitL = linearRegressionWithR2(piv.filter((p) => p.kind === 'L').map((p) => ({ x: p.idx, y: p.price })));
@@ -694,7 +700,7 @@ describe('detectWedges', () => {
 
 		it('pivots は range の中に収まる', () => {
 			const candles = buildRisingWedgeCandles(80);
-			const w = firstWedgeWithPivots(candles);
+			const w = formingWedge(candles, 'rising_wedge');
 			const piv = w.pivots ?? [];
 			const startIdx = candles.findIndex((c) => c.isoTime === w.range?.start);
 			const endIdx = candles.findIndex((c) => c.isoTime === w.range?.end);

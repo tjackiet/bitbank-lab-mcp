@@ -749,6 +749,7 @@ function sectionPairCounts(pairs: Pair[], structures: Structure[]): string {
 	return out.join('\n');
 }
 
+/** 共有点数（double の 3 点のうち継続側の `pivots` に含まれる数）の分布表。 */
 function sectionShared(pairs: Pair[], structures: Structure[]): string {
 	if (pairs.length === 0) return '共存ペアが 0 件なので該当なし。';
 	const label = (n: number | null) => (n === null ? '判定不能（継続側に `pivots` が無い。#252 前の出力）' : `${n} 点`);
