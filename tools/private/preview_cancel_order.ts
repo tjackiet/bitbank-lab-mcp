@@ -73,6 +73,19 @@ function terminalStatusMessage(status: OrderResponse['status']): string {
 	}
 }
 
+/**
+ * 注文キャンセルのプレビューを組み立てる（実際のキャンセルは行わない）。
+ *
+ * `get_order` で注文詳細を取得してサマリに同梱し、終端状態でなければ
+ * `confirmation_token` を発行する。
+ *
+ * - 終端状態（`TERMINAL_ORDER_STATUSES`）: トークンを発行せず `validation_error` で fail
+ * - 注文詳細を取得できなかった場合: プレビューは通す（詳細不明で止めるより、
+ *   キャンセル不能にする方が UX として悪いため）
+ *
+ * @param args.pair - 通貨ペア（例: `btc_jpy`）
+ * @param args.order_id - キャンセル対象の注文 ID
+ */
 export default async function previewCancelOrder(args: { pair: string; order_id: number }) {
 	const { pair, order_id } = args;
 
