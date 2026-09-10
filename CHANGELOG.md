@@ -76,6 +76,43 @@
 | 61 | #268 Phase 1 | **形成中 `double_top` の左の山の探索を「パターン長」基準に変える ablation の計測。コード変更なし。** 現行は `[...allPeaks].reverse().find(...)` で**最新の確定山 1 つ**を取るので `formationBars` が「直近の山からの距離」を測っており、`forming_bars_out_of_range` の下限割れで accepted が 0 件になる。探索を「谷を挟んで最新足と同水準の最初の確定山」に変えても目視で呼べる形は増えなかった | **変わらない**（計測スクリプトと内部メモのみ） |
 | 62 | #268 案 C | **`tryFormingDoubleTop` を削除し、double は `forming` を持たないパターンにした。** double の `status` は `near_completion` / `completed` / `invalid` / `expired` の 4 段で、`forming` は**仕様として持たない**（最終構成点が 1 つしか無く形成中を定義できない）。**triple / H&S の形成中検知は 1 行も触っていない** | **既定（`includeForming: false`）は変わらない。** `includeForming: true` でも 12,104 ケース全件で**変わらない**（削除した経路の accepted が全母集団で 0 件のため）。減るのは `view=debug` の候補だけ |
 | 63 | #252 | **`wedge_*` に `pivots`（構成点）を出すようにした。** 中身は上下トレンドラインの**非ブレイクタッチ点すべて**で、`price` は高安（`extremePrice` と同値）。`triangle_*` と同じ基準に揃えた。**検出ロジック・閾値は 1 つも触っていない**（回帰パスも形成中パスも、採否が決まった後に出力用の点を組むだけ） | **判定は変わらない**（実データ 1hour の回帰 fixture 10 件を全フィールド突き合わせて、**差分は `wedge_*` 4 件に `pivots` が増えたぶんだけ**。他のキーは 1 バイトも動かない） |
+| 64 | #245 Phase 1 | **「ヒゲだけの山2（谷2）」が accepted に混ざるかの計測。コード変更なし。** 12,104 ケースで仮の閾値（`closeGap` ≤ 0.2 かつ `wickShare` ≥ 0.5）に当たったのは**値動き 1 つだけ**で、それは **issue #245 本文の発端の形そのもの**（`btc_jpy` / `1hour` / 2026-09-04）。3 値判定は**保留**——山2 の後にネックラインは割るが、その前に山2 の終値を越えて戻しており **#242 が `peak_after_last_pivot` で落とすのと同じ値動き**。**#245 が残していた問い（「再上昇せずそのまま割る形」）に該当する形は 0 件** | **変わらない**（計測スクリプトと内部メモのみ。検出器・`structural.ts`・`config.ts`・`status` の enum は 1 行も触っていない） |
+
+### Docs（#245 Phase 1: ヒゲだけの山2 が accepted に混ざるかを計測。決定はしない）
+
+**検出器・`structural.ts`・`config.ts`・ベースライン・`status` の enum は 1 行も変えていない。**
+issue #245 の発端の形（山2 の終値がネックラインの 0.17% 上で、高値だけが山1 と同水準）は
+**#242 の経路ゲートで既に `invalid`** なので、残っていた問いは「**ヒゲだけの山2 の直後に、
+再上昇せずそのまま割る形**が accepted に混ざるか」の 1 つだけだった。
+
+12,104 ケース（標準 800 + 実データ B / C / D 各 96 + ローリング窓 3,672 × 3）で実測した:
+
+| 何を | 実測 |
+|---|---|
+| 仮の閾値（`closeGap` ≤ 0.2 かつ `wickShare` ≥ 0.5）の該当 | **延べ 85 / 実体 1 / 値動き 1**。**発端の形そのもの**（実データ C の 348-353-357 = 実データ D の 329-334-338） |
+| その 3 値判定 | **正当な failed retest 0 / 呼べない 0 / 保留 1**。ネックラインは割る（C の idx 363）が、その前に終値 12,711,037 まで戻して山2 の終値 12,639,245 を越えている＝ #242 が落とす値動きと同型 |
+| **「再上昇せずそのまま割る形」** | **0 件** |
+| なぜ発端の形が accepted に残るのか | 経路ゲートが 2 つの理由で発火しない。(a) `swingDepth: 6` では再上昇の足が極値にならない（**#251 案 3 で仕様として固定**）。(b) `detectSwingPoints` が前後 `swingDepth` 本を要求するため、**窓の終端の余白にある足はピボットになれない**（実データ C の 365 本窓では既定 `swingDepth`（3）でも `completed` になる） |
+| 分布（accepted double 延べ 1,151 / 実体 30 / 値動き 19） | `closeGap` は値動き単位で min 0.030 / p50 0.415 / max 0.741、`wickShare` は min 0.072 / p50 0.232 / max 0.733。`closeGap` ≤ 0.2 は 4 値動き、`wickShare` ≥ 0.5 は 2 値動きで、両方に当たるのは 1 つ |
+| 空白帯（#214 の基準） | 帯は `closeGap` 0.415〜0.538 / `wickShare` 0.544〜0.733 にあり、**仮の閾値の位置には無い**。加えて値動きが 19 しか無いので**帯を非恣意性の根拠にしない** |
+| 既存ゲートとの重なり | accepted double 1,151 件（`completed` 257 / `near_completion` 894）に `validateLevelDiff` とネックライン側検査を静的に当てて **0 件**。**`near_completion` のゲート集合は完成済みと同じ**（#270 の検算） |
+| 同族（triple の山3 / 谷3、H&S の右肩 `p4`） | **該当 0 件**。H&S の 2 量は #178 項目 3 のとおり**参考値**（`heightAbs` の端点は頭と谷で肩は端点にならない） |
+
+**`closeGap` > 0 は `validateMainPointsNecklineSide` の帰結。** あのゲートは top で
+`necklinePrice − 山.price >= 0` を落とすので、「**終値では山が完全に無い**（ネックラインと同値か
+下）」形は既に hard reject されている。issue #245 が見ているのは**その 1 段上の「わずかに上」の帯**。
+
+**Phase 1 の推奨は「案 B（`content` に注記）を本命 / 案 A（`scoreComponents` の減点軸）は採らない /
+案 C（何もしない）を併せて採る」で、決定はしていない。** 案 A が効くのは 1 値動きだけで、
+それは #242 が落とすと決めた形。`confidence` を動かすと `globalDedup` の代表が入れ替わる
+副作用（#142 / #204 で実測済みの経路）があり、1 件のために既存の出力集合を揺らす価値が無い。
+
+- `scripts/measure_wick_only_second_peak_245.ts` — 計測ハーネス（新規）。**検出器内のフックも
+  `tools/patterns/` の展開も無い**（`data.patterns` 相当の出力集合だけを見る。#243 と同じ流儀）。
+  export されていない検出器の定数（`BREAKOUT_BUFFER_PCT` / `MAX_BARS_FROM_EXTREMUM`）は写しで
+  持ち、**`completed` な double の `breakoutBarIndex` を神託にして全ケースで一致を検算する**。
+  issue 本文の発端の形（`closeGap` 0.099 / `wickShare` 0.733）の自己検算が**数字を出す前**に走る
+- `docs/internal/wick-only-second-peak-245.md` — 計測結果・目視判定・案 A/B/C の比較
 
 ### Security（`vitest` / `@vitest/coverage-v8` を 4.1.9 → 4.1.11 に揃えて上げた。`@vitest/mocker` の moderate 3 件を解消。#259）
 
