@@ -1,10 +1,11 @@
 /**
- * Double Top / Double Bottom 検出（完成済み＋形成中）
- * detect_patterns.ts Section 2 から抽出
+ * Double Top / Double Bottom 検出。
+ *
+ * **形成中（`status: 'forming'`）は出さない。** 取りうる status は `near_completion` /
+ * `completed` / `invalid` / `expired` の 4 段（`detectDoubles` の docstring。issue #262 / #268）。
+ * detect_patterns.ts Section 2 から抽出。
  */
-import { EPSILON } from '../../lib/math.js';
 import { generatePatternDiagram } from '../../lib/pattern-diagrams.js';
-import { patternBarRange } from './bar-thresholds.js';
 import { deduplicatePatterns, finalizeConf, periodScoreDays } from './helpers.js';
 import { clamp01, relDev } from './regression.js';
 import { averageDefinedAxes, breakoutQualityScore, retracementScore } from './scoring.js';
@@ -13,7 +14,6 @@ import {
 	DOUBLE_LEVEL_MAX_PCT,
 	detectPivotBeforeBreakout,
 	detectTroughZoneReentry,
-	formingNecklineSideReason,
 	isSameLevel,
 	levelSpreadDetailsFrom,
 	levelSpreadMetrics,
@@ -54,61 +54,30 @@ const BREAKOUT_BUFFER_PCT = 0.015;
 const MAX_BARS_FROM_EXTREMUM = 20;
 const RELAXED_TOLERANCE_FACTOR = 1.3;
 const RELAXED_CONFIDENCE_PENALTY = 0.85;
+// 形成中 double 専用の係数はすべて消えた（issue #262 / #268 案 C）。
+// - `FORMING_TOLERANCE_MULTIPLIER` / `FORMING_VALLEY_INVALID_PCT`: `tryFormingDoubleBottom` 専用
+//   だったので #262 で削除。前者と同名の係数は `detect_triples.ts` が形成中 triple 用に別途持つ
+//   （値も用途も独立）。
+// - `MIN_PATTERN_DAYS` / `MAX_FORMING_DAYS` / `FORMING_PEAK_TOLERANCE_PCT` /
+//   `FORMING_BASE_COMPLETION` / `FORMING_COMPLETION_RANGE` / `MIN_FORMING_COMPLETION`:
+//   `tryFormingDoubleTop` 専用だったので #268 案 C で削除。`MIN_FORMING_COMPLETION` は
+//   「現行の定数では到達しない」と docstring に書いてあった（`completion` の下限 0.66 > 0.4）ので、
+//   経路ごと消える今が整理の機会だった。
+// 残るのは下の {@link FORMING_EXPIRY_BARS} だけで、これは未ブレイク構造（`near_completion`）の
+// 期限判定（#262 / #270）が使う。
 /**
- * 形成中ダブルトップ / ボトムの形成期間の上限の日数由来。**実効値はバー数**で、
- * `getDoubleFormingBarParams` が `patterns/bar-thresholds.ts` の換算を通して決める。
- */
-const MAX_FORMING_DAYS = 90;
-const FORMING_PEAK_TOLERANCE_PCT = 0.05;
-const FORMING_BASE_COMPLETION = 0.66;
-const FORMING_COMPLETION_RANGE = 0.34;
-/**
- * 形成中ダブルトップの完成度の下限。
- *
- * **現行の定数では到達しない。** `completion = min(1, FORMING_BASE_COMPLETION + progress * FORMING_COMPLETION_RANGE)`
- * で `progress ∈ [0, 1]` なので最小値は `FORMING_BASE_COMPLETION = 0.66` になり、0.4 を下回れない。
- * 重み側（0.66 / 0.34）を触ったときに効き始めるガードとして残してあり、
- * `forming_completion_below_min` の理由コードもそのために積む（issue #158。#155 の
- * `FORMING_MIN_COMPLETION`（`detect_hs.ts`）と同じ事情）。
- */
-export const MIN_FORMING_COMPLETION = 0.4;
-/**
- * 形成中ダブルトップ / ボトムの形成期間の下限の日数由来。**実効値はバー数**で、
- * `getDoubleFormingBarParams` が `patterns/bar-thresholds.ts` の換算を通して決める。
- * ここの日数は「その値がどこから来たか」を示す注記であって、暦日数の要件ではない。
- */
-export const MIN_PATTERN_DAYS = 14;
-// `FORMING_TOLERANCE_MULTIPLIER` / `FORMING_VALLEY_INVALID_PCT` は `tryFormingDoubleBottom` 専用の
-// 係数だったので、同関数の削除（issue #262）と一緒に消した。前者と同名の係数は
-// `detect_triples.ts` が形成中 triple 用に別途持っている（値も用途も独立）。
-/**
- * 形成中パターンが `forming` を名乗れる、第2構成点確定からの経過バー数の上限（issue #126 G4）。
+ * 未ブレイク構造が `near_completion` を名乗れる、第2構成点確定からの経過バー数の上限
+ * （issue #126 G4。名前は `forming` 時代のもので、#262 / #270 で `near_completion` に移った）。
  *
  * **{@link MAX_BARS_FROM_EXTREMUM} と同じ値であることに意味がある。** 完成済み判定の
  * `findBreakoutIdx` は第2構成点から `MAX_BARS_FROM_EXTREMUM` 本しかネックライン突破を探さない。
  * つまりそれを過ぎた候補は、以後どれだけ待っても `completed` にはならない。
- * 「形成中＝まだ完成しうる」を成立させるには、形成中側の期限を突破探索窓と一致させるしかない。
+ * 「まだ完成しうる」を成立させるには、未ブレイク側の期限を突破探索窓と一致させるしかない。
  *
  * これが無かったため、現値がネックラインを大きく上回っている状態でも「形成中」と
  * 報告され続けていた（8/25 時点で +17.8%）。
  */
 const FORMING_EXPIRY_BARS = MAX_BARS_FROM_EXTREMUM;
-
-/**
- * 形成中ダブルトップ / ボトムが要求する形成バー数のレンジ
- * （`formationBars = lastIdx - 左ピボット.idx`）。
- *
- * 旧実装は `patternDays = Math.round(formationBars × 手書き daysPerBar)` を作って 14〜90 日で
- * 判定していた。手書きの換算（`1day`→1 / `1week`→7 / **それ以外→1**）は intraday と `1month` を
- * 「1 日 / 本」に落とすため、`1month` は 14 バー = 14 ヶ月を要求し、intraday では日数閾値が
- * 偶然そのままバー数閾値として効いていた（issue #118 問題 3）。
- *
- * `detect_triples` の形成中判定（`getTripleFormingBarParams`）と同じ換算に統一してある。
- * `patterns/min-bars.ts` が「時間足 → 最小要求バー数」を導出するのに参照するため export する。
- */
-export function getDoubleFormingBarParams(tf: string): { minBars: number; maxBars: number } {
-	return patternBarRange(tf, MIN_PATTERN_DAYS, MAX_FORMING_DAYS);
-}
 
 type Pcand = (arg: Parameters<typeof pushCand>[1]) => void;
 
@@ -335,72 +304,6 @@ function rejectByNecklineSide(
 	return true;
 }
 
-/**
- * 形成中経路の主構成点とネックラインの位置関係の検査（issue #261）。棄却したら debug candidate を
- * 積んで `true` を返す（呼び出し側は `continue` / `return null`）。判定の実体と根拠——価格基準を
- * `price`（終値）にした理由、許容幅を置かない理由——は {@link validateMainPointsNecklineSide} の
- * docstring が単一ソース。理由コードを `forming_` 接頭辞で分ける理由は
- * {@link formingNecklineSideReason} を参照。
- *
- * ## 形成中 2 経路の主構成点は**非対称**（issue #262 で整理予定。本 issue では現状のまま）
- *
- * | 経路 | 主構成点 | ネックライン水準 | 本ゲートに渡す点 |
- * |---|---|---|---|
- * | {@link tryFormingDoubleTop} | 確定 1 山 ＋ **最新足** | `valley.price` | **`leftPeak` だけ** |
- * | {@link tryFormingDoubleBottom} | **確定 2 谷** | `midPeak.price` | 2 谷とも |
- *
- * **`tryFormingDoubleTop` は 2 つの検査で主構成点 2 点を分担している。** 最新足の側は既存の
- * `forming_current_at_or_below_valley`（`currentPrice <= valley.price` で棄却）が
- * **ネックライン側検査そのもの**——`necklinePrice = valley.price` に対する `top` の要求
- * （`price > necklinePrice`）と同値——なので、本ゲートは残る `leftPeak` だけを見る。
- * **2 つを 1 つの理由コードに統合しない**：#158 のテストが `forming_current_at_or_below_valley`
- * という名前を固定しており、統合すると `view=debug` で「どちらの点が誤側だったか」も消える。
- *
- * どちらの経路でも**中間構成点は渡さない**。`b`（top の `valley` / bottom の `midPeak`）は
- * **ネックラインの定義点そのもの**なので、検査に含めると `deviation === 0` で必ず失格になる
- * （{@link rejectByNecklineSide} の docstring と同じ）。
- *
- * ## 呼び出し位置
- *
- * **既存の棄却検査をすべて通過した後**——`tryFormingDoubleTop` は構造ゲートの後、
- * `tryFormingDoubleBottom` は構造ゲート＋{@link checkPostPivotInvalidation} の後。
- * 完成済み経路の {@link rejectByNecklineSide} と同じ配置規約で、前に置くと固有の理由コードを
- * 持つ候補の `reason` を横取りする。
- */
-function rejectFormingNecklineSide(
-	side: ReversalSide,
-	type: 'double_top' | 'double_bottom',
-	mainPoints: ReadonlyArray<Pick<Pivot, 'idx' | 'price'>>,
-	necklinePrice: number,
-	idxs: number[],
-	pts: Array<{ role: string; idx: number; price: number }>,
-	pcand: Pcand,
-): boolean {
-	const { reason, offenders } = validateMainPointsNecklineSide(side, mainPoints, necklinePrice);
-	if (!reason) return false;
-	pcand({
-		type,
-		accepted: false,
-		reason: formingNecklineSideReason(reason),
-		idxs,
-		pts,
-		details: necklineSideDetailsFrom(necklinePrice, offenders),
-	});
-	return true;
-}
-
-/**
- * 完成済みのサイズ検査の理由コードを、形成中パス用に `forming_` 接頭辞付きへ写す（issue #169）。
- *
- * **完成済みと同じ `pattern_too_small` / `valley_too_shallow` / `peak_too_shallow` を
- * そのまま使わない。** `view=debug` の候補一覧は完成済みと形成中の棄却が同じ配列に並ぶので、
- * 同名だとどちらの経路で落ちたかが読めなくなる。形成中の既存の理由コードが
- * `forming_` 接頭辞で揃っている（`forming_bars_out_of_range` 等）のに合わせる。
- */
-function formingSizeReason(reason: PatternSizeRejectReason): string {
-	return `forming_${reason}`;
-}
-
 // ── Helper: 構造ゲート（issue #126）──
 
 /**
@@ -546,7 +449,7 @@ type DoubleUnbrokenStatus =
  *
  * ## triple / H&S より 2 段多い理由（#126 G4 / G5 を引き継ぐ）
  *
- * 旧 `tryFormingDoubleBottom`（本 PR で削除）は、まさにこの段階を `status: 'forming'` という
+ * 旧 `tryFormingDoubleBottom`（#262 で削除）は、まさにこの段階を `status: 'forming'` という
  * 誤ラベルで出しており、**終端の 2 条件を持っていた**。同じ判定をここへ移す:
  *
  * - **期限切れ（#126 G4）**: 第2構成点 `c` から {@link FORMING_EXPIRY_BARS} を過ぎても未ブレイクなら
@@ -1133,233 +1036,6 @@ function findRelaxedDoubleBottom(
 	return nonCompletedFallback;
 }
 
-// ── Helper: 形成中ダブルトップ検索 ──
-
-/**
- * 形成中ダブルトップを組み立てる。組めなければ null。
- *
- * ## debug candidate の積み方（issue #158）
- *
- * 成功時に `accepted: true` / `status: 'forming'` を積む。**`accepted: true` は「検出器が
- * 組み立てた」であって「最終出力に残った」ではない**——後段 `detect_patterns.ts` の
- * `globalDedup` に畳まれて `data.patterns` に出ないことがある。strict / relaxed パスも
- * `patterns.push` の直後＝dedup 前に積んでおり、既存の約束と揃えてある（#155 と同じ）。
- *
- * 棄却の理由コードは**全分岐に積む**。{@link tryFormingDoubleBottom} や
- * `detect_triples.ts` の形成中 2 経路と違い**この関数にはループが無く**、
- * `lastConfirmedPeak` を 1 点だけ取って直線的にガードを並べるので、1 回の呼び出しで
- * 各分岐はたかだか 1 回しか発火しない。#155 が「構成点が揃う前の分岐には積まない」と
- * したのは頭候補ごとにループする `formingHsForHead` の cap=200 対策で、ここには当て
- * はまらない。積まないと**この経路は完全に無音**になり、なぜ形成中ダブルトップが
- * 出ないのかが debug から追えない。
- *
- * 例外は関数先頭の want / ピボット総数ガードで、これは「この種別が要求されていない」
- * 「窓にピボットが 1 つも無い」であって候補の棄却ではないため積まない。
- */
-function tryFormingDoubleTop(ctx: DetectContext): PatternEntry | null {
-	const { candles, allPeaks, allValleys, want } = ctx;
-	if (!(want.size === 0 || want.has('double_top')) || allPeaks.length < 1 || allValleys.length < 1) return null;
-
-	const lastIdx = candles.length - 1;
-	const currentPrice = Number(candles[lastIdx]?.close ?? NaN);
-	const isoAt = (i: number) => candles[i]?.isoTime || '';
-
-	const lastConfirmedPeak = [...allPeaks].reverse().find((p) => p.idx < lastIdx - 2);
-	if (!lastConfirmedPeak) {
-		pushCand(ctx, { type: 'double_top', accepted: false, reason: 'forming_no_confirmed_peak' });
-		return null;
-	}
-	const valleyAfterPeak = allValleys.find((v) => v.idx > lastConfirmedPeak.idx && v.idx < lastIdx - 1);
-	if (!valleyAfterPeak || valleyAfterPeak.idx <= lastConfirmedPeak.idx) {
-		pushCand(ctx, {
-			type: 'double_top',
-			accepted: false,
-			reason: 'forming_no_valley_after_peak',
-			idxs: [lastConfirmedPeak.idx],
-			pts: [{ role: 'peak1', idx: lastConfirmedPeak.idx, price: lastConfirmedPeak.price }],
-		});
-		return null;
-	}
-
-	const leftPeak = lastConfirmedPeak;
-	const valley = valleyAfterPeak;
-	// 構成点 3 点（山1 / 谷 / 暫定の山2＝最新足）が確定したのでここから先は共通の形で積む。
-	// 最新足は確定ピボットではないので role を `forming_peak` で区別する（既存の棄却
-	// エントリと同じ role 名。同じ経路の ✅ と ❌ が並んで読めるようにするため）。
-	const formingPts = [
-		{ role: 'peak1', idx: leftPeak.idx, price: leftPeak.price },
-		{ role: 'valley', idx: valley.idx, price: valley.price },
-		{ role: 'forming_peak', idx: lastIdx, price: currentPrice },
-	];
-	const formingIdxs = [leftPeak.idx, valley.idx, lastIdx];
-	const rejectForming = (reason: string) => {
-		pushCand(ctx, { type: 'double_top', accepted: false, reason, idxs: formingIdxs, pts: formingPts });
-	};
-
-	const leftPct = currentPrice / Math.max(1, leftPeak.price);
-	if (leftPct < 1 - FORMING_PEAK_TOLERANCE_PCT || leftPct > 1 + FORMING_PEAK_TOLERANCE_PCT) {
-		rejectForming('forming_peak_level_out_of_tolerance');
-		return null;
-	}
-	if (!isSameLevel(currentPrice, leftPeak.price, DOUBLE_LEVEL_MAX_PCT)) {
-		rejectForming('forming_peaks_not_level');
-		return null;
-	}
-	if (currentPrice <= valley.price) {
-		rejectForming('forming_current_at_or_below_valley');
-		return null;
-	}
-
-	const ratio = (currentPrice - valley.price) / Math.max(EPSILON, leftPeak.price - valley.price);
-	const progress = Math.max(0, Math.min(1, ratio));
-	const completion = Math.min(1, FORMING_BASE_COMPLETION + progress * FORMING_COMPLETION_RANGE);
-	if (completion < MIN_FORMING_COMPLETION) {
-		rejectForming('forming_completion_below_min');
-		return null;
-	}
-
-	const formationBars = Math.max(0, lastIdx - leftPeak.idx);
-	const formingBars = getDoubleFormingBarParams(ctx.type);
-	if (formationBars < formingBars.minBars || formationBars > formingBars.maxBars) {
-		rejectForming('forming_bars_out_of_range');
-		return null;
-	}
-
-	const trend = validatePriorTrend(candles, leftPeak.idx, lastIdx - leftPeak.idx, 'up_or_sideways');
-	if (!trend.ok) {
-		ctx.debugCandidates.push({
-			type: 'double_top',
-			accepted: false,
-			reason: `prior_trend_mismatch:${trend.classification}`,
-			indices: [leftPeak.idx, valley.idx, lastIdx],
-			points: [
-				{ role: 'peak1', idx: leftPeak.idx, price: leftPeak.price, isoTime: candles[leftPeak.idx]?.isoTime },
-				{ role: 'valley', idx: valley.idx, price: valley.price, isoTime: candles[valley.idx]?.isoTime },
-				{ role: 'forming_peak', idx: lastIdx, price: currentPrice, isoTime: candles[lastIdx]?.isoTime },
-			],
-		});
-		return null;
-	}
-	if (trend.classification === 'insufficient_data') {
-		ctx.debugCandidates.push({
-			type: 'double_top',
-			accepted: true,
-			reason: 'prior_trend_insufficient_data',
-			indices: [leftPeak.idx, valley.idx, lastIdx],
-		});
-	}
-
-	// サイズ検査（issue #169）。**完成済み double top と同じ `validateTopSize` を同じ 3 点構造で
-	// 掛ける。** 3 点目（暫定の山2）は確定ピボットではないので `{ extremePrice: 最新足の終値 }` を
-	// 渡す——triple / H&S の形成中パスが `validatePatternSize` へ暫定構成点を渡すのと同じ idiom
-	// （`detect_triples.ts` / `detect_hs.ts`、および `validatePatternSize` の docstring）。
-	//
-	// **高さ（`(leftPeak − valley) / leftPeak`）は 3 点目を見ない**ので、暫定点のノイズは高さ判定に
-	// 入らない。深さの分母 `peakAvg` には暫定点が入るが、これは形成中 triple / H&S と同じ扱い。
-	//
-	// **配置が最後なのは `validatePatternSize` の docstring の規約**（「既存の棄却検査をすべて
-	// 通過した後」）に従ったもの。前に置くと固有の理由コードを持つ候補の `reason` を横取りして
-	// `view=debug` の診断が変わる。最後に置けば「これまで accepted だった候補だけを落とす」ことが
-	// 位置から保証される。
-	const sizeReason = validateTopSize(leftPeak, valley, { extremePrice: currentPrice }, ctx.sizeThresholds);
-	if (sizeReason) {
-		rejectForming(formingSizeReason(sizeReason));
-		return null;
-	}
-
-	// 形成中でも構造ゲートは完成済みと同じものを掛ける。ゲートを通らない形は、
-	// 形成が進んでも有効なパターンにはならない（issue #126 G1 / G2）。
-	// 暫定右肩（最新足）は確定ピボットではないので、第2構成点には left/valley だけで
-	// 判定できる部分——先行値幅と戻り率——のみを適用する。
-	const gate = validateReversalStructure({
-		candles,
-		pivots: ctx.pivots,
-		first: leftPeak,
-		mid: valley,
-		// 形成中ダブルトップのネックラインは valley.price（下の neckline 配列と同じ値）
-		necklinePrice: valley.price,
-		side: 'top',
-	});
-	if (!gate.ok) {
-		ctx.debugCandidates.push({
-			type: 'double_top',
-			accepted: false,
-			reason: gate.reason,
-			indices: [leftPeak.idx, valley.idx, lastIdx],
-			points: [
-				{ role: 'peak1', idx: leftPeak.idx, price: leftPeak.price, isoTime: candles[leftPeak.idx]?.isoTime },
-				{ role: 'valley', idx: valley.idx, price: valley.price, isoTime: candles[valley.idx]?.isoTime },
-			],
-		});
-		return null;
-	}
-
-	// 主構成点とネックラインの位置関係（issue #261）。**見るのは `leftPeak` だけ**——最新足の側は
-	// 上の `forming_current_at_or_below_valley` が同じ判定を既に済ませている。分担の根拠と
-	// 統合しない理由は `rejectFormingNecklineSide` の docstring。
-	if (
-		rejectFormingNecklineSide('top', 'double_top', [leftPeak], valley.price, formingIdxs, formingPts, (arg) =>
-			pushCand(ctx, arg),
-		)
-	) {
-		return null;
-	}
-
-	const neckline = [
-		{ x: leftPeak.idx, y: valley.price },
-		{ x: lastIdx, y: valley.price },
-	];
-	const confBase = Math.min(1, Math.max(0, (1 - Math.abs(leftPct - 1)) * 0.6 + progress * 0.4));
-	const confidence = Math.round(confBase * 100) / 100;
-	const start = isoAt(leftPeak.idx);
-	const end = isoAt(lastIdx);
-	const formDtTarget = Math.round(valley.price - (leftPeak.price - valley.price));
-	const structureRange = start && end ? { start, end } : undefined;
-	const precedingTrend = buildPrecedingTrend(candles, trend, leftPeak.idx);
-
-	const structureGate = buildStructureGate(gate);
-
-	// 成功エントリ（issue #158）。構成点・並びは上の棄却エントリと同じにして、
-	// 同じ経路の ✅ と ❌ が並んで読めるようにする。
-	pushCand(ctx, {
-		type: 'double_top',
-		accepted: true,
-		status: 'forming',
-		idxs: formingIdxs,
-		pts: formingPts,
-	});
-
-	return {
-		type: 'double_top',
-		confidence,
-		scoreComponents: {
-			symmetry: Number(clamp01(1 - relDev(leftPeak.price, currentPrice)).toFixed(4)),
-			...(retracementScore(gate.retracementRatio) !== undefined
-				? { retracement: Number((retracementScore(gate.retracementRatio) as number).toFixed(4)) }
-				: {}),
-		},
-		...(structureGate ? { structureGate } : {}),
-		range: { start, end },
-		...(structureRange ? { structureRange } : {}),
-		confirmation: { type: 'not_confirmed' },
-		...(precedingTrend ? { precedingTrend } : {}),
-		status: 'forming',
-		pivots: [
-			{ idx: leftPeak.idx, price: leftPeak.price, kind: 'H' as const, extremePrice: leftPeak.extremePrice },
-			{ idx: valley.idx, price: valley.price, kind: 'L' as const, extremePrice: valley.extremePrice },
-		],
-		neckline,
-		trendlineLabel: 'ネックライン',
-		breakoutTarget: formDtTarget,
-		targetMethod: 'neckline_projection' as const,
-		// 形成中は定義上ブレイクしていないので進捗は測れない。**それを言う**（#224 症状 2）——
-		// `breakoutTarget` は出るので、黙ると LLM が「進捗 0%」と読み違える。
-		...targetReachFields(omittedTargetReach('not_broken_out')),
-		completionPct: Math.round(completion * 100),
-		_method: 'forming_double_top',
-	};
-}
-
 // ── Main ──
 
 /**
@@ -1371,7 +1047,15 @@ function tryFormingDoubleTop(ctx: DetectContext): PatternEntry | null {
  * 2. **relaxed フォールバック**: その type の `completed` が 1 件も出なかったときだけ
  *    {@link findRelaxedDoubleTop} / {@link findRelaxedDoubleBottom} を走らせ、1 件だけ足す。
  * 3. `deduplicatePatterns` で重なりを畳む。
- * 4. `includeForming` のときだけ {@link tryFormingDoubleTop}（「2 つ目の山を作っている途中」）を足す。
+ *
+ * **double は `status: 'forming'` を出さない**（issue #268 案 C）。取りうる status は
+ * `near_completion` / `expired` / `invalid` / `completed` の 4 段だけで、`forming` はこの種別の
+ * 仕様に無い。理由は「最終構成点が 1 つしか無く、形成中を定義できない」こと——
+ * 2 山のうち 1 つを最新足の暫定値で埋めると、主構成点 2 点のうち 1 点が確定ピボットでない
+ * 経路になり、ネックライン側検査を 2 つに分担する / 単調性ゲートが定義できない / `pivots` が
+ * 2 点になる、といった double 専用の例外が仕様のあちこちに生えていた（#262 / #269）。
+ * triple / H&S は中間構成点が 2 つあるので最終構成点を暫定にしても形が決まり、
+ * **そちらの `forming` は据え置き**。経緯は #262 / #268。
  *
  * 戻り値の `found` は **`completed` が出たかどうか**で、`near_completion` では立てない
  * （立てると relaxed フォールバックが走らなくなり、別の構成点で成立していた `completed` が消える）。
@@ -1855,16 +1539,14 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 		patterns = deduplicatePatterns(patterns);
 	}
 
-	// 2b) 形成中ダブルトップ（「2 つ目の山を作っている途中」）。
-	//
-	// **ダブルボトム側の対応物は無い。** `tryFormingDoubleBottom` は「構造が揃ってブレイクを
-	// 待っている」段階を `status: 'forming'` という誤ラベルで出しており（同じ語が top と別の段階を
-	// 指していた）、その段階は上の完成済み経路の `near_completion` になったので issue #262 で削除した。
-	// bottom 側で「最終構成点が形成中」を出すかは #268 の論点。
-	if (includeForming && (want.size === 0 || want.has('double_top'))) {
-		const formingTop = tryFormingDoubleTop(ctx);
-		if (formingTop) push(patterns, formingTop);
-	}
+	// **形成中経路は top / bottom とも存在しない**（issue #262 / #268 案 C）。
+	// `tryFormingDoubleBottom` は「構造が揃ってブレイクを待っている」段階を `status: 'forming'`
+	// という誤ラベルで出していたので #262 で削除し、その段階を上の完成済み経路の
+	// `near_completion` に付け替えた。残っていた `tryFormingDoubleTop`（「2 つ目の山を作っている
+	// 途中」）は #268 案 C で削除した——実データ 12,104 ケースで accepted 0 件（`forming_bars_out_of_range`
+	// の下限割れが律速。#268 Phase 1 §1）で、維持するには double だけの例外を仕様に抱え続ける
+	// 必要があった。`includeForming` は完成済み経路の未ブレイク分岐（`near_completion` /
+	// `expired` / `invalid`）の出し分けにだけ効く（上の strict / relaxed 経路が見ている）。
 
 	return { patterns, found: { double_top: foundDoubleTop, double_bottom: foundDoubleBottom } };
 }

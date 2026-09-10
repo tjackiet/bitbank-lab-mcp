@@ -17,7 +17,6 @@ import { describe, expect, it } from 'vitest';
 import { CandleTypeEnum } from '../../src/schema/base.js';
 import { structuralFloorBars } from '../../tools/patterns/bar-thresholds.js';
 import { getDefaultParamsForTf } from '../../tools/patterns/config.js';
-import { getDoubleFormingBarParams } from '../../tools/patterns/detect_doubles.js';
 import { getHsFormingBarParams } from '../../tools/patterns/detect_hs.js';
 import { getFlagParams } from '../../tools/patterns/detect_pennants.js';
 import { getTriangleParams } from '../../tools/patterns/detect_triangles.js';
@@ -105,11 +104,13 @@ describe('minBarsForDetector — 導出式', () => {
 	});
 
 	describe('形成中の反転パターン — 形成バー数の境界', () => {
-		// double / triple / H&S は同じ形の判定をする: formationBars ∈ [minBars, maxBars]。
+		// triple / H&S は同じ形の判定をする: formationBars ∈ [minBars, maxBars]。
 		// 窓が bars 本のとき取りうる最大の formationBars は bars - 1（添字差）なので、
 		// 導出値は minBars + 1 でなければならない。
+		//
+		// **`forming_double` はこの表から外れた（#268 案 C）。** 形成中 double の経路が消えたので
+		// 「その時間足で形成中 double が組めるか」という問い自体が無くなった。
 		const cases: Array<{ detector: MinBarsDetector; params: (tf: string) => { minBars: number; maxBars: number } }> = [
-			{ detector: 'forming_double', params: getDoubleFormingBarParams },
 			{ detector: 'forming_hs', params: getHsFormingBarParams },
 			{ detector: 'forming_triple', params: getTripleFormingBarParams },
 		];
@@ -136,22 +137,22 @@ describe('minBarsForDetector — 導出式', () => {
 
 		it('手書き daysPerBar の受理域には戻っていない（#118 問題 3 の回帰）', () => {
 			// 旧実装は patternDays = Math.round(formationBars × (1day→1 / 1week→7 / それ以外→1))
-			// を 14〜90 日 / 21〜90 日で判定していた。1week の受理域は [2, 12] / [3, 12] で、
-			// 構造的下限（25 本）を下回っており実質検出不能だった。
+			// を 21〜90 日で判定していた。1week の受理域は [3, 12] で、構造的下限（25 本）を
+			// 下回っており実質検出不能だった。
+			// **double の 14 日由来の行（受理域 [2, 12]）は #268 案 C で消えた**（経路ごと削除）。
+			// 同じ換算に乗っていた H&S / triple の 21 日由来だけを残す。
 			const legacyDaysPerBar = (tf: string) => (tf === '1day' ? 1 : tf === '1week' ? 7 : 1);
 			const legacyRange = (tf: string, minDays: number) => ({
 				// Math.round(x) >= minDays ⟺ x >= minDays - 0.5
 				minBars: Math.ceil((minDays - 0.5) / legacyDaysPerBar(tf)),
 				maxBars: Math.floor((90 + 0.5) / legacyDaysPerBar(tf) - Number.EPSILON),
 			});
-			expect(legacyRange('1week', 14)).toEqual({ minBars: 2, maxBars: 12 });
 			expect(legacyRange('1week', 21)).toEqual({ minBars: 3, maxBars: 12 });
-			expect(getDoubleFormingBarParams('1week').minBars).toBeGreaterThan(legacyRange('1week', 14).maxBars);
 			expect(getHsFormingBarParams('1week').minBars).toBeGreaterThan(legacyRange('1week', 21).maxBars);
-			// 1month は旧実装が 14 バー = 14 ヶ月を要求していた。バー数統一後は構造的下限に
+			// 1month は旧実装が 21 バー = 21 ヶ月を要求していた。バー数統一後は構造的下限に
 			// 持ち上がるので、閾値は緩むのではなく厳しくなる（PR の意図した向き）。
-			expect(getDoubleFormingBarParams('1month').minBars).toBe(structuralFloorBars('1month'));
-			expect(getDoubleFormingBarParams('1month').minBars).toBeGreaterThan(legacyRange('1month', 14).minBars);
+			expect(getHsFormingBarParams('1month').minBars).toBe(structuralFloorBars('1month'));
+			expect(getHsFormingBarParams('1month').minBars).toBeGreaterThan(legacyRange('1month', 21).minBars);
 		});
 	});
 
@@ -248,7 +249,6 @@ describe('docs/tools.md 「`limit` の実効下限」表との一致', () => {
 		const headerCells = rows.get('時間足');
 		expect(headerCells, 'docs §2: ヘッダ行が「時間足」で始まっていない').toBeDefined();
 		const columnToDetector: Record<string, MinBarsDetector> = {
-			'forming double（14日由来）': 'forming_double',
 			'forming triple（21日由来）': 'forming_triple',
 			'forming H&S（21日由来）': 'forming_hs',
 			'完成済み wedge（25日窓由来）': 'completed_wedge',

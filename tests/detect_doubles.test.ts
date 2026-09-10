@@ -449,40 +449,21 @@ describe('detectDoubles', () => {
 		});
 	});
 
-	// ── 形成中ダブルトップ ───────────────────────────────
+	// ── 形成中経路は double に無い（issue #262 / #268 案 C）────────────────
+	//
+	// **`形成中ダブルトップ: 確定ピーク + 谷 + 現在価格がピーク付近` と
+	// `forming double_top: structureRange あり, confirmation=not_confirmed` を削除した。**
+	// `tryFormingDoubleTop` が #268 案 C で消えたので、`status: 'forming'` の `double_top` を
+	// 作れる入力が存在しない。同じ形（山1 + 谷 + 最新足が山の水準）は完成済み経路の
+	// 構成点 3 点が揃うまで候補にならず、揃った時点で `near_completion` になる。
+	// `structureRange` / `confirmation: 'not_confirmed'` の回帰は下の `near_completion` の
+	// テストが引き継いでいる。「1 件も出ない」ことは
+	// `tests/patterns/no-forming-double-268.test.ts` のトリップワイヤが固定する。
 
-	it('形成中ダブルトップ: 確定ピーク + 谷 + 現在価格がピーク付近', () => {
-		// 50本、peak@idx=15 → valley@idx=30 → 現在(idx=49)がピーク付近まで回復
-		const candles: CandleData[] = [];
-		for (let i = 0; i < 50; i++) candles.push(mkCandle(50 - i, 150, 155, 145, 150));
-		// 確定ピーク（lastIdx-2=47 より前）
-		candles[15] = mkCandle(35, 195, 200, 190, 195);
-		// 確定谷（ピーク後、lastIdx-1=48 より前）
-		candles[30] = mkCandle(20, 163, 168, 160, 165);
-		// 現在価格がピーク付近まで回復
-		for (let i = 45; i < 50; i++) candles[i] = mkCandle(50 - i, 195, 198, 190, 196);
-
-		const allPeaks: Pivot[] = [{ idx: 15, price: 200, kind: 'H', extremePrice: 200 }];
-		const allValleys: Pivot[] = [{ idx: 30, price: 160, kind: 'L', extremePrice: 160 }];
-
-		const ctx = buildCtx({
-			candles,
-			pivots: [...allPeaks, ...allValleys],
-			allPeaks,
-			allValleys,
-			includeForming: true,
-		});
-		const result = detectDoubles(ctx);
-
-		const forming = result.patterns.filter((p) => p.type === 'double_top' && p.status === 'forming');
-		expect(forming.length).toBeGreaterThanOrEqual(1);
-		if (forming.length > 0) {
-			expect(forming[0].completionPct).toBeDefined();
-			expect(forming[0].breakoutTarget).toBeDefined();
-		}
-	});
-
-	it('includeForming=false では形成中パターンは検出しない', () => {
+	// `includeForming=false` では未ブレイク構造（`near_completion` / `expired` / `invalid`）も
+	// 出ない。`forming` は #268 案 C 以降 double では構造的に出ないので、このテストが見ているのは
+	// **`includeForming` のスイッチが効いていること**になった（`status` の名前は据え置き）。
+	it('includeForming=false では未ブレイク構造も形成中も検出しない', () => {
 		const candles: CandleData[] = [];
 		for (let i = 0; i < 50; i++) candles.push(mkCandle(50 - i, 150, 155, 145, 150));
 		candles[20] = mkCandle(30, 195, 200, 190, 195);
@@ -609,32 +590,6 @@ describe('detectDoubles', () => {
 
 		expect(db.precedingTrend).toBeDefined();
 		expect(db.precedingTrend?.end).toBe(candles[0].isoTime);
-	});
-
-	it('forming double_top: structureRange あり, confirmation=not_confirmed', () => {
-		const candles: CandleData[] = [];
-		for (let i = 0; i < 50; i++) candles.push(mkCandle(50 - i, 150, 155, 145, 150));
-		candles[15] = mkCandle(35, 195, 200, 190, 195);
-		candles[30] = mkCandle(20, 163, 168, 160, 165);
-		for (let i = 45; i < 50; i++) candles[i] = mkCandle(50 - i, 195, 198, 190, 196);
-
-		const allPeaks: Pivot[] = [{ idx: 15, price: 200, kind: 'H', extremePrice: 200 }];
-		const allValleys: Pivot[] = [{ idx: 30, price: 160, kind: 'L', extremePrice: 160 }];
-
-		const ctx = buildCtx({
-			candles,
-			pivots: [...allPeaks, ...allValleys],
-			allPeaks,
-			allValleys,
-			includeForming: true,
-		});
-		const result = detectDoubles(ctx);
-		const forming = result.patterns.find((p) => p.type === 'double_top' && p.status === 'forming');
-		expect(forming).toBeDefined();
-		if (!forming) return;
-
-		expect(forming.structureRange).toBeDefined();
-		expect(forming.confirmation?.type).toBe('not_confirmed');
 	});
 
 	/**

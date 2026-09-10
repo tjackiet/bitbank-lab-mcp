@@ -7,24 +7,28 @@
  * 実測では、accepted な形成中 triple 48 実体のうち **37 実体**がネックラインの誤側で、
  * うち 24 実体は高さ相対ゲート（#178 項目 1 Phase 2）で落ちる集合と重なっていた。
  *
- * 本テストが固定するのは 4 点:
+ * 本テストが固定するのは 3 点:
  *
- * 1. 合成 fixture で 4 経路それぞれが新理由コードで落ちること、かつ
+ * 1. 合成 fixture で各経路が新理由コードで落ちること、かつ
  *    **誤側の 1 点だけを動かした対照系列は accepted のまま**であること（最小対）
- * 2. `tryFormingDoubleTop` の既存コード `forming_current_at_or_below_valley` が
- *    **引き続き発火する**こと。本ゲートは `leftPeak` 側だけを見ており、
- *    2 つで主構成点 2 点を分担している（#158 のテストが名前を固定しているので統合しない）
- * 3. `details` に**どの点がどれだけ外れたか**が載ること（完成済みと同じ `necklineSideDetailsFrom`）
- * 4. 凍結済み実データ（`btc_jpy_1hour_2026_09_05` = #178 の「実データ D」）に**同じ形が実在する**こと。
+ * 2. `details` に**どの点がどれだけ外れたか**が載ること（完成済みと同じ `necklineSideDetailsFrom`）
+ * 3. 凍結済み実データ（`btc_jpy_1hour_2026_09_05` = #178 の「実データ D」）に**同じ形が実在する**こと。
  *    PR #260 のメモ §8 が「ネックライン誤側」と目視判定した実体のうち #34
  *    （`triple_top` 329-338-364）を指名して落ちることを固定する
  *
  * 完成済み経路の回帰は `neckline-side-triple-double.test.ts`、判定関数そのものの単体は
  * 同ファイルと `neckline-side-hs.test.ts` が持つ。**ここは配線だけを見る。**
  *
- * **issue #262 以降、`double_bottom` のケースだけは完成済み経路（`near_completion`）を見ている。**
- * `tryFormingDoubleBottom` が削除され、同じ 3 点を完成済み経路が組むようになったため。
- * 見ている検査（`validateMainPointsNecklineSide`）と fixture は #261 のまま。
+ * ## double 側は**形成中経路を 1 つも見ていない**（#262 / #268 案 C）
+ *
+ * - `double_bottom`: `tryFormingDoubleBottom` が #262 で削除され、同じ 3 点を完成済み経路が
+ *   `near_completion` として組む。見ている検査（`validateMainPointsNecklineSide`）と fixture は
+ *   #261 のまま。
+ * - `double_top`: `tryFormingDoubleTop` が **#268 案 C で削除された**ので、#261 が固定していた
+ *   top 側の 3 ケース（`leftPeak` の誤側 / その対照 / `forming_current_at_or_below_valley` との
+ *   分担）を**まとめて削除した**。分担そのものが「主構成点の 1 つが確定ピボットでない」経路に
+ *   固有の事情で、その経路が無くなった以上固定する対象が無い。完成済み `double_top` の
+ *   `peaks_below_neckline` は `neckline-side-triple-double.test.ts` が見ている。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { asMockResult, assertOk } from '../_assertResult.js';
@@ -37,7 +41,6 @@ import { buildBtcJpy1hour20260905Candles } from '../fixtures/btc_jpy_1hour_2026_
 import {
 	type Candle,
 	formingDoubleBottomRows,
-	formingDoubleTopRows,
 	formingTripleTopRows,
 	mirrorRows,
 	rowsToCandles,
@@ -130,38 +133,7 @@ describe('形成中 triple — 主構成点がネックラインの誤側（issu
 	});
 });
 
-describe('形成中 double — 主構成点がネックラインの誤側（issue #261）', () => {
-	it('山1 がネックライン（谷の終値）以下の double_top は forming_peaks_below_neckline で落ちる', async () => {
-		const { patterns, candidates } = await detectForming(rowsToCandles(formingDoubleTopRows()), '1day');
-		expect(forming(patterns, 'double_top')).toHaveLength(0);
-
-		const hits = withReason(candidates, 'double_top', 'forming_peaks_below_neckline');
-		expect(hits).toHaveLength(1);
-		expect(hits[0].indices).toEqual([12, 24, 35]);
-		// **誤側なのは `leftPeak`。** 最新足（idx 35 / 102）はネックラインより上で、
-		// そちらは既存の `forming_current_at_or_below_valley` の担当（下のテスト）。
-		expect(hits[0].details?.offenders).toEqual([
-			{ idx: 12, price: 100.686, deviation: expect.closeTo(0.685, 6), deviationPct: expect.closeTo(0.0067574, 6) },
-		]);
-	});
-
-	it('対照: 山1 をネックラインより上に置くと accepted のまま（最小対）', async () => {
-		const { patterns, candidates } = await detectForming(rowsToCandles(formingDoubleTopRows(100.2)), '1day');
-		expect(forming(patterns, 'double_top')).toHaveLength(1);
-		expect(withReason(candidates, 'double_top', 'forming_peaks_below_neckline')).toHaveLength(0);
-	});
-
-	/**
-	 * **既存コードを統合しないことの回帰**（#158 が名前を固定している）。
-	 * `forming_current_at_or_below_valley` は `current` に対するネックライン側検査そのもので、
-	 * 本ゲートが見る `leftPeak` と合わせて主構成点 2 点を分担している。
-	 */
-	it('最新足が谷以下なら従来どおり forming_current_at_or_below_valley（新コードに置き換わらない）', async () => {
-		const { candidates } = await detectForming(rowsToCandles(formingDoubleTopRows(100.2, 100.1)), '1day');
-		expect(withReason(candidates, 'double_top', 'forming_current_at_or_below_valley')).toHaveLength(1);
-		expect(withReason(candidates, 'double_top', 'forming_peaks_below_neckline')).toHaveLength(0);
-	});
-
+describe('ブレイク待ち double — 主構成点がネックラインの誤側（issue #261 / #262）', () => {
 	/**
 	 * **`forming_valleys_above_neckline` → `valleys_above_neckline`、`forming` → `near_completion`
 	 * に変えた（issue #262）。** 形成中ダブルボトムの経路（`tryFormingDoubleBottom`）は削除され、

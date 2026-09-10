@@ -249,7 +249,7 @@ function metaOf(result: Record<string, unknown>): Record<string, unknown> {
  * ——宣言を足すと `data.patterns` の中身が増える（＝出力が変わる）ためで、#184 の「やらないこと」に
  * 「検出結果を変えない」がある。別 issue で「意図的な非公開なのか宣言漏れなのか」を判断する。
  *
- * - `patterns[]._method` — 検出経路のラベル（`forming_double_top` 等）。先頭の `_` から
+ * - `patterns[]._method` — 検出経路のラベル（`forming_triple_top` 等）。先頭の `_` から
  *   内部フィールドとして意図的に非公開の可能性が高い（`detect_doubles` / `detect_hs` / `detect_triples` /
  *   `detect_wedges` の形成中パスが付ける）。
  * - `patterns[].breakout` / `.idx` / `.price` — 検出器内部のブレイク位置。公開されている

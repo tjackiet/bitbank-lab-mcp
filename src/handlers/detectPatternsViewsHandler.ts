@@ -1016,9 +1016,8 @@ const PIVOT_ROLE_LABELS: Readonly<Record<string, readonly string[]>> = {
  * （＝明細行を 1 行も出さない）。
  *
  * **double 2 型だけは点数で引かない。** 従来から「`pivots.length >= 3` なら先頭 3 点」で
- * 出しており（形成中 double_top は 2 点なので元々出ない）、点数を鍵にすると
- * `pivots` の構成が変わった瞬間に表示が黙って消える。issue #234 は triple / H&S を
- * 足す変更なので、double の表示は完全に据え置く。
+ * 出しており、点数を鍵にすると `pivots` の構成が変わった瞬間に表示が黙って消える。
+ * issue #234 は triple / H&S を足す変更なので、double の表示は完全に据え置く。
  */
 function pivotRoleLabels(type: string, pivotCount: number): readonly string[] | null {
 	if (type === 'double_top') return ['山1', '谷', '山2'];

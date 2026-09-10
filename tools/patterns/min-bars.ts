@@ -32,12 +32,16 @@
  * ## 対象外の検出器
  *
  * - **完成済み double / triple / H&S**: サイズ閾値を持たない（ピボット構造のみ）。
+ * - **形成中 double**: **そもそも形成中経路が無い**（issue #268 案 C で `tryFormingDoubleTop` を
+ *   削除した。double は `near_completion` / `expired` / `invalid` / `completed` の 4 段）。
+ *   完成済み経路（`near_completion` を含む）が要求するのはピボット 3 点の間隔
+ *   （`minDist` × 2 + 前後の `swingDepth`）だけで、これは §2 ではなく §1 の一般式
+ *   （`2 × swingDepth + 2 × max(minBarsBetweenSwings, 5) + 1`）が担う。
  * - **形成中 wedge**: `formingWindowMin` は下限に見えるが、`detect_wedges` は
  *   「最新に揃えた特別ウィンドウ」を `Math.max(0, lastIdx - size)` で clamp して必ず積むため、
  *   窓が足りなくても候補が消えない。ハードなゲートではないのでここでは扱わない。
  */
 
-import { getDoubleFormingBarParams } from './detect_doubles.js';
 import { getHsFormingBarParams } from './detect_hs.js';
 import { getFlagParams } from './detect_pennants.js';
 import { getTriangleParams } from './detect_triangles.js';
@@ -47,12 +51,14 @@ import { getWedgeBarParams } from './detect_wedges.js';
 /**
  * パターンサイズの下限を持つ検出器の識別子。
  *
- * `docs/tools.md` §2 の表が持つのは `forming_double` / `forming_triple` / `forming_hs` /
- * `completed_wedge` / `flag_pennant` の 5 列。`triangle` は同じクラスの閾値を持つが表では
- * 散文で触れているだけなので、ここで併せて導出する（到達性テストの網羅性のため）。
+ * `docs/tools.md` §2 の表が持つのは `forming_triple` / `forming_hs` / `completed_wedge` /
+ * `flag_pennant` の 4 列。`triangle` は同じクラスの閾値を持つが表では散文で触れているだけなので、
+ * ここで併せて導出する（到達性テストの網羅性のため）。
+ *
+ * **`forming_double` は #268 案 C で外した**（形成中 double の経路が無くなり、この検出器種別の
+ * 構造的下限そのものが意味を失った）。上の「対象外の検出器」を参照。
  */
 export const MIN_BARS_DETECTORS = [
-	'forming_double',
 	'forming_hs',
 	'forming_triple',
 	'completed_wedge',
@@ -70,14 +76,11 @@ export type MinBarsDetector = (typeof MIN_BARS_DETECTORS)[number];
  */
 export function minBarsForDetector(tf: string, detector: MinBarsDetector): number {
 	switch (detector) {
-		// 形成中の反転パターン 3 種は同じ形をしている: `formationBars` をバー数レンジと
-		// 突き合わせる（`patterns/bar-thresholds.ts` の換算）。`formationBars` は添字の差
-		// （double / triple は `lastIdx - 左ピボット.idx`、H&S は `右肩.idx - 左肩.idx`）なので、
+		// 形成中の反転パターン 2 種（triple / H&S）は同じ形をしている: `formationBars` をバー数
+		// レンジと突き合わせる（`patterns/bar-thresholds.ts` の換算）。`formationBars` は添字の差
+		// （triple は `lastIdx - 左ピボット.idx`、H&S は `右肩.idx - 左肩.idx`）なので、
 		// 窓としては 1 本多く要る。H&S の右肩は確定ピボットのこともあり、その場合は
 		// `右肩.idx < lastIdx` ぶんさらに広い窓が要る——ここが返すのは下限なのでこれでよい。
-		case 'forming_double':
-			return getDoubleFormingBarParams(tf).minBars + 1;
-
 		case 'forming_hs':
 			return getHsFormingBarParams(tf).minBars + 1;
 

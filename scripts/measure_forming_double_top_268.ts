@@ -58,8 +58,12 @@
  * `tools/patterns/` を**ディレクトリごと**一時領域へ展開して読む（検出器 1 ファイルだけを写すと
  * `./structural.js` が作業ツリーへ解決され、ablation ビルドに現行実装が混ざる）。
  * `--strip-ref <ref>` を渡すと `detect_doubles.ts` だけをその ref から取る strip ビルドになる
- * （{@link verifyStripScope} の検算付き）。**本 issue は検出器を変更しないので既定は作業ツリー**
- * （= `main`）で、strip を使う必要はない。
+ * （{@link verifyStripScope} の検算付き）。
+ *
+ * **#268 案 C の実装後は `--strip-ref` が必須になった。** 作業ツリーの `detect_doubles.ts` から
+ * `tryFormingDoubleTop` が削除されたので、ablation のアンカーが無く `base` ビルドが組めない。
+ * 既定値として使うべき ref は {@link STRIP_REF_BEFORE_268C}（#271 のマージ commit）。
+ * 付け忘れると {@link requireFormingTopAnchors} が起動時に落とす。
  *
  * ## コーパス
  *
@@ -71,9 +75,10 @@
  * ## 使い方
  *
  * ```bash
- * npx tsx scripts/measure_forming_double_top_268.ts
- * npx tsx scripts/measure_forming_double_top_268.ts --json /tmp/268.json
- * npx tsx scripts/measure_forming_double_top_268.ts --no-rolling   # 短時間確認用
+ * # **#268 案 C 以降は --strip-ref が必須**（理由は上の「ハーネス」）。
+ * npx tsx scripts/measure_forming_double_top_268.ts --strip-ref 27337eb
+ * npx tsx scripts/measure_forming_double_top_268.ts --strip-ref 27337eb --json /tmp/268.json
+ * npx tsx scripts/measure_forming_double_top_268.ts --strip-ref 27337eb --no-rolling  # 短時間確認用
  *
  * # ablation の detect_doubles.ts を書き出すだけ（計測はしない）。
  * # 既存テストへの影響を測るときに作業ツリーへ一時的に当てるためのもので、
@@ -302,8 +307,9 @@ interface BuildVariantOpts {
 	/** `ablP` に加えて中間構成点の `minDist` ゲートを足す（#269）。 */
 	minDistGate?: boolean;
 	/**
-	 * `detect_doubles.ts` を作業ツリーではなくこの git ref から取る（**strip ビルド**）。
-	 * 本 issue は検出器を変更しないので既定は作業ツリー。`--strip-ref` を渡したときだけ効く。
+	 * `tools/patterns/` を作業ツリーではなくこの git ref から取る（**strip ビルド**）。
+	 * `--strip-ref` を渡したときだけ効く。#268 案 C 以降は作業ツリーに `tryFormingDoubleTop` が
+	 * 無いので、本スクリプトを走らせるには実質必須（{@link requireFormingTopAnchors}）。
 	 */
 	fromRef?: string;
 }
@@ -311,9 +317,20 @@ interface BuildVariantOpts {
 /**
  * strip ビルドが指定 ref と等価であることの検算（#264 / #265 / #262 の様式）。
  *
- * strip は「`detect_doubles.ts` だけを ref から取り、残りは作業ツリー」という組み方なので、
- * **作業ツリーが `tools/patterns/` の他のファイルを触っていたら等価性が崩れる。**
- * その場合は数字を出さずに落とす。戻り値は差分のあったファイル一覧（メモに出す）。
+ * ## #268 案 C で `fromRef` を `tools/patterns/` の**全ファイル**へ広げた
+ *
+ * 元は「`detect_doubles.ts` だけを ref から取り、残りは作業ツリー」という組み方で、
+ * **作業ツリーが `tools/patterns/` の他のファイルを触っていたら等価性が崩れる**ため、
+ * `detect_doubles.ts` 以外の差分を見つけたらその場で落としていた。案 C は
+ * `min-bars.ts`（`forming_double` の除外）と `structural.ts`（docstring の参照先）も触るので、
+ * その条件では `--strip-ref` がそもそも使えなくなる。**当時のエラーメッセージが案内していた
+ * 対処（`fromRef` を全ファイルに広げる）をそのまま採った。**
+ *
+ * したがって strip ビルドは「`tools/patterns/` をまるごと ref から取ったもの」で、
+ * **本関数は等価性のゲートではなく、差分の申告**（メモの §0 に出す）になった。
+ * 落とす条件は 1 つだけ残してある: **ファイル構成が ref と作業ツリーでずれていないこと**。
+ * ずれていると、ref から取った側が作業ツリーにしか無いモジュールを import して解決に失敗する
+ * （逆向きなら黙って古い構成で走る）。
  */
 function verifyStripScope(ref: string): string[] {
 	const changed = execFileSync('git', ['diff', '--name-only', ref, '--', 'tools/patterns/'], {
@@ -323,15 +340,71 @@ function verifyStripScope(ref: string): string[] {
 		.split('\n')
 		.map((s) => s.trim())
 		.filter(Boolean);
-	const unexpected = changed.filter((path) => path !== 'tools/patterns/detect_doubles.ts');
-	if (unexpected.length > 0) {
+	const added = execFileSync('git', ['diff', '--name-only', '--diff-filter=AD', ref, '--', 'tools/patterns/'], {
+		cwd: ROOT,
+		encoding: 'utf8',
+	})
+		.split('\n')
+		.map((s) => s.trim())
+		.filter(Boolean);
+	if (added.length > 0) {
 		throw new Error(
-			`strip ビルドが '${ref}' と等価にならない: ${unexpected.join(', ')} も変更されている。` +
-				'strip は detect_doubles.ts だけを ref から取るので、他のファイルも触るなら ' +
-				'materializePatternsDir の fromRef を全ファイルに広げること。',
+			`strip ビルドが '${ref}' と組めない: ${added.join(', ')} が追加 / 削除されている。` +
+				'ファイル構成がずれると、ref から取った側の import が解決できない（または黙って古い構成で走る）。' +
+				'ファイルの追加 / 削除をまたぐ ref を strip に使わないこと。',
 		);
 	}
 	return changed;
+}
+
+/**
+ * **#268 案 C 前の `detect_doubles.ts` を持つ ref**（#271 のマージ commit）。
+ *
+ * 作業ツリーには `tryFormingDoubleTop` がもう無いので、本スクリプトの ablation を組むには
+ * この ref（かそれ以前で #270 マージ後のもの）を `--strip-ref` に渡す必要がある。
+ * #270 マージ後であることが要るのは、`near_completion` の導入前と後で完成済み経路の
+ * `status` が違い、Phase 1 の数字と比較できなくなるため。
+ */
+const STRIP_REF_BEFORE_268C = '27337eb';
+
+/**
+ * `detect_doubles.ts`（strip-ref 側 or 作業ツリー）に ablation のアンカーがあることを
+ * **起動時に**確認する。無ければ**数字を 1 つも出さずに落とす。**
+ *
+ * #268 案 C（`tryFormingDoubleTop` の削除）以降、作業ツリーにはアンカーが無い。
+ * これを黙って見逃すと `base` ビルドが組めないまま部分結果が出る——PR #260 のレビューで
+ * 「コーパスが縮んだまま正常終了」を直したのと同じ失敗の形なので、同じ扱いにする。
+ *
+ * **読むのは strip-ref を渡したならその ref の中身**（`materializePatternsDir` が実際に
+ * 差し替える対象と同じもの）。作業ツリーを見て判定すると、`--strip-ref` で正しく走れる場合まで
+ * 落としてしまう。
+ */
+function requireFormingTopAnchors(ref: string | null): void {
+	const path = 'tools/patterns/detect_doubles.ts';
+	const src = ref
+		? execFileSync('git', ['show', `${ref}:${path}`], { cwd: ROOT, encoding: 'utf8' })
+		: readFileSync(join(ROOT, path), 'utf8');
+	if (src.includes(FN_SPAN.start)) return;
+	throw new Error(
+		[
+			'',
+			`${ref ? `'${ref}' の` : '作業ツリーの'} ${path} に tryFormingDoubleTop が無いので、`,
+			'本スクリプトの ablation（base / noTop / ablP / ablP+minDist）を組めません。',
+			'',
+			'issue #268 案 C で形成中 double_top の経路を削除したためです。**計測は再計測の根拠として',
+			'残してあるので、削除前の ref を渡して走らせてください**:',
+			'',
+			`  npx tsx scripts/measure_forming_double_top_268.ts --strip-ref ${STRIP_REF_BEFORE_268C}`,
+			'',
+			`  ${STRIP_REF_BEFORE_268C} = PR #271（#268 Phase 1）のマージ commit。`,
+			'  #270 マージ後であることが要ります（near_completion 導入前の ref だと完成済み経路の',
+			'  status が違い、Phase 1 の数字と突き合わせられません）。',
+			'',
+			'部分結果は出しません。アンカーが無い状態で走らせると base ビルドが現行実装（形成中経路なし）',
+			'になり、§1 のファネルが「全段 0 件」として静かに壊れます。',
+			'',
+		].join('\n'),
+	);
 }
 
 /** アンカーがちょうど 1 回現れることを確認する（崩れたらその場で落とす）。 */
@@ -390,7 +463,9 @@ function swapSearch(src: string, minDistGate: boolean): string {
  * ablation ビルドに現行実装が混ざる。
  */
 function materializePatternsDir(variant: string, opts: BuildVariantOpts = {}): string {
-	const files = execFileSync('git', ['ls-tree', '-r', '--name-only', 'HEAD', '--', 'tools/patterns/'], {
+	// **ファイル一覧も `fromRef` 側から取る。** 作業ツリーの一覧で回すと、ref に無いファイルを
+	// `git show` しようとしてそこで落ちる（`verifyStripScope` が追加 / 削除を弾くので通常は同じ）。
+	const files = execFileSync('git', ['ls-tree', '-r', '--name-only', opts.fromRef ?? 'HEAD', '--', 'tools/patterns/'], {
 		cwd: ROOT,
 		encoding: 'utf8',
 	})
@@ -416,12 +491,14 @@ function materializePatternsDir(variant: string, opts: BuildVariantOpts = {}): s
 
 	for (const path of files) {
 		const name = path.slice('tools/patterns/'.length);
-		let src = readFileSync(join(ROOT, path), 'utf8');
+		// `fromRef` を渡されたら **`tools/patterns/` を 1 ファイルも残さず ref から取る**（#268 案 C）。
+		// 検出器 1 ファイルだけを ref から取る組み方は、作業ツリーが同ディレクトリの別ファイルを
+		// 触った瞬間に等価性が崩れる（`verifyStripScope` の docstring）。
+		let src = opts.fromRef
+			? execFileSync('git', ['show', `${opts.fromRef}:${path}`], { cwd: ROOT, encoding: 'utf8' })
+			: readFileSync(join(ROOT, path), 'utf8');
 
 		if (name === 'detect_doubles.ts') {
-			if (opts.fromRef) {
-				src = execFileSync('git', ['show', `${opts.fromRef}:${path}`], { cwd: ROOT, encoding: 'utf8' });
-			}
 			if (opts.disableTop) src = swapWholeFn(src);
 			else if (opts.search === 'ablP') src = swapSearch(src, !!opts.minDistGate);
 		}
@@ -1459,6 +1536,14 @@ async function main(): Promise<void> {
 	// `--emit <ablP|ablP+minDist> <path>`: ablation の `detect_doubles.ts` を書き出すだけで終わる。
 	// **計測はしない。** 既存テストが動くかを見るために作業ツリーへ一時的に当てるとき、
 	// 手で書き写して本計測と別物になるのを防ぐ（当てたら必ず `git checkout` で戻すこと）。
+	const refAt = argv.indexOf('--strip-ref');
+	// **#268 案 C 以降は `--strip-ref` が実質必須**（作業ツリーに `tryFormingDoubleTop` が無い）。
+	// 既定を作業ツリーのままにしてあるのは、何を読んでいるかを明示的に選ばせるため——
+	// 黙って別の ref を読むより、`requireFormingTopAnchors` が落ちて案内を出すほうがよい。
+	const stripRef = refAt >= 0 ? argv[refAt + 1] : null;
+	// **数字を 1 つも出す前に**アンカーの有無を確かめる（`--emit` も同じ差し替えを使うので前に置く）。
+	requireFormingTopAnchors(stripRef);
+
 	const emitAt = argv.indexOf('--emit');
 	if (emitAt >= 0) {
 		const variant = argv[emitAt + 1];
@@ -1467,7 +1552,10 @@ async function main(): Promise<void> {
 			throw new Error(`--emit の variant は 'ablP' か 'ablP+minDist'（受け取った値: ${variant}）。`);
 		}
 		if (!dest) throw new Error('--emit には出力先パスが要る。');
-		const src = readFileSync(join(ROOT, 'tools/patterns/detect_doubles.ts'), 'utf8');
+		// 差し替え元は `--strip-ref` 側（無ければ作業ツリー）。本計測と同じソースを使う。
+		const src = stripRef
+			? execFileSync('git', ['show', `${stripRef}:tools/patterns/detect_doubles.ts`], { cwd: ROOT, encoding: 'utf8' })
+			: readFileSync(join(ROOT, 'tools/patterns/detect_doubles.ts'), 'utf8');
 		writeFileSync(dest, swapSearch(src, variant === 'ablP+minDist'));
 		process.stdout.write(`${variant} の detect_doubles.ts を ${dest} に書き出した。\n`);
 		return;
@@ -1476,10 +1564,6 @@ async function main(): Promise<void> {
 	const jsonAt = argv.indexOf('--json');
 	const jsonPath = jsonAt >= 0 ? argv[jsonAt + 1] : null;
 	const includeRolling = !argv.includes('--no-rolling');
-	const refAt = argv.indexOf('--strip-ref');
-	// **既定は作業ツリー**。本 issue は検出器を 1 行も変えないので strip は要らない
-	// （`--strip-ref main` を渡せば #262 と同じ strip ビルドになる。等価性は verifyStripScope が検算）。
-	const stripRef = refAt >= 0 ? argv[refAt + 1] : null;
 	const stripScope = stripRef ? verifyStripScope(stripRef) : [];
 	const fromRef = stripRef ? { fromRef: stripRef } : {};
 
@@ -1493,6 +1577,11 @@ async function main(): Promise<void> {
 	const noTop = await loadBuild('noTop', { ...fromRef, disableTop: true });
 	const ablP = await loadBuild('ablP', { ...fromRef, search: 'ablP' });
 	const ablPmd = await loadBuild('ablPmd', { ...fromRef, search: 'ablP', minDistGate: true });
+	// §0(a) の「展開ビルド ≡ 作業ツリー」で突き合わせる相手。strip を使っていないなら `base` が
+	// そのまま作業ツリーの写しだが、`--strip-ref` を渡したときの `base` は**その ref** なので
+	// 作業ツリーとは一致しない（#268 案 C 以降はこちらが常態）。別に作業ツリーのビルドを組む
+	// ——これを怠ると「strip を渡すと §0 が必ず不一致で落ちる」ことになる（#262 版の `pr` と同じ役割）。
+	const work = stripRef ? await loadBuild('work') : base;
 
 	const aggBase = newAgg('現行 `tryFormingDoubleTop`', STAGES_BASE);
 	const aggP = newAgg('ablP（谷を挟んで最新足と同水準の最初の確定山）', STAGES_ABL_P);
@@ -1524,10 +1613,11 @@ async function main(): Promise<void> {
 	for (const part of corpus) {
 		for (const spec of part.cases) {
 			caseCount++;
-			// §0 検算: 展開した `base` ビルドが作業ツリーと全キーで一致するか（triple 込み）。
+			// §0 検算: 展開した作業ツリービルド（`work`）が本物と全キーで一致するか（triple 込み）。
 			const fullBase = runFull(base.detectTriples, base.detectDoubles, spec);
+			const fullCheck = stripRef ? runFull(work.detectTriples, work.detectDoubles, spec) : fullBase;
 			const fullWork = runFull(realDetectTriples, realDetectDoubles, spec);
-			if (key(fullBase.patterns) !== key(fullWork.patterns) || key(fullBase.cands) !== key(fullWork.cands)) {
+			if (key(fullCheck.patterns) !== key(fullWork.patterns) || key(fullCheck.cands) !== key(fullWork.cands)) {
 				mismatch++;
 				if (mismatch <= 3) {
 					say(
@@ -1616,7 +1706,9 @@ async function main(): Promise<void> {
 	}
 
 	if (mismatch > 0) {
-		throw new Error(`展開ビルド（base）が作業ツリーと ${mismatch} / ${caseCount} ケースで食い違った。計測は無効。`);
+		throw new Error(
+			`展開ビルド（${stripRef ? 'work' : 'base'}）が作業ツリーと ${mismatch} / ${caseCount} ケースで食い違った。計測は無効。`,
+		);
 	}
 
 	// ── §0 ──
@@ -1626,32 +1718,51 @@ async function main(): Promise<void> {
 	header.push(
 		'**作業ツリーは 1 バイトも変更しない。** 本スクリプトは `tools/patterns/` を一時領域へ展開し、' +
 			'`tryFormingDoubleTop` の**左の山の探索だけ**を差し替えたビルドを別に作って走らせるだけ。' +
-			'閾値（`DOUBLE_LEVEL_MAX_PCT` / `getDoubleFormingBarParams` / `FORMING_*`）は 1 つも動かしていない。',
+			'閾値（`DOUBLE_LEVEL_MAX_PCT` / `getDoubleFormingBarParams` / `FORMING_*`）は 1 つも動かしていない。' +
+			(stripRef
+				? ` **検出器は \`${stripRef}\` から取っている**（#268 案 C で作業ツリーから ` +
+					'`tryFormingDoubleTop` が削除されたため。アンカーの有無は起動時に確認済み）。'
+				: ''),
 	);
 	header.push('');
 	header.push('## 0. 検算');
 	header.push('');
 	header.push(
-		'**(a) 展開ビルド ≡ 作業ツリー**: `tools/patterns/` を一時領域へディレクトリごと展開し、' +
-			'`detect_doubles.ts` の末尾に `export { … }` を 1 行足しただけのビルド（**`base`**）が、' +
-			'作業ツリーの本物と `patterns` / `debugCandidates` の JSON 全キーで一致することを**全ケースで**確かめる。',
+		stripRef
+			? '**(a) 展開ビルド ≡ 作業ツリー**: `tools/patterns/` を一時領域へディレクトリごと展開し、' +
+					'`detect_doubles.ts` の末尾に `export { … }` を 1 行足しただけの**作業ツリービルド**' +
+					'（**`work`**）が、作業ツリーの本物と `patterns` / `debugCandidates` の JSON 全キーで' +
+					'一致することを**全ケースで**確かめる。`base` は strip 側（下の (c)）なので比較相手にしない。'
+			: '**(a) 展開ビルド ≡ 作業ツリー**: `tools/patterns/` を一時領域へディレクトリごと展開し、' +
+					'`detect_doubles.ts` の末尾に `export { … }` を 1 行足しただけのビルド（**`base`**）が、' +
+					'作業ツリーの本物と `patterns` / `debugCandidates` の JSON 全キーで一致することを**全ケースで**確かめる。',
 	);
 	header.push('');
 	header.push(
 		'**(b) 差し替えの範囲**: `ablP` は `tryFormingDoubleTop` の' +
 			'「`lastConfirmedPeak` を取る行」から「`const valley = valleyAfterPeak;`」までを置き換えるだけで、' +
-			'**それ以外は作業ツリーとバイト単位で同一**。`ablP+minDist` はこれに加えて `ctx` の分割代入 1 行と' +
-			'ゲート 1 ブロックだけを足す。アンカーはすべて「ちょうど 1 回現れる」ことを差し替え前に確認しており、' +
-			'崩れたらその場で例外になる。',
+			`**それ以外は ${stripRef ? `\`${stripRef}\`` : '作業ツリー'} とバイト単位で同一**。` +
+			'`ablP+minDist` はこれに加えて `ctx` の分割代入 1 行とゲート 1 ブロックだけを足す。' +
+			'アンカーはすべて「ちょうど 1 回現れる」ことを差し替え前に確認しており、崩れたらその場で例外になる。' +
+			(stripRef
+				? ' strip ビルドは **`tools/patterns/` を 1 ファイルも残さず ref から取る**' +
+					'（検出器 1 ファイルだけを差し替える組み方は、同ディレクトリの別ファイルを触った瞬間に' +
+					'等価性が崩れるため。#268 案 C で広げた）。'
+				: ''),
 	);
 	header.push('');
-	header.push(`- ✅ ${caseCount} ケース全件で \`base\` ≡ 作業ツリー（\`patterns\` / \`debugCandidates\` とも）`);
+	header.push(
+		`- ✅ ${caseCount} ケース全件で \`${stripRef ? 'work' : 'base'}\` ≡ 作業ツリー` +
+			'（`patterns` / `debugCandidates` とも）',
+	);
 	header.push(`- うち \`includeForming: true\` は ${formingCases} ケース（形成中経路が呼ばれるのはここだけ）`);
 	header.push(
 		stripRef
-			? `- strip ビルド（\`--strip-ref ${stripRef}\`）の \`tools/patterns/\` 差分: ` +
-					`${stripScope.length === 0 ? 'なし' : stripScope.map((f) => `\`${f}\``).join(' / ')}`
-			: '- strip ビルドは使っていない（検出器を変更しないので作業ツリー = `main` がそのまま対照）',
+			? `- **(c)** strip ビルド（\`--strip-ref ${stripRef}\`）が作業ツリーと違うファイル: ` +
+					`${stripScope.length === 0 ? 'なし' : stripScope.map((f) => `\`${f}\``).join(' / ')}` +
+					'（**strip はこのディレクトリを丸ごと ref から取る**ので、この一覧は「作業ツリーとの差分の申告」' +
+					'であって等価性のゲートではない。ゲートとして残しているのはファイルの追加 / 削除だけ）'
+			: '- strip ビルドは使っていない（作業ツリーがそのまま対照）',
 	);
 	header.push(`- 展開先: \`${TMP_DIR}\`（作業ツリーは 1 バイトも変更していない）`);
 	header.push(
