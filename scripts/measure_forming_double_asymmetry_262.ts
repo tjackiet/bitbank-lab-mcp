@@ -2124,13 +2124,15 @@ async function main(): Promise<void> {
 	}
 	say();
 
-	// ── §8 本 PR（#262 Phase 2）の実装 vs strip（`main`） ──
-	say('## 8. 本 PR の実装 vs strip（`main`）');
+	// ── §8 本 PR（#262 Phase 2）の実装 vs strip（`--strip-ref` の ref） ──
+	say(`## 8. 作業ツリーの実装 vs strip（\`${stripRef}\`）`);
 	say();
 	say(
-		`strip は \`tools/patterns/\` を丸ごと \`${stripRef}\` から取る。` +
-			'この組み方が `main` と等価であることは、**本 PR が `tools/patterns/` で触ったファイルが ' +
-			'`detect_doubles.ts` だけ**であることの検算で担保している' +
+		`strip は **\`tools/patterns/\` を 1 ファイルも残さず \`${stripRef}\` から取る**` +
+			'（#268 案 C で `detect_doubles.ts` 1 ファイルから広げた）。' +
+			'ディレクトリごと ref から取るので、**作業ツリーがこのディレクトリの何を触っていても strip の' +
+			`等価性は崩れない**——下の一覧は \`${stripRef}\` と作業ツリーの差分の**申告**で、` +
+			'等価性のゲートではない（ゲートとして残しているのはファイルの追加 / 削除だけ）' +
 			`（実測: ${stripScope.length === 0 ? '差分なし' : stripScope.map((f) => `\`${f}\``).join(' / ')}）。` +
 			'§1〜§7 は strip で走らせているので Phase 1 の数字がそのまま再現される。',
 	);

@@ -175,9 +175,19 @@ ablation を組むので、削除後の作業ツリーでは `base` ビルドが
 
 #### 実測
 
-`npx tsx scripts/measure_forming_double_top_268.ts --strip-ref 27337eb`（12,104 ケース）で再計測し、
-**#268 Phase 1 / #262 Phase 1 の数字がそのまま再現した**（これが計測スクリプトの案内が機能していることの
-検算も兼ねる）。
+再計測は**2 本とも走らせた**（これが計測スクリプトの案内が機能していることの検算も兼ねる）。
+**どちらも数字がそのまま再現した。**
+
+| コマンド | 再現するもの | 走らせた範囲 |
+|---|---|---|
+| `npx tsx scripts/measure_forming_double_top_268.ts --strip-ref 27337eb` | **#268 Phase 1 全体**（と #262 Phase 1 §4 = 形成中 top のファネル） | 全 12,104 ケース |
+| `npx tsx scripts/measure_forming_double_asymmetry_262.ts --strip-ref a920019` | **#262 Phase 1 全体**（形成中 2 経路 + ablation A / B） | `--no-rolling` の固定窓 1,088 ケース |
+
+**2 本目を `--no-rolling` にしたのは、こちらで確かめたいのが「案内した ref で走るか」と
+「§1 のファネルが Phase 1 と一致するか」だけだから。** 削除の根拠になる数字（形成中 top の
+accepted が全母集団 0 件）は 1 本目が全コーパスで出している。
+
+下の表は 1 本目の §1（形成中 top 経路のファネル）から取った。
 
 | 何を | 実測 |
 |---|---|

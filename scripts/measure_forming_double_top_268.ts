@@ -57,8 +57,9 @@
  * `scripts/measure_forming_double_asymmetry_262.ts`（PR #270 版）の流儀をそのまま使う。
  * `tools/patterns/` を**ディレクトリごと**一時領域へ展開して読む（検出器 1 ファイルだけを写すと
  * `./structural.js` が作業ツリーへ解決され、ablation ビルドに現行実装が混ざる）。
- * `--strip-ref <ref>` を渡すと `detect_doubles.ts` だけをその ref から取る strip ビルドになる
- * （{@link verifyStripScope} の検算付き）。
+ * `--strip-ref <ref>` を渡すと **`tools/patterns/` を 1 ファイルも残さず**その ref から取る
+ * strip ビルドになる（{@link verifyStripScope} の docstring。#268 案 C で `detect_doubles.ts`
+ * 1 ファイルから広げた）。
  *
  * **#268 案 C の実装後は `--strip-ref` が必須になった。** 作業ツリーの `detect_doubles.ts` から
  * `tryFormingDoubleTop` が削除されたので、ablation のアンカーが無く `base` ビルドが組めない。
