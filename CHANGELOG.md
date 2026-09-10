@@ -82,6 +82,58 @@
 | 67 | #274 Phase 1 | **`wedge_*` の `pivots` 点数を案 A 相当の絞り方ごとに計測。コード変更なし（`preparePivots` の `export` 追加のみ）。** 12,104 ケースで accepted wedge 延べ 24,692 / 実体 212 を測り、A0（現行）に対し A1 / A2 / A3 がどれだけ絞れるかと、PR #273 の不変条件を満たすかを並べた。**終端の上下幅が 0.5% を切る実体では A0 の中央値が 65（帯が広い側は 34）・充填率 0.88** で、issue の原因説明は裏付けられた。ただし帯が狭い実体が A0 合計に占めるのは 26.6%（延べ 37.0%）で、残りは窓の長さが効く。**決定はしていない** | **変わらない**（計測スクリプトと内部メモのみ。検出器・`helpers.ts`・`buildTouchPivots`・ベースラインは 1 行も触っていない） |
 | 68 | #281 | **`wedge_*` の `pivots` から**ブレイク足以降**を線を問わず落とした（出力のみ）。** `evaluateTouchesEx` は `isBreak` を**線ごとに独立に**立てるので、下側ラインを割った足でも高値が上側ラインの 0.5% 以内なら `upperTouches` 側は非ブレイクのまま残り、`kind: 'H'` の構成点として出ていた（PR #280 §5-1 で実体 8 / 59、うち 7 件が `rising_wedge`）。`buildTouchPivots` に `breakIdx` を渡して `idx >= breakIdx` を落とす。**`helpers.ts` は無変更で、`evaluateTouchesEx` の判定・タッチ数・`score`・`alternation`・採否は 1 つも動かない** | **判定は変わらない**（実データ 1hour の回帰 fixture 10 件を全フィールド突き合わせて**バイト単位で完全一致**——本 fixture の `wedge_*` 4 件はブレイク足より 3 〜 13 本手前で `pivots` が止まっており、打ち切りが 1 点も当たらない。**ベースライン更新は不要だった**。計測（`--no-rolling`）では「ブレイク足を含む」が実体 5 → **0** / 延べ 160 → **0**） |
 | 69 | #28 | **（`detect_patterns` 系ではない。読む順の連番だけ引き継ぐ）** `preview_cancel_order` の status ガードを `startsWith('CANCELED')` から**終端 4 状態の拒否リスト**（`TERMINAL_ORDER_STATUSES`）に広げた。`FULLY_FILLED` / `REJECTED` にも確認トークンが出ていた（＝押せるのに必ず失敗するボタン）のを、トークン生成より前で止める | **対象外**（`detect_patterns` は 1 行も触っていない） |
+| 70 | #27 | **（`detect_patterns` 系ではない。読む順の連番だけ引き継ぐ）** `clientSupportsElicitation` の判定を「`elicitation` があるか」から**「form モードを扱えるか」**に変えた。SEP-2322 の宣言形で `{ url: {} }` だけを宣言したホストが「form 対応あり」と判定され、サーバーが処理できない form 形式の elicitation を送っていた（CodeRabbit が #26 で指摘） | **対象外**（`detect_patterns` は 1 行も触っていない） |
+
+### Fixed（#27: `clientSupportsElicitation` が url モードのみ宣言のクライアントを「form 対応あり」と判定していた）
+
+**判定条件を form モード対応の有無にする。`withElicitedConfirmation` 本体と `tools/get_ui_snapshot.ts` は無変更。**
+
+`src/private/elicitation.ts` の `clientSupportsElicitation()` は、initialize 時の capabilities と
+per-request envelope の 2 か所から `elicitation` を取り、**どちらかが truthy なら true** を返していた。
+MCP 2026-07-28（SEP-2322）では elicitation の capability は対応モードを宣言する形（`{ form: {}, url: {} }`）
+なので、`{ url: {} }` だけを宣言したクライアントも truthy として通り、**サーバーは処理できない form 形式の
+elicitation を送ってしまう。** 本サーバーの確認フロー（`withElicitedConfirmation`）は form 形式しか使わないので、
+判定は「elicitation があるか」ではなく **「form モードを扱えるか」**でなければならない。
+公開済み 0.3.1 に含まれるコードで、CodeRabbit が #26 で指摘した。
+
+| | |
+|---|---|
+| 原因 | capability の値を**存在チェック（truthy）だけ**で見ていた。2025 系では `{}` しか来なかったので成立していたが、2026-07-28 でモード宣言が入って前提が崩れた |
+| 修正 | `declaresAppUi` と同じ作法で `declaresFormElicitation(caps: unknown): boolean` を切り出し、`clientSupportsElicitation` は**2 つの取得元それぞれにこれを当てて OR する**。判定の実体は述語 1 つに閉じる |
+| 境界の引き方 | **form キーの有無ではなく「モードキーを 1 つ以上持つのに form が無い」**で引く。前者で引くと 2025 系の `{}` まで非対応になり、既存ホストが全部 fallback へ落ちる |
+| 新しい分岐は作らない | form 非対応と判定したホストは**既存の fallback 経路**（実行不可通知。MCP Apps オプトイン時は `_meta` 配送）にそのまま倒れる。`MissingRequiredClientCapabilityError`（-32021）を返す経路は足していない——form 非対応なら form リクエストをそもそも送らない、で足りる |
+
+#### 判定表（`declaresFormElicitation` の docstring と 1:1。実装後の実測で埋めた）
+
+| `elicitation` の値 | 判定 | 理由 |
+|---|---|---|
+| 無い / `null` / `undefined` | `false` | 宣言なし（現行どおり） |
+| オブジェクト以外（`true` 等） | `false` | 仕様に無い形。fail-closed（**現行は `true` を返していた**） |
+| `{}` | `true` | 2025 系の宣言形。後方互換 |
+| `{ form: {} }` | `true` | form を宣言 |
+| `{ form: {}, url: {} }` | `true` | form を宣言 |
+| `{ url: {} }` | `false` | url のみ。form リクエストを処理できない（**本 issue**） |
+| `{ form: {}, 未知のキー }` | `true` | 未知のモードは無視し、form の有無だけ見る |
+
+未知のキー**だけ**を持つ宣言（`{ voice: {} }` 等）は `{}` と同じく `true`。`ELICITATION_MODE_KEYS` に
+既知のモード（`form` / `url`）しか入れていないためで、後方互換を優先した意図的な扱い。
+
+#### 変えていないもの
+
+- **2 つの取得元を OR する構造。** `clientSupportsAppUi` の docstring が「取得元の優先順位は `clientSupportsElicitation` と意図的に異なる（あちらは OR）」と書いており、その理由（広めに倒しても SDK が capability 未宣言を検知して送信を塞ぐ）は本修正後も成り立つ。**envelope を権威にするかは別の設計判断**で、本 issue の対象外
+- **`withElicitedConfirmation` 本体。** url のみのホストは round 1 で fallback に落ちる。「`_meta` へのトークン配送は elicitation 非対応と判定した経路だけ」という ADR-0007 の不変条件 5 は、この修正で**むしろ正しく効くようになる**（url のみホストが `isAppUiExecuteAllowed` を満たせば `_meta` 経路へ倒れる）
+- **`tools/get_ui_snapshot.ts`。** `isAppUiExecuteAllowed(extra) && !clientSupportsElicitation(extra)` と同じ述語を使っているので自動で整合する（preview 側と snapshot 側で判定がずれないことをテストで固定した）
+
+#### テスト
+
+修正前のコードでは `tests/private/elicitation.test.ts` の新規 7 ケースが落ちる（`url のみ → false` と
+`オブジェクト以外（true） → false` の 5 ケース + `withElicitedConfirmation` の 2 ケース）。
+
+- `clientSupportsElicitation`: 上の判定表 7 行を **initialize 側・envelope 側それぞれで**回す
+- 両取得元の OR: init が `{ form: {} }` / envelope なし → true、init なし / envelope が `{ url: {} }` → false、init が `{ url: {} }` / envelope が `{ form: {} }` → true（**OR を変えていないことの固定**）
+- `withElicitedConfirmation`: envelope が `{ url: {} }` のみのホストで fallback が返り、`input_required` にならず `onConfirmed` も呼ばれない。fallback に `confirmation_token` が混入しないこと（`.claude/rules/sensitive-data.md`）も同じ assertion で見る
+- 同条件 + `BITBANK_MCP_APPS_EXECUTE=1` + UI 宣言で、`_meta` にトークンが載る（url のみホストが MCP Apps 経路に正しく倒れること）
+- `tests/get_ui_snapshot.test.ts`: url のみホストで snapshot 側の判定が preview 側と一致すること 1 件
 
 ### Fixed（#28: `preview_cancel_order` が終端状態の注文にも確認トークンを発行していた）
 
