@@ -563,6 +563,36 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 「この検出器は終値を経由していない」という情報として読むこと。
 契約は `tests/detect_patterns_debug.test.ts` が固定している。
 
+### double の content には「山2 / 谷2 の位置」行が必ず出る（#245）
+
+`double_top` / `double_bottom` の明細には、**閾値を持たない 1 行**が常に付く。
+
+```text
+   - 山2 の位置: 終値はネックラインの +9.9%（パターン高さ比）/ ヒゲ 73.3%
+```
+
+**この行は上の混合基準（極値は高安・同水準は終値）の帰結を読み手が判断するためにある。**
+「終値ではネックラインのすぐ上にいるだけの足でも、高安ではダブルトップとして山1 と同水準」
+という形が実在する（issue #245 の発端の形が上の数値そのもの。上ヒゲがパターン高さの 73.3% で、
+終値はネックラインの 9.9% 上）。`content[0].text` が LLM への唯一のチャネルなので、
+この行が無いと「山2 は終値では存在せずヒゲだけだった」ことを読み取る手段が無い。
+**これは棄却でも減点でもない**——`confidence` も `data.patterns` も一切動かない。
+
+| 項目 | 中身 |
+|---|---|
+| 分母（パターン高さ） | 構成点 3 点の `extremePrice` の全振幅（`tools/patterns/structural.ts` の `levelSpreadMetrics().heightAbs`）。**高安基準**で、同水準ゲート（`peaks_diff_vs_height_excess`）と同じ量 |
+| 終値の位置 | `(山2 / 谷2 の終値 − ネックライン) ÷ パターン高さ`。**符号は価格の向き**（`+` が上、`-` が下）なので、正常な `double_bottom` は `-x%` になる |
+| ヒゲ | top は `(高値 − 終値) ÷ パターン高さ`、bottom は `(終値 − 安値) ÷ パターン高さ`。向きを持たないので符号は付かない |
+| 出る条件 | `status` が `completed` / `near_completion` / `expired` / `invalid` のいずれでも出る。**`view` にも依らない**（`summary` / `detailed` / `full`。`debug` はそもそもパターン明細を出さない階梯外の view） |
+| 出ない条件 | パターン高さが 0 か、`extremePrice` が欠けているとき。**`n/a` は出さず 1 行まるごと出さない**（構成点の価格が読めないことの申告ではなく、この形では量が定義できないという意味なので） |
+
+- **値は `pivots` から導出しているので `structuredContent` には無い。** `data.patterns[*].pivots` の
+  `price` / `extremePrice` から同じ式で再計算できる（上の表がその式）。
+- **`triple_*` / H&S 系には出ない。** H&S はパターン高さの端点が頭と谷で肩が端点にならないため、
+  同じ比が肩について何も言わない（#178 項目 3）。`triple_*` は実測で該当が 0 件だった。
+- 分布の実測（accepted な double 19 値動きで終値の位置が 3.0%〜74.1%、ヒゲが 7.2%〜73.3%）は
+  `docs/internal/wick-only-second-peak-245.md`。**閾値を置かないと決めた根拠**もそこにある。
+
 ### double_top / double_bottom の構造ゲート（hard reject）
 
 `double_top` / `double_bottom` は、形の良し悪しを整合度で減点する前に、

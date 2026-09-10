@@ -11,6 +11,7 @@ import { formatDateInTz, resolveTz, toIsoWithTz } from '../../lib/datetime.js';
 import { formatFixed, formatInt, formatPctFromRatio, formatRounded } from '../../lib/formatter.js';
 import { toStructured } from '../../lib/result.js';
 import { isIntradayType } from '../../tools/patterns/period.js';
+import { levelSpreadMetrics } from '../../tools/patterns/structural.js';
 import type { Pivot } from '../../tools/patterns/swing.js';
 import { formatTargetProgressLine } from '../../tools/patterns/target-reach.js';
 import type { PatternEntry } from '../../tools/patterns/types.js';
@@ -984,6 +985,87 @@ function formatPivotPrices(pv: Pivot): string {
 }
 
 /**
+ * double 2 型の「山2 / 谷2 の位置」行（issue #245）。該当しない形は `null`（＝行を出さない）。
+ *
+ * ## 何のための行か
+ *
+ * 極値判定は高安（`tools/patterns/swing.ts` の `detectSwingPoints`）、同水準判定は終値
+ * （`Pivot.price`）という混合基準なので、**「高値では山1 と同水準、終値ではネックラインの
+ * すぐ上」という足がそのまま山2 になる**（#245 の発端の形。上ヒゲがパターン高さの 73.3%）。
+ * `content[0].text` は LLM への唯一のチャネル（`.claude/rules/tools.md`）なので、この行が
+ * 無いと「山2 は終値では存在せずヒゲだけだった」ことを読み手が知る手段が無い——#245 の症状は
+ * 「報告が間違っている」ではなく「報告に情報が足りない」だった。
+ *
+ * **閾値を持たず、double なら常に出す。** PR #276 の計測で「ヒゲだけの山2 の直後に再上昇
+ * せずそのまま割る形」が 12,104 ケースで 0 件だったため、検出側（減点 / hard reject）は
+ * 変えない（#245 の決定コメント: 案 B + 案 C）。閾値を置かないので #214 の「非恣意性を
+ * 主張できない境界を入れない」基準にも触れない。
+ *
+ * ## 量（PR #276 / `docs/internal/wick-only-second-peak-245.md` と同じ定義）
+ *
+ * `pivots = [a, b, c]`（`c` が山2 / 谷2、`b` がネックライン定義点で `necklinePrice = b.price`）:
+ *
+ * | 量 | top | bottom |
+ * |---|---|---|
+ * | `heightAbs` | `levelSpreadMetrics([a, c], [a, b, c]).heightAbs`（全構成点の `extremePrice` の全振幅） | 同左 |
+ * | `closeGap` | `(c.price − b.price) / heightAbs` | `(b.price − c.price) / heightAbs` |
+ * | `wickShare` | `(c.extremePrice − c.price) / heightAbs` | `(c.price − c.extremePrice) / heightAbs` |
+ *
+ * **分母は再実装せず {@link levelSpreadMetrics} を import して使う。** 表示層で式を写すと、
+ * 検出器側の「パターン高さ」の定義が動いたときに同じ語が 2 つの量を指すようになる。
+ *
+ * ## 値は `pivots` から導出する（`structuredContent` は変えない）
+ *
+ * 検出器に新しいフィールドを足していない。`data.patterns` は 1 バイトも動かないので、
+ * ベースライン回帰（`tests/detect_patterns_data_patterns_regression.test.ts`）と
+ * `tests/view-structured-content-invariance.test.ts` は無差分のまま通る。
+ *
+ * ## 符号は価格の向きに固定する（`+` が上、`-` が下）
+ *
+ * `closeGap` は「正常な向き」を正に取る量（bottom は谷2 の終値がネックラインより**下**に
+ * あるのが正常）だが、**表示にはその符号を使わない**。`+` を「上」と読むのは読み手の既定の
+ * 期待で、パターン種別で符号の意味が反転する表示は #245 が問題にしている読み違いを
+ * もう 1 つ増やすだけになる。よって bottom は `-x%`（＝ ネックラインより x% 下）と出す。
+ * `ヒゲ` は向きを持たない量なので符号を付けない。
+ *
+ * ## 出さない条件（`n/a` は出さない）
+ *
+ * `pivots` が 3 点でない / `extremePrice` 欠損（`heightAbs` が `null`）/ `heightAbs` が 0 /
+ * 終値が非有限。{@link formatPivotPrices} の `n/a` は「**この点の価格が読めない**」という
+ * 観測の申告だが、本行が出せないのは「**この形では量が定義できない**」であって申告すべき
+ * 観測値が存在しない。1 行まるごと黙る方が読み手を誤らせない。
+ *
+ * ## triple / H&S には出さない
+ *
+ * H&S は `heightAbs` の端点が頭と谷で、肩は端点にならないため同じ量が意味を持たない
+ * （#178 項目 3 が「不要」で決着済み）。triple は PR #276 の計測で該当 0 件。必要になれば
+ * 別 issue で足す。
+ */
+function formatSecondExtremePositionLine(p: PatternEntry): string | null {
+	const side = p?.type === 'double_top' ? 'top' : p?.type === 'double_bottom' ? 'bottom' : null;
+	if (!side) return null;
+	const pivots = p?.pivots;
+	// **`>= 3` ではなく `=== 3`。** double の `pivots` は常に 3 点（`docs/tools.md`）で、
+	// 点数が変わったなら `b` がネックライン定義点だという前提そのものを検算し直す必要がある。
+	if (!Array.isArray(pivots) || pivots.length !== 3) return null;
+	const [a, b, c] = pivots;
+	if (!a || !b || !c) return null;
+	const necklinePrice = Number(b.price);
+	const close = Number(c.price);
+	const extreme = Number(c.extremePrice);
+	if (!Number.isFinite(necklinePrice) || !Number.isFinite(close) || !Number.isFinite(extreme)) return null;
+	const { heightAbs } = levelSpreadMetrics([a, c], [a, b, c]);
+	if (heightAbs === null || !(heightAbs > 0)) return null;
+	// 価格の向きの符号を持つ差（`closeGap` の符号ではない。docstring「符号は価格の向きに固定する」）。
+	const gapByPrice = (close - necklinePrice) / heightAbs;
+	const wickShare = side === 'top' ? (extreme - close) / heightAbs : (close - extreme) / heightAbs;
+	const label = side === 'top' ? '山2' : '谷2';
+	// `formatPctFromRatio` は負値にだけ符号を付けるので、正のときだけ `+` を補う。
+	const sign = gapByPrice > 0 ? '+' : '';
+	return `   - ${label} の位置: 終値はネックラインの ${sign}${formatPctFromRatio(gapByPrice)}（パターン高さ比）/ ヒゲ ${formatPctFromRatio(wickShare)}`;
+}
+
+/**
  * pivot 明細行の役割ラベル表（issue #234）。キーは **`type` と `pivots.length` の組**。
  *
  * **`kind` から役割を導出してはいけない。** 形成中 H&S の 4 点は `H, H, L, H`（逆 H&S は
@@ -1287,6 +1369,10 @@ export function formatPatternLine(
 		formingTripleNote,
 		priceRange ? `   - 価格範囲: ${priceRange}` : null,
 		...(pivotLines.length ? pivotLines : []),
+		// 山2 / 谷2 の位置（issue #245）。**`view` で分岐しない**——`pivotLines` は full / debug
+		// 限定だが、本行は 1 行で、軽い view でも「山2 がヒゲだけ」を LLM が読めるべきなので
+		// 全 view に出す（規約 3 の上位集合もこれで保たれる）。
+		formatSecondExtremePositionLine(p),
 		neckline ? `   - ${p?.trendlineLabel || 'ネックライン'}: ${neckline}` : null,
 		breakoutLine,
 		outcomeLine,

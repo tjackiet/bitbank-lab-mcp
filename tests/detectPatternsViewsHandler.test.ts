@@ -1991,3 +1991,164 @@ describe('表示日付の tz 整形（範囲・期間）', () => {
 		expect(res.content[0].text).toContain('(2026-10-01)');
 	});
 });
+
+// ── 山2 / 谷2 の位置行（issue #245） ──
+
+/**
+ * `content` に「山2 / 谷2 の位置」を常に出す件（issue #245 の決定コメント: 案 B + 案 C）。
+ *
+ * 検出器 / `structuredContent` は変えず、値は `pivots` から表示層で導出する。量の定義は
+ * PR #276（`docs/internal/wick-only-second-peak-245.md`）と同じで、分母は
+ * `levelSpreadMetrics([a, c], [a, b, c]).heightAbs`。
+ *
+ * 実データ（#245 の発端の形）での値の固定は
+ * `tests/patterns/second-extreme-position-245.test.ts` が持つ。ここは分岐と定義の検算。
+ */
+describe('formatPatternLine: 山2 / 谷2 の位置行（#245）', () => {
+	/**
+	 * 山2 がヒゲだけの合成 `double_top`。
+	 *
+	 * | 点 | 終値 | 高安 |
+	 * |---|---:|---:|
+	 * | 山1 `a` | 100,000 | 101,000 |
+	 * | 谷 `b`（ネックライン） | 90,000 | 89,000 |
+	 * | 山2 `c` | 92,000 | 100,000 |
+	 *
+	 * `heightAbs` = 101,000 − 89,000 = 12,000 / `closeGap` = 2,000 / 12,000 = 16.7% /
+	 * `wickShare` = 8,000 / 12,000 = 66.7%。
+	 */
+	const wickyTop = (): PatternEntry =>
+		makePattern({
+			type: 'double_top',
+			pivots: [
+				{ idx: 0, price: 100000, kind: 'H', extremePrice: 101000 },
+				{ idx: 5, price: 90000, kind: 'L', extremePrice: 89000 },
+				{ idx: 10, price: 92000, kind: 'H', extremePrice: 100000 },
+			],
+		});
+
+	/** 上の符号反転（`double_bottom`）。谷2 の終値はネックラインの 16.7% **下**。 */
+	const wickyBottom = (): PatternEntry =>
+		makePattern({
+			type: 'double_bottom',
+			pivots: [
+				{ idx: 0, price: 90000, kind: 'L', extremePrice: 89000 },
+				{ idx: 5, price: 100000, kind: 'H', extremePrice: 101000 },
+				{ idx: 10, price: 98000, kind: 'L', extremePrice: 90000 },
+			],
+		});
+
+	it('double_top: closeGap / wickShare が定義どおりに出る', () => {
+		const line = formatPatternLine(wickyTop(), 0, 'full', emptyMeta);
+		expect(line).toContain('   - 山2 の位置: 終値はネックラインの +16.7%（パターン高さ比）/ ヒゲ 66.7%');
+	});
+
+	it('double_bottom: 符号は価格の向き（ネックラインより下なので負）', () => {
+		const line = formatPatternLine(wickyBottom(), 0, 'full', emptyMeta);
+		expect(line).toContain('   - 谷2 の位置: 終値はネックラインの -16.7%（パターン高さ比）/ ヒゲ 66.7%');
+	});
+
+	it('4 つの view すべてで出る（pivot 明細行と違い view で分岐しない）', () => {
+		// `debug` view の formatter は `formatPatternLine` を呼ばない（階梯外＝出力の置換）が、
+		// **`formatPatternLine(…, 'debug', …)` 単体は出す**——`pivotLines` と同じ扱いで、
+		// view 値そのものが行を落とさないことをここで固定する。
+		for (const view of ['summary', 'detailed', 'full', 'debug'] as const) {
+			expect(formatPatternLine(wickyTop(), 0, view, emptyMeta), `view=${view}`).toContain('山2 の位置: ');
+			expect(formatPatternLine(wickyBottom(), 0, view, emptyMeta), `view=${view}`).toContain('谷2 の位置: ');
+		}
+	});
+
+	it('status が付いていても出る（double の 4 段すべて）', () => {
+		for (const status of ['completed', 'near_completion', 'expired', 'invalid'] as const) {
+			const p = { ...wickyTop(), status } as PatternEntry;
+			expect(formatPatternLine(p, 0, 'full', emptyMeta), status).toContain('山2 の位置: ');
+		}
+	});
+
+	it('pivot 明細行の直後・ネックライン行の直前に出る', () => {
+		const p = {
+			...wickyTop(),
+			neckline: [
+				{ x: 0, y: 90000 },
+				{ x: 10, y: 90000 },
+			],
+		} as PatternEntry;
+		const lines = formatPatternLine(p, 0, 'full', emptyMeta).split('\n');
+		const posIdx = lines.findIndex((l) => l.includes('山2 の位置: '));
+		const lastPivotIdx = lines.findIndex((l) => l.trim().startsWith('- 山2:'));
+		const necklineIdx = lines.findIndex((l) => l.trim().startsWith('- ネックライン:'));
+		expect(lastPivotIdx).toBeGreaterThanOrEqual(0);
+		expect(necklineIdx).toBeGreaterThanOrEqual(0);
+		expect(posIdx).toBe(lastPivotIdx + 1);
+		expect(necklineIdx).toBe(posIdx + 1);
+	});
+
+	it('pivots が 3 点でないとき出さない（2 点 / 4 点とも）', () => {
+		const two = makePattern({
+			type: 'double_top',
+			pivots: [
+				{ idx: 0, price: 100000, kind: 'H', extremePrice: 101000 },
+				{ idx: 5, price: 90000, kind: 'L', extremePrice: 89000 },
+			],
+		});
+		const four = makePattern({
+			type: 'double_top',
+			pivots: [...(wickyTop().pivots ?? []), { idx: 15, price: 88000, kind: 'L', extremePrice: 87000 }],
+		});
+		expect(formatPatternLine(two, 0, 'full', emptyMeta)).not.toContain('山2 の位置');
+		expect(formatPatternLine(four, 0, 'full', emptyMeta)).not.toContain('山2 の位置');
+	});
+
+	it('extremePrice が欠けているとき出さない（n/a も出さない）', () => {
+		const p = makePattern({
+			type: 'double_top',
+			pivots: [
+				{ idx: 0, price: 100000, kind: 'H', extremePrice: 101000 },
+				{ idx: 5, price: 90000, kind: 'L' } as unknown as NonNullable<PatternEntry['pivots']>[number],
+				{ idx: 10, price: 92000, kind: 'H', extremePrice: 100000 },
+			],
+		});
+		const line = formatPatternLine(p, 0, 'full', emptyMeta);
+		expect(line).not.toContain('山2 の位置');
+		expect(line).not.toContain('パターン高さ比');
+	});
+
+	it('heightAbs が 0 のとき出さない（ゼロ除算を n/a で報告しない）', () => {
+		const p = makePattern({
+			type: 'double_top',
+			pivots: [
+				{ idx: 0, price: 100000, kind: 'H', extremePrice: 100000 },
+				{ idx: 5, price: 90000, kind: 'L', extremePrice: 100000 },
+				{ idx: 10, price: 92000, kind: 'H', extremePrice: 100000 },
+			],
+		});
+		expect(formatPatternLine(p, 0, 'full', emptyMeta)).not.toContain('山2 の位置');
+	});
+
+	it('triple / H&S には出さない（#178 項目 3。同じ量が意味を持たない）', () => {
+		const triple = makePattern({
+			type: 'triple_top',
+			pivots: [
+				{ idx: 0, price: 100000, kind: 'H', extremePrice: 101000 },
+				{ idx: 5, price: 90000, kind: 'L', extremePrice: 89000 },
+				{ idx: 10, price: 100000, kind: 'H', extremePrice: 101000 },
+				{ idx: 15, price: 90000, kind: 'L', extremePrice: 89000 },
+				{ idx: 20, price: 92000, kind: 'H', extremePrice: 100000 },
+			],
+		});
+		const hs = makePattern({
+			type: 'head_and_shoulders',
+			pivots: [
+				{ idx: 0, price: 98000, kind: 'H', extremePrice: 99000 },
+				{ idx: 5, price: 90000, kind: 'L', extremePrice: 89000 },
+				{ idx: 10, price: 105000, kind: 'H', extremePrice: 106000 },
+				{ idx: 15, price: 90000, kind: 'L', extremePrice: 89000 },
+				{ idx: 20, price: 97000, kind: 'H', extremePrice: 99000 },
+			],
+		});
+		for (const p of [triple, hs]) {
+			const line = formatPatternLine(p, 0, 'full', emptyMeta);
+			expect(line, String(p.type)).not.toContain('の位置: 終値はネックライン');
+		}
+	});
+});
