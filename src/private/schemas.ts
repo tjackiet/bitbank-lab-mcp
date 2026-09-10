@@ -1336,6 +1336,23 @@ export const OrderStatusEnum = z.enum([
 ]);
 
 /**
+ * 終端状態。以後キャンセル不能（`OrderStatusEnum` の docstring で「終端」と注記した 4 つ）。
+ *
+ * キャンセル可否の判定はここを単一ソースとし、ツール側で別の分類を作らない。
+ * 型を `z.infer<typeof OrderStatusEnum>` から導出しているため、enum に無い文字列を書くと typecheck が落ちる。
+ *
+ * ⚠️ **拒否リストであって許可リストではない。** `INACTIVE`（stop のトリガー前）/ `TRIGGERED`
+ * （トリガー発動済み）は正当にキャンセル可能なので、「`UNFILLED` / `PARTIALLY_FILLED` だけ許す」
+ * 形に反転させてはならない（#28）。enum に無い未知の status も通す（拒否リストの帰結）。
+ */
+export const TERMINAL_ORDER_STATUSES = new Set<z.infer<typeof OrderStatusEnum>>([
+	'FULLY_FILLED',
+	'CANCELED_UNFILLED',
+	'CANCELED_PARTIALLY_FILLED',
+	'REJECTED',
+]);
+
+/**
  * 注文タイプ（現物・信用共通）。
  *
  * bitbank 公式 spec の `POST /v1/user/spot/order` では `take_profit` / `stop_loss` / `losscut`

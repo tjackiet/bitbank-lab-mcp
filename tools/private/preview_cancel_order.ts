@@ -21,7 +21,11 @@ import { fail, ok, toStructured } from '../../lib/result.js';
 import { generateToken } from '../../src/private/confirmation.js';
 import { withElicitedConfirmation } from '../../src/private/elicitation.js';
 import type { OrderResponse } from '../../src/private/schemas.js';
-import { PreviewCancelOrderInputSchema, PreviewCancelOrderOutputSchema } from '../../src/private/schemas.js';
+import {
+	PreviewCancelOrderInputSchema,
+	PreviewCancelOrderOutputSchema,
+	TERMINAL_ORDER_STATUSES,
+} from '../../src/private/schemas.js';
 import type { ToolDefinition } from '../../src/tool-definition.js';
 import cancelOrder from './cancel_order.js';
 import getOrder from './get_order.js';
@@ -47,6 +51,28 @@ function formatOrderDetailLines(order: OrderResponse, pair: string): string[] {
 	return lines;
 }
 
+/**
+ * 終端状態の拒否メッセージ。状態ごとに理由を書き分ける
+ * （LLM がこの文をそのままユーザーへの説明に使うため、「キャンセル済み」で一括りにしない）。
+ *
+ * 呼び出し元は `TERMINAL_ORDER_STATUSES.has()` を満たす状態でのみ呼ぶ。
+ * `default` は「将来 enum と `TERMINAL_ORDER_STATUSES` に終端状態が増えたが、ここに case を
+ * 足し忘れた」場合の受け皿で、誤った理由（例: 未約定なのに「キャンセル済み」）を出さないための保険。
+ */
+function terminalStatusMessage(status: OrderResponse['status']): string {
+	switch (status) {
+		case 'FULLY_FILLED':
+			return `この注文は既に全量約定しているためキャンセルできません（status: ${status}）`;
+		case 'REJECTED':
+			return `この注文はシステムに拒否されており、キャンセル対象ではありません（status: ${status}）`;
+		case 'CANCELED_UNFILLED':
+		case 'CANCELED_PARTIALLY_FILLED':
+			return `この注文は既にキャンセル済みです（status: ${status}）`;
+		default:
+			return `この注文は終端状態のためキャンセルできません（status: ${status}）`;
+	}
+}
+
 export default async function previewCancelOrder(args: { pair: string; order_id: number }) {
 	const { pair, order_id } = args;
 
@@ -59,12 +85,12 @@ export default async function previewCancelOrder(args: { pair: string; order_id:
 		orderDetail = detailResult.data.order;
 	}
 
-	// 既にキャンセル済みの注文はプレビュー段階で拒否する（復元された古いカードや
-	// 重複依頼による二重キャンセルを bitbank へ届く前に止める）。
-	if (orderDetail?.status?.startsWith('CANCELED')) {
-		return PreviewCancelOrderOutputSchema.parse(
-			fail(`この注文は既にキャンセル済みです（status: ${orderDetail.status}）`, 'validation_error'),
-		);
+	// 終端状態の注文はプレビュー段階で拒否する（復元された古いカードや重複依頼による
+	// 二重キャンセル、既に約定・拒否された注文への操作を bitbank へ届く前に止める）。
+	// トークンはここより後で生成する = 終端状態では「押せるのに必ず失敗するボタン」を出さない。
+	const status = orderDetail?.status;
+	if (status !== undefined && TERMINAL_ORDER_STATUSES.has(status)) {
+		return PreviewCancelOrderOutputSchema.parse(fail(terminalStatusMessage(status), 'validation_error'));
 	}
 
 	const tokenParams = { pair, order_id };
