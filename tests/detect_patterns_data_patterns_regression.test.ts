@@ -20,6 +20,7 @@
  * | #216 Phase 2 | `triple_*` / `double_*` の主構成点がネックラインの誤った側にあったら落とす構造ゲートを入れた（13 → 12。`triple_top` 1 件の純減） |
  * | #211 Phase 2 | `necklineAt` の外挿を定義点の区間へクランプした。**H&S 系 4 件が 2 件に減り、うち 1 件は別の構造に入れ替わった**（12 → 10） |
  * | #244 Phase 2 | H&S の肩の同水準判定を時間足別にした（`getHsShoulderMaxPctForTf`。`1hour` = 1.04%）。**件数は 10 のまま**だが、`inverse_head_and_shoulders` の `globalDedup` 代表が `3-9-42-147-154`（肩 `relDiff` **1.356%** で肩ゲート超過）から `3-9-42-106-109`（同 **0.325%**）へ入れ替わり、`rankPatterns` の並びが 1 つずれた |
+ * | #252 | `wedge_*` に `pivots`（上下トレンドラインの非ブレイクタッチ点。`price` は高安）を出すようにした。**件数は 10 のまま**で、差分は `rising_wedge` 2 件 / `falling_wedge` 2 件に `pivots` 配列が**増えたぶんだけ**（`diff` が純粋な 4 ハンクの追加になることを確認した。他のキーは 1 バイトも動いていない）。**実データの既定オプションで出る `wedge_*` は形成中パス由来**（回帰パス由来なら `aftermath` を持つ）なので、回帰パスだけに足していたらこの fixture は 1 バイトも動かなかった |
  *
  * **#206 では更新していない**（`MIN_CONFIDENCE` から未配線の 4 エントリを消しただけで、
  * `data.patterns` は 940 ケース全件で完全一致。行を足す必要が無かった）。
@@ -255,7 +256,7 @@ function stripStructureDiagram(patterns: ReadonlyArray<Record<string, unknown>>)
 	});
 }
 
-describe('detect_patterns: data.patterns の実データスナップショット（issue #200 起点。#202 / #199 / #208 / #210 / #204 / #199 候補 2 / #218 / #216 / #211 / #244 で更新）', () => {
+describe('detect_patterns: data.patterns の実データスナップショット（issue #200 起点。#202 / #199 / #208 / #210 / #204 / #199 候補 2 / #218 / #216 / #211 / #244 / #252 で更新）', () => {
 	it('btc_jpy 1hour（デフォルトオプション）で data.patterns が構造図の svg/title を除きベースラインと一致する', async () => {
 		const candles = buildBtcJpy1hour202608Candles();
 		vi.mocked(analyzeIndicators).mockResolvedValueOnce(
