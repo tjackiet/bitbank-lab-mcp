@@ -29,11 +29,16 @@ export interface Candle {
  * |---|---|---|
  * | `detectSwingPoints`（double / triple / H&S） | 終値 | 判定に使った `high` / `low` |
  * | `detect_triangles` の relaxed swing | **`high` / `low`** | 同左（同値） |
+ * | `detect_wedges` のトレンドラインタッチ点 | **`high` / `low`** | 同左（同値） |
  * | 形成中 H&S / 逆 H&S の暫定右肩 | 最新足の終値 | 同左（極値判定を通っていない） |
  *
  * 三角形が終値を経由しないのは、**トレンドライン（`upperLine` / `lowerLine`）をこの高安列に
  * 回帰させており、`neckline` もその線から取る**ため。`price` を終値に差し替えると構成点が
- * 自分のトレンドライン上に乗らなくなる。**不変なのは「`extremePrice` は判定に使った値」**の
+ * 自分のトレンドライン上に乗らなくなる。ウェッジ（#252）も同じ論理で高安に揃えてある——
+ * こちらは回帰の入力ではなく**トレンドラインへのタッチ点**を構成点にしており、
+ * タッチ判定自体が `c.high` / `c.low` と線の距離で行われている（`helpers.ts` の `evaluateTouchesEx`）。
+ * ウェッジの構造図（`pivForDiagram`）だけは従来どおり `price` に終値を入れているので、
+ * **同じ `idx` でも図の点と `pivots` の点は価格が違う**。**不変なのは「`extremePrice` は判定に使った値」**の
  * 一点だけで、`price` の基準は検出器ごとに違う（`docs/tools.md` に表がある）。
  */
 export interface Pivot {

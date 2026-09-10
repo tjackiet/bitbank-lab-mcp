@@ -509,6 +509,28 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 主構成点が要るなら `kind` で絞る。`view=debug` の `candidates[].points[].role` も同じ表から
 `main` / `neckline` を決めている。
 
+#### 継続系（`triangle_*` / `wedge_*`）の `pivots`
+
+継続系も `pivots` を出すが、**上の表とは性質が違う**（`wedge_*` は issue #252 から）。
+
+| 検出器 | `pivots` の中身 | 点数 |
+|---|---|---:|
+| `triangle_*` | 上下トレンドラインの回帰に使った relaxed swing（peaks / valleys） | 可変 |
+| `wedge_*` | 上下トレンドラインの**非ブレイクタッチ点すべて**（ブレイク足は含めない） | 可変 |
+
+- **役割ラベルが無い。** 点数が可変で「山1 / 谷 / 山2」のような位置の意味づけができないため、
+  `view=full` の content に構成点の明細行は**出ない**（`src/handlers/detectPatternsViewsHandler.ts` の
+  表引きが該当なしで抜ける。issue #234）。使うなら `structuredContent` 側を `kind` と `idx` で読むこと。
+- **ネックライン定義点という概念が無い。** 継続系の水準はトレンドライン（`neckline` は
+  `triangle_*` のみ、ブレイク側の線）であって構成点の平均ではない。
+- **`price` は高安**（`extremePrice` と同値）。下の「`pivots[].price` は終値、`extremePrice` が判定値」を参照。
+- **点数は窓の長さとタッチの多さに比例する。** `wedge_*` は 0.5% 以内をタッチとみなす
+  （`helpers.ts` の `evaluateTouchesEx`）ので、収束が進んで上下の幅が 0.5% を切った区間では
+  ほぼ全バーが構成点になる（BTC/JPY 1hour の実測で 31〜107 点）。**件数を「形の良さ」の
+  代理指標に使わないこと**——整合度は `confidence` を見る。
+- `wedge_*` の構造図（`structureDiagram`）が描く点は `pivots` とは**別に組んでいる**。
+  図は 6 点まで間引いたうえで `price` に終値を入れているので、**同じ `idx` でも価格が違う**。
+
 ### `pivots[].price` は終値、`extremePrice` が判定値
 
 スイング検出（`tools/patterns/swing.ts`）は**極値判定を高値 / 安値で行い、`price` には終値を入れる**。
@@ -530,10 +552,12 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 |---|---|---|
 | `detectSwingPoints`（double / triple / H&S） | 終値 | 判定に使った `high` / `low` |
 | `detect_triangles` の relaxed swing（`triangle_*`） | **`high` / `low`** | 同左（`price` と同値） |
+| `detect_wedges` のトレンドラインタッチ点（`wedge_*`） | **`high` / `low`** | 同左（`price` と同値） |
 | 形成中 H&S / 逆 H&S の暫定右肩 | 最新足の終値 | 同左（極値判定を通っていない） |
 
 三角形が終値を経由しないのは、**トレンドライン（`upperLine` / `lowerLine`）をこの高安列に
-回帰させており、`neckline` もその線から取る**ため。`price` を終値に差し替えると構成点が
+回帰させており、`neckline` もその線から取る**ため。ウェッジも同じ論理で高安に揃えてある——
+構成点がトレンドラインへの**タッチ点**で、タッチ判定自体が高安と線の距離で行われている。`price` を終値に差し替えると構成点が
 自分のトレンドライン上に乗らなくなり、`aftermath.theoreticalTarget`
 （`min` / `max(pivots[].price)` 由来）も動く。同値であることは欠損ではなく
 「この検出器は終値を経由していない」という情報として読むこと。

@@ -614,14 +614,22 @@ export const DetectedPatternSchema = z.object({
 					.describe(
 						'極値判定に実際に使った値。kind=H なら `high`、kind=L なら `low`。' +
 							'`price` との差がヒゲ分で、これを見れば報告値から判定を検算できる。' +
-							'ただし triangle_* は独自の relaxed swing（`price` が最初から high / low）を使うため ' +
-							'`price` と同値になる——同値であること自体が「終値を経由していない」という情報。',
+							'ただし継続系（triangle_* は独自の relaxed swing、wedge_* はトレンドラインへのタッチ点）は ' +
+							'`price` が最初から high / low なので `price` と同値になる' +
+							'——同値であること自体が「終値を経由していない」という情報。',
 					),
 			}),
 		)
 		.optional()
 		.describe(
 			'パターン構成点の位置と価格。**price（終値）と extremePrice（極値判定に使った高安）は別の値。** ' +
+				'**継続系（triangle_* / wedge_*）も出す。** triangle_* は回帰に使った relaxed swing、' +
+				'wedge_* は上下トレンドラインの**非ブレイクタッチ点すべて**（issue #252）で、' +
+				'どちらも `price` は高安（`extremePrice` と同値）。' +
+				'**点数は可変**（wedge_* は窓の長さとタッチの多さで数十点になることがある）で、' +
+				'反転系のような役割（山1 / 谷 / …）は無い——位置で意味づけせず `kind` と `idx` だけを使うこと。' +
+				'`view=full` の content にも継続系の構成点明細は出ない（役割ラベルが無いため）。' +
+				'以下は反転系の話。' +
 				'種別混在の構造点リストで、主構成点は位置ではなく `kind` で識別する（triple_top / H&S は H、' +
 				'triple_bottom / 逆 H&S は L）。**反転系はネックライン定義点も含む**（H&S は p1 / p3、double は b、' +
 				'triple は v1 / v2。並びは H&S `[p0,p1,p2,p3,p4]`、double `[a,b,c]`、triple `[a,v1,b,v2,c]`。' +

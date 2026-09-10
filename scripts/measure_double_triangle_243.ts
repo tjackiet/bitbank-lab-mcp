@@ -522,7 +522,13 @@ interface Pair {
 	dEnd: string;
 	dConfidence: number;
 	cType: string;
-	/** `wedge_*` は `pivots` を持たない（`detect_wedges.ts` は構成点を出力しない）ので `null`。 */
+	/**
+	 * 継続側の構成点の添字。`null` は `pivots` を持たない出力（＝共有点数が判定不能）。
+	 *
+	 * **#252 以降、`wedge_*` も `pivots` を出す**（トレンドラインの非ブレイクタッチ点。`price` は高安）ので、
+	 * 現行側で `null` になる継続 type はもう無い。ベースライン側（`--baseline-rev` の #252 前のリビジョン）は
+	 * 引き続き `wedge_*` が `null` になるため、分岐そのものは残してある。
+	 */
 	cIdxs: number[] | null;
 	cStart: string;
 	cEnd: string;
@@ -743,9 +749,10 @@ function sectionPairCounts(pairs: Pair[], structures: Structure[]): string {
 	return out.join('\n');
 }
 
+/** 共有点数（double の 3 点のうち継続側の `pivots` に含まれる数）の分布表。 */
 function sectionShared(pairs: Pair[], structures: Structure[]): string {
 	if (pairs.length === 0) return '共存ペアが 0 件なので該当なし。';
-	const label = (n: number | null) => (n === null ? '判定不能（継続側に `pivots` が無い）' : `${n} 点`);
+	const label = (n: number | null) => (n === null ? '判定不能（継続側に `pivots` が無い。#252 前の出力）' : `${n} 点`);
 	const out: string[] = ['| 共有点数 | 延べ | 構造 |', '|---|---:|---:|'];
 	const keys = [...new Set(pairs.map((p) => p.shared))].sort((a, b) => (a ?? -1) - (b ?? -1));
 	for (const k of keys) {
@@ -889,7 +896,7 @@ function sectionCdOverlap(results: CorpusResult[]): string {
  * 分布の読み取りは従来どおりコーパス別の表で行うこと。
  */
 function sectionChecksum(structures: Structure[]): string {
-	const label = (n: number | null) => (n === null ? '判定不能（`wedge_*`）' : `${n} 点`);
+	const label = (n: number | null) => (n === null ? '判定不能（`pivots` 無し。#252 前の `wedge_*`）' : `${n} 点`);
 	const out: string[] = [
 		`共存構造は全コーパス通算で **${structures.length}**。メモ §5 の判定表の行数はこれと一致する。`,
 		'',
@@ -1011,9 +1018,11 @@ async function main(): Promise<void> {
 	);
 	md.push('');
 	md.push(
-		'**継続側の `pivots`**: `triangle_*` は構成点を出力するが、`wedge_*`（`detect_wedges.ts`）は' +
-			'`pivots` を持たない（ダイアグラム用の点は別フィールド）。共有点数はその場合 **判定不能**として別建てにする。' +
-			'照合は必ず `idx` で行う——`triangle` の `pivots.price` は高安、`double` は終値で、価格では突き合わせられない' +
+		'**継続側の `pivots`**: `triangle_*` / `wedge_*` とも構成点を出力する（`wedge_*` は **#252 以降**。' +
+			'トレンドラインの非ブレイクタッチ点で、点数は可変。ダイアグラム用の点は従来どおり別フィールド）。' +
+			'したがって現行側の共有点数はすべて計算できる——**判定不能**の行が出るのは ' +
+			'ベースライン側（#252 前）だけ。' +
+			'照合は必ず `idx` で行う——継続側の `pivots.price` は高安、`double` は終値で、価格では突き合わせられない' +
 			'（`swing.ts` の `Pivot` docstring）。',
 	);
 	md.push('');

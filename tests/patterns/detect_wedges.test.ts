@@ -567,4 +567,149 @@ describe('detectWedges', () => {
 		expect(() => detectWedges(ctx1d)).not.toThrow();
 		expect(() => detectWedges(ctx1w)).not.toThrow();
 	});
+	// ── pivots（構成点。issue #252）────────────────────────────
+	//
+	// `wedge_*` は #252 まで `pivots` を出しておらず、`triangle_*` と非対称だった。
+	// 中身は上下トレンドラインの**非ブレイクタッチ点すべて**で、`price` は高安。
+	//
+	// **ここで踏むのは 4d（形成中）パス。** 4b（回帰ベース）は本ファイル冒頭のとおり
+	// 合成フィクスチャでは通らず、実データ（`btc_jpy_1day_2026` / `1hour_2026_08` /
+	// `1hour_2026_09` × tf 3 種 × swingDepth 4 種 × includeForming 2 値）でも 1 件も出ない。
+	// **両パスとも同じ `buildTouchPivots` を通す**ので、契約はここで固定できる。
+
+	describe('pivots（構成点）', () => {
+		/**
+		 * 指定した型の**形成中パス（4d）由来**のウェッジを 1 件取る。
+		 *
+		 * **型と検出経路の両方で絞る。** `detectWedges` は回帰パス（4b）の結果を先に並べるので、
+		 * `_wedge` で終わる最初の 1 件を拾うと、別の型や 4b の結果が assert を満たしてしまい
+		 * 「4d の `pivots` を見ている」つもりのテストが黙って別物を見る（PR #273 のレビュー指摘）。
+		 * 4b が踏めるようになったらここが落ちるので、そのとき経路ごとにテストを分ければよい。
+		 */
+		function formingWedge(candles: CandleData[], type: 'rising_wedge' | 'falling_wedge') {
+			const ctx = buildCtx({ candles, pivots: [], includeForming: true });
+			const result = detectWedges(ctx);
+			const w = result.patterns.find(
+				(p) => p.type === type && (p as { _method?: string })._method === 'forming_relaxed',
+			);
+			expect(w).toBeDefined();
+			return w as NonNullable<typeof w>;
+		}
+
+		it('rising_wedge に pivots が出る（idx 昇順・上下 2 点ずつ以上）', () => {
+			const candles = buildRisingWedgeCandles(80);
+			const w = formingWedge(candles, 'rising_wedge');
+			const piv = w.pivots ?? [];
+
+			// 上下 2 点ずつ以上（ウェッジの成立条件と整合）。
+			expect(piv.length).toBeGreaterThanOrEqual(4);
+			expect(piv.filter((p) => p.kind === 'H').length).toBeGreaterThanOrEqual(2);
+			expect(piv.filter((p) => p.kind === 'L').length).toBeGreaterThanOrEqual(2);
+
+			// idx 昇順。**同じ idx が H / L 両方に出ることは許す**（外側バーが上下両ラインを
+			// 同時に触るケース。配列のキーは `idx` ではなく `(idx, kind)`）。
+			for (let i = 1; i < piv.length; i++) {
+				expect(piv[i].idx).toBeGreaterThanOrEqual(piv[i - 1].idx);
+			}
+		});
+
+		it('price は高安（H=high / L=low）で extremePrice と一致する', () => {
+			const candles = buildRisingWedgeCandles(80);
+			const w = formingWedge(candles, 'rising_wedge');
+			const piv = w.pivots ?? [];
+			expect(piv.length).toBeGreaterThan(0);
+
+			for (const p of piv) {
+				const c = candles[p.idx];
+				expect(c).toBeDefined();
+				expect(p.price).toBe(p.kind === 'H' ? c.high : c.low);
+				// **極値判定に使った値と同値**——この検出器は終値を経由していない、という情報。
+				expect(p.extremePrice).toBe(p.price);
+			}
+		});
+
+		it('price は終値ではない（構造図の点＝終値ベースと同じ配列を流用していない）', () => {
+			// `pivForDiagram` は同じタッチ点から組むが `price` に**終値**を入れており、
+			// 間引きもする。ここが終値になっていたら図の配列を流用した回帰。
+			const candles = buildRisingWedgeCandles(80);
+			const w = formingWedge(candles, 'rising_wedge');
+			const piv = w.pivots ?? [];
+			expect(piv.some((p) => p.price !== candles[p.idx].close)).toBe(true);
+		});
+
+		it('kind は上限 / 下限のタッチに対応する（H は上側トレンドライン、L は下側）', () => {
+			// フィクスチャの設計値は upper(i) = 100 + 0.3i / lower(i) = 80 + 0.5i。
+			// H の点だけ・L の点だけを回帰すると、それぞれの線が復元できるはず。
+			const candles = buildRisingWedgeCandles(80);
+			const w = formingWedge(candles, 'rising_wedge');
+			const piv = w.pivots ?? [];
+
+			const fitH = linearRegressionWithR2(piv.filter((p) => p.kind === 'H').map((p) => ({ x: p.idx, y: p.price })));
+			const fitL = linearRegressionWithR2(piv.filter((p) => p.kind === 'L').map((p) => ({ x: p.idx, y: p.price })));
+
+			expect(fitH.r2).toBeGreaterThan(0.9);
+			expect(fitL.r2).toBeGreaterThan(0.9);
+			expect(fitH.slope).toBeCloseTo(0.3, 1);
+			expect(fitL.slope).toBeCloseTo(0.5, 1);
+			// rising wedge は両ライン上向きで**下側がより急**（収束）。
+			expect(fitH.slope).toBeGreaterThan(0);
+			expect(fitL.slope).toBeGreaterThan(fitH.slope);
+			// 同じ idx で H は L より上（上限側 / 下限側の対応そのもの）。
+			const inverted = piv.filter((h) => {
+				if (h.kind !== 'H') return false;
+				const l = piv.find((q) => q.kind === 'L' && q.idx === h.idx);
+				return l !== undefined && h.price <= l.price;
+			});
+			expect(inverted).toEqual([]);
+		});
+
+		it('ブレイク足は pivots に含まれない', () => {
+			// 末尾 10 本で上限を大きく上抜けるフィクスチャ。ブレイク足はラインを
+			// **抜けた**足であって構成点ではないので `isBreak: true` として除かれる。
+			const candles = buildFallingWedgeWithUpBreakout();
+			const ctx = buildCtx({ candles, pivots: [], includeForming: true });
+			const result = detectWedges(ctx);
+			const broken = result.patterns.filter(
+				(p) => p.type === 'falling_wedge' && typeof p.breakoutBarIndex === 'number',
+			);
+			expect(broken.length).toBeGreaterThan(0);
+
+			for (const w of broken) {
+				const piv = w.pivots ?? [];
+				expect(piv.length).toBeGreaterThanOrEqual(4);
+				expect(piv.some((p) => p.idx === w.breakoutBarIndex)).toBe(false);
+				// ブレイク足だけでなく、**ブレイク区間（末尾 10 本）が丸ごと入らない**ことも見る。
+				expect(piv.every((p) => p.idx < 80)).toBe(true);
+			}
+		});
+
+		it('falling_wedge でも kind が上限 / 下限に対応する', () => {
+			// upper(i) = 200 − 0.5i / lower(i) = 180 − 0.25i。両ライン下向きで**上側がより急**。
+			const candles = buildFallingWedgeWithUpBreakout();
+			const w = formingWedge(candles, 'falling_wedge');
+			const piv = w.pivots ?? [];
+
+			const fitH = linearRegressionWithR2(piv.filter((p) => p.kind === 'H').map((p) => ({ x: p.idx, y: p.price })));
+			const fitL = linearRegressionWithR2(piv.filter((p) => p.kind === 'L').map((p) => ({ x: p.idx, y: p.price })));
+			expect(fitH.r2).toBeGreaterThan(0.9);
+			expect(fitL.r2).toBeGreaterThan(0.9);
+			expect(fitH.slope).toBeLessThan(0);
+			expect(fitL.slope).toBeLessThan(0);
+			expect(Math.abs(fitH.slope)).toBeGreaterThan(Math.abs(fitL.slope));
+		});
+
+		it('pivots は range の中に収まる', () => {
+			const candles = buildRisingWedgeCandles(80);
+			const w = formingWedge(candles, 'rising_wedge');
+			const piv = w.pivots ?? [];
+			const startIdx = candles.findIndex((c) => c.isoTime === w.range?.start);
+			const endIdx = candles.findIndex((c) => c.isoTime === w.range?.end);
+			expect(startIdx).toBeGreaterThanOrEqual(0);
+			expect(endIdx).toBeGreaterThanOrEqual(startIdx);
+			for (const p of piv) {
+				expect(p.idx).toBeGreaterThanOrEqual(startIdx);
+				expect(p.idx).toBeLessThanOrEqual(endIdx);
+			}
+		});
+	});
 });

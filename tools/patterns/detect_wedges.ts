@@ -30,6 +30,7 @@ import {
 	generateWindows,
 } from './helpers.js';
 import { smoothCandleExtremes } from './smoothing.js';
+import type { Pivot } from './swing.js';
 import { computeTargetReach, omittedTargetReach, type TargetReachResult, targetReachFields } from './target-reach.js';
 import type {
 	CandDebugEntry,
@@ -37,6 +38,7 @@ import type {
 	DeduplicablePattern,
 	DetectContext,
 	DetectResult,
+	TouchPoint,
 	TouchResult,
 } from './types.js';
 
@@ -412,6 +414,39 @@ function validateRegressionCandidate(
 
 // ── Phase 2b: 回帰ベース候補の結果構築 ──
 
+/**
+ * トレンドラインのタッチ点から `PatternEntry.pivots`（構成点）を組む（issue #252）。
+ *
+ * 対象は上下トレンドラインの**非ブレイクタッチ点すべて**。ブレイク点（`isBreak: true`）は
+ * ラインを**割った / 抜けた**足であって構成点ではないので除く。
+ *
+ * **間引かない。** 間引きは図（`pivForDiagram`）の都合であって、データ側の都合ではない。
+ * 図とは別に組む（図は `MAX_DIAGRAM_POINTS` まで間引いた上で `price` に**終値**を入れているので、
+ * 図の点と `pivots` の点は同じ `idx` でも価格が違う）。
+ *
+ * **`price` は高安**（`kind='H'` なら `high`、`'L'` なら `low`）で、`extremePrice` も同値。
+ * `detect_triangles` の relaxed swing と同じ基準に揃えてある——タッチ判定自体が `c.high` / `c.low` と
+ * トレンドラインの距離で行われており（`helpers.ts` の `evaluateTouchesEx`）、`price` を終値にすると
+ * 構成点が自分のトレンドライン上に乗らなくなる（`swing.ts` の `Pivot` docstring と同じ論理）。
+ *
+ * 同じ `idx` が H / L 両方に現れ得る（外側バーが上下両ラインを同時に触るケース）。
+ * 配列のキーは `idx` ではなく `(idx, kind)` なので dedup しない（`detect_triangles` と同じ扱い。#141）。
+ */
+function buildTouchPivots(candles: readonly CandleData[], touches: TouchResult): Pivot[] {
+	const pick = (pts: readonly TouchPoint[], kind: 'H' | 'L'): Pivot[] =>
+		pts
+			.filter((t) => !t.isBreak)
+			.map((t) => {
+				const c = candles[t.index];
+				const price = Number(kind === 'H' ? c?.high : c?.low);
+				return { idx: t.index, price, kind, extremePrice: price };
+			})
+			.filter((p) => Number.isFinite(p.price));
+	return [...pick(touches.upperTouches ?? [], 'H'), ...pick(touches.lowerTouches ?? [], 'L')].sort(
+		(a, b) => a.idx - b.idx,
+	);
+}
+
 function downsamplePoints(pts: Array<{ idx: number; kind: 'H' | 'L' }>, maxPoints: number) {
 	if (pts.length <= maxPoints) return pts;
 	const out: typeof pts = [];
@@ -423,6 +458,14 @@ function downsamplePoints(pts: Array<{ idx: number; kind: 'H' | 'L' }>, maxPoint
 	return out.filter((p, i, arr) => arr.findIndex((q) => q.idx === p.idx && q.kind === p.kind) === i);
 }
 
+/**
+ * 検証を通った回帰ベース候補（4b）から出力エントリを 1 件組む。
+ *
+ * ブレイク検出・ターゲット価格・`aftermath`・構造図・`pivots` をここでまとめて作る。
+ * **`aftermath` を持つのはこのパスだけ**なので、出力から 4b 由来か 4d 由来かを判別できる。
+ *
+ * @returns 開始 / 終了のローソク足が取れなかった場合は `null`
+ */
 function buildRegressionEntry(
 	candles: CandleData[],
 	wedgeType: 'rising_wedge' | 'falling_wedge',
@@ -488,6 +531,10 @@ function buildRegressionEntry(
 			targetReach = omittedTargetReach('invalid_breakout_price');
 		}
 	}
+
+	// 構成点（`pivots`）はタッチ点の非ブレイク分を**全件**、`price` は高安で出す（#252）。
+	// 下の図用の点（`pivForDiagram`）とは**別に組む**——図は間引き済みで `price` が終値なので流用できない。
+	const pivots = buildTouchPivots(candles, touches);
 
 	// ダイアグラム用にタッチポイントから主要点を間引きして pivots を構成
 	const upTouchPts = (touches.upperTouches || [])
@@ -579,6 +626,7 @@ function buildRegressionEntry(
 		confidence,
 		range: { start, end },
 		status: status4b,
+		pivots,
 		daysToApex: apex.isValid ? apex.barsToApex : undefined,
 		breakoutDirection: breakoutDirection ?? undefined,
 		outcome: outcome4b,
@@ -893,6 +941,15 @@ function findLowerTrendlineF(
 
 // ── Phase 3: 形成中ウェッジ検出 ──
 
+/**
+ * 形成中ウェッジ（4d）を検出する。回帰ベース（4b）より緩い条件で、SG 平滑化した
+ * リラックスピボットから 2 点でトレンドラインを引き、収束・Apex・包含だけを見る。
+ *
+ * ブレイクを確認できた候補は `status: 'completed'` になるため、**`includeForming: false`
+ * でも出力に残る**（実データの既定オプションで出てくる `wedge_*` はほぼこれ）。
+ *
+ * @param existingPatterns 回帰パスの結果。期間が近い同型を重複として捨てるために参照する
+ */
 function detectFormingWedges(
 	pivotData: PivotData,
 	barParams: WedgeBarParams,
@@ -1121,11 +1178,20 @@ function detectFormingWedges(
 			}
 		}
 
+		// 構成点（`pivots`）。回帰パスと同じ定義——上下トレンドラインの非ブレイクタッチ点を
+		// `evaluateTouchesEx` で取り、`price` は高安で出す（#252）。**検出には一切使わない**
+		// （このパスの採否は上のゲートで既に決まっている）ので、閾値も判定も動かない。
+		// 形成中パスもここで `pivots` を出さないと、同じ `wedge_*` なのに検出経路によって
+		// 構成点が有ったり無かったりする（実データの既定オプションで出る wedge はこちらのパス）。
+		const fTouches = evaluateTouchesEx(candles, upperLine, lowerLine, startIdx, actualEndIdx);
+		const fPivots = buildTouchPivots(candles, fTouches);
+
 		const entry: DeduplicablePattern = {
 			type: wedgeType,
 			confidence,
 			range: { start, end },
 			status,
+			pivots: fPivots,
 			daysToApex: fApex.isValid ? fApex.barsToApex : undefined,
 			breakoutDirection: breakoutDirection ?? undefined,
 			outcome,

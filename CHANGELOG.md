@@ -75,6 +75,52 @@
 | 60 | #262 Phase 2 | **double の「構造完成・ブレイク待ち」を `near_completion` で出すようにし、誤ラベルだった `tryFormingDoubleBottom` を削除した。** 完成済み 4 経路（strict / relaxed × top / bottom）は `findBreakoutIdx` が −1 のとき `no_breakout` で棄却していたが、triple / H&S と同じく `near_completion` を組むようにした。**`status` の enum も `FORMING_*` 係数も 1 つも変えていない** | **既定（`includeForming: false`）は 544 ケース全件で完全一致**（**検出器は `includeForming` を「エントリを組み立てる前」に見る**ので、`false` のときは `near_completion` / `expired` / `invalid` をそもそも作らず、従来どおり `no_breakout` で抜ける）。`includeForming: true` は 11,560 ケース中 2,791 ケースで変わる |
 | 61 | #268 Phase 1 | **形成中 `double_top` の左の山の探索を「パターン長」基準に変える ablation の計測。コード変更なし。** 現行は `[...allPeaks].reverse().find(...)` で**最新の確定山 1 つ**を取るので `formationBars` が「直近の山からの距離」を測っており、`forming_bars_out_of_range` の下限割れで accepted が 0 件になる。探索を「谷を挟んで最新足と同水準の最初の確定山」に変えても目視で呼べる形は増えなかった | **変わらない**（計測スクリプトと内部メモのみ） |
 | 62 | #268 案 C | **`tryFormingDoubleTop` を削除し、double は `forming` を持たないパターンにした。** double の `status` は `near_completion` / `completed` / `invalid` / `expired` の 4 段で、`forming` は**仕様として持たない**（最終構成点が 1 つしか無く形成中を定義できない）。**triple / H&S の形成中検知は 1 行も触っていない** | **既定（`includeForming: false`）は変わらない。** `includeForming: true` でも 12,104 ケース全件で**変わらない**（削除した経路の accepted が全母集団で 0 件のため）。減るのは `view=debug` の候補だけ |
+| 63 | #252 | **`wedge_*` に `pivots`（構成点）を出すようにした。** 中身は上下トレンドラインの**非ブレイクタッチ点すべて**で、`price` は高安（`extremePrice` と同値）。`triangle_*` と同じ基準に揃えた。**検出ロジック・閾値は 1 つも触っていない**（回帰パスも形成中パスも、採否が決まった後に出力用の点を組むだけ） | **判定は変わらない**（実データ 1hour の回帰 fixture 10 件を全フィールド突き合わせて、**差分は `wedge_*` 4 件に `pivots` が増えたぶんだけ**。他のキーは 1 バイトも動かない） |
+
+### Added（#252: `wedge_*` に `pivots`（構成点）を出す）
+
+`rising_wedge` / `falling_wedge` は構成点を出力しておらず、`triangle_*` が出す `pivots` と
+非対称だった。**`structuredContent` へのフィールド追加**なので既存の消費者は壊れない
+（`.claude/rules/tools.md` の view 規約 2 が禁じるのは *削る* 側）。
+
+#### 何を入れるか
+
+上下トレンドラインの**非ブレイクタッチ点すべて**（`helpers.ts` の `evaluateTouchesEx` が
+`isBreak: false` で返す点）を `idx` 昇順で並べる。**間引かない**——間引きは構造図の都合であって、
+データ側の都合ではない。
+
+- **`price` は高安**（`kind='H'` は `high`、`'L'` は `low`）で、`extremePrice` も同値。
+  `triangle_*` と同じ基準に揃えた。タッチ判定自体が `c.high` / `c.low` とトレンドラインの
+  距離で行われているので、`price` を終値にすると**構成点が自分のトレンドライン上に乗らない**
+  （`swing.ts` の `Pivot` docstring と同じ論理）。
+- **ブレイク足（`isBreak: true`）は入れない。** ラインを割った / 抜けた足であって構成点ではない。
+- **構造図（`pivForDiagram`）は従来どおり**。6 点まで間引いたうえで `price` に終値を入れており、
+  **同じ `idx` でも図の点と `pivots` の点は価格が違う**。図の見た目は 1 ピクセルも変えていない。
+- **回帰パス（4b）と形成中パス（4d）の両方に出す。** 実データの既定オプションで出てくる
+  `wedge_*` は**形成中パス由来**（回帰パスは `aftermath` を持つので出力から判別できる）なので、
+  4b だけに足すと実データでは 1 件も増えない。同じ `wedge_*` が検出経路によって構成点を
+  持ったり持たなかったりするのを避ける。
+
+#### 役割ラベルは足さない（`view=full` の明細行は出ない）
+
+点数が可変で「山1 / 谷 / 山2」のような位置の意味づけができないため、
+`detectPatternsViewsHandler.ts` の役割ラベル表引き（#234）は `wedge_*` を引かず、
+`view=full` の構成点明細行は**出ない**。これは `triangle_*` と同じ扱い。
+content で新しく出るのは `価格範囲` 行（`pivots` の `price` の min / max）だけ。
+
+#### 点数は可変で、収束区間では大きくなる
+
+`evaluateTouchesEx` は線から 0.5% 以内をタッチとみなすので、上下の幅が 0.5% を切った区間では
+ほぼ全バーが構成点になる。実データ（BTC/JPY 1hour・既定オプション）の 4 件で **31 / 37 / 68 / 107 点**。
+**件数を「形の良さ」の代理指標に使わないこと**——整合度は従来どおり `confidence` を見る
+（`docs/tools.md` の「継続系（`triangle_*` / `wedge_*`）の `pivots`」に明記した）。
+
+#### 副次的に片付いたもの
+
+`scripts/measure_double_triangle_243.ts` が共有点数を「判定不能（継続側に `pivots` が無い）」と
+していた分岐が、**現行側で 0 件**になった（ベースライン側＝ #252 前のリビジョンでは引き続き
+出るので分岐自体は残してある）。#243 の結論（案 C = 型間排他を入れない）は動かないので
+**再計測はしていない**（[docs/internal/double-triangle-exclusion-243.md](docs/internal/double-triangle-exclusion-243.md) の末尾に追記）。
 
 ### Removed（#268 案 C: double の `forming` を廃止し、`near_completion` から始まるパターンにする）
 
