@@ -385,20 +385,21 @@ describe('apply が例外を投げる', () => {
 });
 
 describe('タイマー注入', () => {
-	it('setTimeout / clearTimeout を差し替えられる（既定の globalThis を使わない）', async () => {
+	it('タイマー実装をペアで差し替えられる（既定の globalThis を使わない）', async () => {
 		const h = makeHarness();
-		const scheduledDelays: (number | undefined)[] = [];
+		const scheduledDelays: number[] = [];
 		let clearedCount = 0;
-		// Mock<typeof setTimeout> は setTimeout のジェネリック署名を畳んでしまい
-		// `typeof globalThis.setTimeout` に代入できないため、記録は素の関数で行う。
 		const stop = start(h, {
-			setTimeout: (handler, timeout) => {
-				scheduledDelays.push(timeout);
-				return globalThis.setTimeout(handler, timeout);
-			},
-			clearTimeout: (id) => {
-				clearedCount += 1;
-				globalThis.clearTimeout(id);
+			// 予約と取り消しはペアでしか差し替えられない（片方だけだと ID を取り違える）。
+			timers: {
+				setTimeout: (handler, timeout) => {
+					scheduledDelays.push(timeout);
+					return globalThis.setTimeout(handler, timeout);
+				},
+				clearTimeout: (id) => {
+					clearedCount += 1;
+					globalThis.clearTimeout(id);
+				},
 			},
 		});
 

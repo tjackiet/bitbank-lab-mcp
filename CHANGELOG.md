@@ -168,6 +168,8 @@ UI は既に `src/mcp-apps-meta.js` を `../../../src/` 経由で import して�
 
 なお注入の型は `typeof globalThis.setTimeout` ではなく**使う部分だけの最小契約**（`SetTimeoutLike` / `ClearTimeoutLike`）にした。Node の型は `__promisify__` まで持つため、そのまま要求すると**テストが素の関数を渡せず注入という目的が果たせない**。
 
+差し替えは `timers: { setTimeout, clearTimeout }` の**ペア単位**にしてある（2 つの独立した optional にしない）。片方だけ差し替えられると、予約側が返した ID を取り消し側が知らず、**abort してもタイマーが残る**——停止関数が仕事をしなくなる経路が型で作れてしまう（CodeRabbit が #285 で指摘）。
+
 #### ビルド成果物
 
 `npm run build:ui` で両 UI を再生成し、`src/resources/app-resources.ts` が読む `ui/*/dist/*.html`（リポジトリ管理下）を差分に含めた。

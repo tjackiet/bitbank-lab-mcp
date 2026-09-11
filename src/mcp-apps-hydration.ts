@@ -55,6 +55,25 @@ export type TimerId = ReturnType<typeof globalThis.setTimeout>;
 export type SetTimeoutLike = (handler: () => void, timeoutMs: number) => TimerId;
 export type ClearTimeoutLike = (timerId: TimerId) => void;
 
+/**
+ * 差し替え可能なタイマー実装。**予約と取り消しは必ず同じ実装で行う**ため、
+ * 片方だけ差し替えられない形（1 つのオブジェクト）で受け取る。
+ *
+ * 混ぜると予約側が返した ID を取り消し側が知らず、**abort してもタイマーが残る**
+ * （停止関数が仕事をしなくなる。CodeRabbit が #285 で指摘）。
+ */
+export interface SnapshotHydrationTimers {
+	setTimeout: SetTimeoutLike;
+	clearTimeout: ClearTimeoutLike;
+}
+
+/** 既定のタイマー。ブラウザの window.setTimeout は receiver を外すと Illegal invocation に
+ *  なりうるので、メソッド呼び出しのまま包む。 */
+const globalTimers: SnapshotHydrationTimers = {
+	setTimeout: (handler, timeoutMs) => globalThis.setTimeout(handler, timeoutMs),
+	clearTimeout: (timerId) => globalThis.clearTimeout(timerId),
+};
+
 export interface SnapshotHydrationOptions {
 	/** get_ui_snapshot を呼ぶ。UI 側で mcpApp.callServerTool を包んで渡す */
 	fetchSnapshot: () => Promise<unknown>;
@@ -68,8 +87,8 @@ export interface SnapshotHydrationOptions {
 	initialDelayMs?: number;
 	/** リトライ間隔（既定 [2_000, 4_000]。試行回数は 1 + この配列の長さ = 3） */
 	retryDelaysMs?: readonly number[];
-	setTimeout?: SetTimeoutLike;
-	clearTimeout?: ClearTimeoutLike;
+	/** テスト注入用。予約と取り消しの取り違えを防ぐため**ペアでのみ**差し替えられる */
+	timers?: SnapshotHydrationTimers;
 }
 
 /**
@@ -92,12 +111,9 @@ export function startSnapshotHydration(opts: SnapshotHydrationOptions): () => vo
 		initialDelayMs = DEFAULT_INITIAL_DELAY_MS,
 		retryDelaysMs = DEFAULT_RETRY_DELAYS_MS,
 	} = opts;
-	// ブラウザの window.setTimeout は receiver を外すと Illegal invocation になりうるので、
-	// 既定はメソッド呼び出しのまま包む。既定値の解決は呼び出し時なので、テスト側が
-	// フェイクタイマーを入れてから呼べばそれが使われる。
-	const setTimer: SetTimeoutLike =
-		opts.setTimeout ?? ((handler, timeoutMs) => globalThis.setTimeout(handler, timeoutMs));
-	const clearTimer: ClearTimeoutLike = opts.clearTimeout ?? ((timerId) => globalThis.clearTimeout(timerId));
+	// 既定は globalThis のタイマー。参照はここで解決するのではなく呼び出しのたびに辿るので、
+	// テスト側がフェイクタイマーを入れてから呼べばそれが使われる。
+	const { setTimeout: setTimer, clearTimeout: clearTimer } = opts.timers ?? globalTimers;
 
 	let aborted = false;
 	let timerId: TimerId | undefined;
