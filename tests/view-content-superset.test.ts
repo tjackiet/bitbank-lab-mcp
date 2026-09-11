@@ -501,6 +501,13 @@ const TARGET_FIXTURE_BY_INDEX: Record<number, Record<string, unknown>> = {
 		targetScanBars: 25,
 		targetScanComplete: false,
 	},
+	// 4 形目（出力なし）。**3 形だけだと、この行が上位 view から消えても包含テストが通る**
+	// （`length > 0` も `full ⊇ detailed` も他の 3 形で満たされてしまう）。
+	3: {
+		breakoutTarget: 11_000_000,
+		targetMethod: 'pattern_height',
+		targetProgressOmittedReason: 'degenerate_target_distance',
+	},
 };
 
 // 戻り値を上流ツールの出力型で縛る。手書きフィクスチャが production の shape から
@@ -778,6 +785,23 @@ describe('階梯上の view の content は下位 view の上位集合（§3-2 �
 		expect(targetLines(summary)).toHaveLength(0);
 		expect(targetLines(detailed).length).toBeGreaterThan(0);
 		expect(targetLines(full).length).toBeGreaterThan(0);
+		// **4 形それぞれを名指しで見る。** 件数だけだと 1 形が消えても他の形が埋め合わせて通る。
+		for (const [label, text] of [
+			['detailed', detailed],
+			['full', full],
+		] as const) {
+			const lines = targetLines(text);
+			expect(lines, `${label}: 到達`).toContain('- ターゲット: 到達（ブレイク後 12 本目、2026-01-15）');
+			expect(lines, `${label}: 未到達（走査完了）`).toContain(
+				'- ターゲット: 未到達（走査 60 本完了、目標幅の 26% まで接近）。走査窓内に逆方向のブレイクあり（triangle_ascending 上方 +28 本）',
+			);
+			expect(lines, `${label}: 未到達（走査中）`).toContain(
+				'- ターゲット: 未到達（ブレイク後 25 本経過 / 走査上限 60 本、目標幅の 61% まで接近）',
+			);
+			expect(lines, `${label}: 出力なし`).toContain(
+				'- ターゲット: 出力なし（ブレイク足が想定値幅の85%以上を消化済みで、残り距離が短く進捗率が意味を持たないため）',
+			);
+		}
 
 		expectSupersetOf(fixedElements(detailed), fixedElements(summary), 'detailed ⊇ summary');
 		expectSupersetOf(fixedElements(full), fixedElements(detailed), 'full ⊇ detailed');

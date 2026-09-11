@@ -51,15 +51,20 @@
  * 先に置くと、後の段で消えるパターンを他ブレイクとして数えてしまう。
  */
 
-/** 交絡として申告する 1 件。**本数はどれも自分のブレイク足を 0 本目とした相対値。** */
-export interface TargetBreakoutConfounder {
-	/** 他パターンの種別（`triangle_ascending` 等）。 */
-	type: string;
-	/** 他パターンのブレイク方向。 */
-	direction: 'up' | 'down';
-	/** 自分のブレイク足から見て何本後にそのブレイクがあったか（常に 1 以上）。 */
-	barsAfterBreakout: number;
-}
+/**
+ * 交絡として申告する 1 件。**本数はどれも自分のブレイク足を 0 本目とした相対値。**
+ *
+ * **単一ソースは `src/schema/patterns.ts` の `TargetBreakoutConfounderSchema`**（Zod）で、
+ * ここは再エクスポートしているだけ。TypeScript の形を別に持つと、型上は正しい値を返しても
+ * Zod 側の宣言とずれて `parse()` が黙って剥がす / 落とす——`TargetReachOmissionReason` が
+ * 同じ理由で Zod から導出されている（#155 / #160 / #184 / #189 / #199 の再発防止）。
+ * 実行時の依存は `src/schema/patterns.ts` → `target-reach.ts`（閾値 3 定数）の一方向のままで、
+ * 逆向きは `import type` のみ（出力から消えるので循環しない）。
+ */
+export type { TargetBreakoutConfounder } from '../../src/schema/patterns.js';
+
+// 内部で値を組み立てるためにローカル名でも参照する（上の re-export は公開用）。
+import type { TargetBreakoutConfounder as Confounder } from '../../src/schema/patterns.js';
 
 /**
  * 交絡の判定に要る最小のかたち。`PatternEntry` / `DeduplicablePattern` に依存しないのは、
@@ -72,8 +77,8 @@ export interface TargetConfoundablePattern {
 	breakoutDirection?: unknown;
 	targetFirstReachBars?: unknown;
 	targetScanBars?: unknown;
-	targetOtherBreakoutBeforeReach?: TargetBreakoutConfounder[];
-	targetOppositeBreakoutInWindow?: TargetBreakoutConfounder[];
+	targetOtherBreakoutBeforeReach?: Confounder[];
+	targetOppositeBreakoutInWindow?: Confounder[];
 }
 
 /**
@@ -90,7 +95,7 @@ function isAcceptedForConfounding(p: TargetConfoundablePattern): boolean {
 
 interface BreakoutRef {
 	source: TargetConfoundablePattern;
-	type: string;
+	type: Confounder['type'];
 	direction: 'up' | 'down';
 	idx: number;
 }
@@ -100,7 +105,13 @@ function toBreakoutRef(p: TargetConfoundablePattern): BreakoutRef | null {
 	if (!Number.isInteger(idx)) return null;
 	const direction = p.breakoutDirection;
 	if (direction !== 'up' && direction !== 'down') return null;
-	const type = typeof p.type === 'string' && p.type ? p.type : 'unknown';
+	// **キャストが要るのは `p.type` を `unknown` で受けているから**（検出器が積んだ生の
+	// オブジェクトをそのまま受ける形。`TargetConfoundablePattern` の docstring を参照）。
+	// 値そのものは `DetectedPatternSchema.type`（= `PatternTypeEnum`）を通る側なので列挙外には
+	// ならず、読み取れなかった場合だけ防御分岐の `'unknown'` に落ちる。**万一列挙外が来たら
+	// `DetectPatternsOutputSchema.parse()` が落として黙って通さない**——ここで `string` のまま
+	// 持つと、その検査が効かなくなる。
+	const type = (typeof p.type === 'string' && p.type ? p.type : 'unknown') as Confounder['type'];
 	return { source: p, type, direction, idx };
 }
 
@@ -148,11 +159,7 @@ export function annotateTargetBreakoutConfounders<T extends TargetConfoundablePa
 	return patterns;
 }
 
-function collect(
-	refs: readonly BreakoutRef[],
-	self: BreakoutRef,
-	keep: (r: BreakoutRef) => boolean,
-): TargetBreakoutConfounder[] {
+function collect(refs: readonly BreakoutRef[], self: BreakoutRef, keep: (r: BreakoutRef) => boolean): Confounder[] {
 	return (
 		refs
 			.filter((r) => r.source !== self.source && keep(r))

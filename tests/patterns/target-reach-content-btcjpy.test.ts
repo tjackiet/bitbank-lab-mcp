@@ -20,12 +20,13 @@
  * （`tests/fixtures/detect_patterns_1hour_data_patterns_baseline.json`）と同じ呼び出しから出る。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { asMockResult } from '../_assertResult.js';
+import { asMockResult, assertOk } from '../_assertResult.js';
 
 vi.mock('../../tools/analyze_indicators.js', () => ({ default: vi.fn() }));
 
 import { toolDef as detectPatternsTool } from '../../src/handlers/detectPatternsHandler.js';
 import analyzeIndicators from '../../tools/analyze_indicators.js';
+import detectPatterns from '../../tools/detect_patterns.js';
 import { buildBtcJpy1hour202608Candles } from '../fixtures/btc_jpy_1hour_2026_08.js';
 
 afterEach(() => {
@@ -121,6 +122,23 @@ describe('#288 Phase 2 のターゲット行（実データ B / 365 本 / 既定
 		expect(text).not.toContain('530%');
 		expect(text).not.toContain('999%');
 		expect(text).not.toContain('ターゲット進捗');
+	});
+
+	/**
+	 * `tools/detect_patterns.ts` の `res.summary` は views handler と**別実装**なので、
+	 * 日時の粒度も別々に決まる。**暦日に潰すと 1hour では 24 本が同じラベルになり、
+	 * 初到達の足を特定できない**（#288 Phase 2 のレビュー指摘）。
+	 */
+	it('res.summary（別実装）も intraday の初到達を分まで出す', async () => {
+		const candles = buildBtcJpy1hour202608Candles();
+		vi.mocked(analyzeIndicators).mockResolvedValueOnce(
+			asMockResult({ ok: true, summary: 'ok', data: { chart: { candles } } }),
+		);
+		const res = await detectPatterns('btc_jpy', '1hour', candles.length, {});
+		assertOk(res);
+		expect(res.summary).toContain(`${TARGET_LABEL}到達（ブレイク後 12 本目、2026-08-25 11:00）`);
+		// 暦日に潰れていた旧実装の形が残っていないこと。
+		expect(res.summary).not.toContain('到達（ブレイク後 12 本目、2026-08-25）');
 	});
 
 	it('view=full: 進捗を出さなかった 2 件は理由を名乗り続ける（#224 症状 2 の回帰）', async () => {

@@ -496,15 +496,29 @@ export type TargetProgressOmittedReason = z.infer<typeof TargetProgressOmittedRe
  * `targetOtherBreakoutBeforeReach` / `targetOppositeBreakoutInWindow` の要素。
  * **どの区間・どの方向を数えるかは 2 フィールドで違う**ので、それぞれの `.describe()` を読むこと。
  * 判定の単一ソースは `tools/patterns/target-confounders.ts`。
+ *
+ * **範囲を宣言側に書き切る。** docstring が「常に 1 以上」と言っているのに `z.number().int()` が
+ * 任意の整数を通す状態は、#155 / #160 / #184 / #189 / #199 と同じ「宣言と振る舞いがずれる」形
+ * （あちらは宣言漏れ、こちらは宣言の緩さ）。範囲を書いておけば、判定を変えたときに
+ * `parse()` が落ちて気づける。
  */
 const TargetBreakoutConfounderSchema = z.object({
-	type: z.string().describe('他パターンの種別。'),
+	// **`unknown` は実装の防御分岐**（`toBreakoutRef` が `type` を文字列として取れなかったとき）。
+	// `PatternTypeEnum` に混ぜず literal で足すことで、「列挙外の種別」と「種別が読めなかった」を
+	// 区別できる状態のまま、任意の文字列は弾ける。
+	type: z
+		.union([PatternTypeEnum, z.literal('unknown')])
+		.describe('他パターンの種別。`unknown` は種別を読み取れなかったことの申告。'),
 	direction: z.enum(['up', 'down']).describe('他パターンのブレイク方向。'),
 	barsAfterBreakout: z
 		.number()
 		.int()
+		.min(1)
 		.describe('自分のブレイク足を 0 本目として何本後にそのブレイクがあったか（常に 1 以上）。'),
 });
+
+/** `TargetBreakoutConfounderSchema` から導出した交絡 1 件の型。実装側はこれを再エクスポートする。 */
+export type TargetBreakoutConfounder = z.infer<typeof TargetBreakoutConfounderSchema>;
 
 export const DetectedPatternSchema = z.object({
 	type: PatternTypeEnum,
@@ -869,6 +883,8 @@ export const DetectedPatternSchema = z.object({
 	targetFirstReachBars: z
 		.number()
 		.int()
+		.min(0)
+		.max(TARGET_REACH_MAX_BARS)
 		.optional()
 		.describe(
 			`**初めて breakoutTarget に届いた足**が、ブレイク足を 0 本目として何本目か` +
@@ -887,6 +903,8 @@ export const DetectedPatternSchema = z.object({
 	targetScanBars: z
 		.number()
 		.int()
+		.min(0)
+		.max(TARGET_REACH_MAX_BARS)
 		.optional()
 		.describe(
 			`到達判定で**実際に走査した本数**（ブレイク足を 0 本目とした後続の本数）。` +

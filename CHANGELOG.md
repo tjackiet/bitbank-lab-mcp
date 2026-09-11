@@ -157,6 +157,31 @@ Phase 1 の実測では走査窓 (0, 60] に他パターンのブレイクがあ
 - **`1day` は評価不能のまま。** ブレイク足の後に 60 本残る実体が 0 件で、母集団が作れない
   （この環境から bitbank API には届かないので、より長い 1day 系列の凍結 fixture が要る）。
 
+#### レビューで見つかった隣接欠陥も同じ PR で直した
+
+3 つは**この変更が触った行のすぐ隣に前からあった**もの（CodeRabbit の指摘）。
+
+1. **`breakoutTarget` が無いと理由行ごと消えていた。** 進捗行を `ターゲット価格:` 行のガードの
+   **中**で組んでいたため、`targetProgressOmittedReason` があっても `breakoutTarget` が無い
+   パターンは content から行が消えていた。**`no_target` は「ターゲット価格が出せなかった」ことの
+   申告なので、この理由を名乗るべき唯一のケースで必ず `breakoutTarget` が無い。**
+   #224 症状 2 と同じ形が呼び出し側 2 箇所に残っていたということ。実データ B の
+   `includeForming: true` にも `near_completion` の `triangle_ascending` が 1 件実在し、
+   その理由行が黙って消えていた。価格行と独立に出すようにした。
+2. **`res.summary` の intraday 日時が暦日に潰れていた。** `1hour` では 24 本が同じラベルになり、
+   初到達の足を特定できない。views handler 側は分まで出していたので、**同じ判定を 2 箇所が
+   別々に持っていて片方だけ潰れていた**形。判定を `lib/datetime.ts` の
+   `formatDateOrTimeInTz` に 1 本化し、handler の `toDateOrTime` もそこへ委譲した。
+3. **範囲と型の宣言が緩かった。** `barsAfterBreakout` は docstring が「常に 1 以上」と言うのに
+   任意の整数を通し、`targetFirstReachBars` / `targetScanBars` も `0〜TARGET_REACH_MAX_BARS` の
+   範囲を宣言していなかった。交絡の `type` も任意の文字列を受けていた
+   （`z.union([PatternTypeEnum, z.literal('unknown')])` に絞った。`unknown` は種別を
+   読み取れなかったことの申告なので literal で別に足す）。あわせて
+   `TargetBreakoutConfounder` を **Zod から導出**するようにした——実装側に別の形を持つのは
+   `TargetReachOmissionReason` が避けている事故そのもの。
+
+**`data.patterns` の値はこの 3 つでも動かない**（ベースライン fixture は 1 バイトも変わっていない）。
+
 #### ベースライン更新（#207）
 
 `tests/fixtures/detect_patterns_1hour_data_patterns_baseline.json` を更新した。

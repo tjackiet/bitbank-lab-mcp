@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import { formatDateInTz } from '../lib/datetime.js';
+import { formatDateInTz, formatDateOrTimeInTz } from '../lib/datetime.js';
 import { fail, failFromError, ok } from '../lib/result.js';
 import { extractUpstreamWarning, prependWarnings } from '../lib/warning-propagation.js';
 import { DetectPatternsOutputSchema, type PatternFilterEnum } from '../src/schemas.js';
@@ -598,6 +598,18 @@ export default async function detectPatterns(
 				}
 
 				// ターゲット価格情報（全パターン共通）
+				//
+				// **ターゲット行は `breakoutTarget` の有無で握り潰さない。** `targetProgressOmittedReason:
+				// 'no_target'` は「ターゲット価格そのものが出せなかった」ことの申告なので、
+				// **理由を出すべき唯一のケースで `breakoutTarget` が必ず無い。** 価格行のガードの中に
+				// 進捗行を入れていると、その 1 経路だけが content から消える（#224 症状 2 と同じ形が
+				// 呼び出し側に残っていた。#288 Phase 2 のレビュー指摘）。
+				//
+				// 日時は時間足に応じて粒度を変える（intraday は分まで）。
+				// **暦日に潰すと 1hour では 24 本が同じラベルになり、初到達の足を特定できない。**
+				const progressLine = formatTargetProgressLine(p, {
+					formatDate: (iso) => formatDateOrTimeInTz(iso, tz, String(type)) ?? iso,
+				});
 				if (p.breakoutTarget != null) {
 					const methodJa: Record<string, string> = {
 						flagpole_projection: 'フラッグポール値幅投影',
@@ -605,12 +617,8 @@ export default async function detectPatterns(
 						neckline_projection: 'ネックライン投影',
 					};
 					detail += `\n   - ターゲット価格: ${Math.round(p.breakoutTarget).toLocaleString('ja-JP')}円（${(p.targetMethod && methodJa[p.targetMethod]) || p.targetMethod || '不明'}）`;
-					// 日時は他の行（旗竿期間など）と同じ tz 整形に合わせる。
-					const progressLine = formatTargetProgressLine(p, {
-						formatDate: (iso) => formatDateInTz(Date.parse(iso), tz) ?? iso,
-					});
-					if (progressLine) detail += `\n${progressLine}`;
 				}
+				if (progressLine) detail += `\n${progressLine}`;
 
 				// flag / pennant 固有フィールド（bull_*/bear_* 含む。legacy 'pennant' も処理）
 				if (
