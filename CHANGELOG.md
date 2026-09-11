@@ -96,7 +96,7 @@
 
 #### 症状
 
-#286 で `content` の状態行は `status` × `invalidReason` の表引きになったが、**継続系
+issue #286 で `content` の状態行は `status` × `invalidReason` の表引きになったが、**継続系
 （`triangle_ascending` / `triangle_descending` / `pennant` / `bull_flag` / `bear_flag`）は
 検出器が `invalidReason` を出していない**ため、裸の `- 状態: 無効` になっていた。実データ D
 （BTC/JPY 1hour の `limit=72` 窓）の `triangle_ascending` がその実例で、修正前の明細は:
@@ -141,7 +141,7 @@
 #### #286 との関係
 
 **#286 で消した「期待と逆方向にブレイク」という文言は、継続系に限っては正しかった。**
-#286 の誤りは文言そのものではなく、**理由を問わず全 `invalid` に当てていたこと**——
+issue #286 の誤りは文言そのものではなく、**理由を問わず全 `invalid` に当てていたこと**——
 実機で `invalidReason: 'peak_after_last_pivot'` の `double_top`（下方ブレイクは期待どおり）が
 その文言で表示されていた。今回は「継続系の `invalid`」という 1 条件にだけ紐付けて戻している。
 同じ実データ窓に両方が同居するため、回帰テストは状態行を type ごとのブレイクに切って見る

@@ -30,6 +30,7 @@ import {
 	buildAscendingTriangleCompletedBreakoutCandles,
 	buildAscendingTriangleInvalidBreakoutCandles,
 	buildBullFlagFailureCandles,
+	buildBullFlagSuccessCandles,
 	buildBullPennantFailureCandles,
 	buildBullPennantSuccessCandles,
 	buildDescendingTriangleInvalidBreakoutCandles,
@@ -127,6 +128,7 @@ describe('#291 継続系の invalid に breakout_against_expectation が付く',
 	});
 
 	// ── flag ──
+	// triangle / pennant と同じく、**本体が同一で末尾 4 本だけが違う対**で見る。
 	it('bull_flag の逆方向ブレイク（invalid）に理由コードが付く', async () => {
 		const hits = await run(buildBullFlagFailureCandles(), ['flag']);
 		const hit = hits.find((p) => p.type === 'bull_flag');
@@ -137,6 +139,19 @@ describe('#291 継続系の invalid に breakout_against_expectation が付く',
 			expectedBreakoutDirection: 'up',
 			outcome: 'failure',
 		});
+	});
+
+	it('bull_flag の順方向ブレイク（completed）には付かない', async () => {
+		const hits = await run(buildBullFlagSuccessCandles(), ['flag']);
+		const hit = hits.find((p) => p.type === 'bull_flag');
+		expect(hit).toMatchObject({
+			status: 'completed',
+			breakoutDirection: 'up',
+			expectedBreakoutDirection: 'up',
+			outcome: 'success',
+			isTrendContinuation: true,
+		});
+		expect(hit?.invalidReason).toBeUndefined();
 	});
 
 	// ── 横断 ──
@@ -151,6 +166,7 @@ describe('#291 継続系の invalid に breakout_against_expectation が付く',
 			[buildBullPennantFailureCandles(), ['pennant']],
 			[buildBullPennantSuccessCandles(), ['pennant']],
 			[buildBullFlagFailureCandles(), ['flag']],
+			[buildBullFlagSuccessCandles(), ['flag']],
 		];
 		// `status` と `invalidReason` の対を全件集めてから 1 回で見る（分岐の中で `expect` を
 		// 呼ぶと、分岐に入らなかった組み合わせが黙って素通りする）。
@@ -166,6 +182,11 @@ describe('#291 継続系の invalid に breakout_against_expectation が付く',
 		expect(others.map((p) => p.invalidReason)).toEqual(others.map(() => undefined));
 		// 「1 件も `invalid` が無かったので素通りした」を防ぐ。
 		expect(invalids.length).toBeGreaterThanOrEqual(4);
-		expect(others.length).toBeGreaterThan(0);
+		// **`invalid` 以外の側も 3 系統すべてから来ていること**を確認する。片方の系統に
+		// `completed` の fixture が無いと、その系統だけ「`invalid` 以外には付かない」が
+		// 未検証のまま通ってしまう（CodeRabbit が flag について指摘した形）。
+		const continuationOf = (type: string) =>
+			type.startsWith('triangle_') ? 'triangle' : type.endsWith('_pennant') ? 'pennant' : 'flag';
+		expect([...new Set(others.map((p) => continuationOf(p.type)))].sort()).toEqual(['flag', 'pennant', 'triangle']);
 	});
 });

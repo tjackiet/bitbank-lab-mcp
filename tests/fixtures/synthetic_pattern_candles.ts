@@ -103,9 +103,23 @@ export function buildRisingChannelCandles(year = 2026): Candle[] {
 	return closes.map((close, index) => makeCandle(index, close, year));
 }
 
+/** ブルフラッグの本体部分（pole + 保ち合い。ブレイク前）。下の 2 つで共用する。 */
+const BULL_FLAG_BODY_CLOSES = [100, 108, 116, 124, 132, 140, 136, 138, 134, 136, 132, 134, 130, 132, 128, 130];
+
 /** ブルフラッグの逆方向ブレイク（failure）。 */
 export function buildBullFlagFailureCandles(year = 2026): Candle[] {
-	const closes = [100, 108, 116, 124, 132, 140, 136, 138, 134, 136, 132, 134, 130, 132, 128, 130, 120, 118, 116, 114];
+	const closes = [...BULL_FLAG_BODY_CLOSES, 120, 118, 116, 114];
+
+	return closes.map((close, index) => makeCandle(index, close, year));
+}
+
+/**
+ * ブルフラッグの順方向ブレイク（success）。`completed` になる fixture（issue #291）。
+ * 上の {@link buildBullFlagFailureCandles} と本体が同一で末尾 4 本だけが違うので、
+ * 「`invalidReason` が付くのは `invalid` のときだけ」を flag でも同じ形の対で見られる。
+ */
+export function buildBullFlagSuccessCandles(year = 2026): Candle[] {
+	const closes = [...BULL_FLAG_BODY_CLOSES, 136, 140, 144, 148];
 
 	return closes.map((close, index) => makeCandle(index, close, year));
 }
