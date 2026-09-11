@@ -38,6 +38,13 @@
  * 1 件も含まない**（H&S 系 4 / wedge 4 / triangle 4）ので差分が出ない。triple の実データ回帰は
  * `tests/detect_patterns_triple_neckline_pivots_btcjpy.test.ts`（実データ B × `includeForming`）が持つ）。
  *
+ * **#286 でも更新していない**（`content` の状態行を `status` × `invalidReason` の表引きにした
+ * 表示層のみの変更。`src/handlers/detectPatternsViewsHandler.ts` の `formatStatusLine` だけを
+ * 触っており、`tools/` / `src/schema/` は無変更。本 fixture は `data.patterns` だけを凍結していて
+ * `content` を含まないので差分も出ない。状態行の回帰は
+ * `tests/detectPatternsViewsHandler.test.ts`（`status` × 理由コードの網羅）と
+ * `tests/patterns/status-reason-label-286.test.ts`（実データ D の `double_top`）が持つ）。
+ *
  * **#234 でも更新していない**（`content` の pivot 明細行を `triple_*` / H&S 系にも出すように
  * した表示層のみの変更。`src/handlers/detectPatternsViewsHandler.ts` の役割ラベル表引きだけを
  * 触っており、検出ロジックにも `data.patterns` のどのフィールドにも手が入っていない。

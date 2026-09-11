@@ -10,9 +10,12 @@ import {
 	formatDetailedView,
 	formatFullView,
 	formatPatternLine,
+	formatStatusLine,
 	formatSummaryView,
 	REJECTION_CROSS_TOTAL_LABEL,
 } from '../src/handlers/detectPatternsViewsHandler.js';
+import { DetectedPatternSchema, PatternTypeEnum } from '../src/schema/patterns.js';
+import type { BreakoutPathRejectReason } from '../tools/patterns/structural.js';
 import { TARGET_REACH_MAX_BARS, TARGET_REACHED_PCT_CAP } from '../tools/patterns/target-reach.js';
 import type { PatternEntry } from '../tools/patterns/types.js';
 
@@ -903,10 +906,16 @@ describe('formatPatternLine', () => {
 		expect(result).toContain('完成（ブレイクアウト確認済み）');
 	});
 
-	it('status: invalid を日本語で表示する', () => {
+	// **`invalidReason` が無いときは裸の「無効」だけ**（issue #286）。旧実装はここで
+	// 「無効（期待と逆方向にブレイク）」と書いていたが、**その文言に対応する理由コードは
+	// 検出器に 1 つも存在しなかった**。理由コードごとの文言は
+	// 「状態行: status × 理由コードの網羅」が持つ。
+	it('status: invalid は invalidReason が無ければ裸のラベルだけ', () => {
 		const p = makePattern({ status: 'invalid' });
 		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
-		expect(result).toContain('無効（期待と逆方向にブレイク）');
+		// 行末で固定する（`toContain('無効')` では括弧付きの文言が付いても通ってしまう）。
+		expect(result).toMatch(/^ {3}- 状態: 無効$/mu);
+		expect(result).not.toContain('逆方向');
 	});
 
 	it('status: forming を日本語で表示する', () => {
@@ -915,10 +924,12 @@ describe('formatPatternLine', () => {
 		expect(result).toContain('形成中');
 	});
 
-	it('status: near_completion を日本語で表示する', () => {
+	// `makePattern` の既定 type は `double_top`（反転系）なので「apex接近」ではない（issue #286）。
+	it('status: near_completion は反転系では「構造成立・ネックライン未突破」', () => {
 		const p = makePattern({ status: 'near_completion' });
 		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
-		expect(result).toContain('ほぼ完成（apex接近）');
+		expect(result).toContain('ほぼ完成（構造成立・ネックライン未突破）');
+		expect(result).not.toContain('apex');
 	});
 
 	it('status が未知の値のときそのまま表示する', () => {
@@ -2150,5 +2161,235 @@ describe('formatPatternLine: 山2 / 谷2 の位置行（#245）', () => {
 			const line = formatPatternLine(p, 0, 'full', emptyMeta);
 			expect(line, String(p.type)).not.toContain('の位置: 終値はネックライン');
 		}
+	});
+});
+
+// ── 状態行: status × 理由コードの網羅（issue #286） ──────────────
+
+/**
+ * 経路ゲートの理由コードの全件。**`Record<BreakoutPathRejectReason, …>` で受けている**ので、
+ * `tools/patterns/structural.ts` の union に値を足すと typecheck（TS2739: 不足キー）が
+ * ここで落ちる——列挙を手書きの配列にすると気づけない。
+ */
+const BREAKOUT_PATH_REASONS: Record<BreakoutPathRejectReason, true> = {
+	peak_after_last_pivot: true,
+	trough_after_last_pivot: true,
+};
+
+/**
+ * `invalidReason` に流れる理由コードの全件。
+ *
+ * 経路ゲートの 2 つは型（{@link BreakoutPathRejectReason}）から導出する。残る 2 つは
+ * `tools/patterns/reversal-gate.ts`（`re_entered_trough_zone`）と
+ * `tools/patterns/detect_doubles.ts`（`forming_expired`）が**リテラルで直書き**しており
+ * 導出できる型が無いため手書きする。
+ *
+ * **検出器に新しい理由コードを足したらここにも足すこと。** 足し忘れは下の
+ * 「4 つの理由コードを列挙している」が拾わない（新規コードは列挙に無いだけで落ちない）ので、
+ * 表引きの未知値フォールバック（日本語なし・コードだけ）が最後の防波堤になる。
+ */
+const ALL_INVALID_REASONS: readonly string[] = [
+	...(Object.keys(BREAKOUT_PATH_REASONS) as BreakoutPathRejectReason[]),
+	're_entered_trough_zone',
+	'forming_expired',
+];
+
+/** `status` の全件。schema の enum から導出する（表示層が status を取りこぼさないため）。 */
+const ALL_STATUSES = DetectedPatternSchema.shape.status.unwrap().options;
+
+/** top 側 / bottom 側の反転系。`re_entered_trough_zone` のゾーン語の向きを独立に決めるのに使う。 */
+const TOP_SIDE_REVERSALS = ['double_top', 'triple_top', 'head_and_shoulders'] as const;
+const BOTTOM_SIDE_REVERSALS = ['double_bottom', 'triple_bottom', 'inverse_head_and_shoulders'] as const;
+
+describe('状態行: status × 理由コードの網羅（issue #286）', () => {
+	it('検出器が出す 4 つの理由コードを列挙している', () => {
+		expect([...ALL_INVALID_REASONS].sort()).toEqual([
+			'forming_expired',
+			'peak_after_last_pivot',
+			're_entered_trough_zone',
+			'trough_after_last_pivot',
+		]);
+	});
+
+	it('schema の status 5 段すべてを列挙している', () => {
+		expect([...ALL_STATUSES].sort()).toEqual(['completed', 'expired', 'forming', 'invalid', 'near_completion']);
+	});
+
+	// ── (a) invalid / expired: 理由コードの表引き + コード併記 ──
+
+	const INVALID_CASES: ReadonlyArray<{
+		entry: Pick<PatternEntry, 'type' | 'status' | 'invalidReason'>;
+		expected: string;
+	}> = [
+		{
+			entry: { type: 'double_top', status: 'invalid', invalidReason: 'peak_after_last_pivot' },
+			expected: '   - 状態: 無効（山2 の後に別の山を作ってから割った: peak_after_last_pivot）',
+		},
+		{
+			entry: { type: 'double_bottom', status: 'invalid', invalidReason: 'trough_after_last_pivot' },
+			expected: '   - 状態: 無効（谷2 の後に別の谷を作ってから抜けた: trough_after_last_pivot）',
+		},
+		// 経路ゲートは triple / H&S にも掛かる（#242 の横展開）ので、最終構成点の呼び名も種別で変わる。
+		{
+			entry: { type: 'triple_top', status: 'invalid', invalidReason: 'peak_after_last_pivot' },
+			expected: '   - 状態: 無効（山3 の後に別の山を作ってから割った: peak_after_last_pivot）',
+		},
+		{
+			entry: { type: 'head_and_shoulders', status: 'invalid', invalidReason: 'peak_after_last_pivot' },
+			expected: '   - 状態: 無効（右肩 の後に別の山を作ってから割った: peak_after_last_pivot）',
+		},
+		{
+			entry: { type: 'inverse_head_and_shoulders', status: 'invalid', invalidReason: 'trough_after_last_pivot' },
+			expected: '   - 状態: 無効（右肩 の後に別の谷を作ってから抜けた: trough_after_last_pivot）',
+		},
+		{
+			entry: { type: 'double_top', status: 'invalid', invalidReason: 're_entered_trough_zone' },
+			expected: '   - 状態: 無効（山2 の確定後、突破前に山ゾーンへ戻った: re_entered_trough_zone）',
+		},
+		{
+			entry: { type: 'double_bottom', status: 'invalid', invalidReason: 're_entered_trough_zone' },
+			expected: '   - 状態: 無効（谷2 の確定後、突破前に谷ゾーンへ戻った: re_entered_trough_zone）',
+		},
+		// `expired` は旧実装で表引きに無く、生の `expired` が content に出ていた。
+		{
+			entry: { type: 'double_top', status: 'expired', invalidReason: 'forming_expired' },
+			expected: '   - 状態: 期限切れ（突破確認窓を過ぎてもネックラインを突破しなかった: forming_expired）',
+		},
+		{
+			entry: { type: 'double_bottom', status: 'expired', invalidReason: 'forming_expired' },
+			expected: '   - 状態: 期限切れ（突破確認窓を過ぎてもネックラインを突破しなかった: forming_expired）',
+		},
+	];
+
+	for (const { entry, expected } of INVALID_CASES) {
+		it(`${entry.status} × ${entry.invalidReason}（${entry.type}）の状態行を固定する`, () => {
+			expect(formatStatusLine(entry)).toBe(expected);
+		});
+	}
+
+	it('expired のラベルが出る（生の expired が content に出ない）', () => {
+		const line = formatStatusLine({ type: 'double_top', status: 'expired', invalidReason: 'forming_expired' });
+		expect(line).toContain('期限切れ');
+		expect(line).not.toMatch(/状態: expired/u);
+	});
+
+	it('未知の invalidReason は日本語を当てずコードだけ出す', () => {
+		expect(formatStatusLine({ type: 'double_top', status: 'invalid', invalidReason: 'some_future_reason' })).toBe(
+			'   - 状態: 無効（some_future_reason）',
+		);
+	});
+
+	it('invalidReason が欠損なら「無効」だけ', () => {
+		expect(formatStatusLine({ type: 'double_top', status: 'invalid' })).toBe('   - 状態: 無効');
+	});
+
+	it('理由コードは必ず併記される（日本語だけにならない）', () => {
+		for (const reason of ALL_INVALID_REASONS) {
+			for (const type of [...TOP_SIDE_REVERSALS, ...BOTTOM_SIDE_REVERSALS]) {
+				const line = formatStatusLine({ type, status: 'invalid', invalidReason: reason });
+				expect(line, `${type} × ${reason}`).toContain(reason);
+			}
+		}
+	});
+
+	it('4 つの理由コードすべてに日本語ラベルがある（コードだけにならない）', () => {
+		for (const reason of ALL_INVALID_REASONS) {
+			const line = formatStatusLine({ type: 'double_top', status: 'invalid', invalidReason: reason });
+			expect(line, reason).toContain(`: ${reason}）`);
+		}
+	});
+
+	// `re_entered_trough_zone` のゾーン語は実装の表と独立に side から決める——実装の表を
+	// そのまま写すと分岐漏れが両方に入って気づけない。
+	for (const type of TOP_SIDE_REVERSALS) {
+		it(`re_entered_trough_zone: ${type} は山ゾーン`, () => {
+			const line = formatStatusLine({ type, status: 'invalid', invalidReason: 're_entered_trough_zone' });
+			expect(line).toContain('山ゾーンへ戻った');
+			expect(line).not.toContain('谷ゾーンへ戻った');
+		});
+	}
+	for (const type of BOTTOM_SIDE_REVERSALS) {
+		it(`re_entered_trough_zone: ${type} は谷ゾーン`, () => {
+			const line = formatStatusLine({ type, status: 'invalid', invalidReason: 're_entered_trough_zone' });
+			expect(line).toContain('谷ゾーンへ戻った');
+			expect(line).not.toContain('山ゾーンへ戻った');
+		});
+	}
+
+	it('未知 type の re_entered_trough_zone は方向を持たない言い回しにする', () => {
+		const line = formatStatusLine({
+			type: 'some_future_pattern',
+			status: 'invalid',
+			invalidReason: 're_entered_trough_zone',
+		});
+		expect(line).toBe(
+			'   - 状態: 無効（最終構成点の確定後、突破前に最終構成点のゾーンへ戻った: re_entered_trough_zone）',
+		);
+		expect(line).not.toContain('山ゾーン');
+		expect(line).not.toContain('谷ゾーン');
+	});
+
+	// ── (b) near_completion: 種別の系統で分ける ──
+
+	for (const type of ['double_top', 'triple_bottom', 'inverse_head_and_shoulders'] as const) {
+		it(`near_completion: 反転系 ${type} は「構造成立・ネックライン未突破」`, () => {
+			expect(formatStatusLine({ type, status: 'near_completion' })).toBe(
+				'   - 状態: ほぼ完成（構造成立・ネックライン未突破）',
+			);
+		});
+	}
+
+	for (const type of ['triangle_ascending', 'rising_wedge'] as const) {
+		it(`near_completion: 継続系 ${type} は「apex接近」（現行どおり）`, () => {
+			expect(formatStatusLine({ type, status: 'near_completion' })).toBe('   - 状態: ほぼ完成（apex接近）');
+		});
+	}
+
+	it('near_completion: どちらの系統にも属さない type は apex とも未突破とも言わない', () => {
+		expect(formatStatusLine({ type: 'some_future_pattern', status: 'near_completion' })).toBe('   - 状態: ほぼ完成');
+	});
+
+	// **出力 type 全件を系統に分類できていることを機械的に固定する**（分岐漏れ検出）。
+	// 新しい type を `PatternTypeEnum` に足して系統の集合へ入れ忘れると、その type の
+	// `near_completion` が裸の「ほぼ完成」に落ちるので、ここで落ちる。
+	it('near_completion: 出力 type 全件が反転系 / 継続系のどちらかに分類されている', () => {
+		const unclassified = PatternTypeEnum.options.filter(
+			(type) => formatStatusLine({ type, status: 'near_completion' }) === '   - 状態: ほぼ完成',
+		);
+		expect(unclassified).toEqual([]);
+	});
+
+	// ── (c) completed / forming: 現行どおり ──
+
+	it('completed / forming は現行どおり（理由コードを持たない）', () => {
+		expect(formatStatusLine({ type: 'double_top', status: 'completed' })).toBe(
+			'   - 状態: 完成（ブレイクアウト確認済み）',
+		);
+		expect(formatStatusLine({ type: 'triple_top', status: 'forming' })).toBe('   - 状態: 形成中');
+	});
+
+	// ── 共通 ──
+
+	it('status 5 段すべてに日本語ラベルがある（生の status が出ない）', () => {
+		for (const status of ALL_STATUSES) {
+			const line = formatStatusLine({ type: 'double_top', status });
+			expect(line, status).not.toContain(status);
+		}
+	});
+
+	it('status が無ければ状態行を出さない', () => {
+		expect(formatStatusLine({ type: 'double_top' })).toBeNull();
+	});
+
+	it('未知の status は生の値をそのまま出す', () => {
+		expect(formatStatusLine({ type: 'double_top', status: 'custom_status' })).toBe('   - 状態: custom_status');
+	});
+
+	// formatPatternLine 経由でも同じ行が出る（配線の確認）。
+	it('formatPatternLine の状態行が formatStatusLine と一致する', () => {
+		const p = makePattern({ status: 'invalid', invalidReason: 'peak_after_last_pivot' });
+		expect(formatPatternLine(p, 0, 'detailed', emptyMeta)).toContain(
+			'   - 状態: 無効（山2 の後に別の山を作ってから割った: peak_after_last_pivot）',
+		);
 	});
 });
