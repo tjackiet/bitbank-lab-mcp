@@ -42,6 +42,19 @@ export const DEFAULT_INITIAL_DELAY_MS = 2_500;
  */
 export const DEFAULT_RETRY_DELAYS_MS: readonly number[] = [2_000, 4_000];
 
+/** 予約済みタイマーの識別子。ブラウザでは number、Node では Timeout になる。 */
+export type TimerId = ReturnType<typeof globalThis.setTimeout>;
+
+/**
+ * タイマー注入の最小契約。
+ *
+ * `typeof globalThis.setTimeout` をそのまま要求すると、Node の型が `__promisify__` まで
+ * 持つため**素の関数を渡せなくなる**（注入という目的が果たせない）。本モジュールが使うのは
+ * 「関数と遅延を渡して ID を受け取る / ID で取り消す」だけなので、そこだけを型にする。
+ */
+export type SetTimeoutLike = (handler: () => void, timeoutMs: number) => TimerId;
+export type ClearTimeoutLike = (timerId: TimerId) => void;
+
 export interface SnapshotHydrationOptions {
 	/** get_ui_snapshot を呼ぶ。UI 側で mcpApp.callServerTool を包んで渡す */
 	fetchSnapshot: () => Promise<unknown>;
@@ -55,8 +68,8 @@ export interface SnapshotHydrationOptions {
 	initialDelayMs?: number;
 	/** リトライ間隔（既定 [2_000, 4_000]。試行回数は 1 + この配列の長さ = 3） */
 	retryDelaysMs?: readonly number[];
-	setTimeout?: typeof globalThis.setTimeout;
-	clearTimeout?: typeof globalThis.clearTimeout;
+	setTimeout?: SetTimeoutLike;
+	clearTimeout?: ClearTimeoutLike;
 }
 
 /**
@@ -79,13 +92,15 @@ export function startSnapshotHydration(opts: SnapshotHydrationOptions): () => vo
 		initialDelayMs = DEFAULT_INITIAL_DELAY_MS,
 		retryDelaysMs = DEFAULT_RETRY_DELAYS_MS,
 	} = opts;
-	// ブラウザの window.setTimeout は receiver を外すと Illegal invocation になりうるので束縛する。
-	// 既定値の解決は呼び出し時なので、テスト側がフェイクタイマーを入れてから呼べばそれが使われる。
-	const setTimer = opts.setTimeout ?? globalThis.setTimeout.bind(globalThis);
-	const clearTimer = opts.clearTimeout ?? globalThis.clearTimeout.bind(globalThis);
+	// ブラウザの window.setTimeout は receiver を外すと Illegal invocation になりうるので、
+	// 既定はメソッド呼び出しのまま包む。既定値の解決は呼び出し時なので、テスト側が
+	// フェイクタイマーを入れてから呼べばそれが使われる。
+	const setTimer: SetTimeoutLike =
+		opts.setTimeout ?? ((handler, timeoutMs) => globalThis.setTimeout(handler, timeoutMs));
+	const clearTimer: ClearTimeoutLike = opts.clearTimeout ?? ((timerId) => globalThis.clearTimeout(timerId));
 
 	let aborted = false;
-	let timerId: ReturnType<typeof setTimer> | undefined;
+	let timerId: TimerId | undefined;
 
 	const notify = (phase: SnapshotHydrationPhase): void => {
 		if (aborted) return;

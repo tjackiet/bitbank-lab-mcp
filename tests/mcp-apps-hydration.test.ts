@@ -6,10 +6,11 @@
  * アンマウント後も promise チェーンが走る / 2 ファイルに複製）のうち、前 2 点の挙動をここで固定する。
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import {
 	DEFAULT_INITIAL_DELAY_MS,
 	DEFAULT_RETRY_DELAYS_MS,
+	type SnapshotHydrationOptions,
 	type SnapshotHydrationPhase,
 	startSnapshotHydration,
 } from '../src/mcp-apps-hydration.js';
@@ -19,9 +20,9 @@ const INITIAL_DELAY_MS = 2_500;
 const RETRY_DELAYS_MS = [2_000, 4_000] as const;
 
 interface Harness {
-	fetchSnapshot: ReturnType<typeof vi.fn>;
-	apply: ReturnType<typeof vi.fn>;
-	onPhase: ReturnType<typeof vi.fn>;
+	fetchSnapshot: Mock<() => Promise<unknown>>;
+	apply: Mock<(result: unknown) => void>;
+	onPhase: Mock<(phase: SnapshotHydrationPhase) => void>;
 	phases: SnapshotHydrationPhase[];
 	hydrated: { value: boolean };
 }
@@ -30,9 +31,9 @@ interface Harness {
 function makeHarness(): Harness {
 	const phases: SnapshotHydrationPhase[] = [];
 	return {
-		fetchSnapshot: vi.fn(async () => ({ structuredContent: { ok: true } })),
-		apply: vi.fn(),
-		onPhase: vi.fn((phase: SnapshotHydrationPhase) => {
+		fetchSnapshot: vi.fn<() => Promise<unknown>>(async () => ({ structuredContent: { ok: true } })),
+		apply: vi.fn<(result: unknown) => void>(),
+		onPhase: vi.fn<(phase: SnapshotHydrationPhase) => void>((phase) => {
 			phases.push(phase);
 		}),
 		phases,
@@ -40,12 +41,12 @@ function makeHarness(): Harness {
 	};
 }
 
-function start(h: Harness, overrides: Record<string, unknown> = {}): () => void {
+function start(h: Harness, overrides: Partial<SnapshotHydrationOptions> = {}): () => void {
 	return startSnapshotHydration({
-		fetchSnapshot: h.fetchSnapshot as unknown as () => Promise<unknown>,
+		fetchSnapshot: h.fetchSnapshot,
 		isHydrated: () => h.hydrated.value,
-		apply: h.apply as unknown as (result: unknown) => void,
-		onPhase: h.onPhase as unknown as (phase: SnapshotHydrationPhase) => void,
+		apply: h.apply,
+		onPhase: h.onPhase,
 		initialDelayMs: INITIAL_DELAY_MS,
 		retryDelaysMs: RETRY_DELAYS_MS,
 		...overrides,
@@ -314,6 +315,59 @@ describe('apply が例外を投げる', () => {
 		expect(vi.getTimerCount()).toBe(0);
 	});
 
+	it('UI と同じ形の apply（取り込めなければ投げる）で、空スナップショットが failed に到達する', async () => {
+		// 両 UI の apply は applyPreviewResult のあと hasPreviewRef が false なら投げる。
+		// resolve したが preview を含まないスナップショット（サーバー側キャッシュが未投入 等）は
+		// **成功として扱ってはいけない**——黙って終わると「復元中」のまま固まる（#29 の要点）。
+		const h = makeHarness();
+		let hasPreview = false;
+		h.fetchSnapshot.mockResolvedValue({ structuredContent: { ok: true } });
+		h.apply.mockImplementation((result) => {
+			const structured = (result as { structuredContent?: { data?: { preview?: unknown } } }).structuredContent;
+			if (structured?.data?.preview) {
+				hasPreview = true;
+				return;
+			}
+			throw new Error('snapshot did not contain a usable preview');
+		});
+		start(h);
+
+		await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
+		await vi.advanceTimersByTimeAsync(RETRY_DELAYS_MS[0]);
+		await vi.advanceTimersByTimeAsync(RETRY_DELAYS_MS[1]);
+
+		expect(hasPreview).toBe(false);
+		expect(h.fetchSnapshot).toHaveBeenCalledTimes(3);
+		expect(h.phases.filter((p) => p === 'failed')).toHaveLength(1);
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it('空スナップショットのあと preview を含むスナップショットが返れば復元して終わる', async () => {
+		const h = makeHarness();
+		let hasPreview = false;
+		h.fetchSnapshot
+			.mockResolvedValueOnce({ structuredContent: { ok: true } })
+			.mockResolvedValue({ structuredContent: { ok: true, data: { preview: { pair: 'btc_jpy' } } } });
+		h.apply.mockImplementation((result) => {
+			const structured = (result as { structuredContent?: { data?: { preview?: unknown } } }).structuredContent;
+			if (structured?.data?.preview) {
+				hasPreview = true;
+				h.hydrated.value = true;
+				return;
+			}
+			throw new Error('snapshot did not contain a usable preview');
+		});
+		start(h);
+
+		await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
+		await vi.advanceTimersByTimeAsync(RETRY_DELAYS_MS[0]);
+
+		expect(hasPreview).toBe(true);
+		expect(h.fetchSnapshot).toHaveBeenCalledTimes(2);
+		expect(h.phases).not.toContain('failed');
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
 	it('fetchSnapshot が同期的に投げてもリトライ経路に乗る', async () => {
 		const h = makeHarness();
 		h.fetchSnapshot.mockImplementation(() => {
@@ -333,18 +387,25 @@ describe('apply が例外を投げる', () => {
 describe('タイマー注入', () => {
 	it('setTimeout / clearTimeout を差し替えられる（既定の globalThis を使わない）', async () => {
 		const h = makeHarness();
-		const setSpy = vi.fn(globalThis.setTimeout);
-		const clearSpy = vi.fn(globalThis.clearTimeout);
+		const scheduledDelays: (number | undefined)[] = [];
+		let clearedCount = 0;
+		// Mock<typeof setTimeout> は setTimeout のジェネリック署名を畳んでしまい
+		// `typeof globalThis.setTimeout` に代入できないため、記録は素の関数で行う。
 		const stop = start(h, {
-			setTimeout: setSpy as unknown as typeof globalThis.setTimeout,
-			clearTimeout: clearSpy as unknown as typeof globalThis.clearTimeout,
+			setTimeout: (handler, timeout) => {
+				scheduledDelays.push(timeout);
+				return globalThis.setTimeout(handler, timeout);
+			},
+			clearTimeout: (id) => {
+				clearedCount += 1;
+				globalThis.clearTimeout(id);
+			},
 		});
 
-		expect(setSpy).toHaveBeenCalledTimes(1);
-		expect(setSpy.mock.calls[0]?.[1]).toBe(INITIAL_DELAY_MS);
+		expect(scheduledDelays).toEqual([INITIAL_DELAY_MS]);
 
 		stop();
-		expect(clearSpy).toHaveBeenCalledTimes(1);
+		expect(clearedCount).toBe(1);
 		await vi.advanceTimersByTimeAsync(60_000);
 		expect(h.fetchSnapshot).toHaveBeenCalledTimes(0);
 	});

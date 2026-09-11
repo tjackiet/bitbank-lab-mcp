@@ -118,6 +118,7 @@ UI は既に `src/mcp-apps-meta.js` を `../../../src/` 経由で import して�
 | `fetchSnapshot` の reject | 次の間隔で再試行。間隔が尽きたら `failed` |
 | `fetchSnapshot` が**同期的に**投げた | 同上（`Promise.resolve()` の外で投げても落ちない） |
 | resolve したが `apply` が例外を投げた | 同上。**握りつぶさず次の試行へ**回す |
+| resolve したが**取り込めなかった**（スナップショット未保存 / 別ツールの結果 / `structuredContent` 欠損） | 各 UI の `apply` が `hasPreviewRef` を見て**投げる**ので上と同じ扱い。ここを成功にすると `failed` に到達せず「復元中」のまま固まり、**issue の症状がそのまま残る**（CodeRabbit が #285 で指摘） |
 | 途中で `isHydrated()` が true（push 配信が先に届いた） | **黙って終了。`failed` は出さない。** 各試行の前・resolve 直後・再試行の予約前の 3 点で見る |
 | 停止関数が呼ばれた後のあらゆるコールバック | 何もしない（`apply` / `onPhase` とも呼ばない） |
 
@@ -140,6 +141,10 @@ UI は既に `src/mcp-apps-meta.js` を `../../../src/` 経由で import して�
 
 `RESULT_WAIT_HINT_MS` は両 UI から消し、モジュールの既定値（`DEFAULT_INITIAL_DELAY_MS`）に一本化した。`SNAPSHOT_TIMEOUT_MS` / `CONNECT_TIMEOUT_MS` は `callServerTool` と接続の引数なので UI に残る。
 
+#### `apply` が「取り込めたか」を返さない理由
+
+モジュールは**結果の中身を一切読まない**（確認トークンが `_meta` で流れる経路なので、透過的に渡すだけにする）。そのため「復元できたか」を判断できるのは UI 側だけで、判定結果は**例外**という既存の経路で戻す。`apply` の戻り値（`boolean`）で表す案もあるが、`fetchSnapshot` の reject / `apply` の throw / 戻り値の false と**失敗の表現が 3 通り**になる。1 つに寄せた。
+
 #### 変えていないもの
 
 - **サーバー側。** `tools/get_ui_snapshot.ts` / `src/private/*` / `src/ui-snapshot-cache.ts` は 1 行も触っていない。`src/` への追加は `mcp-apps-hydration.ts` のみ
@@ -158,7 +163,10 @@ UI は既に `src/mcp-apps-meta.js` を `../../../src/` 経由で import して�
 - 停止関数の**二重呼び出し**が壊れないこと
 - `isHydrated()` が途中で true: 初回待ちの間（1 回も呼ばない）／ 1 回目 reject の直後（2 回目も `failed` も無し）／ resolve 後・`apply` 前（`apply` を呼ばない）
 - `apply` が例外を投げる: 次の試行で成功すれば `failed` 無し／最後まで投げ続ければ `failed` 1 回
+- **UI と同じ形の `apply`**（取り込めなければ投げる）で、preview を含まない空スナップショットが 3 回試行のうえ `failed` に到達すること / 途中で preview を含む応答が返れば復元して終わること
 - タイマー注入（`setTimeout` / `clearTimeout` の差し替え）と `onPhase` 未指定
+
+なお注入の型は `typeof globalThis.setTimeout` ではなく**使う部分だけの最小契約**（`SetTimeoutLike` / `ClearTimeoutLike`）にした。Node の型は `__promisify__` まで持つため、そのまま要求すると**テストが素の関数を渡せず注入という目的が果たせない**。
 
 #### ビルド成果物
 

@@ -229,6 +229,13 @@ export function App() {
 						// 効かないホスト向け。有効化ゲートはサーバー側で再判定される）。
 						const snapshot = result as { structuredContent?: unknown; _meta?: unknown };
 						applyPreviewResult(snapshot.structuredContent as PreviewResult | undefined, snapshot._meta);
+						// 取り込めなかった場合は**失敗として扱う**（スナップショット未保存、
+						// 別ツールの結果、structuredContent 欠損など）。resolve したまま黙って
+						// 終わるとリトライも failed 表示も起きず、「復元中」のまま固まる（#29 の要点）。
+						// 例外は startSnapshotHydration のリトライ経路に乗る。
+						if (!hasPreviewRef.current) {
+							throw new Error('snapshot did not contain a usable preview');
+						}
 					},
 					onPhase: setHydrationPhase,
 				});
