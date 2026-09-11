@@ -102,11 +102,13 @@ export function startSnapshotHydration(opts: SnapshotHydrationOptions): () => vo
 	let aborted = false;
 	let timerId: TimerId | undefined;
 
+	/** 段階を UI へ通知する。abort 後は一切通知しない（停止の唯一の出口をここに閉じる）。 */
 	const notify = (phase: SnapshotHydrationPhase): void => {
 		if (aborted) return;
 		onPhase?.(phase);
 	};
 
+	/** 次の処理を予約する。発火時にも abort を見るので、停止関数が間に合わなくても走らない。 */
 	const schedule = (delayMs: number, run: () => void): void => {
 		timerId = setTimer(() => {
 			timerId = undefined;
@@ -128,6 +130,7 @@ export function startSnapshotHydration(opts: SnapshotHydrationOptions): () => vo
 		schedule(delayMs, () => attempt(index + 1));
 	};
 
+	/** 試行 `index` を実行する。resolve / reject / 同期 throw のすべてを `retryOrFail` に集約する。 */
 	const attempt = (index: number): void => {
 		if (aborted) return;
 		// 各試行の前に見る。push 配信が先に届いていれば 1 回も呼ばない。
