@@ -718,7 +718,11 @@ export const DetectedPatternSchema = z.object({
 				'`peak_after_last_pivot` / `trough_after_last_pivot` = 最終構成点（山2 / 山3 / 右肩）と' +
 				'ネックライン突破バーの**間**に同種のピボットがあり、最終構成点から直接ネックラインを' +
 				'割っていない（水準は問わない。反転ではなく別の形——レンジ上限への 3 回目のタッチ等）。' +
-				'`forming_expired` = 突破確認窓を過ぎた。',
+				'`forming_expired` = 突破確認窓を過ぎた。' +
+				'`breakout_against_expectation` = 継続系（triangle / pennant / flag）で期待と逆方向にブレイクした。' +
+				'実際の方向は `breakoutDirection`。**期待方向のフィールドは pennant / flag だけが持つ**' +
+				'（`expectedBreakoutDirection`。pole の向きから決まるため）——triangle は持たないので、' +
+				'`type` から導出する（`triangle_ascending` = `up` / `triangle_descending` = `down`）。',
 		),
 	/**
 	 * 整合度（confidence）のサブスコア。issue #126 で露出。

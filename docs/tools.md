@@ -978,9 +978,23 @@ ATR 比テーブルを掛けたもの。
 理由コードを併記する**（`無効（山2 の後に別の山を作ってから割った: peak_after_last_pivot）`）。
 日本語は `invalidReason` の表引きで、**表に無い未知コードには日本語を当てずコードだけを出す**
 （#286。`structuredContent` は LLM から見えないので、この行が理由の唯一のチャネルになる）。
-**`invalidReason` が欠損する場合は基底ラベルだけを出す**（`- 状態: 無効`）——継続系
-（`triangle_*` / pennant）の `invalid` が該当し、方向の情報は `ブレイク方向` / `パターン結果` の
-2 行が持つ。`near_completion` の文言も系統で分かれる——反転系は
+
+`invalidReason` に出る理由コードは以下:
+
+| `invalidReason` | 意味 | 出る種別 |
+|---|---|---|
+| `re_entered_trough_zone` | 第2構成点の確定後、ネックライン突破前に価格が谷（山）ゾーンへ戻った | 反転系（double / triple / H&S） |
+| `peak_after_last_pivot` / `trough_after_last_pivot` | 最終構成点（山2 / 山3 / 右肩）とネックライン突破バーの**間**に同種のピボットがあり、最終構成点から直接ネックラインを割っていない（#242） | 反転系 |
+| `forming_expired` | 突破確認窓を過ぎてもネックラインを突破しなかった（`status=expired`） | 反転系 |
+| `breakout_against_expectation` | **期待と逆方向にブレイクした**（#291） | 継続系（`triangle_ascending` / `triangle_descending` / pennant / flag） |
+
+**継続系の `invalid` は方向の具体値を状態行に持たない**——`ブレイク方向` /
+`パターン結果` の 2 行が「下方ブレイク（本来は上方ブレイクが期待されるパターン）」の形で持つので、
+状態行は「期待と逆方向にブレイク」という条件だけを名乗る。継続系の `invalid` はこの 1 条件しか
+無いため理由コードも 1 つで、`triangle_symmetrical` は期待方向が無いので `invalid` にならず、
+`wedge_*` は逆方向を `outcome: 'failure'` で表して `invalid` を出さない。
+
+`near_completion` の文言も系統で分かれる——反転系は
 「構造成立・ネックライン未突破」、継続系（`triangle_*` / `wedge_*` / flag / pennant）は「apex接近」。
 
 `expired` は `invalid` と同義ではない——形が崩れたのではなく、成立する時間を使い切った状態。

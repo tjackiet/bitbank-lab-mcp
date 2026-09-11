@@ -15,7 +15,7 @@ import {
 	REJECTION_CROSS_TOTAL_LABEL,
 } from '../src/handlers/detectPatternsViewsHandler.js';
 import { DetectedPatternSchema, PatternTypeEnum } from '../src/schema/patterns.js';
-import type { BreakoutPathRejectReason } from '../tools/patterns/structural.js';
+import type { BreakoutPathRejectReason, ContinuationInvalidReason } from '../tools/patterns/structural.js';
 import { TARGET_REACH_MAX_BARS, TARGET_REACHED_PCT_CAP } from '../tools/patterns/target-reach.js';
 import type { PatternEntry } from '../tools/patterns/types.js';
 
@@ -2264,22 +2264,43 @@ const BREAKOUT_PATH_REASONS: Record<BreakoutPathRejectReason, true> = {
 };
 
 /**
+ * 継続系（triangle / pennant / flag）の理由コードの全件。**`Record<ContinuationInvalidReason, …>` で
+ * 受けている**ので、`tools/patterns/structural.ts` の union に値を足すと typecheck が
+ * ここで落ちる（issue #291）。現状は 1 値——継続系の `invalid` は「期待と逆方向にブレイクした」
+ * の 1 条件しか無いため。
+ */
+const CONTINUATION_INVALID_REASONS: Record<ContinuationInvalidReason, true> = {
+	breakout_against_expectation: true,
+};
+
+/**
  * `invalidReason` に流れる理由コードの全件。
  *
- * 経路ゲートの 2 つは型（{@link BreakoutPathRejectReason}）から導出する。残る 2 つは
+ * 経路ゲートの 2 つは型（{@link BreakoutPathRejectReason}）から、継続系の 1 つは
+ * {@link ContinuationInvalidReason} から導出する。残る 2 つは
  * `tools/patterns/reversal-gate.ts`（`re_entered_trough_zone`）と
  * `tools/patterns/detect_doubles.ts`（`forming_expired`）が**リテラルで直書き**しており
  * 導出できる型が無いため手書きする。
  *
  * **検出器に新しい理由コードを足したらここにも足すこと。** 足し忘れは下の
- * 「4 つの理由コードを列挙している」が拾わない（新規コードは列挙に無いだけで落ちない）ので、
+ * 「5 つの理由コードを列挙している」が拾わない（新規コードは列挙に無いだけで落ちない）ので、
  * 表引きの未知値フォールバック（日本語なし・コードだけ）が最後の防波堤になる。
  */
 const ALL_INVALID_REASONS: readonly string[] = [
 	...(Object.keys(BREAKOUT_PATH_REASONS) as BreakoutPathRejectReason[]),
+	...(Object.keys(CONTINUATION_INVALID_REASONS) as ContinuationInvalidReason[]),
 	're_entered_trough_zone',
 	'forming_expired',
 ];
+
+/** 継続系の全件。`breakout_against_expectation` の状態行を種別横断で固定するのに使う。 */
+const CONTINUATION_INVALID_TYPES = [
+	'triangle_ascending',
+	'triangle_descending',
+	'pennant',
+	'bull_flag',
+	'bear_flag',
+] as const;
 
 /** `status` の全件。schema の enum から導出する（表示層が status を取りこぼさないため）。 */
 const ALL_STATUSES = DetectedPatternSchema.shape.status.unwrap().options;
@@ -2289,8 +2310,9 @@ const TOP_SIDE_REVERSALS = ['double_top', 'triple_top', 'head_and_shoulders'] as
 const BOTTOM_SIDE_REVERSALS = ['double_bottom', 'triple_bottom', 'inverse_head_and_shoulders'] as const;
 
 describe('状態行: status × 理由コードの網羅（issue #286）', () => {
-	it('検出器が出す 4 つの理由コードを列挙している', () => {
+	it('検出器が出す 5 つの理由コードを列挙している', () => {
 		expect([...ALL_INVALID_REASONS].sort()).toEqual([
+			'breakout_against_expectation',
 			'forming_expired',
 			'peak_after_last_pivot',
 			're_entered_trough_zone',
@@ -2337,6 +2359,12 @@ describe('状態行: status × 理由コードの網羅（issue #286）', () => 
 			entry: { type: 'double_bottom', status: 'invalid', invalidReason: 're_entered_trough_zone' },
 			expected: '   - 状態: 無効（谷2 の確定後、突破前に谷ゾーンへ戻った: re_entered_trough_zone）',
 		},
+		// 継続系（issue #291）。**種別に関係なく同じ文言**——継続系に最終構成点の概念が無いので、
+		// 反転系の「山2 / 谷3 / 右肩」に相当する語を当てない。
+		...CONTINUATION_INVALID_TYPES.map((type) => ({
+			entry: { type, status: 'invalid' as const, invalidReason: 'breakout_against_expectation' },
+			expected: '   - 状態: 無効（期待と逆方向にブレイク: breakout_against_expectation）',
+		})),
 		// `expired` は旧実装で表引きに無く、生の `expired` が content に出ていた。
 		{
 			entry: { type: 'double_top', status: 'expired', invalidReason: 'forming_expired' },
@@ -2372,17 +2400,29 @@ describe('状態行: status × 理由コードの網羅（issue #286）', () => 
 
 	it('理由コードは必ず併記される（日本語だけにならない）', () => {
 		for (const reason of ALL_INVALID_REASONS) {
-			for (const type of [...TOP_SIDE_REVERSALS, ...BOTTOM_SIDE_REVERSALS]) {
+			for (const type of [...TOP_SIDE_REVERSALS, ...BOTTOM_SIDE_REVERSALS, ...CONTINUATION_INVALID_TYPES]) {
 				const line = formatStatusLine({ type, status: 'invalid', invalidReason: reason });
 				expect(line, `${type} × ${reason}`).toContain(reason);
 			}
 		}
 	});
 
-	it('4 つの理由コードすべてに日本語ラベルがある（コードだけにならない）', () => {
+	it('5 つの理由コードすべてに日本語ラベルがある（コードだけにならない）', () => {
 		for (const reason of ALL_INVALID_REASONS) {
 			const line = formatStatusLine({ type: 'double_top', status: 'invalid', invalidReason: reason });
 			expect(line, reason).toContain(`: ${reason}）`);
+		}
+	});
+
+	// 継続系の文言に反転系の語（山2 / 谷2 / 山3 / 谷3 / 右肩 / ネックライン）を混ぜない（issue #291）。
+	// `invalidReasonJa` は `REVERSAL_STATUS_WORDS` を引ける実装なので、分岐を足すときに
+	// 「最終構成点」相当の語を当ててしまう形を機械的に禁じる。
+	it('breakout_against_expectation は反転系の構成点の語を使わない', () => {
+		for (const type of CONTINUATION_INVALID_TYPES) {
+			const line = formatStatusLine({ type, status: 'invalid', invalidReason: 'breakout_against_expectation' });
+			for (const word of ['山2', '山3', '谷2', '谷3', '右肩', 'ネックライン', '最終構成点']) {
+				expect(line, `${type} × ${word}`).not.toContain(word);
+			}
 		}
 	});
 

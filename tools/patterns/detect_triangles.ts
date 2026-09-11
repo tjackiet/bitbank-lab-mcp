@@ -19,6 +19,7 @@
 import { patternBarsCap, structuralFloorBars } from './bar-thresholds.js';
 import { barsPerDay, calcATR, deduplicatePatterns, finalizeConf } from './helpers.js';
 import { clamp01 } from './regression.js';
+import { BREAKOUT_AGAINST_EXPECTATION } from './structural.js';
 import { computeTargetReach, omittedTargetReach, type TargetReachResult, targetReachFields } from './target-reach.js';
 import type { CandDebugEntry, DetectContext, DetectResult, PatternEntry } from './types.js';
 
@@ -396,6 +397,10 @@ function buildTriangleResult(c: TriangleCandidateCtx): { pattern: PatternEntry; 
 		confidence,
 		range: { start: startIso, end: endIso },
 		status,
+		// 継続系の `invalid` は「期待と逆方向にブレイクした」の 1 条件しか無い
+		// （`determineTriangleStatus`: `hasBreakout && !isExpectedBreakout`）ので、
+		// `status` が決まれば理由も決まる。**採否にも `status` にも触らない additive な付与**（issue #291）。
+		...(status === 'invalid' ? { invalidReason: BREAKOUT_AGAINST_EXPECTATION } : {}),
 		pivots: allPivots,
 		neckline,
 		trendlineLabel,

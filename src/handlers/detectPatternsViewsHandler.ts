@@ -10,7 +10,7 @@
 import { formatDateOrTimeInTz } from '../../lib/datetime.js';
 import { formatFixed, formatInt, formatPctFromRatio, formatRounded } from '../../lib/formatter.js';
 import { toStructured } from '../../lib/result.js';
-import { levelSpreadMetrics } from '../../tools/patterns/structural.js';
+import { BREAKOUT_AGAINST_EXPECTATION, levelSpreadMetrics } from '../../tools/patterns/structural.js';
 import type { Pivot } from '../../tools/patterns/swing.js';
 import { formatTargetProgressLine } from '../../tools/patterns/target-reach.js';
 import type { PatternEntry } from '../../tools/patterns/types.js';
@@ -1183,6 +1183,11 @@ function invalidReasonJa(reason: string, type: string): string | null {
 			return `${last} の後に別の谷を作ってから抜けた`;
 		case 'forming_expired':
 			return '突破確認窓を過ぎてもネックラインを突破しなかった';
+		case BREAKOUT_AGAINST_EXPECTATION:
+			// 継続系専用。**`words` 由来の語（山2 / 谷3 / 右肩）を混ぜない**——継続系に
+			// 最終構成点の概念が無く、当てはめると存在しない構造を名乗ることになる（issue #291）。
+			// 方向の具体値は本行では言わない（「ブレイク方向」「パターン結果」の 2 行が持つ）。
+			return '期待と逆方向にブレイク';
 		default:
 			return null;
 	}
