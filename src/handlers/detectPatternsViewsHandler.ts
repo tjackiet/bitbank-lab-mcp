@@ -1206,7 +1206,7 @@ function nearCompletionJa(type: string): string {
 /**
  * パターン 1 件の状態行（`   - 状態: …`）。`status` が無ければ `null`（行を出さない）。
  *
- * `invalid` / `expired` では**理由コードを必ず併記する**（`無効（…: peak_after_last_pivot）`）。
+ * `invalid` / `expired` では**`invalidReason` があれば必ず理由コードを併記する**（`無効（…: peak_after_last_pivot）`）。
  * 日本語は補助で、コードが LLM と利用者の共通語彙——`structuredContent` は LLM から見えないので、
  * `content` にコードを出さない限り理由は誰にも届かない。`invalidReason` が欠損なら裸のラベルだけ。
  */
