@@ -50,7 +50,7 @@ import { dayjs } from '../../lib/datetime.js';
  * 返さなかったときにだけ走るフォールバックなので、同じ 5 点を含んでいても、窓を広げて strict が
  * 別の H&S を拾えば relaxed は評価すらされない。本 fixture の 365 本全体を 1 つの窓として渡すのと、
  * ライブと同じ左端で切った部分窓を渡すのとでは結果が変わる——計測側は窓長を軸として掃く
- * （`scripts/measure_relaxed_fallback_227.ts`）。
+ * （tjackiet/bitbank-lab-mcp#227 の計測スクリプト）。
  *
  * **数値は改変しないこと。** 末尾は切っていない（取得時点の直近 365 本そのもの）。
  */

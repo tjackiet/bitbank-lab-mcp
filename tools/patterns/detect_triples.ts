@@ -115,11 +115,10 @@ const FORMING_MAX_CONFIDENCE = 0.59;
  * ### 再開条件
  *
  * **高さ相対ゲートが単独で拾う実体に「呼べない」が積み上がる実データが出たとき。**
- * `scripts/measure_forming_triple_level_spread_178.ts` を再実行して残差の内訳を出し直す。
- * 経緯と数字は [`docs/internal/forming-triple-level-spread-178.md`][memo]（Phase 1 と決定）。
+ * tjackiet/bitbank-lab-mcp#178 の計測スクリプト を再実行して残差の内訳を出し直す。
+ * 経緯と数字は tjackiet/bitbank-lab-mcp#178 の計測記録（Phase 1 と決定）。
  *
  * [decision]: https://github.com/tjackiet/bitbank-lab-mcp/issues/178#issuecomment-5599895375
- * [memo]: ../../docs/internal/forming-triple-level-spread-178.md
  */
 const FORMING_LEVEL_SPREAD_FACTOR = 1.0; // tripleTolerancePct × 1.0
 // 形成中トリプル: ネックライン構成点（peak3 用の 2 谷 / valley3 用の 2 山）の水平性。
@@ -217,7 +216,7 @@ function findBreakoutIdx(
  * type によって別の基準で計算される。** triple だけ移したのは、暦日版の `per` が triple でのみ
  * 実質定数（#203 Phase 1 で 109/109 が 0.6）で、`double` / H&S では 4 値すべてが出るため。
  * バケット境界の根拠は `periodScoreBars` の docstring と
- * `docs/internal/triple-period-score-bars-199.md`。
+ * tjackiet/bitbank-lab-mcp#199 の計測記録。
  */
 function buildTripleScore(opts: {
 	/** 主構成点 3 点の `price`（top なら 3 山、bottom なら 3 谷。並び順は結果に影響しない） */
@@ -1422,7 +1421,7 @@ function rejectFormingNecklineSide(
  *
  * `triple_top` は切り上がりだけ、`triple_bottom` は切り下がりだけを評価しており、
  * **`triple_top` の単調な切り下がりと `triple_bottom` の単調な切り上がりが素通り**していた。
- * #178 項目 1 Phase 1 の目視判定（`docs/internal/forming-triple-level-spread-178.md` §8）の
+ * #178 項目 1 Phase 1 の目視判定（tjackiet/bitbank-lab-mcp#178 の計測記録 §8）の
  * #14（切り下がり 2.77%）と #20（切り上がり 1.86%）が実データの実例で、どちらも
  * 「呼べない」判定なのに accepted になっていた。
  *

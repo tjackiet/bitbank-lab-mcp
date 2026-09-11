@@ -82,7 +82,7 @@ import type { CandleData } from './types.js';
  *
  * **1day では評価できていない。** 実データ A（1day 90 本）はブレイク足の後に 60 本残る実体が
  * **0 件**なので母集団に 1 つも入らない（#228 / #227 と同じ但し書きで、「1day でも問題ない」ではない）。
- * 詳細は `docs/internal/target-reach-window-288.md`。
+ * 詳細は tjackiet/bitbank-lab-mcp#288 の計測記録。
  *
  * **時間足別のテーブルにしない。** バー数のまま持つ（`HS_BREAKOUT_MAX_BARS` と同じ扱い）。
  * 時間足別テーブルの流用は #198 で事故になっている。

@@ -42,13 +42,13 @@ import { HS_SHOULDER_MAX_PCT, MIN_DEPTH_PCT, MIN_PATTERN_HEIGHT_PCT, type SizeTh
  * （中間構成点が許容帯の端にへばりついていて、ブレイクの裏付けも無い）という 1 つのクラスに収まる。
  * `levelMargin` は 0.5858〜0.9391 とばらけており、**同水準性だけで切られてはいない**
  * （＝旧 `tolMargin` 一本足打法とは別の切り方になっている）。詳細は
- * `docs/internal/triple-confidence-multi-axis-phase2.md`。
+ * tjackiet/bitbank-lab-mcp#199 の計測記録（Phase 2）。
  *
  * ## ⚠️ 「分布の空白に置いた線」という根拠は #199 候補 2 で崩れた（0.6 は現在つまみ）
  *
  * 上の記述は元々「分布上 0.55〜0.59 が空なので 0.55〜0.60 のどこに置いても切れ方は同じ」で
  * 締めていた。**この性質は `duration` をバー数基準に移した時点で失われている**
- * （#199 候補 2 / `docs/internal/triple-period-score-bars-199.md`）。同一の計測基盤
+ * （#199 候補 2 / tjackiet/bitbank-lab-mcp#199 の計測記録）。同一の計測基盤
  * （検出器層 1,056 ケース = 24 系列 × 全 11 時間足 × `swingDepth` 4 種。ゲート到達を構造単位で集計）で:
  *
  * | | before（暦日基準） | after（バー数基準） |
@@ -91,7 +91,7 @@ import { HS_SHOULDER_MAX_PCT, MIN_DEPTH_PCT, MIN_PATTERN_HEIGHT_PCT, type SizeTh
  * （`detectPatternsViewsHandler` の `⚠️ 信頼度: 低い（形状不十分・単独判断不可、他指標と必ず併用）`）。
  * 「消す」か「ラベルを付ける」かは type ごとの方針の違いで、triple だけが「消す」側なのは
  * 上の 3 つ目の根拠（`FORMING_MAX_CONFIDENCE` との隣接）と棄却集合のクラス性が
- * triple にしか無いため。実測ログは `docs/internal/min-confidence-unwired-entries-206.md`。
+ * triple にしか無いため。実測ログは tjackiet/bitbank-lab-mcp#206 の計測記録。
  */
 export const MIN_CONFIDENCE: Record<string, number> = {
 	triple_top: 0.6,
@@ -286,7 +286,7 @@ export function getSizeThresholdsForTf(tf: string): SizeThresholds {
  * 正当化は分布ではなく**次元の一貫性**にある: 同じ形の判定を全時間足で同じ ATR 本数で
  * 行う、という #152 の方針を肩の同水準判定にも適用しただけ。落ちる集合が構造として
  * 失格であることは #244 Phase 1.5 で**目視により**確認した（延べ 14 構造すべて「呼べない」。
- * `docs/internal/level-pct-tf-244.md` §10）——値の非恣意性ではなく、**この値で落ちるものの
+ * tjackiet/bitbank-lab-mcp#244 の計測記録 §10）——値の非恣意性ではなく、**この値で落ちるものの
  * 妥当性**が根拠。
  *
  * ## 適用先は肩ゲートだけ。窓生成（`outerShoulderOk`）は 5% のまま
@@ -384,7 +384,7 @@ export function getHsShoulderMaxPctForTf(tf: string): number {
  * strict が既に 0.83% で `head_and_shoulders` / `inverse_head_and_shoulders` を検出できて
  * いる限り到達しない。`RELAXED_FACTORS` 自体の設計見直しは本 issue の範囲外。
  *
- * ### 実測（issue #227 Phase 1。`scripts/measure_relaxed_fallback_227.ts`）
+ * ### 実測（issue #227 Phase 1。tjackiet/bitbank-lab-mcp#227 の計測スクリプト）
  *
  * 上の「到達しない」は `btc_jpy` / `1hour` のライブ実行で崩れた（strict 0 件・段2
  * `x2.0_0.4` でだけ拾われた `head_and_shoulders` が整合度 0.79 で出力され、頭の突出は要求 0.83% の
@@ -429,7 +429,7 @@ export function getHsShoulderMaxPctForTf(tf: string): number {
  * `0.4` という値の非恣意性の根拠にはならない（#214 の非恣意性テストの意味では不合格）。
  * したがって Phase 2 では**段2 を削らず**、`headProminence` 軸の採点だけを strict の閾値
  * （本関数の値）に固定した（`detect_hs.ts` の `buildHsScore` / `headProminenceGate`）。
- * 詳細は `docs/internal/relaxed-fallback-overreach-227.md`。
+ * 詳細は tjackiet/bitbank-lab-mcp#227 の計測記録。
  */
 export function getHeadProminenceForTf(tf: string): number {
 	const t = String(tf);

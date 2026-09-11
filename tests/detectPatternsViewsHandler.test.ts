@@ -2096,7 +2096,7 @@ describe('表示日付の tz 整形（範囲・期間）', () => {
  * `content` に「山2 / 谷2 の位置」を常に出す件（issue #245 の決定コメント: 案 B + 案 C）。
  *
  * 検出器 / `structuredContent` は変えず、値は `pivots` から表示層で導出する。量の定義は
- * PR #276（`docs/internal/wick-only-second-peak-245.md`）と同じで、分母は
+ * PR #276（tjackiet/bitbank-lab-mcp#245 の計測記録）と同じで、分母は
  * `levelSpreadMetrics([a, c], [a, b, c]).heightAbs`。
  *
  * 実データ（#245 の発端の形）での値の固定は

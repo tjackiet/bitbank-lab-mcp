@@ -419,7 +419,7 @@ export function calculatePatternScoreEx(components: PatternScoreComponents, weig
  * （#199 Phase 1 実測。940 ケース延べで `double` は 0.6/0.7/0.8/0.9 の 4 値、
  * H&S も 4 値。H&S はネイティブ 1hour だけでも 0.8 が 19.0% 出る）。
  * 定数でない軸を「原則に合わないから」だけで動かすと、寄与が混ざったまま
- * confidence の分布が動く。詳細は `docs/internal/triple-period-score-bars-199.md`。
+ * confidence の分布が動く。詳細は tjackiet/bitbank-lab-mcp#199 の計測記録。
  */
 export function periodScoreDays(startIso?: string, endIso?: string): number {
 	if (!startIso || !endIso) return 0.7;

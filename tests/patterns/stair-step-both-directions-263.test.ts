@@ -7,7 +7,7 @@
  * **ここは「その形が実データに実在する」ことだけを固定する。**
  *
  * 指名するのは #178 項目 1 Phase 1（PR #260）のメモ
- * [`docs/internal/forming-triple-level-spread-178.md`](../../docs/internal/forming-triple-level-spread-178.md)
+ * tjackiet/bitbank-lab-mcp#178 の計測記録
  * §8 の目視判定 **#14**:
  *
  * > `1hour / top / 08-25T02 + 08-25T16` | 呼べない |

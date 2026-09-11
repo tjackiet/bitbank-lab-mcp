@@ -251,7 +251,7 @@ describe('未ブレイクの double は near_completion（issue #262）', () => 
 });
 
 /**
- * Phase 1 のメモ [`docs/internal/forming-double-asymmetry-262.md`](../../docs/internal/forming-double-asymmetry-262.md)
+ * Phase 1 のメモ tjackiet/bitbank-lab-mcp#262 の計測記録
  * §8-1 の **形 07**（実データ B = `btc_jpy_1hour_2026_08`、`1hour` / `swingDepth: 6` /
  * 終端 idx 253、構成点 219 - 230 - 236）。
  *

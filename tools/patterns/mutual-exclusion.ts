@@ -17,7 +17,7 @@
  * したがって落とすのは常に triple で、H&S 側は 1 件も落とさない。
  *
  * **本モジュールは閾値を一切持たない。** issue #218 Phase 1
- * （`docs/internal/triple-depth-ratio-218.md`）は「ネックラインからの深さ比」を hard gate に
+ * （tjackiet/bitbank-lab-mcp#218 の計測記録）は「ネックラインからの深さ比」を hard gate に
  * する案を実測して**否定**している——価格系列上の構造が 13 件しかなく、accepted プールの
  * 空白帯を支えているのはサイズ検査 / ネックライン傾き / 構造ゲート / `validateLevelSpread` と
  * いった**深さ比を見ていない別の定数**で、#215 と同じ壊れ方をする。Phase 1 が確かな根拠を
@@ -68,7 +68,7 @@ import type { DeduplicablePattern } from './types.js';
  * `formingHsForHead`）で `[0] [2] [4]` は**戻り谷と undefined を拾って壊れる**。
  * 形成中 triple は 2 点（`detect_triples.ts` の `tryFormingTripleTop`）。
  * `kind` で取れば完成済みでは上表の位置と一致し、形成中でも意味が保たれる
- * （Phase 1 の計測も同じ取り方をしている。`docs/internal/triple-depth-ratio-218.md` 3 章）。
+ * （Phase 1 の計測も同じ取り方をしている。tjackiet/bitbank-lab-mcp#218 の計測記録 3 章）。
  *
  * **`double_*` は意図的に載せていない**（上記スコープ）。載せると `mainPointIdxs` が
  * 値を返すようになり、ペアの列挙に double を足すだけで**未計測の排他が動き出す**。
