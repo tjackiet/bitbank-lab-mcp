@@ -2109,7 +2109,6 @@ docstring に残し、`not_computed_by_detector` が復活しないことを合�
 > **enum からは削除していない**——公開スキーマの出力フィールドの値なので削除は破壊的変更になる。
 
 
-
 #### 配線した経路（22 箇所。issue の表の 12 箇所＋実測で見つかった 10 箇所）
 
 issue が列挙したのは `targetReachFields` を既に呼んでいる 12 箇所（doubles 4 / H&S 4 /
@@ -6214,71 +6213,6 @@ status が変わったのは **forming → 完成済み（status 未設定）が
 - **`meta.dwFetchedForPnl`（boolean）を追加した。** `meta.depositWithdrawalStatus` は分析**セクション**の状態を表すため、`include_deposit_withdrawal: false` では履歴を取得済みでも `not_requested` になる。内部取得の成否はこの新フィールドで申告する。
 - **理由コード `withdrawal_history_not_fetched` を削除した**（`holdings[].cost_basis_unavailable_reason` / `data.total_cost_basis_unavailable_reason` / `*_performance.flow_unavailable_reason` / `meta.flowDataUnavailableReason`）。入出金履歴を「取得していない」状態が損益出力と併存しなくなったため。取得が落ちた場合は `dw_fetch_failed` に落ちる。
 
-### Security
-- **取引系 HITL の trust-host 経路を撤去した。** `BITBANK_TRUST_HOST_APPROVAL=1` でも `confirmation_token` を `structuredContent` に載せない。SEP-1865 iframe 起源の `tools/call` をサーバー側で識別できないため、token 露出は HITL バイパスになる。execute は elicitation / MRTR のユーザー明示 accept のみ。`create_order` / `cancel_order` / `cancel_orders` の MCP handler は常に `direct_execute_forbidden` で拒否する。環境変数は設定しても無視される（後方互換のため `isHostApprovalTrusted()` は常に `false` を返す）。
-
-### Schema (breaking)（`view` の語彙をツール間で統一）
-- **`view` の語彙をツール間で統一した。** `view` は**出力量の 1 軸**のみを表し、`summary` < `detailed` < `full` の順序で、**`full` は常にそのツールの最重量**を意味する。従来は同じ語が別の重さを指していた（`get_candles` の `full` は既定の通常表示、`get_flow_metrics` の `full` は全バケット列挙で約 1,440 行、`get_transactions` の `summary` は全件列挙）。LLM が `view` からトークン量を見積れず、`src/prompts/intermediate.ts` は `get_flow_metrics` に存在しない `view=detailed` を指示していた（この 1 件は先行して修正済み）。
-- **旧値は deprecated alias として受理し続ける。** ハンドラ入口で新しい指定へ正規化するので、**旧値経由の既定挙動は変わらない**。**`0.4.0` で削除予定**（最低 1 リリース かつ 3 ヶ月の猶予）。写像は以下のとおり。
-
-  > **表の「不変」の基準は、下記「`view` は `content` のみを変え、`structuredContent` を変えない」の修正を適用した後の挙動**（= 旧値と写像先を同一リリース内で突き合わせたときに一致する、の意）。**前リリースからの wire 契約の差分は別にある**——同リリースで `get_flow_metrics(view=summary)`（**既定値**）の `structuredContent` に `data.series.buckets` が戻り、`view=compact` の `series.buckets` が全バケットになる。`structuredContent` を読むクライアントは、語彙統一の表だけでなくそちらの項も確認すること。
-
-  | ツール | 旧値 | 新しい指定 | `content` | `structuredContent` |
-  |---|---|---|---|---|
-  | `get_candles` | `items` | `view=full` + `format=json` | 不変 | **変わる**（下記） |
-  | `get_transactions` | `summary`（旧既定） | `view=full` | 不変 | 不変 |
-  | `get_transactions` | `items` | `view=full` + `format=json` | 不変 | 不変 |
-  | `get_flow_metrics` | `compact` | `view=full` + `nonZeroOnly=true` | **バケット行は不変。ヘッダ 2 行が増える** | 不変 |
-  | `get_flow_metrics` | `buckets` | `view=detailed` | 不変 | 不変 |
-
-  `compact` で増える 2 行は `PAIR Flow Metrics (bucketMs=…)` と `Totals: …`。上の「上位ビューは下位ビューの上位集合」の修正で `full` に入ったヘッダで、**減る要素は無い**。バケット行——どのバケットを出すか / 欠損の連続区間の 1 行への畳み込み（`⋯ 欠損 A〜B（Nバケット, データなし）`）/ 真のゼロの除外——は 1 バイトも変わらない。
-- **量以外の軸を別パラメータへ切り出した**: `format`（`text` / `json`、`get_candles` / `get_transactions`）、`nonZeroOnly`（boolean、`get_flow_metrics`）。切り出したことで、旧 enum では表現できなかった組み合わせ（`view=detailed` + `nonZeroOnly=true` など）も表現できるようになった。`debug`（`detect_patterns`）と `beginner`（`get_volatility_metrics`）は出力を**置換**する**階梯外の値**として `view` に残す。
-- **`format=json` はトークン削減オプションではない。** 同じデータを pretty JSON にすると散文の圧縮形式より必ず増える（`get_candles` の実測で約 7.4 倍）。「機械可読性のために**トークンを払う**」オプションであることを description に明記した。
-- **`get_candles(view=items)` の `structuredContent` shape が変わる（本リリース唯一の shape 破壊）。** **旧 `items` だけが逸脱していたのを解消するもので、`format` が `structuredContent` を変えるようになったわけではない。** 移行後は `view` / `format` のどの組み合わせでも同一の `Result` 封筒を返す。
-
-  | 指定 | `content[0].text` | `structuredContent` |
-  |---|---|---|
-  | `view=full` + `format=text`（既定） | サマリ本文 ＋ 先頭 5 本の JSON サンプル | `Result` 封筒（`ok` / `summary` / `data.{raw,normalized,keyPoints,volumeStats}` / `meta`） |
-  | `view=full` + `format=json` | 全件の pretty JSON | **同上（同一）** |
-  | `view=items`（deprecated alias） | 同上 | **同上（同一）** |
-
-  **旧 `items` は `{ items, meta }` を返し `ok` / `summary` / `data.{raw,keyPoints,volumeStats}` を落としていた。旧 shape に依存するクライアントは `structuredContent.items` → `structuredContent.data.normalized` の読み替えが必要。** この 3 通りが deep-equal であることは `tests/view-structured-content-invariance.test.ts` で固定してある。（`get_transactions(view=items)` は元から封筒を保持しており、こちらは不変）
-- **`get_transactions` の default が `summary` → `full` に変わる（挙動は不変）。** 従来の `summary` は「返却した全約定を 1 行 1 件で列挙」であり、実体は `full` だった。外れ値だったのは default ではなく**名前**で、名前を階梯に合わせたことで `get_candles` と default が揃う。`summary`（集計のみ）は将来別リリースで **opt-in 専用**として新設予定（既定にはしない）。**同じ語の意味を差し替えないため、`summary` は alias 期間の削除後にのみ再導入する**——旧値を送り続けたクライアントに黙って別の応答が返るのを避けるため。
-- **生データ系ツール（`get_candles` / `get_transactions`）の既定は今後も全件列挙のまま。** `content[0].text` が LLM への唯一のチャネルであり（`.claude/rules/tools.md`）、既定を軽くすることは「応答を短くする」ではなく「**LLM が OHLCV / 約定明細を一切受け取らなくなる**」を意味するため。過去に `get_volatility_metrics` で軽量な一行要約を既定にして差し戻した実例がある。
-- **description を統一文言に揃えた。** 各 `view` に「この view では〇〇が `content` に出ない」を明記し、deprecated 値には写像先と削除目標バージョン（`0.4.0`）を書いた。共通文言は `src/schema/base.ts`（`VIEW_CONTRACT_NOTE` / `FORMAT_PARAM_NOTE` / `deprecatedViewNote()`）を単一ソースにしている。あわせて **`detect_macd_cross` の `view` が `pair` 省略時（スクリーニングモード）でのみ有効で、`pair` 指定の単一ペア深掘りモードでは無視される**ことを明記した（従来 `inputSchema` にもハンドラの型にも書かれていなかった）。
-- **`get_tickers_jpy` の `view`（`items` / `ranked`）は対象外。** 量でも形式でもなく**射影**（並び順と `data.ranked` の有無）を指しており、`view` という名前自体が誤用のため。改名は別途扱う。
-- **語彙統一そのものが既定の応答を変えるツールは無い。** 本項で変わるのは deprecated alias 経由の `get_flow_metrics(compact)` で `content` のヘッダ 2 行が増える点（減る要素は無い）と、`get_candles` の `format=json` / `view=items` の `structuredContent` shape だけ。**ただしリリース全体で見ると `get_flow_metrics(view=summary)`（既定値）の `structuredContent` は変わる**——下記「`view` は `content` のみを変え、`structuredContent` を変えない」の修正で `data.series.buckets` が戻るため。
-- **再発防止**: 横断テスト `tests/view-alias-mapping.test.ts` を追加し、上の写像表どおり旧値と新しい指定の応答が一致することを固定する。`get_flow_metrics` は**真のゼロと欠損区間を両方含むフィクスチャ**で検証する——「非ゼロだけにフィルタしてから全件レンダラに渡す」素朴な実装では欠損の畳み込みが失われて N 行に展開されるため、この 2 つが同時に無いと検出できない。あわせて `tests/view-content-superset.test.ts` の階梯包含テストを `detect_patterns`（`summary` ⊆ `detailed` ⊆ `full`）へ横展開し、`tests/view-structured-content-invariance.test.ts` の `get_candles` ケースを「既知の逸脱を固定する」形から他ツールと同じ deep-equal へ置き換えた。
-
-### Fixed（`view` の階梯: 上位ビューは下位ビューの上位集合）
-- **`get_flow_metrics(view=buckets / full)` の `content` に、最終約定価格・スパイク上位 3 件の詳細・4 行フッタ（含まれるもの / 含まれないもの / 補完ツール / 加工契約）が出るようになった。** 従来は上流の `res.summary` を捨てて短いヘッダ（`PAIR Flow Metrics (bucketMs=…)` ＋ `Totals:` ＋ 警告行）を組み直していたため、**軽い view（`summary` / `compact`）には出ているこれらの定型情報が、重い view でだけ消えていた**。`res.summary` をベースにバケット行を足す形（`compact` と同じ組み立て）に変更した。バケット行の直前に置く `Flow Metrics (bucketMs=…)` ヘッダと `Totals:` 行は従来どおり出る（警告行は `res.summary` が同じ文言を含むため重複させない）。
-- **`get_volatility_metrics(view=detailed / full)` の `content` に 4 行フッタ（含まれるもの / 含まれないもの / ATR の定義 / 補完ツール）が出るようになった。** 従来は本文を再構築する際にフッタを落としていた。文言は `tools/get_volatility_metrics.ts` の `VOLATILITY_METRICS_FOOTER` を単一ソースにし、`summary`（上流 `res.summary` をそのまま流す）と `detailed` / `full`（ハンドラが組み立てる）で食い違わないようにした。
-- **`content[0].text` は LLM への唯一のチャネル**（`.claude/rules/tools.md`）なので、上位 view で定型情報が消えるのは「表示が変わる」ではなく「LLM が最終値・スパイク詳細・『含まれないもの』『補完ツール』『加工契約』を受け取らなくなる」に等しい。`view` を上げたら情報は減らない、を契約にした。
-- **既定の `content` が変わるツールは無い。** 変わるのは `get_flow_metrics` の `buckets` / `full`（既定は `summary`）と `get_volatility_metrics` の `detailed` / `full`（既定は `summary`）だけで、いずれも**増える方向のみ**——従来の出力はそのまま残り、消えていた定型情報が加わる。`structuredContent` は全 `view` で従来どおり不変。
-- **階梯外の view は対象外**: `get_volatility_metrics(beginner)` と `detect_patterns(debug)` は「出力の置換」であり上位集合である必要がない。平易な言い換えである `beginner` に専門用語のフッタを足すのはその view の目的に反するため、意図的に足していない（テストで固定した）。
-- **再発防止**: 横断テスト `tests/view-content-superset.test.ts` を追加し、階梯上の各 view の `content` が下位 view の定型要素を含むことを検証する。**文字列長の比較（`len(summary) ≤ len(detailed) ≤ len(full)`）は使わない**——長さは上位集合性を検証せず（フッタが落ちても明細が増えれば通る。今回の欠陥はまさにその形）、文言を 1 語変えただけで落ちる脆いテストにもなるため。代わりに定型要素（📌 フッタ行 / ⚠️・ℹ️ 注記行 / ヘッダの pair・期間・最終値）を抽出・正規化した集合の包含と、バケット行の識別キー集合の包含で検証する。
-
-### Fixed（`view` は `content` のみを変え、`structuredContent` を変えない）
-- **`get_flow_metrics(view=summary)` の `structuredContent` に `data.series.buckets` が戻った。** 従来は `buckets` を**キーごと削除**しており、`series: z.object({ buckets: ... })` を**必須**で宣言する `GetFlowMetricsDataSchemaOut` を満たさない `structuredContent` を返していた（ハンドラでの加工後に再 parse していなかったため実行時エラーにならず露見していなかった）。`data.series.buckets` を必須として読む外部クライアントは、これまで `view=summary`（**既定値**）で欠落を受け取っていたことになる。
-- **`get_flow_metrics(view=compact)` の `structuredContent` が全バケットになった**（従来は「非ゼロ ∪ 欠損」でフィルタ済み）。`content` テキスト側の絞り込み表示（非ゼロバケットのみ＋欠損は `⋯ 欠損 A〜B（Nバケット, データなし）` の区間表記）は**従来どおり不変**。
-- 削除・フィルタの動機はトークン削減だったが、**LLM は `structuredContent` を参照しない**（`.claude/rules/tools.md`「`content[0].text` だけが LLM に見える」）ため削減量はゼロで、非 LLM クライアント向けの契約だけが壊れていた。`view` は `content` の量を決めるパラメータであり、`structuredContent` の shape を決めるパラメータではない。
-- **`content` は全 `view` で 1 バイトも変わらない。** `view=summary` / `compact` / `buckets` / `full` のテキスト出力・警告行・フッタはいずれも従来どおり。
-- **再発防止**: ① `get_flow_metrics` のハンドラ出口で `GetFlowMetricsOutputSchema.parse()` を通し、以後のスキーマ drift を CI で検出する。② 横断テスト `tests/view-structured-content-invariance.test.ts` を追加し、同一入力に対し `view` を変えても `structuredContent` が deep-equal であることを `get_flow_metrics` / `get_transactions` / `get_volatility_metrics` で検証する。階梯外 view が**足す**のは許容（`detect_patterns(debug)` の `data.candidates`、`detect_patterns(detailed)` の `usage_example`、`detect_macd_cross(detailed)` の `data.resultsDetailed` / `data.screenedDetailed`）なので、これらは「既存キーが全て残っていること（下位集合でないこと）」と「足しているキーが上記に限られること」を検証する。
-- **`get_candles(view=items)` の `structuredContent` 封筒（`{ items, meta }`）は本リリースでは変更しない。** `items` は後続で `view=full` + `format=json` に置き換える予定があり、そこで同時に直せば外部クライアントが受ける破壊は 1 回で済むため。現状の逸脱は上記テストで形を固定してある。
-
-### Fixed（プロンプトが存在しない `view` 値を指示していた）
-- **`中級：BTCのフロー分析をして` プロンプトが `get_flow_metrics` に存在しない `view=detailed` を指示していた問題を修正**（`view=compact` に差し替え）。同ツールの enum は `summary` / `compact` / `buckets` / `full` で `detailed` は無い。SDK v2 はハンドラ実行前に `inputSchema` で入力を検証するため、プロンプトの指示どおり呼ぶと**ツール呼び出しが validation error になる**（黙って既定値に倒れるのではなく失敗する）。差し替え先に `compact` を選んだのは、このプロンプトの用途が「CVD 推移・スパイク・直近 1-3 時間重視」で `limit=300` / `bucketMs=60000`（最大約 300 バケット）のため。`full` は 300 行で用途に対して重く、`buckets` は既定 10 件で推移を追うには短い。`compact` は非ゼロバケットのみを出しつつ欠損を区間表記で残す。
-- **再発防止テストを追加**（`tests/prompts_contract.test.ts`）。全プロンプトの本文から `toolName(..., view=xxx, ...)` を抽出し、`allToolDefs` の `inputSchema` が持つ `view` の enum で受理されるかを検証する。プロンプトはテストで実行されないため、この不整合は従来どのテストにも掛からなかった。**検査対象は `view` を明示している呼び出し例に限る**（`view` を渡していない呼び出し例は対象外で、プロンプトが参照するツール名一般の実在性は検証していない）。その範囲内では、ツール名を `allToolDefs` で解決できないケースと、`view` を持たないツールに `view` を渡しているケースも失敗として報告する（黙って検査をスキップしないため）。
-
-### Changed（プロンプトとドキュメントを新しい `view` 語彙に追従させた）
-**ツールの挙動変更は無い**（旧値は alias として受理され続けるため、追従前のプロンプトもそのまま動く）。語彙は導入したが呼び出し側が旧値のまま、という状態を残さないための追従。
-- **同梱プロンプトが指示する `view` を新語彙へ差し替えた。**
-  - `中級：BTCのフロー分析をして`: `get_flow_metrics(view=compact)` → `view=full, nonZeroOnly=true`、`get_transactions(view=summary)` → `view=full`。いずれも上表の写像どおりで**指示内容の意味は変わらない**。
-  - `detect_patterns(view=detailed)` は新語彙でも有効値のため**変更なし**。
-  - `🌅 おはようレポート`: `get_candles(view="items")` → **`view="full"` のみ**（`format` は付けない）。写像表の `view=full` + `format=json` は「旧 `items` と `content` を一致させる」ための写像であって、このプロンプトが必要とするものではない。用途はスパークライン用に 24 本の close を得ることで、既定の `view=full` + `format=text` のサマリ本文が全 24 本を 1 行 1 本の圧縮形式で含む。`format=json` にすると同じ 24 本が 10 行/本の pretty JSON になり（トークン増）、しかも `content` からサマリ本文・価格レンジ・キーポイント・出来高統計・フッタが消える。**JSON を要求する理由が無く、外したほうが軽くかつ LLM が受け取る情報は多い。**
-- **`docs/tools.md` に「`view` の共通語彙」節を新設した**（従来 `view` パラメータの記載はゼロだった）。階梯（`summary` < `detailed` < `full`、`full` は常に最重量）、`full` が全件列挙になるのは主対象がレコード列のツールに限ること（`get_volatility_metrics` は該当せず、`full` でも系列そのものは出ない）、`view` が `structuredContent` からフィールドを削らないこと、`format` / `nonZeroOnly` は量ではなく形式 / 絞り込みの軸であること、階梯外の値（`debug` / `beginner`）は出力の置換であること、生データ系ツールの既定が全件列挙である理由、ツール別の値と既定、**非推奨の値と写像先**を記載した。`get_tickers_jpy` の `view` が本語彙の対象外であることも明記している。
-- **`.claude/rules/tools.md` に `view` の規約を追記した**（開発者向け）。新規ツール追加時に守る 7 項目——量の 1 軸であること / `structuredContent` を削らないこと（削る・足す・入力のエコーの 3 分類）/ 階梯上の view は下位の上位集合であること / 量以外の軸を `view` の値に混ぜないこと / 「この view では〇〇が `content` に出ない」を description に書くこと / 規約をテストで固定すること / enum 値を変える際の alias 手順と型導出——を、`src/schema/base.ts` の共通文言と各共通テストへの導線つきで書いた。
-
 ### Changed（**挙動変更**: `get_flow_metrics` の `date` 指定で `limit` を適用しない）
 - **`get_flow_metrics(date=YYYYMMDD)` が当該 UTC 暦日の全件を集計するようになった**（従来は「その UTC 日の最新側 `limit` 件」）。`since` / `until` の導入で区間指定パラメータが 3 系統になった際、`limit` の扱いが `date` だけ不揃いになっていた（`hours` は「`limit` は無視」、`since`・`until` は「指定時は `limit` を適用しない（区間の全件を集計）」、`date` のみ適用）。既定 `limit` は 100 なので `get_flow_metrics(date=20260801)` は末尾約 20 分ぶんを返しており、日付を指定した意図とはまず一致しなかった。切り捨て自体は `meta.truncated` / `meta.totalAvailable` / warning で申告されていた（黙って壊れてはいない）が、既定の挙動として不適切だった。
   - **`date` + `limit` で少数サンプルを取っていた利用は結果が変わる。** 直近 N 件が欲しい場合は `date` を外して件数ベース取得（`date` / `hours` / `since`・`until` をどれも指定しない呼び出し）を使うこと。
@@ -6369,22 +6303,71 @@ status が変わったのは **forming → 完成済み（status 未設定）が
 
 ### Changed
 - **`get_transactions` の `minAmount` / `maxAmount` / `minPrice` / `maxPrice` フィルタを `limit` 適用前に移動**（filter → limit）。従来は「最新側 limit 件を取り出してから絞る」ため条件を絞るほどカバー期間が縮み、date 指定時は UTC 日アーカイブ（約 8,000 件超）の末尾 limit 件しかフィルタ対象にならなかった（直近 24 時間の大口約定分析で約 11 時間分が無警告欠落する実害）。現在は「条件に合致した約定を最新側優先で最大 limit 件」返す。フィルタはコア関数の第 4 引数（`GetTransactionsFilters`）に移動し、フィルタ未指定の内部呼び出し（`get_flow_metrics` / `analyze_volume_profile` 等）は挙動不変。
-- **`get_volatility_metrics` の実現ボラ `rv_std` / `rolling[].rv_std`（および年率換算 `rv_std_ann`）が母集団分散(n) から標本分散(n-1, Bessel 補正)ベースに変わったため出力数値が変化する。破壊的変更ではない**（型・フィールド・契約は不変、同一データで `rv_std` が僅かに大きくなるのみ）。上振れ幅は**小窓ほど大きく**、aggregate は標準 limit=200 で約 +0.25%、rolling は w=14 で約 +3.78%、w=20 で約 +2.60%、w=30 で約 +1.71%。
-- 上記に伴い `volatile`(≥0.8) / `calm`(≤0.3) 判定閾値および下流参照（`getVolatilityMetricsHandler` の `high_vol`/`low_vol`/`expanding_vol`/`contracting_vol`/`high_short_term_vol`、`analyze_market_signal` の `volatilityFactor` / `recommendedTimeframes`）の閾値を**再評価のうえ据え置き**。根拠: 閾値は全て年率実現ボラを基準に判定しており、(a) aggregate ベースの閾値は標本数が大きく Bessel 補正が無視可能（最小 20 本でも +2.74%）、(b) `expanding/contracting_vol` の short/long 比は Bessel 係数が相殺し残差が ±5% 中立バンド内、(c) `high_short_term_vol` の最大上振れ（w=14, +3.78%）もヒューリスティックな許容範囲内のため、いずれも判定境界を実質的に跨がない。volatile/calm の閾値は `VOLATILE_RV_ANN_THRESHOLD` / `CALM_RV_ANN_THRESHOLD` 定数として明示し、判定を純粋関数 `classifyRealizedVolTags` に集約した（挙動は不変）。
-
-### Security
-- `run_backtest` の `savePng: true` 時の `outputDir` を許可 root 配下のみに制限（`/mnt/user-data/outputs`・サーバー作業ディレクトリ配下、および環境変数 `BACKTEST_OUTPUT_DIR_ALLOWLIST` で運用側が追加した root）。許可外パスはバックテスト実行前にエラーを返す。判定は `..`・シンボリックリンクを解決した実パスで行うためトラバーサル・symlink では迂回できない。**既定設定の動作は不変**で、許可外ディレクトリへ出力していた場合のみ環境変数での明示許可が必要（#15）。
-- チャートファイル名生成（`generateBacktestChartFilename`）に、パス区切り・ドット等を除去する防御的サニタイズを追加。ファイル名の安全性を上流の pair バリデーションに依存させないための多層防御（#15）。
 
 ### Schema (breaking)
-- `GetOrderbookDataSchemaOut` を `{ raw, normalized }` 固定の object から `z.discriminatedUnion('mode', [Summary, Pressure, Statistics, Raw])` に変更。実装 (`tools/get_orderbook.ts`) は元々 mode 別に完全に異なる shape の `data` を返していたが、スキーマ側が追従していなかったため `z.infer<typeof GetOrderbookDataSchemaOut>` を消費する外部クライアントには契約不一致だった。これに合わせて `data.mode` を必須の discriminator として明示。`get_orderbook` 末尾で `GetOrderbookOutputSchema.parse()` 経由のリターンに切り替え、スキーマ drift が CI で検出されるようにした。
-- 併せて `GetOrderbookMetaSchemaOut` の `count`（実装で一度もセットされていなかった）を削除し、実装で実際に常設している `mode` を必須フィールドに追加。
-- `get_orderbook` statistics mode の `ranges[].ratio` を `number | null` に変更（旧: `number`、その後一時的に `number | Infinity`）。`askVolume === 0 && bidVolume > 0` のとき `Infinity` を返していたが `JSON.stringify(Infinity)` が `null` になり MCP wire format と乖離するため、実装側 (`tools/get_orderbook.ts` `buildStatistics`) で `null` に正規化。「買い優勢 / strong / 売り板=0 で算出不能」の意味は `interpretation` / `summary.overall` / `summary.strength` / `content` テキストで保持する。schema は `z.number().nullable()`。
 - `GetTransactionsDataSchemaOut` から `raw` を削除。date 指定時に全 UTC 日分（約 8,000 件超）の生レスポンスが `structuredContent` に毎回同梱され、`limit` の意義を無効化していた。transactions の `data.raw` を参照する消費者がリポジトリ内に存在しないことは確認済み。あわせて `GetTransactionsMetaSchemaOut` に truncation メタ（`totalFetched` / `matched` / `returned` / `truncated` は必須、`actualRange` / `fetchedRange` は optional）を追加。
 - `AnalyzeVolumeProfileDataSchemaOut` の `params.timeRange` に `coveredMin` / `gapMin` / `segments` を**必須**で追加（`requestedMin` は optional）。`data.params.timeRange` を消費する外部クライアントは新フィールドを受け取る（既存の `start` / `end` / `durationMin` は不変）。
 - `GetFlowMetricsMetaSchemaOut` / `AnalyzeVolumeProfileMetaSchemaOut` に `totalAvailable`（number, optional）/ `truncated`（boolean, optional）を追加。件数ベース取得時のみセットされる。
 - `FlowBucketSchema` に `hasData`（boolean）を**必須**で追加。`false` は「約定ゼロ」ではなく「取得できていない（欠損区間）」を意味する。`data.series.buckets` を消費する外部クライアントは新フィールドを受け取る（既存フィールドは不変）。あわせて `view=compact` の `content` テキストでも欠損バケットが（区間表記で）残るようになった（従来は黙って除外されていた）。なお `structuredContent` 側の `view=compact` のフィルタは後述の「`view` は `structuredContent` を変えない」で**全廃**しており、返却バケットは欠損に限らず全件になる。
 - `GetFlowMetricsMetaSchemaOut.actualRange` を `TxCoverageRangeSchema` に差し替え（`coveredMinutes` / `gapMinutes` / `segments` が必須、`requestedMinutes` / `coveragePct` / `gaps` が optional）。既存の `start` / `end` / `durationMinutes` は不変。あわせて計算層用の `warnings`（`string[]`, optional）を追加。
+
+
+## [0.4.0] - 2026-08-21
+
+### Added
+- **MCP Apps 対応ホスト限定・オプトインで、確認カードのボタンからの発注・取消を再導入した**（`BITBANK_MCP_APPS_EXECUTE=1`、既定 off）。elicitation / MRTR 非対応のホスト（Claude Desktop 等）では実行経路が無く、プレビューまでしかできなかった。確認トークンをツール結果の `_meta` にのみ載せて iframe へ渡し、`structuredContent` には載せない。有効化はオプトインとクライアントの MCP Apps UI 宣言（MIME 型込み）の 2 段 AND で、elicitation 対応ホストでは従来経路を優先する。既存の束縛（HMAC パラメータ束縛 / TTL 60 秒 / ワンタイム / `requestState` の session bind）は 1 つも緩めておらず、署名鍵に per-process nonce を追加してプロセス再起動・複数プロセスでの replay も塞いだ。
+  - **安全性はホストが `_meta` をモデルコンテキストに渡さないという前提に依存する。仕様上の保証ではない。**また UI 宣言はクライアントの自己申告で検証できないため、認可の実体はトークン所持のみである。有効化前に README の警告と ADR-0007 を必ず読むこと。
+
+### Fixed
+- **過去保有の復元（`reconstructHoldingsAtDate`）が期初の保有を過大に出す問題を修正。** 巻き戻しは「約定 → 入庫 → 出庫」の 3 相で同一時点の状態に加算を積むが、約定相と入庫相が途中経過ゼロ以下の資産をその場で削除していた。3 相は独立した加算なので本来は順序に依存しないが、途中でクランプすると負の繰り越しが失われて順序依存になる（現在 BTC 1 / ウィンドウ内に「BTC 2 買い → BTC 1 出庫」がある口座で、期初は BTC 0 であるべきところ BTC 1 になる）。途中のクランプをやめ、実質ゼロの掃除は全相を終えた後の既存 cleanup 1 回だけにした。`buildEquitySeries` の過去の点と、期初評価額を使う期間パフォーマンス（調整後増減）が同じ向きにずれていたが、系列は滑らかなままなので読み手からは見えなかった。
+- **売り約定の巻き戻しが base 建て手数料を戻していなかった問題を修正**（`current + qty` → `current + qty + feeBase`）。base 手数料は売りでも base から引かれる。買い側の `qty - feeBase` と対称になる。実口座では売り行の `fee_amount_base` が全てゼロのため出力は変わらない。
+- **重い `view` が軽い `view` の上位集合になっていなかった問題を修正（`content` は増える方向のみ変わる）。** `get_flow_metrics` の `view=buckets` / `view=full` は上流 `res.summary` を捨てて短いヘッダを組み直しており、`view=summary` / `view=compact` にあった**最終約定価格・スパイク上位 3 件の詳細・4 行フッタ**（含まれるもの / 含まれないもの / 補完ツール / 加工契約）が上位 `view` でだけ消えていた。同様に `get_volatility_metrics` の `view=detailed` / `view=full` では 4 行フッタ（含まれるもの / 含まれないもの / ATR の定義 / 補完ツール）が消えていた。`content[0].text` は LLM への唯一のチャネルなので、これは「表示が変わる」ではなく「LLM が情報を失う」に等しい。
+- `get_flow_metrics(buckets/full)` を `res.summary` ベースに変更（バケット行の直前に置く `PAIR Flow Metrics (bucketMs=…)` / `Totals:` の 2 行ヘッダは従来どおり）。取得層の warning 行は `res.summary` が既に含むため、ヘッダ側には重ねない。`get_volatility_metrics(detailed/full)` はフッタ文言を `VOLATILITY_METRICS_FOOTER`（`tools/get_volatility_metrics.ts`）に単一ソース化して維持するようにした。**既定 `view` の応答が変わるツールは無い**（`get_flow_metrics` の既定は `summary`、`get_volatility_metrics` の既定は `summary`。どちらも元からフッタを持つ）。
+- 併せて `tests/view-content-superset.test.ts` を新設。**文字列長の比較は使わない**（フッタが落ちても明細が増えれば通ってしまう）——定型要素（`📌` フッタ行 / `⚠️`・`ℹ️` 注記行 / ヘッダ主要フィールド）とバケット行の識別キーの**集合包含**で検証する。階梯外の `beginner` / `debug` は「出力の置換」なので対象外であることもテストで固定した。
+- **`get_flow_metrics` の `view` が `structuredContent` の契約を変えていた問題を修正。`view` は `content` だけを変え、`structuredContent` からフィールドを削らないことを契約にした。** 従来 `view=summary` は `data.series.buckets` を**キーごと削除**しており、同フィールドを必須で宣言する `GetFlowMetricsDataSchemaOut` を満たさない `structuredContent` を返していた（ハンドラ加工後に再 parse していなかったため実行時に露見していなかった）。`view=compact` も同様に、宣言上は全バケットのはずが非ゼロだけの部分集合になっていた。**修正により `view=summary` / `view=compact` でも `series.buckets` に全バケットが入る。** `content` の絞り込み（`summary` はバケット行なし / `compact` は非ゼロのみ）は従来どおりで、**全 `view` について `content` は 1 バイトも変わらない**。
+- 削除の動機はトークン削減だったが、LLM は `structuredContent` を参照しない（`.claude/rules/tools.md`）ため削減量はゼロで、非 LLM クライアントの契約だけが壊れていた。再発防止としてハンドラ出口で `GetFlowMetricsOutputSchema.parse()` を通し、以後 `view` 分岐が `structuredContent` を加工したら CI で落ちるようにした。併せて `tests/view-structured-content-invariance.test.ts` を新設し、`get_flow_metrics` / `get_transactions` / `get_volatility_metrics` は全 `view` で deep-equal、`detect_patterns` / `detect_macd_cross` は「足すだけ（削らない）」を横断的に固定した。
+- MCP プロンプト「中級：BTCのフロー分析をして」が `get_flow_metrics` に存在しない `view=detailed` を指示していた問題を修正（`view=compact` に差し替え）。同ツールの enum は `summary` / `compact` / `buckets` / `full` で、SDK v2 はハンドラ実行前に `inputSchema` で入力を検証するため、指示どおり呼ぶと validation error になっていた。差し替え先を `compact` にした根拠は、当該プロンプトの用途（CVD 推移・スパイク・直近 1-3 時間重視、`limit=300` / `bucketMs=60000` ＝ 最大約 300 バケット）に対し `full` は 300 行で重く、`buckets`（既定 10 件）は CVD 推移を見るには短いため。
+- 併せて `tests/prompts_contract.test.ts` に、全プロンプトのツール呼び出し例が指示する `view` が各ツールの Zod enum で受理されるかを静的に突き合わせる検査を追加。プロンプトはテストで実行されないため、この種の不整合は従来どのテストにも掛からなかった。
+- MCP `initialize` が返す `serverInfo.version` を `package.json` の値に統一。`src/server.ts` が `'0.4.2'` をハードコードしており、`package.json` / 各プラグインマニフェスト（`.claude-plugin` / `.codex-plugin` / `.cursor-plugin` / `gemini-extension.json`）の `0.1.1` と乖離したまま、クライアントに誤ったバージョンを申告していた。`createRequire(import.meta.url)` で `package.json` を単一ソースとして読むようにし、以後リリース時に取り残されないようにした（`bin/bitbank-lab-mcp.js` と同じ解決方式）。併せて `tests/server_smoke.test.ts` の期待値をリテラルから `package.json` 参照に変更し、同種の drift をテストで検知できるようにした。
+
+### Changed
+- **`calcPeriodNetFlow` が価格を解決できない資産を黙って落としていたのを、`unpriced_assets` として申告するようにした**（0 円計上と等価で `net_flow_jpy` が過小になり、`adjusted_change_jpy` も同じ向きにずれる）。`analyze_my_portfolio` は計算層の warning として `content` 先頭と `meta.warnings` に出す。該当なしのときはキーごと省くため、従来の出力と JSON 上で完全一致する。
+- **bitbank API が返す `asset` / `pair` シンボルを取得境界で小文字に正規化するようにした**（`lib/asset-code.ts` / `lib/pair-code.ts`）。リポジトリ全体が「API は小文字を返す」前提の上に立っており、大文字が混ざると `BTC_JPY` に対して `replace('_jpy','')` が何も置換せず holdings のキーが割れる、`calcPnl` の pair 突き合わせが 0 件になり実現損益が静かに消える、といった壊れ方をする。防御的正規化で、現行 API の挙動は変わらない。消費側に `.toLowerCase()` を撒かず取得境界の 1 箇所に集約している。
+- **`get_volatility_metrics` の実現ボラ `rv_std` / `rolling[].rv_std`（および年率換算 `rv_std_ann`）が母集団分散(n) から標本分散(n-1, Bessel 補正)ベースに変わったため出力数値が変化する。破壊的変更ではない**（型・フィールド・契約は不変、同一データで `rv_std` が僅かに大きくなるのみ）。上振れ幅は**小窓ほど大きく**、aggregate は標準 limit=200 で約 +0.25%、rolling は w=14 で約 +3.78%、w=20 で約 +2.60%、w=30 で約 +1.71%。
+- 上記に伴い `volatile`(≥0.8) / `calm`(≤0.3) 判定閾値および下流参照（`getVolatilityMetricsHandler` の `high_vol`/`low_vol`/`expanding_vol`/`contracting_vol`/`high_short_term_vol`、`analyze_market_signal` の `volatilityFactor` / `recommendedTimeframes`）の閾値を**再評価のうえ据え置き**。根拠: 閾値は全て年率実現ボラを基準に判定しており、(a) aggregate ベースの閾値は標本数が大きく Bessel 補正が無視可能（最小 20 本でも +2.74%）、(b) `expanding/contracting_vol` の short/long 比は Bessel 係数が相殺し残差が ±5% 中立バンド内、(c) `high_short_term_vol` の最大上振れ（w=14, +3.78%）もヒューリスティックな許容範囲内のため、いずれも判定境界を実質的に跨がない。volatile/calm の閾値は `VOLATILE_RV_ANN_THRESHOLD` / `CALM_RV_ANN_THRESHOLD` 定数として明示し、判定を純粋関数 `classifyRealizedVolTags` に集約した（挙動は不変）。
+
+### Security
+- **使用済み confirmation token / requestState nonce の記録を有界化し、上限到達時を fail-closed にした。** 従来はどちらも上限のない `Map` に貯め続けており、確認フローを大量に作るクライアントが短時間でプロセスのメモリを増やせた（nonce 側は `consumeNonce` 内の全走査でしか purge されず、CPU も件数に比例して消費していた）。TTL + 件数上限つきの共通データ構造 `lib/bounded-expiring-set.ts` に載せ替え、上限に達したら **生存エントリを追い出さず** `add` を失敗させ、確認・実行を拒否する（`validateToken` は `token_store_full`、`consumeNonce` は `capacity_exceeded`）。**容量を空けるために未期限切れの記録を退避してはならない**——その token / nonce は「未使用」に巻き戻り replay が黙って通るため、メモリ上限のためにワンタイム性を犠牲にしない。件数上限は `DEFAULT_MAX_ENTRIES`（10,000 件 ≒ 2MB。環境変数 `REPLAY_GUARD_MAX_ENTRIES` で上書き可）に 1 箇所へ集約し、算出根拠（保持期間 最長 300 秒 × 想定ピーク 20 件/秒 = 6,000 件）をコメントに残した。purge はアクセス時に加えて定期タイマー（60 秒間隔・`unref` 済み）でも走り、無アクセス期間の記録が TTL 超過後に残り続けないようにした。
+- **取引系 HITL の trust-host 経路を撤去した。** `BITBANK_TRUST_HOST_APPROVAL=1` でも `confirmation_token` を `structuredContent` に載せない。SEP-1865 iframe 起源の `tools/call` をサーバー側で識別できないため、token 露出は HITL バイパスになる。execute は elicitation / MRTR のユーザー明示 accept のみ。`create_order` / `cancel_order` / `cancel_orders` の MCP handler は常に `direct_execute_forbidden` で拒否する。環境変数は設定しても無視される（後方互換のため `isHostApprovalTrusted()` は常に `false` を返す）。
+- `run_backtest` の `savePng: true` 時の `outputDir` を許可 root 配下のみに制限（`/mnt/user-data/outputs`・サーバー作業ディレクトリ配下、および環境変数 `BACKTEST_OUTPUT_DIR_ALLOWLIST` で運用側が追加した root）。許可外パスはバックテスト実行前にエラーを返す。判定は `..`・シンボリックリンクを解決した実パスで行うためトラバーサル・symlink では迂回できない。**既定設定の動作は不変**で、許可外ディレクトリへ出力していた場合のみ環境変数での明示許可が必要（#15）。
+- チャートファイル名生成（`generateBacktestChartFilename`）に、パス区切り・ドット等を除去する防御的サニタイズを追加。ファイル名の安全性を上流の pair バリデーションに依存させないための多層防御（#15）。
+
+### Documentation
+- `docs/tools.md` に「`view` の共通語彙」節を新設（従来 `view` の記載はゼロだった）。階梯 / `full` が全件列挙とは限らない条件 / `structuredContent` を削らない契約 / `format`・`nonZeroOnly` の位置づけ / 階梯外の値 / 生データ系の既定が全件列挙である理由 / ツール別の値と既定 / **非推奨の値と写像先の表**を書いた。`get_tickers_jpy` の `view` は本語彙の対象外である旨も明記。
+- `.claude/rules/tools.md` に「`view` の規約」節（規約 1〜7）を追記。`src/schema/base.ts` の共通文言と各共通テストへの導線を張り、handler チェックリストの `view=items` という例示を `format=json` に差し替えた（旧値を規約文書に残さないため）。
+- `docs/internal/view-vocabulary-unification.md` を追加（設計の一次ソース）。`view` 語彙の調査結果・統一設計・移行方針・alias 写像表・実施状況。
+- MCP プロンプトを新語彙へ追従: 「中級：BTCのフロー分析をして」の `get_flow_metrics(view=compact)` → `view=full, nonZeroOnly=true` / `get_transactions(view=summary)` → `view=full`、「🌅 おはようレポート」の `get_candles(view="items")` → `view="full"`。**おはようレポートに `format=json` は付けていない**——用途はスパークライン用に 24 本の close を得ることで、`view=full`（既定）のサマリ本文が 24 本すべてを 1 行 1 本の圧縮形式で含む。`format=json` にすると同じ 24 本が 10 行/本の pretty JSON になり、しかも `content` からサマリ本文・価格レンジ・キーポイント・出来高統計・フッタが消える（**JSON を要求する理由が無く、付けないほうが軽く、かつ LLM が受け取る情報は増える**）。
+
+### Schema (breaking)
+- **`view` の語彙をツール間で統一した。** `view` は**出力量の 1 軸**のみを表し、`summary` < `detailed` < `full` の順序で、**`full` は常にそのツールの最重量**を意味する。従来は同じ語が別の重さを指していた（`get_candles` の `full` は既定の通常表示、`get_flow_metrics` の `full` は全バケット列挙、`get_transactions` の `summary` は全件列挙）。LLM が `view` からトークン量を見積れず、`src/prompts/intermediate.ts` は `get_flow_metrics` に存在しない `view=detailed` を指示していた。
+- **旧値は deprecated alias として受理する**（`get_candles.items` / `get_transactions.summary` / `get_transactions.items` / `get_flow_metrics.compact` / `get_flow_metrics.buckets`）。写像は次のとおりで、**旧値経由の `content` はバケット行・明細とも変わらない**。削除目標バージョンは `DEPRECATED_VIEW_REMOVAL_TARGET`（`src/schema/base.ts`）を単一ソースにした。
+
+  | ツール | 旧値 | 新しい指定 | `content` | `structuredContent` |
+  |---|---|---|---|---|
+  | `get_candles` | `items` | `view=full` + `format=json` | 不変 | **変わる**（下記） |
+  | `get_transactions` | `summary`（旧既定） | `view=full` | 不変 | 不変 |
+  | `get_transactions` | `items` | `view=full` + `format=json` | 不変 | 不変 |
+  | `get_flow_metrics` | `compact` | `view=full` + `nonZeroOnly=true` | **バケット行は不変。ヘッダ 2 行が増える** | 不変 |
+  | `get_flow_metrics` | `buckets` | `view=detailed` | 不変 | 不変 |
+
+- **量以外の軸を別パラメータへ切り出した**: `format`（`text` / `json`。`get_candles` / `get_transactions`）、`nonZeroOnly`（boolean。`get_flow_metrics`）。`debug`（`detect_patterns`）と `beginner`（`get_volatility_metrics`）は出力を**置換**する**階梯外の値**として `view` に残す。`get_tickers_jpy` の `view`（`items` / `ranked`）は量でも形式でもなく**射影**なので本統一の対象外（改名は別途）。
+- **`get_candles(view=items)` の `structuredContent` shape が変わる。** 旧 `items` は `{ items, meta }` を返し `ok` / `summary` / `data.{raw,keyPoints,volumeStats}` を落としていたが、`view=full` + `format=json` では他ツールと同じ `Result` 封筒を返す。**旧 shape に依存するクライアントは `structuredContent.items` → `structuredContent.data.normalized` に読み替えが必要。**（`get_transactions(view=items)` は元から封筒を保持しており不変）
+- **`get_transactions` の default が `summary` → `full` に変わる（挙動は不変）。** 従来の `summary` は「返却した全約定を 1 行 1 件で列挙」であり、実体は `full` だった。集計のみの軽量 `summary` は将来別リリースで **opt-in 専用**として新設予定で、**同じ語の意味を差し替えないため alias 期間の削除後にのみ再導入する**。
+- **生データ系ツール（`get_candles` / `get_transactions`）の既定は今後も全件列挙のまま。** `content[0].text` が LLM への唯一のチャネルであり（`.claude/rules/tools.md`）、既定を軽くすることは「短くする」ではなく「LLM が明細を受け取らなくなる」を意味するため。同じ理由で `format=json` は**トークン削減オプションではない**（同じデータでも pretty JSON は散文の圧縮形式より必ず増える）。この位置づけを各 description に明記した。
+- **既定の応答内容が変わるツールは無い。** 各ツールのハンドラ引数の `view` / `format` 型はリテラルを手書きせず Zod スキーマから導出してあるため、alias を enum から消した時点で残った alias 分岐は `TS2367` で必ず typecheck が落ちる（消し忘れを機械的に潰せる）。
+- `GetOrderbookDataSchemaOut` を `{ raw, normalized }` 固定の object から `z.discriminatedUnion('mode', [Summary, Pressure, Statistics, Raw])` に変更。実装 (`tools/get_orderbook.ts`) は元々 mode 別に完全に異なる shape の `data` を返していたが、スキーマ側が追従していなかったため `z.infer<typeof GetOrderbookDataSchemaOut>` を消費する外部クライアントには契約不一致だった。これに合わせて `data.mode` を必須の discriminator として明示。`get_orderbook` 末尾で `GetOrderbookOutputSchema.parse()` 経由のリターンに切り替え、スキーマ drift が CI で検出されるようにした。
+- 併せて `GetOrderbookMetaSchemaOut` の `count`（実装で一度もセットされていなかった）を削除し、実装で実際に常設している `mode` を必須フィールドに追加。
+- `get_orderbook` statistics mode の `ranges[].ratio` を `number | null` に変更（旧: `number`、その後一時的に `number | Infinity`）。`askVolume === 0 && bidVolume > 0` のとき `Infinity` を返していたが `JSON.stringify(Infinity)` が `null` になり MCP wire format と乖離するため、実装側 (`tools/get_orderbook.ts` `buildStatistics`) で `null` に正規化。「買い優勢 / strong / 売り板=0 で算出不能」の意味は `interpretation` / `summary.overall` / `summary.strength` / `content` テキストで保持する。schema は `z.number().nullable()`。
 
 ## [0.1.1] - 2026-05-08
 
