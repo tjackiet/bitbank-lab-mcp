@@ -152,8 +152,25 @@ function rejectionSummaryLines(text: string): string[] {
 }
 
 /**
- * view の content から定型要素（注記行 + 期間行 + 実効パラメータ行 + 検出経路行 + ヘッダ主要フィールド）を
- * 抽出した集合。
+ * 状態行（`- 状態: …`）。パターン 1 件ごとに出る定型 1 行で、issue #286 以降は
+ * **`status` の日本語に理由コードを併記する**（`無効（…: peak_after_last_pivot）`）。
+ *
+ * `invalidReason` は `structuredContent` 側にしか無く LLM からは見えないので、この行が
+ * 「なぜ無効になったか」の唯一のチャネルになる。上位 view で文言が変わる / 落ちると
+ * LLM が理由を取り違える（#286 の実機症状そのもの）ため、他の定型要素と同じく包含で固定する。
+ *
+ * **`summary` はパターン明細を 1 件も出さない view** なので、ここは空集合になる（＝下位集合として常に成立）。
+ */
+function statusLines(text: string): string[] {
+	return text
+		.split('\n')
+		.map((line) => line.trim())
+		.filter((line) => line.startsWith('- 状態:'));
+}
+
+/**
+ * view の content から定型要素（注記行 + 期間行 + 実効パラメータ行 + 検出経路行 + 状態行 +
+ * ヘッダ主要フィールド）を抽出した集合。
  */
 function fixedElements(text: string): Set<string> {
 	return new Set([
@@ -162,6 +179,7 @@ function fixedElements(text: string): Set<string> {
 		...effectiveParamsLines(text),
 		...detectionRouteLines(text),
 		...reductionLines(text),
+		...statusLines(text),
 		...headerFields(text),
 	]);
 }

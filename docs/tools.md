@@ -888,6 +888,12 @@ ATR 比テーブルを掛けたもの。
 | `invalid` | 構成点確定後に形が崩れて無効化された（理由は `invalidReason`） | `includeInvalid: true` で |
 | `expired` | **突破確認窓を使い切った。**以後 `completed` になることはない | `includeInvalid: true` で |
 
+**`content` の状態行（`- 状態: …`）には理由コードを併記する**（`無効（山2 の後に別の山を作ってから
+割った: peak_after_last_pivot）`）。日本語は `invalidReason` の表引きで、**表に無い未知コードには
+日本語を当てずコードだけを出す**（#286。`structuredContent` は LLM から見えないので、この行が
+理由の唯一のチャネルになる）。`near_completion` の文言も系統で分かれる——反転系は
+「構造成立・ネックライン未突破」、継続系（`triangle_*` / `wedge_*` / flag / pennant）は「apex接近」。
+
 `expired` は `invalid` と同義ではない——形が崩れたのではなく、成立する時間を使い切った状態。
 突破探索は第2構成点から 20 本しか行われないので、それを過ぎた候補が `forming` /
 `near_completion` を名乗ると「まだ完成しうる」という誤った含意になる。

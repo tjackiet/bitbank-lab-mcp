@@ -1107,6 +1107,127 @@ function pivotRoleLabels(type: string, pivotCount: number): readonly string[] | 
 	return PIVOT_ROLE_LABELS[`${type}:${pivotCount}`] ?? null;
 }
 
+// ── 状態行（`- 状態: …`）の表引き（issue #286） ──────────────────────
+
+/**
+ * 反転系（ネックラインを持つ）パターン種別の語彙。**`last`（最終構成点の呼び名）と
+ * `zone`（ゾーンの向き）を 1 つの表に同居させてある**——2 表に分けると片方だけ埋め忘れた
+ * ときに「山2 の確定後、谷ゾーンへ戻った」のような混線した文が黙って出る。
+ *
+ * `zone` は `re_entered_trough_zone`（issue #286）用。理由コードの名前は `trough`（谷）固定だが、
+ * `detectTroughZoneReentry`（`tools/patterns/structural.ts`）が張るゾーンは
+ * **`side='top'` では山側**なので、コード名のまま「谷ゾーン」と書くと逆になる。
+ *
+ * ここに無い type（継続系・未知）では日本語を方向なしの言い回しに落とす。
+ */
+const REVERSAL_STATUS_WORDS: Readonly<Record<string, { last: string; zone: '山' | '谷' }>> = {
+	double_top: { last: '山2', zone: '山' },
+	double_bottom: { last: '谷2', zone: '谷' },
+	triple_top: { last: '山3', zone: '山' },
+	triple_bottom: { last: '谷3', zone: '谷' },
+	head_and_shoulders: { last: '右肩', zone: '山' },
+	inverse_head_and_shoulders: { last: '右肩', zone: '谷' },
+};
+
+/**
+ * 継続系（apex / 収束を持つ）パターン種別。`near_completion` を「apex 接近」と言ってよいのは
+ * この集合だけ。legacy umbrella alias（`pennant` / `flag`）も含める——出力 type としては
+ * 返らないが、`PatternEntry.type` は `string` なので表示層に届きうる。
+ */
+const CONTINUATION_STATUS_TYPES: ReadonlySet<string> = new Set([
+	'triangle_ascending',
+	'triangle_descending',
+	'triangle_symmetrical',
+	'falling_wedge',
+	'rising_wedge',
+	'bull_flag',
+	'bear_flag',
+	'bull_pennant',
+	'bear_pennant',
+	'pennant',
+	'flag',
+]);
+
+/**
+ * `status` そのものの日本語。`invalid` / `expired` / `near_completion` はここでは
+ * **理由や種別を含めない裸のラベル**だけを持ち、括弧の中身は
+ * {@link invalidReasonJa} / {@link nearCompletionJa} が足す。
+ */
+const STATUS_JA: Readonly<Record<string, string>> = {
+	forming: '形成中',
+	near_completion: 'ほぼ完成',
+	completed: '完成（ブレイクアウト確認済み）',
+	invalid: '無効',
+	expired: '期限切れ',
+};
+
+/**
+ * `invalidReason`（`status='invalid' | 'expired'` の理由コード）の日本語。
+ * **表に無いコードには日本語を当てない（`null` を返す）。** issue #286 の教訓そのもので、
+ * 旧実装は理由を問わず「無効（期待と逆方向にブレイク）」と書いており、
+ * **その文言に対応する理由コードは検出器に 1 つも存在しなかった**（実機で
+ * `invalidReason: 'peak_after_last_pivot'` の `double_top`——下方ブレイクは期待どおり——が
+ * 「期待と逆方向にブレイク」と表示され、LLM がそのまま誤って説明した）。
+ *
+ * 新しい理由コードを検出器に足したらここにも足すこと。網羅は
+ * `tests/detectPatternsViewsHandler.test.ts` の「status × 理由コードの網羅」が固定している。
+ */
+function invalidReasonJa(reason: string, type: string): string | null {
+	const words = REVERSAL_STATUS_WORDS[type];
+	const last = words?.last ?? '最終構成点';
+	switch (reason) {
+		case 're_entered_trough_zone':
+			// 種別が引けないときは方向を持たない言い回しに落とす（「山」「谷」を推測しない）。
+			return words
+				? `${last} の確定後、突破前に${words.zone}ゾーンへ戻った`
+				: '最終構成点の確定後、突破前に最終構成点のゾーンへ戻った';
+		case 'peak_after_last_pivot':
+			return `${last} の後に別の山を作ってから割った`;
+		case 'trough_after_last_pivot':
+			return `${last} の後に別の谷を作ってから抜けた`;
+		case 'forming_expired':
+			return '突破確認窓を過ぎてもネックラインを突破しなかった';
+		default:
+			return null;
+	}
+}
+
+/**
+ * `near_completion` の日本語。**同じ status が系統で別の事実を指す**ため種別で分ける:
+ * 反転系は「構造は揃ってネックライン突破を待っている」、継続系は「apex に近い」。
+ * どちらにも属さない type では apex とも未突破とも言わず「ほぼ完成」だけを出す。
+ */
+function nearCompletionJa(type: string): string {
+	if (REVERSAL_STATUS_WORDS[type]) return 'ほぼ完成（構造成立・ネックライン未突破）';
+	if (CONTINUATION_STATUS_TYPES.has(type)) return 'ほぼ完成（apex接近）';
+	return 'ほぼ完成';
+}
+
+/**
+ * パターン 1 件の状態行（`   - 状態: …`）。`status` が無ければ `null`（行を出さない）。
+ *
+ * `invalid` / `expired` では**理由コードを必ず併記する**（`無効（…: peak_after_last_pivot）`）。
+ * 日本語は補助で、コードが LLM と利用者の共通語彙——`structuredContent` は LLM から見えないので、
+ * `content` にコードを出さない限り理由は誰にも届かない。`invalidReason` が欠損なら裸のラベルだけ。
+ */
+export function formatStatusLine(p: Pick<PatternEntry, 'status' | 'invalidReason' | 'type'>): string | null {
+	const status = p?.status;
+	if (!status) return null;
+	const base = STATUS_JA[status];
+	// 未知の status は生の値をそのまま出す（誤った日本語を当てない）。
+	if (!base) return `   - 状態: ${status}`;
+
+	const type = String(p?.type ?? '');
+	if (status === 'near_completion') return `   - 状態: ${nearCompletionJa(type)}`;
+	if (status === 'invalid' || status === 'expired') {
+		const reason = p?.invalidReason;
+		if (!reason) return `   - 状態: ${base}`;
+		const ja = invalidReasonJa(reason, type);
+		return `   - 状態: ${base}（${ja ? `${ja}: ` : ''}${reason}）`;
+	}
+	return `   - 状態: ${base}`;
+}
+
 /**
  * `data.patterns[i]` 1 件を content 用の複数行テキストに整形する（summary / detailed / full / debug 共通）。
  * `価格範囲` は `pivots` 全点の min / max（反転系はネックライン定義点を含む。#224 症状 3）、
@@ -1198,17 +1319,8 @@ export function formatPatternLine(
 		/* ignore */
 	}
 
-	// status
-	let statusLine: string | null = null;
-	if (p?.status) {
-		const statusJa: Record<string, string> = {
-			completed: '完成（ブレイクアウト確認済み）',
-			invalid: '無効（期待と逆方向にブレイク）',
-			forming: '形成中',
-			near_completion: 'ほぼ完成（apex接近）',
-		};
-		statusLine = `   - 状態: ${statusJa[p.status] || p.status}`;
-	}
+	// status（`status` × `invalidReason` の表引き。issue #286）
+	const statusLine = formatStatusLine(p);
 
 	// forming triple: 3 点目が確定していないことを LLM に明示する。
 	// 確定した主構成点は 2 点だけ（3 点目は現在価格の暫定値で `pivots` に入らない）なので、

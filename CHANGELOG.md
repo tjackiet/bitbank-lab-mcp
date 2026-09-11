@@ -84,6 +84,110 @@
 | 69 | #28 | **（`detect_patterns` 系ではない。読む順の連番だけ引き継ぐ）** `preview_cancel_order` の status ガードを `startsWith('CANCELED')` から**終端 4 状態の拒否リスト**（`TERMINAL_ORDER_STATUSES`）に広げた。`FULLY_FILLED` / `REJECTED` にも確認トークンが出ていた（＝押せるのに必ず失敗するボタン）のを、トークン生成より前で止める | **対象外**（`detect_patterns` は 1 行も触っていない） |
 | 70 | #27 | **（`detect_patterns` 系ではない。読む順の連番だけ引き継ぐ）** `clientSupportsElicitation` の判定を「`elicitation` があるか」から**「form モードを扱えるか」**に変えた。SEP-2322 の宣言形で `{ url: {} }` だけを宣言したホストが「form 対応あり」と判定され、サーバーが処理できない form 形式の elicitation を送っていた（CodeRabbit が #26 で指摘） | **対象外**（`detect_patterns` は 1 行も触っていない） |
 | 71 | #29 | **（`detect_patterns` 系ではない。読む順の連番だけ引き継ぐ）** 確認 UI（iframe）の pull 型 hydration を `src/mcp-apps-hydration.ts` に切り出し、**上限付きリトライ（計 3 回）と abort** を入れた。`get_ui_snapshot` を 2.5 秒後に 1 回だけ呼び、失敗すると「復元中」の案内のまま固まっていた（CodeRabbit が #26 で指摘）。サーバー側（`tools/` / `src/private/`）は無変更 | **対象外**（`detect_patterns` は 1 行も触っていない） |
+| 72 | #286 | **`content` の状態行を `status` × 理由コードの表引きにした（表示層のみ）。** `status='invalid'` を理由を問わず「無効（期待と逆方向にブレイク）」と書いており、**その文言に対応する理由コードは検出器に 1 つも存在しなかった**——実機で `invalidReason: 'peak_after_last_pivot'` の `double_top`（下方ブレイクは期待どおり）が「期待と逆方向にブレイク」と表示され、LLM がそのまま誤って説明した。理由コードを併記し、日本語は表引き・未知コードはコードだけにする。`expired` のラベル追加と `near_completion` の系統分けも同じ表の中で直した | **変わらない**（`tools/` / `src/schema/` は無変更。`structuredContent` / `data.patterns` が 1 バイトも動かない） |
+
+### Fixed（#286: `content` の状態行が理由コードを参照せず、`invalid` を一律「期待と逆方向にブレイク」と書いていた）
+
+**表示層のみ。** `src/handlers/detectPatternsViewsHandler.ts` の状態行の組み立てと docs / テストだけで、
+`tools/` / `src/schema/` は無変更・`structuredContent` / `data.patterns` は 1 バイトも動かない
+（回帰ベースライン `tests/fixtures/detect_patterns_1hour_data_patterns_baseline.json` は無差分）。
+`closes #286`。
+
+旧実装は `status` ごとの固定文字列で、`invalidReason` を一度も参照していなかった:
+
+```ts
+const statusJa: Record<string, string> = {
+	completed: '完成（ブレイクアウト確認済み）',
+	invalid: '無効（期待と逆方向にブレイク）',   // ← 理由を問わず必ずこれ
+	forming: '形成中',
+	near_completion: 'ほぼ完成（apex接近）',     // ← 反転系でも apex と言う
+};
+```
+
+**「期待と逆方向にブレイク」に対応する理由コードは検出器に 1 つも存在しない。**
+`invalidReason` に流れるのは 4 つだけ（`re_entered_trough_zone` /
+`peak_after_last_pivot` / `trough_after_last_pivot` / `forming_expired`）で、どれも方向の話ではない。
+`aftermath.ts` の「失敗（…期待と逆方向に…）」は**別の行**（`パターン結果:`）で、状態行とは無関係。
+
+#### 発端の実機表示（Claude Desktop / 2026-09-11）
+
+#242 / #245 の発端の形（実データ D の `limit=72` 窓 / 既定 `swingDepth` / `includeInvalid: true`）の
+`double_top`。**この構造の下方ブレイクは `double_top` の期待どおりの方向**で、無効化の理由は
+「山2 の後にもう 1 つ山を作ってから割った」（`peak_after_last_pivot`）である:
+
+```text
+修正前: - 状態: 無効（期待と逆方向にブレイク）
+修正後: - 状態: 無効（山2 の後に別の山を作ってから割った: peak_after_last_pivot）
+```
+
+LLM は `structuredContent` を読めないので、`content` に理由コードが出ない限り
+`invalidReason` はどこにも届かない。結果、LLM は表示された文言をそのまま信じて誤った説明をした。
+
+#### 状態行の最終表（実装後の実出力）
+
+| `status` | `invalidReason` | 状態行 |
+|---|---|---|
+| `completed` | — | `- 状態: 完成（ブレイクアウト確認済み）` |
+| `forming` | — | `- 状態: 形成中` |
+| `near_completion` | — | 反転系: `- 状態: ほぼ完成（構造成立・ネックライン未突破）` / 継続系: `- 状態: ほぼ完成（apex接近）` / どちらでもない type: `- 状態: ほぼ完成` |
+| `invalid` | `peak_after_last_pivot` | `- 状態: 無効（山2 の後に別の山を作ってから割った: peak_after_last_pivot）`（`triple_top` は「山3」、H&S は「右肩」） |
+| `invalid` | `trough_after_last_pivot` | `- 状態: 無効（谷2 の後に別の谷を作ってから抜けた: trough_after_last_pivot）` |
+| `invalid` | `re_entered_trough_zone` | top 系: `- 状態: 無効（山2 の確定後、突破前に山ゾーンへ戻った: re_entered_trough_zone）` / bottom 系: `…谷ゾーンへ戻った…` |
+| `invalid` | 欠損 | `- 状態: 無効` |
+| `invalid` | 未知コード | `- 状態: 無効（some_future_reason）`（**日本語を当てない**） |
+| `expired` | `forming_expired` | `- 状態: 期限切れ（突破確認窓を過ぎてもネックラインを突破しなかった: forming_expired）` |
+
+**理由コードは必ず併記する。** 日本語の要約は補助で、コードが LLM と利用者の共通語彙になる
+（`invalidReason` は `structuredContent` にしか無く、この行が唯一のチャネル）。
+**表に無いコードには日本語を当てない**——誤った文言を出すくらいなら黙る、が本 issue の教訓。
+
+#### `re_entered_trough_zone` のゾーン語は `side` で入れ替わる
+
+理由コードの名前は `trough`（谷）固定だが、`detectTroughZoneReentry` が張るゾーンは
+**`side='top'` では山側**（`anchor = max(first, second).extremePrice` から下へ
+`TROUGH_REENTRY_FRACTION`）。コード名のまま「谷ゾーン」と書くと top 系で逆になるので、
+最終構成点の呼び名（`山2` / `谷3` / `右肩`）とゾーンの向き（`山` / `谷`）を**1 つの表に同居させた**
+——2 表に分けると片方だけ埋め忘れたときに「山2 の確定後、谷ゾーンへ戻った」という混線した文が
+黙って出る。表に無い type では方向を持たない言い回し（`最終構成点の確定後、突破前に最終構成点のゾーンへ戻った`）に落とす。
+
+#### `near_completion` を系統で分けた理由
+
+同じ `status` が系統で別の事実を指す。反転系（double / triple / H&S）の `near_completion` は
+**「構成点は揃い、ネックライン突破を待っている」**（#262 の決定 2）で、apex は関係ない。
+継続系（`triangle_*` / `wedge_*` / flag / pennant）は収束末端への接近なので「apex接近」が正しい。
+どちらの集合にも無い type では **apex とも未突破とも言わない**（`ほぼ完成` だけ）。
+出力 type 15 件が全件どちらかに分類されていることは
+`tests/detectPatternsViewsHandler.test.ts` が `PatternTypeEnum.options` を回して機械的に固定している
+（新しい type を enum に足して集合へ入れ忘れると落ちる）。
+
+#### 継続系の `invalid` は情報を失っていない
+
+`triangle_*` / pennant の `status='invalid'` は「期待と逆方向にブレイクした」を実際に意味するが
+（`isExpectedBreakout === false`）、`invalidReason` は設定されないので状態行は `- 状態: 無効` になる。
+方向の情報は**同じパターンの 2 行下**に元から出ている:
+
+```text
+   - 状態: 無効
+   - ブレイク方向: 下方ブレイク（本来は上方ブレイクが期待されるパターン）
+   - パターン結果: 失敗（下方ブレイク（弱気転換））
+```
+
+状態行に方向を書き戻すと、反転系の `invalid`（方向とは無関係）でも同じ文言が出る構造に戻るため採らない。
+
+- `src/handlers/detectPatternsViewsHandler.ts` — `formatStatusLine()` を追加し、
+  `REVERSAL_STATUS_WORDS` / `CONTINUATION_STATUS_TYPES` / `STATUS_JA` の 3 表と
+  `invalidReasonJa()` / `nearCompletionJa()` に分けた。`formatPatternLine` 側は 1 行の呼び出しになる
+- `docs/tools.md` — `status` の表の直後に「状態行には理由コードを併記する / 未知コードはコードのみ」
+- `.claude/rules/tools.md` — handler 側のチェックリストに「列挙値のラベル化は値ごとの表引きにし、
+  未知値には文言を当てない」を 1 項目
+- `tests/patterns/status-reason-label-286.test.ts`（新規） — **実データ D の `limit=72` 窓 /
+  既定 `swingDepth` / `includeInvalid: true`**（#245 のテストと同じ切り出し）で、`double_top` の
+  状態行が `peak_after_last_pivot` を含み「逆方向」を含まないことを `detailed` / `full` で固定
+- `tests/detectPatternsViewsHandler.test.ts` — `status` × 理由コードの網羅。理由コードの列挙は
+  `BreakoutPathRejectReason` を `Record` のキーで受けて**型から導出**し（union に足すと
+  typecheck が落ちる）、直書きリテラルの 2 つ（`re_entered_trough_zone` / `forming_expired`）は
+  手書き + 4 件が揃っていることの assertion。`status` 5 段は schema の enum から導出
+- `tests/view-content-superset.test.ts` — 状態行を定型要素集合（規約 3）に追加
 
 ### Fixed（#29: 確認 UI のスナップショット復元が 1 回限りで、失敗すると「復元中」表示のまま固まる）
 
