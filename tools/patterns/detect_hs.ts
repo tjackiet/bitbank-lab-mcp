@@ -202,7 +202,7 @@ const HS_BREAKOUT_BUFFER_PCT = 0.015;
  * `getHsFormingBarParams(tf).maxBars` に相当するものが無い）。上限の追加は #249 案 C として保留し、
  * #244（時間足別テーブル）で再検討する。
  *
- * 詳細は `docs/internal/hs-shoulder-window-249.md` / `docs/tools.md`。
+ * 詳細は tjackiet/bitbank-lab-mcp#249 の計測記録 / `docs/tools.md`。
  */
 const HS_BREAKOUT_MAX_BARS = 30;
 
@@ -343,7 +343,7 @@ export function necklineProjectionHeight(args: {
  * 同じ `relDev(左肩, 右肩)`（以下 rd）から作られていた**（正規化が違うだけ）。実質 2 軸しか無く、
  * `1hour` / `per = 0.6` / strict では `confidence = 0.953333 − 7.7 rd` という rd の 1 次式に
  * 潰れていた（Phase 1・PR #205 が 4,349 行全件で検算済み。
- * `docs/internal/hs-confidence-distribution-phase1.md`）。
+ * tjackiet/bitbank-lab-mcp#204 の計測記録（Phase 1））。
  *
  * **`detect_doubles.ts` の `buildDoubleScore` と同じ選択で `symmetry` を残し `tolMargin` を捨てる。**
  * H&S も主構成点は 2 点（両肩）なので、triple が逆の選択（`levelMargin` を残す）になった事情
@@ -601,7 +601,7 @@ function extremeBetween(list: ReadonlyArray<Pivot>, loIdx: number, hiIdx: number
  *
  * **両者は落ちる集合が同じではない。** #244 Phase 1 の ablation は定数リテラルを差し替えたので
  * 窓生成も同時に締まり、**肩ゲートは通るのに窓生成で消える構造**が出ていた（結果 9(b) /
- * `docs/internal/level-pct-tf-244.md` §9 の `btc_jpy_1day_2026` / `4hour` /
+ * tjackiet/bitbank-lab-mcp#244 の計測記録 §9 の `btc_jpy_1day_2026` / `4hour` /
  * `20-24-27-53-80`。肩 1.228% < `4hour` の閾値 2.040%）。窓生成を据え置いた現行では
  * この構造は**残る**——Phase 2 の再計測（同 §11）で確認済み。
  */

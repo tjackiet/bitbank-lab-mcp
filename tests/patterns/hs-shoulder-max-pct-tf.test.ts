@@ -251,7 +251,7 @@ describe('窓生成（outerShoulderOk）は 5% のまま（#244 決定コメン�
 
 describe('実データ D の 1hour: Phase 1.5 の「形 X」が shoulders_not_near:cap で落ちる', () => {
 	/**
-	 * Phase 1.5（`docs/internal/level-pct-tf-244.md` §10）が「呼べない」と判定した**形 X** の
+	 * Phase 1.5（tjackiet/bitbank-lab-mcp#244 の計測記録 §10）が「呼べない」と判定した**形 X** の
 	 * 4 変種（左肩 30 / 42、右肩 85 / 91）と**形 X'**（左肩 25）。実データ D の idx。
 	 * 肩 `relDiff` は 2.076〜2.719%。
 	 *

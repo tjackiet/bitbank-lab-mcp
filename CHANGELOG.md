@@ -88,6 +88,23 @@
 | 73 | #288 Phase 1 | **ターゲット到達の走査窓（`TARGET_REACH_MAX_BARS` = 60）の境界を実データで計測。コード変更なし。** #210 の 96.3% は**到達済みケースの条件付き分布**で、到達率でも帰無との比較でもなかった。3,764 ケース（実データ A / B / C / D × ネイティブ時間足 × `swingDepth` 4 × ローリング窓 + 合成 88）で到達率・帰無・交絡を測り直した。**予備監査の「自力到達は 20 本以内」はローリング窓で増やすと保たない**（実データ 1hour / accepted 実体で自力到達の max が 20 → **40**、割れ目は (40, 47]）。**パターン起点の到達率は帰無を上回らない**（N=60 で 44.7% 対 53.0%、差 −8.3pt / 差の SE 8.1pt）。**1day は母集団 0 件で評価不能。決定はしていない** | **変わらない**（計測スクリプトと内部メモのみ。`tools/` / `src/` の差分は 0 行） |
 | 74 | #288 Phase 2 | **ターゲット進捗の表示を「事実の記述」に改め、`content` から 100% 超の百分率を消した（`TARGET_REACH_MAX_BARS` = 60 と `targetReachedPct` の計算は据え置き）。** 実機で「進捗 273%（到達）」が出ており、**到達後の超過倍率を「進捗」として読ませていた**。行頭ラベルを `ターゲット:` に統一し、到達 / 未到達（走査完了）/ 未到達（走査中）の 3 形 + 出力なしの事実だけを書く。あわせて到達の事実 4 フィールド（`targetFirstReachBars` / `targetFirstReachDate` / `targetScanBars` / `targetScanComplete`）と、帰属を切る交絡 2 フィールド（`targetOtherBreakoutBeforeReach` / `targetOppositeBreakoutInWindow`）を additive に足した。**交絡は限定して申告する**——素朴に出すと Phase 1 実測の 94.7% に付くため、到達側は `(ブレイク, 初到達)` の開区間・方向不問、未到達側は走査窓の逆方向のみ | **判定は変わらない**（実データ 1hour の回帰 fixture 10 件を全キー突き合わせて、**既存キーで値が変わったもの 0 / 消えたキー 0**。差分は 6 キーが増えたぶんだけの純粋な追加ハンク） |
 | 75 | #291 | **継続系（`triangle_ascending` / `triangle_descending` / pennant / flag）の `status: 'invalid'` に `invalidReason: 'breakout_against_expectation'` を足した（additive）。** #286 で状態行が「無効（日本語の理由: コード）」になったが、継続系は検出器が `invalidReason` を出しておらず**裸の「無効」**のままだった。継続系の `invalid` は「期待と逆方向にブレイクした」の 1 条件しか無いので、コードを 1 つ足せば状態行が全種別で自己記述になる。**`#286` で消した「期待と逆方向にブレイク」という文言は、継続系に限っては正しかった**——#286 の誤りは文言そのものではなく、理由を問わず全 `invalid` に当てていたこと | **変わらない**（採否・`status`・`outcome` は無変更。検出器の差分は `status === 'invalid'` のときの `invalidReason` 付与だけ。実データ 1hour のベースライン fixture は既定 `includeInvalid: false` で 10 件すべて `completed` なので**差分 0**） |
+| 76 | 整理 | **計測メモ（`docs/internal/*.md` 29 本）と計測スクリプト（`scripts/measure_*.ts` 15 本）をリポジトリから外した。** 上の各行が参照していた計測の記録は fork（tjackiet/bitbank-lab-mcp）の issue と git 履歴に残る。コードの docstring・テストのコメント・`docs/tools.md` の引用は「tjackiet/bitbank-lab-mcp#NNN の計測記録」に書き換えた | **変わらない**（検出器のコード変更は `detect_wedges.ts` の計測専用 `export` 2 つを非公開に戻しただけ） |
+
+### Removed（計測メモ・計測スクリプトをリポジトリから外した。利用者・開発者に不要な長文の整理）
+
+`docs/internal/` の計測メモ 29 本（約 18,000 行）と `scripts/measure_*.ts` 15 本（約 21,000 行）を削除した。
+いずれも issue ごとの Phase 1 実測ログで、**コードから import されておらず、CI でも実行していない**。
+判断の根拠は各 issue の完了コメントと本 CHANGELOG の本文に要約が残っており、全文が要るときは
+fork（tjackiet/bitbank-lab-mcp）の issue と git 履歴（削除前の `main`）で読める。
+
+- 残した `docs/internal/`: `bitbank-api-fields.md` / `bitbank-candle-tz.md` / `bitbank-tx-archive-tz.md` /
+  `view-vocabulary-unification.md` / `bitbank-api-docs.lock.json`（仕様・運用の参照資料で、計測ログではない）
+- コードの docstring・テストのコメント・`docs/tools.md` にあった引用（約 40 箇所）は
+  「tjackiet/bitbank-lab-mcp#NNN の計測記録」の形に書き換えた。引用先が無い状態を残さないため
+- `tools/patterns/detect_wedges.ts` の `preparePivots` / `PivotData` は #274 の計測スクリプト専用に
+  `export` していたので非公開に戻した（本体は不変）
+- `scripts/README.md` の「計測」節を削除
+
 
 ### Added（#291: 継続系の `invalid` に `breakout_against_expectation` を足す）
 

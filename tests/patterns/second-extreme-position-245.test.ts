@@ -8,8 +8,8 @@
  *
  * **#245 の発端の形（実データ D の `limit=72` 窓 / `swingDepth: 6`）で `+9.9%` / `73.3%` が
  * 実際に content に出ること。** この 2 値は PR #276 の計測スクリプト
- * （`scripts/measure_wick_only_second_peak_245.ts` の自己検算）と
- * `docs/internal/wick-only-second-peak-245.md` が出した値そのもので、表示層が同じ量を
+ * （tjackiet/bitbank-lab-mcp#245 の計測スクリプトの自己検算）と
+ * tjackiet/bitbank-lab-mcp#245 の計測記録が出した値そのもので、表示層が同じ量を
  * 同じ分母（`levelSpreadMetrics` の `heightAbs` = 219,423）で出していることの検算になる。
  *
  * 窓の切り出しと `swingDepth: 6` で `completed` になる理由は

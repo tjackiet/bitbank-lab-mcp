@@ -178,7 +178,7 @@ describe('同じ形が凍結済み実データにも存在する（issue #242・
 	 * 山2（idx 184）とネックライン突破バー（idx 198）の間に H ピボット
 	 * （idx 194 / `2026-08-28T11:00Z` / 終値 12,725,937 / 高安 12,762,331）があり、
 	 * **山2 から直接割っていない**。起票時のライブ実例（2026-09-04 の 12,711,037）と同型で、
-	 * 計測（`scripts/measure_reversal_path_242.ts`）が実データ C で唯一落とした double。
+	 * 計測（tjackiet/bitbank-lab-mcp#242 の計測スクリプト）が実データ C で唯一落とした double。
 	 */
 	async function realData(opts: Record<string, unknown> = {}) {
 		vi.mocked(analyzeIndicators).mockResolvedValueOnce(

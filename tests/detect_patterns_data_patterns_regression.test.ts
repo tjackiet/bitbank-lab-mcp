@@ -68,7 +68,7 @@
  * 'not_computed_by_detector'` を実際の進捗値に置き換えた変更。**動くのは target 進捗系
  * 4 フィールドだけ**で、判定ロジックには手が入っていない——940 ケースの実測で
  * `detectTriples()` が返す 200 パターンが、進捗系 5 キーを除いて**バイト単位で完全一致**した
- * （`scripts/measure_triple_target_reach_228.ts` と同じコーパス）。本 fixture は #216 / #218 以降
+ * （tjackiet/bitbank-lab-mcp#228 の計測スクリプトと同じコーパス）。本 fixture は #216 / #218 以降
  * triple を 1 件も含まない（H&S 系 4 / wedge 4 / triangle 4）ので、そもそも差分が出る余地が無い。
  * triple の完成済み経路の回帰は `tests/patterns/target-progress-declared.test.ts`
  * （実データ B のライブ実例＋合成 fixture）が持ち、実データのパイプライン回帰は
@@ -81,7 +81,7 @@
  * 既定オプション・既定 `swingDepth`）では 12 件が全フィールド一致する。既定パラメータで
  * 落ちる H&S 系は逆 H&S 225-232-249-265-272（左肩がネックラインより 14,401 円上）の 1 件だけで、
  * これは `globalDedup` の代表ではないため出力に出ていなかった。実測ログは
- * `docs/internal/hs-neckline-side-216.md`、回帰は `tests/patterns/neckline-side-hs.test.ts` が持つ）。
+ * tjackiet/bitbank-lab-mcp#216 の計測記録、回帰は `tests/patterns/neckline-side-hs.test.ts` が持つ）。
  *
  * **#262 Phase 2 でも更新していない**（double の完成済み 4 経路が、ネックライン未突破の構造を
  * `no_breakout` で棄却する代わりに `near_completion` / `expired` / `invalid` として出すようにし、
@@ -90,7 +90,7 @@
  * 抜ける——本 fixture は既定オプション（`includeForming: false`）なので、
  * `data.patterns` にも `view=debug` の理由コードにも差分が出る余地が無い。
  * 12,104 ケースの実測でも `includeForming: false` 側は全件一致している
- * （`scripts/measure_forming_double_asymmetry_262.ts` の §8-4）。double の未ブレイク構造の
+ * （tjackiet/bitbank-lab-mcp#262 の計測スクリプトの §8-4）。double の未ブレイク構造の
  * 回帰は `tests/patterns/near-completion-double-262.test.ts` が持つ）。
  *
  * **#224 症状 1 でも更新していない**（`meta.reduction` に `tripleHsCandidateCount` を足し、
@@ -107,7 +107,7 @@
  * ブレイク足より 3 〜 13 本手前で止まっている（`rising_wedge` 279 / 282、`falling_wedge` 332 / 339、
  * `rising_wedge` 143 / 152、`falling_wedge` 102 / 115）ので、打ち切りが 1 点も当たらない。
  * 実際に修正の前後で `data.patterns` を全フィールド突き合わせて**バイト単位で完全一致**を確認した
- * （`pivots` の点数 37 / 31 / 68 / 107 も据え置きで、`scripts/measure_wedge_pivot_count_274.ts` の
+ * （`pivots` の点数 37 / 31 / 68 / 107 も据え置きで、tjackiet/bitbank-lab-mcp#274 の計測スクリプトの
  * 自己検算 31 / 37 / 68 / 107 が変わらないのと同じ事実）。下方ブレイクの回帰は
  * `tests/patterns/detect_wedges.test.ts`（合成の下方ブレイク fixture と、実データ A の
  * `rising_wedge` `2026-06-23`〜`2026-07-13` のブレイク足 idx 45）が持つ）。

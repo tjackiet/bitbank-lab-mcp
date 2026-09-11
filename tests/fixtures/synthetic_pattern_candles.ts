@@ -3,7 +3,7 @@
  *
  * もともと `tests/detect_patterns_fixtures.test.ts` にローカル関数として置かれていたものを
  * **無改変で**切り出した（issue #227 Phase 1）。計測スクリプト
- * `scripts/measure_relaxed_fallback_227.ts` が「標準コーパス 800」（合成 704 = 本 fixture 22 件 ×
+ * tjackiet/bitbank-lab-mcp#227 の計測スクリプトが「標準コーパス 800」（合成 704 = 本 fixture 22 件 ×
  * オプション 8 通り × 時間足 2 種 × `swingDepth` 2 種）を組むのに同じ系列が要るため、
  * テストとスクリプトの両方から import できる場所に移した。系列の中身（`closes` 配列）は
  * 1 値も変えていない——回帰は `tests/detect_patterns_fixtures.test.ts` がそのまま持つ。

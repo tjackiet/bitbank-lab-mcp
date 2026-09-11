@@ -607,7 +607,7 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 （同じ距離のターゲットを任意のバーに置いたとき）を上回らない**。主表（母集団 n = 38 /
 帰無の試行 m = 11,590）の差は N = 5 / 10 / 20 / 30 / 60 でそれぞれ
 −5.2 / −8.5 / −0.8 / −4.9 / −8.3 pt で**全部負**。さらに走査窓に他パターンのブレイクが
-入る実体が **94.7%** ある。計測の全文は `docs/internal/target-reach-window-288.md`。
+入る実体が **94.7%** ある。計測の全文は tjackiet/bitbank-lab-mcp#288 の計測記録。
 
 **`1day` では評価できていない**（ブレイク足の後に 60 本残る実体が 0 件。「1day でも問題ない」ではなく
 「1day では測れていない」と読むこと）。
@@ -712,7 +712,7 @@ issue #288 の症状）。行頭ラベルは 4 形とも `ターゲット:` で�
 - **`triple_*` / H&S 系には出ない。** H&S はパターン高さの端点が頭と谷で肩が端点にならないため、
   同じ比が肩について何も言わない（#178 項目 3）。`triple_*` は実測で該当が 0 件だった。
 - 分布の実測（accepted な double 19 値動きで終値の位置が 3.0%〜74.1%、ヒゲが 7.2%〜73.3%）は
-  `docs/internal/wick-only-second-peak-245.md`。**閾値を置かないと決めた根拠**もそこにある。
+  tjackiet/bitbank-lab-mcp#245 の計測記録。**閾値を置かないと決めた根拠**もそこにある。
 
 ### double_top / double_bottom の構造ゲート（hard reject）
 
@@ -844,7 +844,7 @@ issue #288 の症状）。行頭ラベルは 4 形とも `ターゲット:` で�
 したがって**「形成中 ⊇ 完成済みの厳しさ」の破れはここに残る**が、見落としではない。再開条件は
 高さ相対ゲートが単独で拾う実体に「呼べない」が積み上がる実データが出たときで、根拠と数字は
 `tools/patterns/detect_triples.ts` の `FORMING_LEVEL_SPREAD_FACTOR` の docstring と
-[docs/internal/forming-triple-level-spread-178.md](internal/forming-triple-level-spread-178.md) にある。
+tjackiet/bitbank-lab-mcp#178 の計測記録にある。
 
 **「形成中は完成済みより緩い」を一般則として読まないこと。** #169 / PR #170 でサイズ検査を揃えたときに
 整理したとおり、緩めてよいのは**「同水準かの判定」**（3 点目が最新足の終値で暫定なぶんノイズが残る）で
@@ -916,7 +916,7 @@ ATR 比テーブルを掛けたもの。
 **値は「つまみ」で、非恣意性は主張していない。** 分布の空白帯に置いた線ではなく、
 「同じ形の判定を全時間足で同じ ATR 本数で行う」という次元の一貫性だけが根拠。
 この閾値で落ちる構造が実際に H&S と呼べない形であることは目視で確認してある
-（[docs/internal/level-pct-tf-244.md](internal/level-pct-tf-244.md) §10）。
+（tjackiet/bitbank-lab-mcp#244 の計測記録 §10）。
 
 #### 窓生成（候補の列挙）は 5% のまま
 
@@ -955,7 +955,7 @@ ATR 比テーブルを掛けたもの。
 30 本の間にピボットが 1 つも立たないことは既定の `swingDepth=3` ではほぼ無いので、実質
 「右肩の直後 数本以内に割った形」だけが通る。実データ B / C / D の 1hour では完成済み
 `head_and_shoulders` は **0 件**で、目視でも H&S と呼べる形は無い（#249 Phase 1 /
-[docs/internal/hs-shoulder-window-249.md](internal/hs-shoulder-window-249.md)）。**この状態は
+tjackiet/bitbank-lab-mcp#249 の計測記録）。**この状態は
 「0 件が正しい」として据え置く判断を採っている**（#249 案 D。窓の値も時間足別化もしない）。
 
 逆 H&S は右肩 → ブレイクが短く（#242 前の同コーパスで中央値 8 本 / max 9 本）、この組み合わせの

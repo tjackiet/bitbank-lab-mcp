@@ -997,7 +997,7 @@ function formatPivotPrices(pv: Pivot): string {
  * 変えない（#245 の決定コメント: 案 B + 案 C）。閾値を置かないので #214 の「非恣意性を
  * 主張できない境界を入れない」基準にも触れない。
  *
- * ## 量（PR #276 / `docs/internal/wick-only-second-peak-245.md` と同じ定義）
+ * ## 量（PR #276 / tjackiet/bitbank-lab-mcp#245 の計測記録と同じ定義）
  *
  * `pivots = [a, b, c]`（`c` が山2 / 谷2、`b` がネックライン定義点で `necklinePrice = b.price`）:
  *

@@ -995,7 +995,7 @@ export function formingNecklineSideReason(
  *
  * ## 許容幅（つまみ）を置かない
  *
- * `docs/internal/hs-neckline-side-216.md`（#216 Phase 1 の H&S 分・`necklineAt` 基準での再計測）
+ * tjackiet/bitbank-lab-mcp#216 の計測記録（#216 Phase 1 の H&S 分・`necklineAt` 基準での再計測）
  * が根拠。**逸脱量の最小はパターン高さの 1.504%（絶対額 3,857 円）で、0〜1.5% は空。**
  * #211 より前の基準（スカラー水準）で見えていた「逆 H&S の最小 0.012%（31 円）」という
  * ゼロ張り付きは**この基準では再現しない**ので、triple / double と同じくゼロ許容で切れる。

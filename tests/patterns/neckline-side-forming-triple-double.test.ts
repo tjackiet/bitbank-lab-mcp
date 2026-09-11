@@ -172,7 +172,7 @@ describe('ブレイク待ち double — 主構成点がネックラインの誤�
 describe('同じ形が凍結済み実データにも存在する（issue #261・btc_jpy_1hour_2026_09_05）', () => {
 	/**
 	 * PR #260 のメモ
-	 * [`docs/internal/forming-triple-level-spread-178.md`](../../docs/internal/forming-triple-level-spread-178.md)
+	 * tjackiet/bitbank-lab-mcp#178 の計測記録
 	 * §8 の目視判定 **#34**（1hour / `triple_top` / 2026-09-03T21:00 + 2026-09-04T06:00、
 	 * 「(N) 3 点目 12,465,523 < NL 12,480,430」）。**#178 の実データ D の全 365 本がそのまま代表窓**
 	 * （`end=364`）なので、fixture を切らずに再現できる。
