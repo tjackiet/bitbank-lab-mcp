@@ -1144,26 +1144,113 @@ describe('formatPatternLine', () => {
 		expect(result).toContain('ネックライン投影');
 	});
 
-	it('targetReachedPct < 100 のとき「未到達」と走査窓の本数を出す', () => {
-		const p = makePattern({ breakoutTarget: 110000, targetMethod: 'pattern_height', targetReachedPct: 60 });
-		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
-		expect(result).toContain('60%');
-		expect(result).toContain(`ブレイク後${TARGET_REACH_MAX_BARS}本以内は未到達`);
+	// ── ターゲット行の 3 形（issue #288 Phase 2）───────────────────
+	//
+	// 旧実装は `ターゲット進捗: 273%（ブレイク後60本以内に到達）` のように**判定口調**で出しており、
+	// 100 超の数字（= 到達した後の超過倍率）を「進捗」として読ませていた。
+
+	it('到達: 初到達の本数と日時を出す（走査窓の判定口調にしない）', () => {
+		const p = makePattern({
+			breakoutTarget: 110000,
+			targetMethod: 'pattern_height',
+			targetReachedPct: 105,
+			targetReached: true,
+			targetFirstReachBars: 12,
+			targetFirstReachDate: '2026-08-25T02:00:00.000Z',
+			targetScanBars: TARGET_REACH_MAX_BARS,
+			targetScanComplete: true,
+		});
+		const result = formatPatternLine(p, 0, 'summary', emptyMeta, 'Asia/Tokyo', '1hour');
+		// intraday なので分まで出る（同ファイルの他の日時行と同じ整形）。
+		expect(result).toContain('   - ターゲット: 到達（ブレイク後 12 本目、2026-08-25 11:00）');
 	});
 
-	it('targetReachedPct >= 100 のとき「N本以内に到達」を表示する', () => {
-		const p = makePattern({ breakoutTarget: 110000, targetMethod: 'pattern_height', targetReachedPct: 105 });
+	it('未到達（走査完了）: 走査本数の完了と接近度を出す', () => {
+		const p = makePattern({
+			breakoutTarget: 110000,
+			targetMethod: 'pattern_height',
+			targetReachedPct: 60,
+			targetReached: false,
+			targetScanBars: TARGET_REACH_MAX_BARS,
+			targetScanComplete: true,
+		});
 		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
-		expect(result).toContain(`ブレイク後${TARGET_REACH_MAX_BARS}本以内に到達`);
+		expect(result).toContain(`   - ターゲット: 未到達（走査 ${TARGET_REACH_MAX_BARS} 本完了、目標幅の 60% まで接近）`);
 	});
 
-	it('上限に当たった pct は「以上」と申告する（issue #210 (1)）', () => {
+	it('未到達（走査中）: 経過本数と走査上限を並べる', () => {
+		const p = makePattern({
+			breakoutTarget: 110000,
+			targetMethod: 'pattern_height',
+			targetReachedPct: 22,
+			targetReached: false,
+			targetScanBars: 13,
+			targetScanComplete: false,
+		});
+		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
+		expect(result).toContain(
+			`   - ターゲット: 未到達（ブレイク後 13 本経過 / 走査上限 ${TARGET_REACH_MAX_BARS} 本、目標幅の 22% まで接近）`,
+		);
+	});
+
+	// **issue #288 の症状そのもの。** 実機で「進捗 273%（到達）」が出ていた entry を名指しで固定する。
+	it('targetReachedPct が 273 の到達 entry でも content に「273」が出ない', () => {
+		const p = makePattern({
+			breakoutTarget: 110000,
+			targetMethod: 'pattern_height',
+			targetReachedPct: 273,
+			targetReached: true,
+			targetFirstReachBars: 14,
+			targetFirstReachDate: '2026-09-08T06:00:00.000Z',
+			targetScanBars: TARGET_REACH_MAX_BARS,
+			targetScanComplete: true,
+		});
+		const result = formatPatternLine(p, 0, 'summary', emptyMeta, 'Asia/Tokyo', '1hour');
+		expect(result).toContain('   - ターゲット: 到達（');
+		expect(result).not.toContain('273');
+		expect(result).not.toContain('進捗');
+	});
+
+	it('上限に当たった pct も数字を出さない（旧実装の「999%以上」は消えた）', () => {
 		const p = makePattern({
 			breakoutTarget: 110000,
 			targetMethod: 'pattern_height',
 			targetReachedPct: TARGET_REACHED_PCT_CAP,
+			targetReached: true,
+			targetFirstReachBars: 3,
 		});
-		expect(formatPatternLine(p, 0, 'summary', emptyMeta)).toContain(`${TARGET_REACHED_PCT_CAP}%以上`);
+		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
+		expect(result).not.toContain(`${TARGET_REACHED_PCT_CAP}%以上`);
+		expect(result).toContain('   - ターゲット: 到達（ブレイク後 3 本目）');
+	});
+
+	it('交絡があれば末尾に申告する（到達側は方向を問わない）', () => {
+		const p = makePattern({
+			breakoutTarget: 110000,
+			targetMethod: 'pattern_height',
+			targetReachedPct: 130,
+			targetReached: true,
+			targetFirstReachBars: 47,
+			targetOtherBreakoutBeforeReach: [{ type: 'triangle_ascending', direction: 'down', barsAfterBreakout: 25 }],
+		});
+		expect(formatPatternLine(p, 0, 'summary', emptyMeta)).toContain(
+			'。到達前に別パターンのブレイクあり（triangle_ascending 下方 +25 本）',
+		);
+	});
+
+	it('未到達の交絡は逆方向のブレイクとして申告する', () => {
+		const p = makePattern({
+			breakoutTarget: 110000,
+			targetMethod: 'pattern_height',
+			targetReachedPct: 26,
+			targetReached: false,
+			targetScanBars: TARGET_REACH_MAX_BARS,
+			targetScanComplete: true,
+			targetOppositeBreakoutInWindow: [{ type: 'triangle_descending', direction: 'down', barsAfterBreakout: 27 }],
+		});
+		expect(formatPatternLine(p, 0, 'summary', emptyMeta)).toContain(
+			'。走査窓内に逆方向のブレイクあり（triangle_descending 下方 +27 本）',
+		);
 	});
 
 	it('退化して進捗を出さなかった場合は content に理由が出る（issue #210 (2)）', () => {
@@ -1174,7 +1261,7 @@ describe('formatPatternLine', () => {
 		});
 		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
 		expect(result).toContain('ターゲット価格');
-		expect(result).toContain('ターゲット進捗: 出力なし');
+		expect(result).toContain('ターゲット: 出力なし');
 	});
 
 	it('breakoutTarget なしのとき ターゲット価格 なし', () => {
@@ -1817,7 +1904,7 @@ describe('formatDetailedView', () => {
 	it('usage_example を structuredContent に含む', () => {
 		const res = formatDetailedView('H', [], '', '', emptyMeta, undefined, emptyRes);
 		const sc = res.structuredContent as Record<string, unknown>;
-		expect(sc['usage_example']).toBeDefined();
+		expect(sc.usage_example).toBeDefined();
 	});
 });
 

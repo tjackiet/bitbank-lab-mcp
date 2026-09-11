@@ -169,8 +169,27 @@ function statusLines(text: string): string[] {
 }
 
 /**
+ * ターゲット行（`- ターゲット: …`）。パターン 1 件ごとに出る定型 1 行で、issue #288 Phase 2 以降は
+ * **到達 / 未到達（走査完了）/ 未到達（走査中）/ 出力なし**の 4 形のいずれかを事実として書く。
+ *
+ * `targetFirstReachBars` / `targetScanBars` / 交絡 2 キーは `structuredContent` 側にしか無く
+ * LLM からは見えないので、この行が「届いたのか・まだ足が無いのか・帰属が切れているのか」の
+ * 唯一のチャネルになる。上位 view で文言が変わる / 落ちると LLM が到達を取り違えるため、
+ * 他の定型要素と同じく包含で固定する。
+ *
+ * **`ターゲット価格:` 行とは別の行。** 前方一致が食い合わないよう `- ターゲット: ` まで見る。
+ * **`summary` はパターン明細を 1 件も出さない view** なので、ここは空集合になる。
+ */
+function targetLines(text: string): string[] {
+	return text
+		.split('\n')
+		.map((line) => line.trim())
+		.filter((line) => line.startsWith('- ターゲット: '));
+}
+
+/**
  * view の content から定型要素（注記行 + 期間行 + 実効パラメータ行 + 検出経路行 + 状態行 +
- * ヘッダ主要フィールド）を抽出した集合。
+ * ターゲット行 + ヘッダ主要フィールド）を抽出した集合。
  */
 function fixedElements(text: string): Set<string> {
 	return new Set([
@@ -180,6 +199,7 @@ function fixedElements(text: string): Set<string> {
 		...detectionRouteLines(text),
 		...reductionLines(text),
 		...statusLines(text),
+		...targetLines(text),
 		...headerFields(text),
 	]);
 }
@@ -448,6 +468,41 @@ function reversalSwings() {
 	);
 }
 
+/**
+ * ターゲット行の 3 形（到達 / 未到達・走査完了 / 未到達・走査中）を出すための追加フィールド。
+ * 添字 0〜2 にだけ付ける。**`breakoutTarget` が無ければ行そのものが出ない**ので、
+ * 4 件目以降は「行が出ないパターン」として残す（包含の比較対象が全件になるのを避ける）。
+ */
+const TARGET_FIXTURE_BY_INDEX: Record<number, Record<string, unknown>> = {
+	0: {
+		breakoutTarget: 12_930_667,
+		targetMethod: 'pattern_height',
+		targetReachedPct: 273,
+		targetReached: true,
+		targetFirstReachBars: 12,
+		targetFirstReachDate: '2026-01-15T00:00:00.000Z',
+		targetScanBars: 60,
+		targetScanComplete: true,
+	},
+	1: {
+		breakoutTarget: 10_149_705,
+		targetMethod: 'pattern_height',
+		targetReachedPct: 26,
+		targetReached: false,
+		targetScanBars: 60,
+		targetScanComplete: true,
+		targetOppositeBreakoutInWindow: [{ type: 'triangle_ascending', direction: 'up' as const, barsAfterBreakout: 28 }],
+	},
+	2: {
+		breakoutTarget: 13_050_465,
+		targetMethod: 'pattern_height',
+		targetReachedPct: 61,
+		targetReached: false,
+		targetScanBars: 25,
+		targetScanComplete: false,
+	},
+};
+
 // 戻り値を上流ツールの出力型で縛る。手書きフィクスチャが production の shape から
 // 黙って drift すると、この層（ツール横断の契約検証）の assert が全て素通りするため。
 function patternsFixture(
@@ -483,6 +538,10 @@ function patternsFixture(
 						end: dayjs.utc('2026-01-20T00:00:00Z').add(i, 'day').toISOString(),
 					},
 					status: 'completed' as const,
+					// ターゲット行（#288 Phase 2）の 3 形を 1 フィクスチャに揃える。**先頭 3 件だけ**に
+					// 付けるので、`breakoutTarget` を持たないパターン（= 行が出ない側）も残る。
+					// これが無いと `targetLines` の抽出が空集合同士で自明に通る。
+					...TARGET_FIXTURE_BY_INDEX[i],
 					...(i < relaxed ? { _fallback: RELAXED_TAG } : {}),
 				})),
 				...extra,
@@ -714,6 +773,11 @@ describe('階梯上の view の content は下位 view の上位集合（§3-2 �
 		expect(periodLines(summary)).toHaveLength(2);
 		expect(effectiveParamsLines(summary)).toHaveLength(1);
 		expect(reductionLines(summary)).toHaveLength(1);
+		// ターゲット行（#288 Phase 2）と状態行は `summary` には出ない（明細を列挙しない view）ので、
+		// **空振りの検出は階梯上の 2 view 側で行う**——ここが 0 のままだと包含が自明に通る。
+		expect(targetLines(summary)).toHaveLength(0);
+		expect(targetLines(detailed).length).toBeGreaterThan(0);
+		expect(targetLines(full).length).toBeGreaterThan(0);
 
 		expectSupersetOf(fixedElements(detailed), fixedElements(summary), 'detailed ⊇ summary');
 		expectSupersetOf(fixedElements(full), fixedElements(detailed), 'full ⊇ detailed');

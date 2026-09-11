@@ -8,6 +8,7 @@
 import type { TargetProgressOmittedReason } from '../../src/schema/patterns.js';
 import type { SizeThresholds } from './structural.js';
 import type { Pivot } from './swing.js';
+import type { TargetBreakoutConfounder } from './target-confounders.js';
 
 /** トレンドライン（線形回帰の結果） */
 export interface TrendLine {
@@ -314,6 +315,19 @@ export interface PatternEntry extends DeduplicablePattern {
 	targetReached?: boolean;
 	targetReachedDate?: string;
 	targetReachedPrice?: number;
+	/**
+	 * ブレイク後の値動きの「事実」と、到達の帰属を切る交絡（issue #288 Phase 2）。schema 参照。
+	 *
+	 * **`targetReachedDate` / `targetReachedPrice` とは別の足を指す**——あちらは走査窓の extremum。
+	 * 交絡 2 つは `tools/patterns/target-confounders.ts` がパイプライン段で注入する
+	 * （検出器は付けない。他パターンの集合が確定するのが `globalDedup` / 型間排他の後のため）。
+	 */
+	targetFirstReachBars?: number;
+	targetFirstReachDate?: string;
+	targetScanBars?: number;
+	targetScanComplete?: boolean;
+	targetOtherBreakoutBeforeReach?: TargetBreakoutConfounder[];
+	targetOppositeBreakoutInWindow?: TargetBreakoutConfounder[];
 	/** target 進捗系を出さなかった理由（issue #210 / #224）。schema 参照。 */
 	targetProgressOmittedReason?: TargetProgressOmittedReason;
 	trendlineLabel?: string;

@@ -91,7 +91,10 @@ function buildTripleCtx(): DetectContext {
 }
 
 const TARGET_PRICE_LABEL = '   - ターゲット価格: ';
-const TARGET_PROGRESS_LABEL = '   - ターゲット進捗: ';
+// 行頭ラベルは issue #288 Phase 2 で `ターゲット進捗:` → `ターゲット:` に変わった
+// （100% 超の数字を「進捗」と名乗らせないため）。**`ターゲット価格:` とは別の文字列なので
+// 件数の突き合わせはそのまま成立する。**
+const TARGET_PROGRESS_LABEL = '   - ターゲット: ';
 
 function countOccurrences(text: string, needle: string): number {
 	return text.split(needle).length - 1;
@@ -224,8 +227,8 @@ describe('breakoutTarget を出したら進捗か理由を必ず名乗る（issu
 			'Asia/Tokyo',
 			'1hour',
 		);
-		expect(line).toContain('ターゲット進捗: ');
-		expect(line).not.toContain('この検出器がターゲット進捗を算出していないため');
+		expect(line).toContain(TARGET_PROGRESS_LABEL);
+		expect(line).not.toContain('この検出器がターゲットへの到達を算出していないため');
 		expect(line).not.toContain('not_computed_by_detector');
 	});
 
@@ -254,6 +257,6 @@ describe('breakoutTarget を出したら進捗か理由を必ず名乗る（issu
 			expect(p.breakoutBarIndex).toBeUndefined();
 			expect(p.targetReachedPct).toBeUndefined();
 		}
-		expect(res.summary).toContain('ターゲット進捗: 出力なし（未ブレイクのため未算出）');
+		expect(res.summary).toContain('ターゲット: 出力なし（未ブレイクのため未算出）');
 	});
 });

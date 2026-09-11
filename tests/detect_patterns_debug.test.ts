@@ -384,16 +384,56 @@ describe('detect_patterns: triangle の分類前ラベル（#129）', () => {
 		expect(pick(tri)).toEqual(fromAll);
 	});
 
-	// ラベルは debug 出力の話でしかない。検出結果に触れていないことを直接固定する。
-	it('data.patterns は patterns=[triangle] の有無で変わらない', async () => {
+	/**
+	 * ラベルは debug 出力の話でしかない。検出結果に触れていないことを直接固定する。
+	 *
+	 * **交絡 2 キーだけは比較から外す**（issue #288 Phase 2）。`targetOtherBreakoutBeforeReach` /
+	 * `targetOppositeBreakoutInWindow` は「**この呼び出しが返した集合の中に**他パターンの
+	 * ブレイクがあったか」を定義とする申告なので、`patterns` で集合を絞れば当然減る
+	 * （下の「基準集合は `patterns` で絞られる」が仕様として固定している）。
+	 * **判定フィールドはここで全件突き合わせたまま**——絞り込みで `confidence` / `status` /
+	 * `targetReachedPct` 等が動いていないことは引き続きこのテストが保証する。
+	 */
+	const CONFOUNDER_KEYS = ['targetOtherBreakoutBeforeReach', 'targetOppositeBreakoutInWindow'] as const;
+	const stripConfounders = (p: Record<string, unknown>) => {
+		const out = { ...p };
+		for (const k of CONFOUNDER_KEYS) delete out[k];
+		return out;
+	};
+
+	it('data.patterns は patterns=[triangle] の有無で変わらない（交絡 2 キーを除く）', async () => {
 		const candles = buildNoisyCandles();
 		const all = await run(candles, { includeForming: true });
 		const tri = await run(candles, { patterns: ['triangle'], includeForming: true });
 		assertOk(all);
 		assertOk(tri);
-		const pick = (r: typeof all) => r.data.patterns.filter((p) => p.type.startsWith('triangle_'));
+		const pick = (r: typeof all) =>
+			r.data.patterns
+				.filter((p) => p.type.startsWith('triangle_'))
+				.map((p) => stripConfounders(p as unknown as Record<string, unknown>));
 		expect(pick(all).length).toBeGreaterThan(0);
 		expect(pick(tri)).toEqual(pick(all));
+	});
+
+	// 上で比較から外した 2 キーの振る舞いを**仕様として**押さえる（黙って落とさない）。
+	it('交絡の基準集合は patterns で絞られる（他の検出器を呼ばなければ他ブレイクは見えない）', async () => {
+		const candles = buildNoisyCandles();
+		const all = await run(candles, { includeForming: true });
+		const tri = await run(candles, { patterns: ['triangle'], includeForming: true });
+		assertOk(all);
+		assertOk(tri);
+		const confounded = (r: typeof all) =>
+			r.data.patterns.filter((p) => {
+				const e = p as unknown as Record<string, unknown>;
+				return !p.type.startsWith('triangle_')
+					? false
+					: CONFOUNDER_KEYS.some((k) => Array.isArray(e[k]) && (e[k] as unknown[]).length > 0);
+			});
+		// 全種別を検出したときは triangle にも他パターン由来の交絡が付く。
+		const withAll = confounded(all);
+		expect(withAll.length).toBeGreaterThan(0);
+		// 三角形だけに絞ると、非 triangle のブレイクは基準集合に存在しないので減る。
+		expect(confounded(tri).length).toBeLessThan(withAll.length);
 	});
 });
 

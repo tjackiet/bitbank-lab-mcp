@@ -490,6 +490,22 @@ export const TargetProgressOmittedReasonEnum = z.enum([
 /** `TargetProgressOmittedReasonEnum` から導出した理由コードの型。実装側はこれを再エクスポートする。 */
 export type TargetProgressOmittedReason = z.infer<typeof TargetProgressOmittedReasonEnum>;
 
+/**
+ * ターゲット到達の帰属を切る「他パターンのブレイク」1 件（issue #288 Phase 2）。
+ *
+ * `targetOtherBreakoutBeforeReach` / `targetOppositeBreakoutInWindow` の要素。
+ * **どの区間・どの方向を数えるかは 2 フィールドで違う**ので、それぞれの `.describe()` を読むこと。
+ * 判定の単一ソースは `tools/patterns/target-confounders.ts`。
+ */
+const TargetBreakoutConfounderSchema = z.object({
+	type: z.string().describe('他パターンの種別。'),
+	direction: z.enum(['up', 'down']).describe('他パターンのブレイク方向。'),
+	barsAfterBreakout: z
+		.number()
+		.int()
+		.describe('自分のブレイク足を 0 本目として何本後にそのブレイクがあったか（常に 1 以上）。'),
+});
+
 export const DetectedPatternSchema = z.object({
 	type: PatternTypeEnum,
 	confidence: z.number().min(0).max(1),
@@ -815,7 +831,13 @@ export const DetectedPatternSchema = z.object({
 				`（= ブレイク足が既に想定値幅の大半を走り終えていて達成度を測れない）、` +
 				`(d) ブレイク足の終値が非有限、(e) ブレイク足以降に走査できる足が無い。` +
 				`**(a)〜(e) いずれも targetProgressOmittedReason で申告する**（issue #224 症状 2。` +
-				`#210 時点では (c) しか申告しておらず、残りは進捗行ごと無言で消えていた）。`,
+				`#210 時点では (c) しか申告しておらず、残りは進捗行ごと無言で消えていた）。\n` +
+				`**これは値動きの記述であって成績・予測の指標ではない**（issue #288 Phase 1）。` +
+				`100 を超える値は「進捗」ではなく**目標幅に対する到達幅の倍率**で、到達した後の値動きを含む` +
+				`（分子が走査窓の extremum なので、届いた後も伸びれば増える）。**到達率としても読まない**——` +
+				`実データではどの窓幅（5〜60 本）でもパターン起点の到達率が帰無を上回っておらず、` +
+				`走査窓に他パターンのブレイクが入る実体が 94.7% ある。` +
+				`「いつ届いたか」は targetFirstReachBars / targetFirstReachDate を見ること。`,
 		),
 	// ブレイク後の high/low ベース target 到達情報。double / triangle / wedge / pennant / flag /
 	// H&S / 逆H&S すべてで付与される。最終 close ベースだと一度到達してから戻したケースを
@@ -827,7 +849,10 @@ export const DetectedPatternSchema = z.object({
 			`ブレイク足から **${TARGET_REACH_MAX_BARS} 本以内**に breakoutTarget へ到達したか。` +
 				`「いつか到達した」ではない——走査を系列末尾まで伸ばすと同じ構造でも問い合わせ時点で値が` +
 				`変わるため、窓を固定してある（issue #210）。ブレイクから ${TARGET_REACH_MAX_BARS} 本ぶんの足が` +
-				`まだ無い場合は、その時点までで判定した暫定値。出ない条件は targetReachedPct と同じ。`,
+				`まだ無い場合は、その時点までで判定した暫定値（targetScanComplete が false）。` +
+				`出ない条件は targetReachedPct と同じ。\n` +
+				`**成績・予測の指標として読まないこと**（issue #288 Phase 1。到達率はどの窓幅でも帰無を上回らない）。` +
+				`到達の帰属を切る他パターンのブレイクは targetOtherBreakoutBeforeReach を見ること。`,
 		),
 	targetReachedDate: z
 		.string()
@@ -837,6 +862,76 @@ export const DetectedPatternSchema = z.object({
 		.number()
 		.optional()
 		.describe(`走査窓（ブレイク足から ${TARGET_REACH_MAX_BARS} 本以内）の extremum（up=最高 high / down=最安 low）。`),
+	// --- ブレイク後の値動きの「事実」（issue #288 Phase 2 で追加。すべて additive）---
+	//
+	// targetReachedDate / targetReachedPrice は **extremum が付いた足**なので「いつ届いたか」ではない。
+	// 初到達は別の量なので別フィールドで持つ。
+	targetFirstReachBars: z
+		.number()
+		.int()
+		.optional()
+		.describe(
+			`**初めて breakoutTarget に届いた足**が、ブレイク足を 0 本目として何本目か` +
+				`（ブレイク足自身の high / low が既に target を越えていれば 0）。
+` +
+				`**targetReachedDate / targetReachedPrice とは別の足を指す**——あちらは走査窓の extremum` +
+				`（＝どこまで走ったか）で、届いた後にさらに伸びれば後ろの足へ動く。
+` +
+				`**未到達なら出さない。** 到達率・予測の指標として読まないこと` +
+				`（実データでは帰属を帰無と区別できていない。issue #288 Phase 1）。`,
+		),
+	targetFirstReachDate: z
+		.string()
+		.optional()
+		.describe(`targetFirstReachBars が指す足の時刻（UTC ISO）。未到達なら出さない。`),
+	targetScanBars: z
+		.number()
+		.int()
+		.optional()
+		.describe(
+			`到達判定で**実際に走査した本数**（ブレイク足を 0 本目とした後続の本数）。` +
+				`min(${TARGET_REACH_MAX_BARS}, 系列末尾までの本数) で、上限まで走れたときちょうど ` +
+				`${TARGET_REACH_MAX_BARS}。
+` +
+				`**未到達がこの値より手前で打ち切られていないかを呼び出し側が検算できるようにするための値。**` +
+				`${TARGET_REACH_MAX_BARS} 未満なら「届かなかった」ではなく「まだ足が無い」。`,
+		),
+	targetScanComplete: z
+		.boolean()
+		.optional()
+		.describe(
+			`targetScanBars === ${TARGET_REACH_MAX_BARS}。走査窓ぶんの足が揃っている（＝この先の足が` +
+				`増えても targetReached / targetReachedPct が動かない）かどうか。`,
+		),
+	// --- 到達の帰属を切る交絡（issue #288 Phase 2）---
+	//
+	// 素朴に「走査窓に他パターンのブレイクがあった」を出すと実体の 94.7% に付く（Phase 1 §5）ので、
+	// **到達側は (ブレイク, 初到達) の開区間・方向不問、未到達側は走査窓の逆方向のみ**に絞ってある。
+	// 基準集合は accepted（status が invalid / expired / forming / near_completion でないもの）だけで、
+	// includeInvalid: true でも変わらない。定義の単一ソースは tools/patterns/target-confounders.ts。
+	targetOtherBreakoutBeforeReach: TargetBreakoutConfounderSchema.array()
+		.optional()
+		.describe(
+			`**到達したパターンにだけ付く。** 自分のブレイクと自分の初到達の**間**（開区間）に、` +
+				`同じ結果集合の他パターンのブレイクがあったもの。**方向は問わない**——同方向の後続パターン` +
+				`経由でも「このパターンだから届いた」とは言えなくなるため（Phase 1 の予備監査で 20 本超の` +
+				`到達 6 件のうち 4 件が同方向）。
+` +
+				`**空なら出さない。** 出ていないことは「自力で届いた」の証明ではなく、` +
+				`accepted 集合の中に該当が無かったという意味。\n` +
+				`**patterns（種別フィルタ）で絞ると基準集合も絞られる**——絞った呼び出しでは他種別の` +
+				`ブレイクがそもそも検出されていないので数えられない。includeInvalid は基準集合を動かさない。`,
+		),
+	targetOppositeBreakoutInWindow: TargetBreakoutConfounderSchema.array()
+		.optional()
+		.describe(
+			`**未到達のパターンにだけ付く。** 走査窓（自分のブレイクの次の足から targetScanBars 本目まで）に` +
+				`**方向が逆**の他パターンのブレイクがあったもの。同方向まで含めると実体の 94.7% に付いて` +
+				`申告にならないので逆方向に限っている。
+` +
+				`**「逆方向へ行ったから届かなかった」とは言っていない**——順序は測っていない。` +
+				`言えるのは「同じ走査窓の中で反対向きの構造も成立していた」まで。空なら出さない。`,
+		),
 	targetProgressOmittedReason: TargetProgressOmittedReasonEnum.optional().describe(
 		`target 進捗系フィールド（targetReached / targetReachedPct / targetReachedDate / targetReachedPrice）を` +
 			`**出さなかった**ことの申告。**breakoutTarget 自体は出ることがある**（進捗だけが測れない）ので、` +

@@ -25,6 +25,7 @@ import { rankPatterns } from './patterns/ranking.js';
 import { linearRegressionWithR2, near as nearFn, pct as pctFn } from './patterns/regression.js';
 import { buildScanWindowWarning } from './patterns/scan-window.js';
 import { type Candle, detectSwingPoints, filterPeaks, filterValleys } from './patterns/swing.js';
+import { annotateTargetBreakoutConfounders, type TargetBreakoutConfounder } from './patterns/target-confounders.js';
 import { formatTargetProgressLine } from './patterns/target-reach.js';
 import { type CandDebugEntry, type DeduplicablePattern, type DetectContext, pushCand } from './patterns/types.js';
 
@@ -61,7 +62,17 @@ interface SummaryPattern extends DeduplicablePattern {
 	breakoutTarget?: number;
 	targetMethod?: string;
 	targetReachedPct?: number;
+	targetReached?: boolean;
 	targetProgressOmittedReason?: string;
+	// ターゲット到達の事実 + 交絡（issue #288 Phase 2）。**`content` の文言に要るので
+	// ここにも宣言する**——`DeduplicablePattern` の index signature 経由だと `unknown` になり、
+	// `formatTargetProgressLine` の引数型に通らない。
+	targetFirstReachBars?: number;
+	targetFirstReachDate?: string;
+	targetScanBars?: number;
+	targetScanComplete?: boolean;
+	targetOtherBreakoutBeforeReach?: TargetBreakoutConfounder[];
+	targetOppositeBreakoutInWindow?: TargetBreakoutConfounder[];
 	poleDirection?: string;
 	priorTrendDirection?: string;
 	flagpoleHeight?: number;
@@ -380,6 +391,15 @@ export default async function detectPatterns(
 			});
 		}
 
+		// --- ターゲット到達の交絡申告（issue #288 Phase 2）---
+		//
+		// **`data.patterns` に載る集合が確定してから**付ける。`globalDedup` と型間排他より前に
+		// 置くと、後で消えるパターンを「他パターンのブレイク」として数えてしまう。
+		// 基準集合・区間・方向の定義は `patterns/target-confounders.ts` が単一ソース
+		// （accepted のみ / 到達側は開区間・方向不問 / 未到達側は逆方向のみ）。
+		// **判定フィールドは 1 つも触らない**——追加は 2 キーだけで、既存キーは動かない。
+		annotateTargetBreakoutConfounders(patterns);
+
 		// detected = dedupMerged + currentFiltered + lifecycleExcluded + tripleHsExcluded + output
 		// （waterfall の不変条件）。`tripleHsCandidateCount` は件数の減少ではなく比較対象の
 		// 申告なので**この等式の外**。
@@ -585,7 +605,10 @@ export default async function detectPatterns(
 						neckline_projection: 'ネックライン投影',
 					};
 					detail += `\n   - ターゲット価格: ${Math.round(p.breakoutTarget).toLocaleString('ja-JP')}円（${(p.targetMethod && methodJa[p.targetMethod]) || p.targetMethod || '不明'}）`;
-					const progressLine = formatTargetProgressLine(p);
+					// 日時は他の行（旗竿期間など）と同じ tz 整形に合わせる。
+					const progressLine = formatTargetProgressLine(p, {
+						formatDate: (iso) => formatDateInTz(Date.parse(iso), tz) ?? iso,
+					});
 					if (progressLine) detail += `\n${progressLine}`;
 				}
 

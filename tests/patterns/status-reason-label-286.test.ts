@@ -68,9 +68,17 @@ describe('#286 の発端の形（実データ D の limit=72 窓 / 既定 swingD
 			expect(text).toContain('   - 状態: 無効（山2 の後に別の山を作ってから割った: peak_after_last_pivot）');
 		});
 
-		it(`view=${view}: 「逆方向」と言わない（旧実装の誤表示）`, async () => {
+		// **旧実装の誤表示そのものを名指しで禁じる。** 初版は `not.toContain('逆方向')` と
+		// 語だけで見ていたが、issue #288 Phase 2 でターゲット行が
+		// 「走査窓内に逆方向のブレイクあり」を**正しい意味で**使うようになり、
+		// 語の有無では状態行の誤表示を分離できなくなった（この窓では実際に交絡が付く）。
+		it(`view=${view}: 状態行が「期待と逆方向にブレイク」と言わない（旧実装の誤表示）`, async () => {
 			const text = await liveWindowContent(view);
-			expect(text).not.toContain('逆方向');
+			expect(text).not.toContain('期待と逆方向にブレイク');
+			// 状態行そのものに「逆方向」が混ざっていないことも直接見る（他の行は対象外）。
+			const statusLines = text.split('\n').filter((l) => l.startsWith('   - 状態: '));
+			expect(statusLines.length).toBeGreaterThan(0);
+			for (const line of statusLines) expect(line).not.toContain('逆方向');
 		});
 	}
 });

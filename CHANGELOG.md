@@ -86,6 +86,91 @@
 | 71 | #29 | **（`detect_patterns` 系ではない。読む順の連番だけ引き継ぐ）** 確認 UI（iframe）の pull 型 hydration を `src/mcp-apps-hydration.ts` に切り出し、**上限付きリトライ（計 3 回）と abort** を入れた。`get_ui_snapshot` を 2.5 秒後に 1 回だけ呼び、失敗すると「復元中」の案内のまま固まっていた（CodeRabbit が #26 で指摘）。サーバー側（`tools/` / `src/private/`）は無変更 | **対象外**（`detect_patterns` は 1 行も触っていない） |
 | 72 | #286 | **`content` の状態行を `status` × 理由コードの表引きにした（表示層のみ）。** `status='invalid'` を理由を問わず「無効（期待と逆方向にブレイク）」と書いており、**その文言に対応する理由コードは検出器に 1 つも存在しなかった**——実機で `invalidReason: 'peak_after_last_pivot'` の `double_top`（下方ブレイクは期待どおり）が「期待と逆方向にブレイク」と表示され、LLM がそのまま誤って説明した。理由コードを併記し、日本語は表引き・未知コードはコードだけにする。`expired` のラベル追加と `near_completion` の系統分けも同じ表の中で直した | **変わらない**（`tools/` / `src/schema/` は無変更。`structuredContent` / `data.patterns` が 1 バイトも動かない） |
 | 73 | #288 Phase 1 | **ターゲット到達の走査窓（`TARGET_REACH_MAX_BARS` = 60）の境界を実データで計測。コード変更なし。** #210 の 96.3% は**到達済みケースの条件付き分布**で、到達率でも帰無との比較でもなかった。3,764 ケース（実データ A / B / C / D × ネイティブ時間足 × `swingDepth` 4 × ローリング窓 + 合成 88）で到達率・帰無・交絡を測り直した。**予備監査の「自力到達は 20 本以内」はローリング窓で増やすと保たない**（実データ 1hour / accepted 実体で自力到達の max が 20 → **40**、割れ目は (40, 47]）。**パターン起点の到達率は帰無を上回らない**（N=60 で 44.7% 対 53.0%、差 −8.3pt / 差の SE 8.1pt）。**1day は母集団 0 件で評価不能。決定はしていない** | **変わらない**（計測スクリプトと内部メモのみ。`tools/` / `src/` の差分は 0 行） |
+| 74 | #288 Phase 2 | **ターゲット進捗の表示を「事実の記述」に改め、`content` から 100% 超の百分率を消した（`TARGET_REACH_MAX_BARS` = 60 と `targetReachedPct` の計算は据え置き）。** 実機で「進捗 273%（到達）」が出ており、**到達後の超過倍率を「進捗」として読ませていた**。行頭ラベルを `ターゲット:` に統一し、到達 / 未到達（走査完了）/ 未到達（走査中）の 3 形 + 出力なしの事実だけを書く。あわせて到達の事実 4 フィールド（`targetFirstReachBars` / `targetFirstReachDate` / `targetScanBars` / `targetScanComplete`）と、帰属を切る交絡 2 フィールド（`targetOtherBreakoutBeforeReach` / `targetOppositeBreakoutInWindow`）を additive に足した。**交絡は限定して申告する**——素朴に出すと Phase 1 実測の 94.7% に付くため、到達側は `(ブレイク, 初到達)` の開区間・方向不問、未到達側は走査窓の逆方向のみ | **判定は変わらない**（実データ 1hour の回帰 fixture 10 件を全キー突き合わせて、**既存キーで値が変わったもの 0 / 消えたキー 0**。差分は 6 キーが増えたぶんだけの純粋な追加ハンク） |
+
+### Changed（#288 Phase 2: ターゲット進捗の表示を「事実の記述」に改める。定数は据え置き）
+
+**`TARGET_REACH_MAX_BARS` = 60 と `targetReachedPct` の計算（上限 999 を含む）は 1 行も変えていない。**
+Phase 1 の実測で「窓の長さの問題ではない」ことが分かった（どの N でもパターン起点の到達率が帰無を
+上回らず、上限を縮める根拠となる N がコーパスに無い）ので、直したのは**数字の意味と見せ方**。
+
+#### 症状
+
+実機で `ターゲット進捗: 273%（ブレイク後60本以内に到達）` が出ていた。`targetReachedPct` の分子は
+**走査窓の extremum** なので、100 を超えた値は「進捗」ではなく**到達した後にどこまで伸びたかの倍率**。
+それを「進捗」と名乗り、さらに「N 本以内に到達 / 未到達」という**判定口調**で出していたため、
+LLM にも人にも成績の指標として読める形になっていた。
+
+#### `content`（表示層）
+
+行頭ラベルを `ターゲット:` に統一し、**100% 超の数字を出さない**。3 形 + 出力なしの 4 形だけ:
+
+```text
+   - ターゲット: 到達（ブレイク後 12 本目、2026-08-25 11:00）
+   - ターゲット: 未到達（走査 60 本完了、目標幅の 26% まで接近）。走査窓内に逆方向のブレイクあり（triangle_ascending 上方 +28 本）
+   - ターゲット: 未到達（ブレイク後 25 本経過 / 走査上限 60 本、目標幅の 61% まで接近）
+   - ターゲット: 出力なし（ブレイク足が想定値幅の85%以上を消化済みで、残り距離が短く進捗率が意味を持たないため）
+```
+
+- 「目標幅の x%」の x は `targetReachedPct`（未到達側は 99 でキャップ済みなので 100 を超えない）。
+- **価格は出さない**——直前の `ターゲット価格: …円（投影方式）` 行が持つ。二重に書かない。
+- **`view` に依らず 4 形とも出る**（規約 3 の上位集合。`debug` はパターン明細自体が出ない階梯外の view）。
+- 日時は各呼び出し側の既存の tz 整形に合わせる（`detect_patterns.ts` の `res.summary` は暦日、
+  ハンドラ側は intraday なら分まで）。
+
+#### `structuredContent`（additive。既存キーは 1 バイトも動かない）
+
+| フィールド | 中身 |
+|---|---|
+| `targetFirstReachBars` | **初めて届いた足**が、ブレイク足を 0 本目として何本目か。未到達なら出さない |
+| `targetFirstReachDate` | 同じ足の時刻（UTC ISO） |
+| `targetScanBars` | 実際に走査した本数（ブレイク足を除く後続）。`min(60, 系列末尾まで)` |
+| `targetScanComplete` | `targetScanBars === 60`。`false` は「届かなかった」ではなく**まだ足が無い** |
+| `targetOtherBreakoutBeforeReach` | **到達した**パターンで、`(自分のブレイク, 自分の初到達)` の**開区間**に他パターンのブレイクがあるもの。**方向は問わない** |
+| `targetOppositeBreakoutInWindow` | **未到達の**パターンで、走査窓 `(ブレイク, ブレイク + targetScanBars]` に**逆方向**のブレイクがあるもの |
+
+**`targetReachedDate` / `targetReachedPrice` は extremum の足のままで、初到達の足とは別物。**
+実データ B の `falling_wedge`（ブレイク `2026-08-17T15:00Z`）は初到達が 3 本目（`08-17T18:00Z`）、
+extremum は `08-20T01:00Z` で `targetReachedPct` は上限の 999。**この 2 つが同じ足だと思わせていたのが
+「進捗」という語**だったので、別フィールドとして出したうえで content は初到達の方を書く。
+
+#### 交絡は**限定して**申告する
+
+Phase 1 の実測では走査窓 (0, 60] に他パターンのブレイクがある実体が **94.7%**（`invalid` 込みで 98.5%）。
+**素朴に出すと全件に付いて申告にならない**ので、到達側と未到達側で絞り方を変えた:
+
+- **到達側は開区間・方向不問。** 同方向の後続パターン経由でも帰属は切れる
+  （Phase 1 の予備監査で 20 本超の到達 6 件のうち **4 件が同方向**）。逆方向だけに絞ると
+  この 4 件が「自力で届いた」と読まれる。
+- **未到達側は逆方向のみ。** 同方向まで含めると 94.7% に付く。
+  **「逆方向へ行ったから届かなかった」とは言っていない**——順序は測っていない。
+
+**基準集合は accepted のみ**（`status` が `invalid` / `expired` / `forming` / `near_completion` でないもの）で、
+**`includeInvalid: true` でも変えない**。変えると同じ値動きへの申告が呼び出しオプション次第で動く。
+判定は `globalDedup` と triple × H&S の型間排他の**後**に行う（`data.patterns` に載る集合が確定してから）。
+定義の単一ソースは `tools/patterns/target-confounders.ts`。
+
+#### 決定しなかったこと
+
+- **複数窓の併記（@5 / @10 / @20）は見送り。** どの窓にも予測力が示せていないので、
+  並べても読み手の判断材料にならない。
+- **`1day` は評価不能のまま。** ブレイク足の後に 60 本残る実体が 0 件で、母集団が作れない
+  （この環境から bitbank API には届かないので、より長い 1day 系列の凍結 fixture が要る）。
+
+#### ベースライン更新（#207）
+
+`tests/fixtures/detect_patterns_1hour_data_patterns_baseline.json` を更新した。
+**件数は 10 のまま**で、全 10 件 × 全キーを突き合わせた結果は
+**既存キーで値が変わったもの 0 / 消えたキー 0**、追加は
+`targetFirstReachBars` / `targetFirstReachDate` が 5 件、`targetScanBars` / `targetScanComplete` が 8 件、
+`targetOtherBreakoutBeforeReach` / `targetOppositeBreakoutInWindow` が 1 件ずつ。
+`tests/detect_patterns_data_patterns_regression.test.ts` の履歴表にも 1 行足してある。
+
+- `tools/patterns/target-confounders.ts`（新規） — 交絡の基準集合・区間・方向の単一ソース
+- `tools/patterns/target-reach.ts` — 初到達 / 走査本数の記録と `formatTargetProgressLine` の書き換え、
+  `TARGET_REACH_MAX_BARS` docstring に「96.3% は到達率ではない」「1day では測れていない」を追記
+- `docs/tools.md` — `detect_patterns` 詳細ガイドに「ターゲット到達は値動きの記述であって成績ではない」節
+- `docs/internal/target-reach-window-288.md` — Phase 1 の計測（Phase 2 の決定の根拠）
 
 ### Docs（#288 Phase 1: ターゲット到達の走査窓を実データで検証。決定はしない）
 

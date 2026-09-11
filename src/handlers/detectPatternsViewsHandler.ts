@@ -1463,7 +1463,9 @@ export function formatPatternLine(
 			neckline_projection: 'ネックライン投影',
 		};
 		targetLine = `   - ターゲット価格: ${Math.round(Number(p.breakoutTarget)).toLocaleString('ja-JP')}円（${(p.targetMethod && methodJa[p.targetMethod]) || p.targetMethod}）`;
-		const progressLine = formatTargetProgressLine(p);
+		// 日時は同ファイルの他の行（ブレイク確認・pivot 明細）と同じ整形に合わせる
+		// （intraday は分まで、日足以上は暦日）。
+		const progressLine = formatTargetProgressLine(p, { formatDate: (iso) => toDateOrTime(iso, tz, type) });
 		if (progressLine) targetLine += `\n${progressLine}`;
 	}
 
@@ -1510,7 +1512,7 @@ export function formatSummaryView(
 ): McpResponse {
 	const now = Date.now();
 	const within = (ms: number) =>
-		pats.filter((p) => Number.isFinite(toTs(p?.range?.end)) && now - toTs(p.range!.end) <= ms).length;
+		pats.filter((p) => Number.isFinite(toTs(p?.range?.end)) && now - toTs(p.range?.end) <= ms).length;
 	const in30 = within(30 * 86400000);
 	const in90 = within(90 * 86400000);
 	const formingHint = includeForming ? '' : '\n※形成中は includeForming=true を指定してください。';
