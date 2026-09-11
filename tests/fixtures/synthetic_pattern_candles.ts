@@ -197,16 +197,41 @@ export function buildCompletedFallingWedgeCandles(year = 2026): Candle[] {
 	return closes.map((close, index) => makeCandle(index, close, year));
 }
 
+/** {@link buildFormingAscendingTriangleCandles} の本体部分（ブレイク前）。下の 2 つで共用する。 */
+const ASCENDING_TRIANGLE_BODY_CLOSES = [
+	115, 118, 121, 124, 127, 124, 118, 112, 116, 120, 124, 127, 123, 117, 114, 118, 122, 126, 127, 124, 120, 117, 120,
+	123, 126, 127, 125, 122, 120, 123, 126, 127, 126,
+];
+
 /**
  * Ascending Triangle (forming): flat upper resistance ~130, rising lower support
  * Peaks: all near close=127 → high=130; Valleys: rising from low=97 upward
  * No impulsive pole before window (gradual entry) to avoid pennant reclassification
  */
 export function buildFormingAscendingTriangleCandles(year = 2026): Candle[] {
-	const closes = [
-		115, 118, 121, 124, 127, 124, 118, 112, 116, 120, 124, 127, 123, 117, 114, 118, 122, 126, 127, 124, 120, 117, 120,
-		123, 126, 127, 125, 122, 120, 123, 126, 127, 126,
-	];
+	return ASCENDING_TRIANGLE_BODY_CLOSES.map((close, index) => makeCandle(index, close, year));
+}
+
+/**
+ * アセンディングトライアングルの**逆方向（下）ブレイク**。`invalid` / `failure` になる fixture（issue #291）。
+ *
+ * 本体は {@link buildFormingAscendingTriangleCandles} と同じ形（水平レジスタンス ~127 /
+ * 切り上がるサポート）で、末尾 3 本で下限ラインを ATR バッファぶん割る。
+ * **3 本とも下げ続ける**のは、最終足が三角形内に戻ると whipsaw 判定でブレイクが取り消され
+ * `forming` に落ちるため。
+ */
+export function buildAscendingTriangleInvalidBreakoutCandles(year = 2026): Candle[] {
+	const closes = [...ASCENDING_TRIANGLE_BODY_CLOSES, 118, 112, 106];
+	return closes.map((close, index) => makeCandle(index, close, year));
+}
+
+/**
+ * アセンディングトライアングルの**順方向（上）ブレイク**。`completed` / `success` になる fixture（issue #291）。
+ * 上の {@link buildAscendingTriangleInvalidBreakoutCandles} と本体が同一で末尾 3 本だけが違うので、
+ * 「`invalidReason` が付くのは `invalid` のときだけ」を同じ形の対で見られる。
+ */
+export function buildAscendingTriangleCompletedBreakoutCandles(year = 2026): Candle[] {
+	const closes = [...ASCENDING_TRIANGLE_BODY_CLOSES, 133, 137, 140];
 	return closes.map((close, index) => makeCandle(index, close, year));
 }
 

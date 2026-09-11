@@ -87,6 +87,78 @@
 | 72 | #286 | **`content` の状態行を `status` × 理由コードの表引きにした（表示層のみ）。** `status='invalid'` を理由を問わず「無効（期待と逆方向にブレイク）」と書いており、**その文言に対応する理由コードは検出器に 1 つも存在しなかった**——実機で `invalidReason: 'peak_after_last_pivot'` の `double_top`（下方ブレイクは期待どおり）が「期待と逆方向にブレイク」と表示され、LLM がそのまま誤って説明した。理由コードを併記し、日本語は表引き・未知コードはコードだけにする。`expired` のラベル追加と `near_completion` の系統分けも同じ表の中で直した | **変わらない**（`tools/` / `src/schema/` は無変更。`structuredContent` / `data.patterns` が 1 バイトも動かない） |
 | 73 | #288 Phase 1 | **ターゲット到達の走査窓（`TARGET_REACH_MAX_BARS` = 60）の境界を実データで計測。コード変更なし。** #210 の 96.3% は**到達済みケースの条件付き分布**で、到達率でも帰無との比較でもなかった。3,764 ケース（実データ A / B / C / D × ネイティブ時間足 × `swingDepth` 4 × ローリング窓 + 合成 88）で到達率・帰無・交絡を測り直した。**予備監査の「自力到達は 20 本以内」はローリング窓で増やすと保たない**（実データ 1hour / accepted 実体で自力到達の max が 20 → **40**、割れ目は (40, 47]）。**パターン起点の到達率は帰無を上回らない**（N=60 で 44.7% 対 53.0%、差 −8.3pt / 差の SE 8.1pt）。**1day は母集団 0 件で評価不能。決定はしていない** | **変わらない**（計測スクリプトと内部メモのみ。`tools/` / `src/` の差分は 0 行） |
 | 74 | #288 Phase 2 | **ターゲット進捗の表示を「事実の記述」に改め、`content` から 100% 超の百分率を消した（`TARGET_REACH_MAX_BARS` = 60 と `targetReachedPct` の計算は据え置き）。** 実機で「進捗 273%（到達）」が出ており、**到達後の超過倍率を「進捗」として読ませていた**。行頭ラベルを `ターゲット:` に統一し、到達 / 未到達（走査完了）/ 未到達（走査中）の 3 形 + 出力なしの事実だけを書く。あわせて到達の事実 4 フィールド（`targetFirstReachBars` / `targetFirstReachDate` / `targetScanBars` / `targetScanComplete`）と、帰属を切る交絡 2 フィールド（`targetOtherBreakoutBeforeReach` / `targetOppositeBreakoutInWindow`）を additive に足した。**交絡は限定して申告する**——素朴に出すと Phase 1 実測の 94.7% に付くため、到達側は `(ブレイク, 初到達)` の開区間・方向不問、未到達側は走査窓の逆方向のみ | **判定は変わらない**（実データ 1hour の回帰 fixture 10 件を全キー突き合わせて、**既存キーで値が変わったもの 0 / 消えたキー 0**。差分は 6 キーが増えたぶんだけの純粋な追加ハンク） |
+| 75 | #291 | **継続系（`triangle_ascending` / `triangle_descending` / pennant / flag）の `status: 'invalid'` に `invalidReason: 'breakout_against_expectation'` を足した（additive）。** #286 で状態行が「無効（日本語の理由: コード）」になったが、継続系は検出器が `invalidReason` を出しておらず**裸の「無効」**のままだった。継続系の `invalid` は「期待と逆方向にブレイクした」の 1 条件しか無いので、コードを 1 つ足せば状態行が全種別で自己記述になる。**`#286` で消した「期待と逆方向にブレイク」という文言は、継続系に限っては正しかった**——#286 の誤りは文言そのものではなく、理由を問わず全 `invalid` に当てていたこと | **変わらない**（採否・`status`・`outcome` は無変更。検出器の差分は `status === 'invalid'` のときの `invalidReason` 付与だけ。実データ 1hour のベースライン fixture は既定 `includeInvalid: false` で 10 件すべて `completed` なので**差分 0**） |
+
+### Added（#291: 継続系の `invalid` に `breakout_against_expectation` を足す）
+
+**additive な変更で、検出ロジック・採否・`status` の判定は 1 行も変えていない。**
+検出器の差分は「`status === 'invalid'` のときだけ `invalidReason` を足す」だけ。
+
+#### 症状
+
+#286 で `content` の状態行は `status` × `invalidReason` の表引きになったが、**継続系
+（`triangle_ascending` / `triangle_descending` / `pennant` / `bull_flag` / `bear_flag`）は
+検出器が `invalidReason` を出していない**ため、裸の `- 状態: 無効` になっていた。実データ D
+（BTC/JPY 1hour の `limit=72` 窓）の `triangle_ascending` がその実例で、修正前の明細は:
+
+```text
+   - 状態: 無効
+   - ブレイク方向: 下方ブレイク（本来は上方ブレイクが期待されるパターン）
+   - パターン結果: 失敗（下方ブレイク（弱気転換））
+```
+
+状態行だけを見ても何が無効なのか分からず、**理由は他の 2 行から読者が推測するしかなかった**。
+
+#### 直したこと
+
+理由コードの単一ソースを `tools/patterns/structural.ts` に置いた
+（`BREAKOUT_AGAINST_EXPECTATION` / 型 `ContinuationInvalidReason`）。
+継続系の `invalid` は**「ブレイクはしたが期待と逆方向だった」の 1 条件しか無い**
+（`detect_triangles.ts` の `determineTriangleStatus`、`detect_pennants.ts` の status 判定が
+どちらも `hasBreakout && !isExpectedBreakout` で `invalid` を立てる）ので、値は 1 つ。
+`detect_triangles.ts` / `detect_pennants.ts` はこの定数から取り、リテラルを直書きしない。
+
+修正後の同じ明細:
+
+```text
+   - 状態: 無効（期待と逆方向にブレイク: breakout_against_expectation）
+   - ブレイク方向: 下方ブレイク（本来は上方ブレイクが期待されるパターン）
+   - パターン結果: 失敗（下方ブレイク（弱気転換））
+```
+
+**「ブレイク方向」「パターン結果」の 2 行はそのまま残す。** 状態行は条件だけを名乗り、
+**方向の具体値はこの 2 行が持つ**——状態行に方向を書くと同じ事実が 3 か所に分散する。
+
+#### 表示層の日本語は型依存の語を使わない
+
+`invalidReasonJa`（`src/handlers/detectPatternsViewsHandler.ts`）の既存の分岐は
+`REVERSAL_STATUS_WORDS` から「山2 / 山3 / 右肩」を引いて文言を作るが、**継続系には
+最終構成点の概念が無い**ので、`breakout_against_expectation` はそれらを一切使わず
+「期待と逆方向にブレイク」の固定文言にした。反転系の語を当てると、存在しない構造を名乗ることになる。
+トリップワイヤは `tests/detectPatternsViewsHandler.test.ts` の
+「`breakout_against_expectation` は反転系の構成点の語を使わない」。
+
+#### #286 との関係
+
+**#286 で消した「期待と逆方向にブレイク」という文言は、継続系に限っては正しかった。**
+#286 の誤りは文言そのものではなく、**理由を問わず全 `invalid` に当てていたこと**——
+実機で `invalidReason: 'peak_after_last_pivot'` の `double_top`（下方ブレイクは期待どおり）が
+その文言で表示されていた。今回は「継続系の `invalid`」という 1 条件にだけ紐付けて戻している。
+同じ実データ窓に両方が同居するため、回帰テストは状態行を type ごとのブレイクに切って見る
+（`tests/patterns/status-reason-label-286.test.ts` の `patternBlock`）。
+
+#### 対象外
+
+- `triangle_symmetrical` — 期待方向を持たないので `invalid` にならない。
+- `wedge_*` — 逆方向を `outcome: 'failure'` で表し、`invalid` を出さない。
+  `outcome` と `status` を揃える話は本件では触っていない。
+
+#### ベースライン（#207）
+
+`tests/detect_patterns_data_patterns_regression.test.ts` は**更新していない**。
+既定オプション（`includeInvalid: false`）で回しており 10 件すべてが `status: 'completed'` なので、
+`invalidReason` が付く entry がそもそも無い。実際に再生成して全 10 件を突き合わせ、
+バイト単位で完全一致を確認した（理由は docstring に 1 行足してある。#281 と同じ前例）。
 
 ### Changed（#288 Phase 2: ターゲット進捗の表示を「事実の記述」に改める。定数は据え置き）
 

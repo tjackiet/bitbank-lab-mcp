@@ -46,6 +46,15 @@
  * `tests/detectPatternsViewsHandler.test.ts`（`status` × 理由コードの網羅）と
  * `tests/patterns/status-reason-label-286.test.ts`（実データ D の `double_top`）が持つ）。
  *
+ * **#291 でも更新していない**（継続系（triangle / pennant / flag）の `status: 'invalid'` に
+ * `invalidReason: 'breakout_against_expectation'` を足した additive な変更。**本 fixture は
+ * 既定オプション（`includeInvalid: false`）で回しており、10 件すべてが `status: 'completed'`**
+ * なので `invalidReason` が付く entry がそもそも 1 件も無い。実際に再生成して
+ * 全 10 件を突き合わせ、**バイト単位で完全一致**を確認した（件数 10 据え置き / 増えたキー 0 /
+ * 値が変わったキー 0）。#281 と同じ理由——検出器の差分が `invalid` の entry にしか触れないため。
+ * 継続系の `invalid` の回帰は `tests/patterns/continuation-invalid-reason-291.test.ts`（合成 fixture）と
+ * `tests/patterns/status-reason-label-286.test.ts`（実データ D の `triangle_ascending`）が持つ）。
+ *
  * **#234 でも更新していない**（`content` の pivot 明細行を `triple_*` / H&S 系にも出すように
  * した表示層のみの変更。`src/handlers/detectPatternsViewsHandler.ts` の役割ラベル表引きだけを
  * 触っており、検出ロジックにも `data.patterns` のどのフィールドにも手が入っていない。

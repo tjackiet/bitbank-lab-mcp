@@ -1341,6 +1341,24 @@ export function detectTroughZoneReentry(input: TroughZoneReentryInput): TroughZo
 /** 最終構成点 → ブレイクの経路検証の不合格理由コード。**種別を跨いで同じ語を使う**（issue #242）。 */
 export type BreakoutPathRejectReason = 'peak_after_last_pivot' | 'trough_after_last_pivot';
 
+/**
+ * 継続系（`triangle_ascending` / `triangle_descending` / `pennant` / `bull_flag` / `bear_flag`）が
+ * `status: 'invalid'` になる理由コード。**単一ソースはここ**（issue #291）。
+ *
+ * 継続系の `invalid` は「ブレイクはしたが**期待と逆方向**だった」の 1 条件しか無い
+ * （`detect_triangles.ts` の `determineTriangleStatus`、`detect_pennants.ts` の status 判定）。
+ * したがって値は 1 つで、検出器はそれを**リテラルで直書きせず**本定数から取る
+ * ——`tests/detectPatternsViewsHandler.test.ts` の #286 網羅テストが
+ * {@link ContinuationInvalidReason} から理由コードを導出しているため。
+ *
+ * `triangle_symmetrical` は期待方向を持たないので `invalid` にならず、`wedge_*` は
+ * 逆方向を `outcome: 'failure'` で表して `invalid` を出さない。どちらも対象外。
+ */
+export const BREAKOUT_AGAINST_EXPECTATION = 'breakout_against_expectation' as const;
+
+/** 継続系の `invalidReason` の全件（現状 1 値）。 */
+export type ContinuationInvalidReason = typeof BREAKOUT_AGAINST_EXPECTATION;
+
 export interface BreakoutPathInput {
 	/** 走査対象のピボット列（`detectSwingPoints` の戻り値。並び順は仮定しない） */
 	pivots: ReadonlyArray<Pivot>;
