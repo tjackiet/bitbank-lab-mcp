@@ -21,6 +21,7 @@
  * | #211 Phase 2 | `necklineAt` の外挿を定義点の区間へクランプした。**H&S 系 4 件が 2 件に減り、うち 1 件は別の構造に入れ替わった**（12 → 10） |
  * | #244 Phase 2 | H&S の肩の同水準判定を時間足別にした（`getHsShoulderMaxPctForTf`。`1hour` = 1.04%）。**件数は 10 のまま**だが、`inverse_head_and_shoulders` の `globalDedup` 代表が `3-9-42-147-154`（肩 `relDiff` **1.356%** で肩ゲート超過）から `3-9-42-106-109`（同 **0.325%**）へ入れ替わり、`rankPatterns` の並びが 1 つずれた |
  * | #252 | `wedge_*` に `pivots`（上下トレンドラインの非ブレイクタッチ点。`price` は高安）を出すようにした。**件数は 10 のまま**で、差分は `rising_wedge` 2 件 / `falling_wedge` 2 件に `pivots` 配列が**増えたぶんだけ**（`diff` が純粋な 4 ハンクの追加になることを確認した。他のキーは 1 バイトも動いていない）。**実データの既定オプションで出る `wedge_*` は形成中パス由来**（回帰パス由来なら `aftermath` を持つ）なので、回帰パスだけに足していたらこの fixture は 1 バイトも動かなかった |
+ * | #288 Phase 2 | ターゲット到達の**事実**（`targetFirstReachBars` / `targetFirstReachDate` / `targetScanBars` / `targetScanComplete`）と**交絡**（`targetOtherBreakoutBeforeReach` / `targetOppositeBreakoutInWindow`）を足した。**件数は 10 のまま**で、差分は 6 キーが**増えたぶんだけ**（全 10 件 × 全キーを突き合わせて、**既存キーで値が変わったもの 0 / 消えたキー 0**。`targetReachedPct` / `targetReached` / `targetReachedDate` / `targetReachedPrice` は 1 バイトも動かない）。内訳は `targetFirstReach*` が 5 件・`targetScan*` が 8 件・交絡 2 キーが 1 件ずつ |
  *
  * **#206 では更新していない**（`MIN_CONFIDENCE` から未配線の 4 エントリを消しただけで、
  * `data.patterns` は 940 ケース全件で完全一致。行を足す必要が無かった）。
@@ -265,6 +266,7 @@ import detectPatterns from '../tools/detect_patterns.js';
 import { asMockResult, assertOk } from './_assertResult.js';
 import { buildBtcJpy1hour202608Candles } from './fixtures/btc_jpy_1hour_2026_08.js';
 import baseline from './fixtures/detect_patterns_1hour_data_patterns_baseline.json' with { type: 'json' };
+import targetReachPre288 from './fixtures/detect_patterns_1hour_target_reach_pre288.json' with { type: 'json' };
 
 /** `structureDiagram` を identifier だけ残して比較対象から除く（F-2 が意図的に変える svg / title を落とす）。 */
 function stripStructureDiagram(patterns: ReadonlyArray<Record<string, unknown>>): unknown[] {
@@ -275,7 +277,7 @@ function stripStructureDiagram(patterns: ReadonlyArray<Record<string, unknown>>)
 	});
 }
 
-describe('detect_patterns: data.patterns の実データスナップショット（issue #200 起点。#202 / #199 / #208 / #210 / #204 / #199 候補 2 / #218 / #216 / #211 / #244 / #252 で更新）', () => {
+describe('detect_patterns: data.patterns の実データスナップショット（issue #200 起点。#202 / #199 / #208 / #210 / #204 / #199 候補 2 / #218 / #216 / #211 / #244 / #252 / #288 Phase 2 で更新）', () => {
 	it('btc_jpy 1hour（デフォルトオプション）で data.patterns が構造図の svg/title を除きベースラインと一致する', async () => {
 		const candles = buildBtcJpy1hour202608Candles();
 		vi.mocked(analyzeIndicators).mockResolvedValueOnce(
@@ -306,5 +308,50 @@ describe('detect_patterns: data.patterns の実データスナップショット
 			.filter((id): id is string => typeof id === 'string');
 		expect(identifiers.length).toBeGreaterThan(0);
 		expect(identifiers).toEqual(baselineIdentifiers);
+	});
+
+	/**
+	 * #288 Phase 2 の差分が **additive であること**を、ベースライン更新とは独立に固定する。
+	 *
+	 * 上のスナップショットは「いまの出力」を丸ごと凍結するので、**次に誰かがベースラインを
+	 * 更新したときに「既存キーも一緒に動いた」を見逃す。** そこで `targetReachedPct` /
+	 * `targetReached` / `targetReachedDate` / `targetReachedPrice` / `targetProgressOmittedReason` と
+	 * ブレイク足の 2 キーだけを **#288 着手前の値のまま**別 fixture に切り出して突き合わせる
+	 * （`detect_patterns_1hour_target_reach_pre288.json` は #288 Phase 2 の 1 つ手前のコミットの
+	 * ベースラインから機械的に射影したもの）。
+	 *
+	 * **この fixture は #288 Phase 2 の受け入れ条件そのもの**——「定数と `targetReachedPct` の計算は
+	 * 無変更」を主張している以上、走査窓や丸めを触れば必ずここが落ちる。
+	 * 意図的に進捗の計算を変える変更は、この fixture を更新する理由を PR に書くこと。
+	 */
+	it('#288 Phase 2: target 進捗系の既存キーが着手前と 1 バイトも変わらない', async () => {
+		const candles = buildBtcJpy1hour202608Candles();
+		vi.mocked(analyzeIndicators).mockResolvedValueOnce(
+			asMockResult({ ok: true, summary: 'ok', data: { chart: { candles } } }),
+		);
+
+		const res = await detectPatterns('btc_jpy', '1hour', 365, {});
+		assertOk(res);
+
+		const PRE_288_KEYS = [
+			'type',
+			'breakoutBarIndex',
+			'breakoutDirection',
+			'targetReachedPct',
+			'targetReached',
+			'targetReachedDate',
+			'targetReachedPrice',
+			'targetProgressOmittedReason',
+		] as const;
+		const project = (patterns: ReadonlyArray<Record<string, unknown>>) =>
+			patterns.map((p) => {
+				const out: Record<string, unknown> = {};
+				for (const k of PRE_288_KEYS) if (p[k] !== undefined) out[k] = p[k];
+				return out;
+			});
+
+		// 射影が空振り（全件 `{type}` だけ）していないことを先に見る。
+		expect(targetReachPre288.filter((p) => 'targetReachedPct' in p).length).toBeGreaterThan(0);
+		expect(project(res.data.patterns)).toEqual(targetReachPre288);
 	});
 });

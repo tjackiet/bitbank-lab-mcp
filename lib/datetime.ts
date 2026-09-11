@@ -200,6 +200,30 @@ export function isIntradayType(type: string): boolean {
 }
 
 /**
+ * UTC ISO 文字列を、時間足に応じて暦日 `YYYY-MM-DD`（日足以上）または分単位
+ * `YYYY-MM-DD HH:mm`（intraday）へ整形する（issue #200 要件 F-1 の共通実装）。
+ *
+ * **暦日に潰すと intraday では 24 本が同じラベルになり、どの足かを特定できない。**
+ * `detect_patterns` の `content` はブレイク足・構成点・ターゲット初到達といった
+ * 「どの足か」が意味を持つ行を出すので、時間足を見て粒度を切り替える必要がある。
+ *
+ * `src/handlers/detectPatternsViewsHandler.ts` の `toDateOrTime` と
+ * `tools/detect_patterns.ts` の `res.summary` が**別々に同じ判定を持っていて片方だけ
+ * 暦日に潰れていた**（#288 Phase 2 のレビュー指摘）ので、判定をここに 1 本化した。
+ *
+ * 値が空 / parse 失敗 / 不正 tz のときは `null` を返す。**フォールバックは呼び出し側が決める**
+ * （`'n/a'` を出す側と、元の ISO をそのまま出す側がある）。
+ */
+export function formatDateOrTimeInTz(iso: string | number | undefined | null, tz: string, type: string): string | null {
+	if (iso == null || iso === '') return null;
+	const ms = typeof iso === 'number' ? iso : Date.parse(iso);
+	if (!Number.isFinite(ms)) return null;
+	if (!isIntradayType(type)) return formatDateInTz(ms, tz);
+	const withTz = toIsoWithTz(ms, resolveTz(tz)); // 'YYYY-MM-DDTHH:mm:ss'
+	return withTz ? `${withTz.slice(0, 10)} ${withTz.slice(11, 16)}` : null;
+}
+
+/**
  * ISO日付文字列を "M/D(曜日)" 形式に変換
  * 例: "2026-04-09T00:00:00Z" → "4/9(木)"
  * @param isoDate ISO8601 日付文字列

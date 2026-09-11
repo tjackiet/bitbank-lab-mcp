@@ -91,7 +91,10 @@ function buildTripleCtx(): DetectContext {
 }
 
 const TARGET_PRICE_LABEL = '   - ターゲット価格: ';
-const TARGET_PROGRESS_LABEL = '   - ターゲット進捗: ';
+// 行頭ラベルは issue #288 Phase 2 で `ターゲット進捗:` → `ターゲット:` に変わった
+// （100% 超の数字を「進捗」と名乗らせないため）。**`ターゲット価格:` とは別の文字列なので
+// 件数の突き合わせはそのまま成立する。**
+const TARGET_PROGRESS_LABEL = '   - ターゲット: ';
 
 function countOccurrences(text: string, needle: string): number {
 	return text.split(needle).length - 1;
@@ -130,9 +133,22 @@ describe('breakoutTarget を出したら進捗か理由を必ず名乗る（issu
 	it.each(OPTION_SETS)('$label: res.summary（tools/detect_patterns.ts）で行数が一致する', async ({ opts }) => {
 		const res = await run(opts);
 		const text = res.summary;
-		// **行数の一致で見る**——「進捗行がどこかにある」だと、1 件でも欠けたときに通ってしまう。
+		// **行数で見る**——「進捗行がどこかにある」だと、1 件でも欠けたときに通ってしまう。
+		//
+		// **等号ではなく `進捗/理由行 === 申告した件数`。** #288 Phase 2 まで進捗行を価格行のガードの
+		// 中で組んでいたため、両者は必ず等しかった——そのせいで `breakoutTarget` を持たない
+		// `not_broken_out` / `no_target` の理由行が黙って消えていた（実データ B の
+		// `includeForming: true` に `near_completion` の `triangle_ascending` が 1 件実在する）。
+		// いまは価格行と独立に出るので、**申告したパターンの件数**と突き合わせる。
+		const declared = (res.data.patterns as unknown as Array<Record<string, unknown>>).filter(
+			(p) => p.targetReachedPct != null || p.targetProgressOmittedReason != null,
+		).length;
 		expect(countOccurrences(text, TARGET_PRICE_LABEL)).toBeGreaterThan(0);
-		expect(countOccurrences(text, TARGET_PROGRESS_LABEL)).toBe(countOccurrences(text, TARGET_PRICE_LABEL));
+		expect(declared).toBeGreaterThan(0);
+		expect(countOccurrences(text, TARGET_PROGRESS_LABEL)).toBe(declared);
+		expect(countOccurrences(text, TARGET_PROGRESS_LABEL)).toBeGreaterThanOrEqual(
+			countOccurrences(text, TARGET_PRICE_LABEL),
+		);
 	});
 
 	it.each(OPTION_SETS)('$label: views handler の 3 view でも行数が一致する', async ({ opts }) => {
@@ -163,16 +179,33 @@ describe('breakoutTarget を出したら進捗か理由を必ず名乗る（issu
 		for (const [label, text] of views) {
 			const prices = countOccurrences(text, TARGET_PRICE_LABEL);
 			expect(prices, `${label} にターゲット価格行が無い`).toBeGreaterThan(0);
-			expect(countOccurrences(text, TARGET_PROGRESS_LABEL), `${label} で進捗/理由行が欠けている`).toBe(prices);
+			// **理由行は価格行より多くなりうる**（#288 Phase 2 で価格行のガードから切り離した）。
+			// 件数の厳密な一致は下の 1 件ずつの検算が持つ——こちらは view が明細を間引くので
+			// `data.patterns` の件数とは合わない。
+			expect(
+				countOccurrences(text, TARGET_PROGRESS_LABEL),
+				`${label} で進捗/理由行が欠けている`,
+			).toBeGreaterThanOrEqual(prices);
 		}
 		// `formatPatternLine` を直接叩く経路（`view` を跨いだ 1 件ずつの検算）。
+		// **`breakoutTarget` の有無で絞らない**——絞ると、価格が無いまま理由だけを名乗るべき
+		// パターン（`not_broken_out` / `no_target`）が検算から丸ごと外れる。
+		let checked = 0;
 		for (const view of ['summary', 'detailed', 'full'] as const) {
 			for (const p of pats) {
-				if (p.breakoutTarget == null) continue;
+				const declares = p.targetReachedPct != null || p.targetProgressOmittedReason != null;
+				if (!declares) continue;
 				const line = formatPatternLine(p, 0, view, meta, 'Asia/Tokyo', '1hour');
 				expect(line, `${view} / ${p.type}`).toContain(TARGET_PROGRESS_LABEL);
+				// **価格行の有無は `breakoutTarget` と 1 対 1。** 「あるときに出る」だけでなく
+				// 「無いときに出ない」も同時に固定する（分岐で書くと後者が抜ける）。
+				expect(line.includes(TARGET_PRICE_LABEL), `${view} / ${p.type}: 価格行の有無が breakoutTarget と食い違う`).toBe(
+					p.breakoutTarget != null,
+				);
+				checked++;
 			}
 		}
+		expect(checked, '検算対象が 1 件も無い（空振り）').toBeGreaterThan(0);
 	});
 
 	/**
@@ -224,8 +257,8 @@ describe('breakoutTarget を出したら進捗か理由を必ず名乗る（issu
 			'Asia/Tokyo',
 			'1hour',
 		);
-		expect(line).toContain('ターゲット進捗: ');
-		expect(line).not.toContain('この検出器がターゲット進捗を算出していないため');
+		expect(line).toContain(TARGET_PROGRESS_LABEL);
+		expect(line).not.toContain('この検出器がターゲットへの到達を算出していないため');
 		expect(line).not.toContain('not_computed_by_detector');
 	});
 
@@ -243,6 +276,48 @@ describe('breakoutTarget を出したら進捗か理由を必ず名乗る（issu
 		).toEqual(completed.map(() => ({ omittedReason: undefined, pct: 'number' })));
 	});
 
+	/**
+	 * **`no_target` はターゲット価格が出せなかったことの申告**なので、この理由を名乗るべき
+	 * 唯一のケースでは `breakoutTarget` が必ず無い。価格行のガードの中に進捗行を入れていると、
+	 * その 1 経路だけが content から消える（#224 症状 2 と同じ形が呼び出し側に残っていた。
+	 * #288 Phase 2 のレビュー指摘）。
+	 *
+	 * 標準コーパスでは `no_target` の発生が 0 件なので、**合成の entry で経路を直接叩く。**
+	 * 実データ待ちにすると、この経路は永久に踏まれない。
+	 */
+	it.each([
+		'summary',
+		'detailed',
+		'full',
+	] as const)('view=%s: breakoutTarget が無くても理由行を出す（no_target を黙らせない）', (view) => {
+		const entry = {
+			type: 'head_and_shoulders',
+			confidence: 0.8,
+			range: { start: '2026-01-01T00:00:00.000Z', end: '2026-01-20T00:00:00.000Z' },
+			status: 'completed',
+			targetProgressOmittedReason: 'no_target',
+		} as unknown as PatternEntry;
+		const line = formatPatternLine(entry, 0, view, {} as Parameters<typeof formatFullView>[4], 'Asia/Tokyo', '1hour');
+		expect(line).not.toContain(TARGET_PRICE_LABEL);
+		expect(line).toContain(`${TARGET_PROGRESS_LABEL}出力なし（`);
+		expect(line).toContain('ターゲット価格またはパターン高さが算出できないため');
+	});
+
+	it('res.summary（tools/detect_patterns.ts）でも breakoutTarget 無しの理由行を出す', async () => {
+		// `detect_patterns` の summary 生成は views handler と**別実装**なので、両方を押さえる
+		// （#224 症状 2 が 2 箇所を別々に直す必要があったのと同じ理由）。
+		// 実データ B の `includeForming: true` には、`breakoutTarget` を持たないまま
+		// `not_broken_out` を名乗る `near_completion` が実在する（旧実装ではこの行が消えていた）。
+		const res = await run({ includeForming: true });
+		const priceless = (res.data.patterns as unknown as Array<Record<string, unknown>>).filter(
+			(p) => p.breakoutTarget == null && p.targetProgressOmittedReason != null,
+		);
+		expect(priceless.length, '価格が無いまま理由を名乗るパターンがコーパスに無い（空振り）').toBeGreaterThan(0);
+		expect(countOccurrences(res.summary, TARGET_PROGRESS_LABEL)).toBe(
+			countOccurrences(res.summary, TARGET_PRICE_LABEL) + priceless.length,
+		);
+	});
+
 	it('未ブレイクのパターンは not_broken_out を名乗る（最多の経路）', async () => {
 		const res = await run({ includeForming: true });
 		const omitted = (res.data.patterns as unknown as Array<Record<string, unknown>>).filter(
@@ -254,6 +329,6 @@ describe('breakoutTarget を出したら進捗か理由を必ず名乗る（issu
 			expect(p.breakoutBarIndex).toBeUndefined();
 			expect(p.targetReachedPct).toBeUndefined();
 		}
-		expect(res.summary).toContain('ターゲット進捗: 出力なし（未ブレイクのため未算出）');
+		expect(res.summary).toContain('ターゲット: 出力なし（未ブレイクのため未算出）');
 	});
 });

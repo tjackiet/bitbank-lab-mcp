@@ -7,10 +7,9 @@
  * - 構造化データ（PatternEntry.range / structureRange / precedingTrend / confirmation.date 等）は
  *   後方互換のため UTC ISO 文字列のまま不変。
  */
-import { formatDateInTz, resolveTz, toIsoWithTz } from '../../lib/datetime.js';
+import { formatDateOrTimeInTz } from '../../lib/datetime.js';
 import { formatFixed, formatInt, formatPctFromRatio, formatRounded } from '../../lib/formatter.js';
 import { toStructured } from '../../lib/result.js';
-import { isIntradayType } from '../../tools/patterns/period.js';
 import { levelSpreadMetrics } from '../../tools/patterns/structural.js';
 import type { Pivot } from '../../tools/patterns/swing.js';
 import { formatTargetProgressLine } from '../../tools/patterns/target-reach.js';
@@ -902,12 +901,9 @@ function buildIdxToIso(meta: PatternMeta): Record<number, string> {
  * 値が空 / parse 失敗時は 'n/a' を返す。
  */
 function toDateOrTime(iso: string | undefined, tz: string, type: string): string {
-	if (!iso) return 'n/a';
-	const ms = Date.parse(iso);
-	if (!Number.isFinite(ms)) return 'n/a';
-	if (!isIntradayType(type)) return formatDateInTz(ms, tz) ?? 'n/a';
-	const withTz = toIsoWithTz(ms, resolveTz(tz)); // 'YYYY-MM-DDTHH:mm:ss'
-	return withTz ? `${withTz.slice(0, 10)} ${withTz.slice(11, 16)}` : 'n/a';
+	// 判定そのものは `lib/datetime.ts` が単一ソース（#288 Phase 2 のレビュー指摘で 1 本化した）。
+	// ここはこのファイルの表示規約である `'n/a'` フォールバックを足すだけ。
+	return formatDateOrTimeInTz(iso, tz, type) ?? 'n/a';
 }
 
 /**
@@ -1455,7 +1451,16 @@ export function formatPatternLine(
 	}
 
 	// target price
+	//
+	// **ターゲット行は `breakoutTarget` の有無で握り潰さない。** `targetProgressOmittedReason:
+	// 'no_target'` は「ターゲット価格そのものが出せなかった」ことの申告なので、
+	// **理由を出すべき唯一のケースで `breakoutTarget` が必ず無い。** 価格行のガードの中に
+	// 進捗行を入れていると、その 1 経路だけが content から消える（#224 症状 2 と同じ形が
+	// 呼び出し側に残っていた。#288 Phase 2 のレビュー指摘）。
 	let targetLine: string | null = null;
+	// 日時は同ファイルの他の行（ブレイク確認・pivot 明細）と同じ整形に合わせる
+	// （intraday は分まで、日足以上は暦日）。
+	const progressLine = formatTargetProgressLine(p, { formatDate: (iso) => toDateOrTime(iso, tz, type) });
 	if (p?.breakoutTarget != null) {
 		const methodJa: Record<string, string> = {
 			flagpole_projection: 'フラッグポール値幅投影',
@@ -1463,8 +1468,9 @@ export function formatPatternLine(
 			neckline_projection: 'ネックライン投影',
 		};
 		targetLine = `   - ターゲット価格: ${Math.round(Number(p.breakoutTarget)).toLocaleString('ja-JP')}円（${(p.targetMethod && methodJa[p.targetMethod]) || p.targetMethod}）`;
-		const progressLine = formatTargetProgressLine(p);
 		if (progressLine) targetLine += `\n${progressLine}`;
+	} else if (progressLine) {
+		targetLine = progressLine;
 	}
 
 	// relaxed フォールバック由来の provenance（#191 B。値は `data.patterns[]._fallback` と同一）。
@@ -1510,7 +1516,7 @@ export function formatSummaryView(
 ): McpResponse {
 	const now = Date.now();
 	const within = (ms: number) =>
-		pats.filter((p) => Number.isFinite(toTs(p?.range?.end)) && now - toTs(p.range!.end) <= ms).length;
+		pats.filter((p) => Number.isFinite(toTs(p?.range?.end)) && now - toTs(p.range?.end) <= ms).length;
 	const in30 = within(30 * 86400000);
 	const in90 = within(90 * 86400000);
 	const formingHint = includeForming ? '' : '\n※形成中は includeForming=true を指定してください。';

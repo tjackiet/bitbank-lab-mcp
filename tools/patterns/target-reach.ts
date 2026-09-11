@@ -11,6 +11,9 @@
 // **型のみ**の import（出力から消えるので実行時の循環は生じない）。理由コードの単一ソースは
 // Zod 側に置いてある——詳細は `TargetReachOmissionReason` の docstring。
 import type { TargetProgressOmittedReason } from '../../src/schema/patterns.js';
+// 交絡フィールドの**型だけ**を借りる（単一ソースは `target-confounders.ts`）。
+// `import type` なので出力から消え、スキーマ側の依存にも実行時の循環にもならない。
+import type { TargetBreakoutConfounder } from './target-confounders.js';
 import type { CandleData } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -63,6 +66,23 @@ import type { CandleData } from './types.js';
  * **60 本以内が 96.3%**。60 本にすると `targetReached` は構造単位 75 → 72 件（−3）しか動かない。
  * 90 本にすれば構造単位の増減は 0 になるが、90 本ぶんの先が揃う行が 29.4% しかなく
  * （60 本なら 39.5%）「値が固まるまでの待ち」が長くなるので採らない。
+ *
+ * ## **96.3% は到達率ではない**（issue #288 Phase 1。読み違えを固定するために書く）
+ *
+ * 上の 96.3% は**到達済みケースの条件付き分布**——「届いたものは何本目で届いたか」であって、
+ * 「届くか」ではない。**届かなかったブレイクは分母に入っていない。**
+ * 実データで到達率そのものを測ると、**どの N（5〜60）でもパターン起点の到達率は帰無
+ * （同じ距離のターゲットを任意のバーに置いたとき）を上回らない**（主表 n = 38 / 帰無 m = 11,590 で
+ * 差は N = 5 / 10 / 20 / 30 / 60 とも −5.2 / −8.5 / −0.8 / −4.9 / −8.3 pt の**全部負**）。
+ * 走査窓に他パターンのブレイクが入る実体が **94.7%** で、60 本超の到達も実在する（max 101 本）。
+ *
+ * **したがって本定数は「取りこぼし防止の走査幅」であって「成績の窓」ではない。**
+ * `targetReachedPct` / `targetReached` を「このパターンだから届いた」の証拠として読ませないこと。
+ * N を短縮する根拠となる値もコーパスに無いため **60 のまま据え置く**（#288 Phase 2 の決定）。
+ *
+ * **1day では評価できていない。** 実データ A（1day 90 本）はブレイク足の後に 60 本残る実体が
+ * **0 件**なので母集団に 1 つも入らない（#228 / #227 と同じ但し書きで、「1day でも問題ない」ではない）。
+ * 詳細は `docs/internal/target-reach-window-288.md`。
  *
  * **時間足別のテーブルにしない。** バー数のまま持つ（`HS_BREAKOUT_MAX_BARS` と同じ扱い）。
  * 時間足別テーブルの流用は #198 で事故になっている。
@@ -136,13 +156,36 @@ export const MIN_TARGET_DISTANCE_HEIGHT_RATIO = 0.15;
  */
 export const TARGET_REACHED_PCT_CAP = 999;
 
-/** 進捗を測れたケース。 */
+/**
+ * 進捗を測れたケース。
+ *
+ * ## 「到達の事実」4 フィールドは `targetReachedPct` とは別の量（issue #288 Phase 2）
+ *
+ * `targetReachedPct` / `targetReachedDate` / `targetReachedPrice` は**走査窓の extremum**を
+ * 見ているので、到達した後にさらに伸びた値動きまで含む（実機で「進捗 273%」と出ていたのは
+ * 到達後の超過倍率）。**いつ・何本目に初めて届いたか**はそこから読めないので、別に持つ。
+ *
+ * | フィールド | 中身 |
+ * |---|---|
+ * | `targetFirstReachBars` | ブレイク足を 0 本目とした初到達の本数。未到達なら出さない |
+ * | `targetFirstReachDate` | 初到達の足の `isoTime`。未到達なら出さない |
+ * | `targetScanBars` | 実際に走査した本数（ブレイク足を除く後続の本数） |
+ * | `targetScanComplete` | `targetScanBars === TARGET_REACH_MAX_BARS` |
+ *
+ * **すべて optional にしてあるのは既存の呼び出し・テストを壊さないため**（additive）。
+ * `computeTargetReach` は `measured` を返すとき `targetScanBars` / `targetScanComplete` を
+ * 常に埋める（初到達 2 つは到達したときだけ）。
+ */
 export interface TargetReachInfo {
 	kind: 'measured';
 	targetReachedPct: number;
 	targetReached: boolean;
 	targetReachedDate?: string;
 	targetReachedPrice: number;
+	targetFirstReachBars?: number;
+	targetFirstReachDate?: string;
+	targetScanBars?: number;
+	targetScanComplete?: boolean;
 }
 
 /**
@@ -261,6 +304,13 @@ export function computeTargetReach(
 	const lastIdx = Math.min(startIdx + TARGET_REACH_MAX_BARS, candles.length - 1);
 	let extremePrice = direction === 'down' ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY;
 	let extremeIdx = -1;
+	// **初到達の足は極値の足とは別に記録する**（issue #288 Phase 2）。
+	// `targetReachedDate` / `targetReachedPrice` は走査窓の extremum が付いた足なので、
+	// 「いつ届いたか」ではなく「どこまで走ったか」を指す。表示に要るのは初到達の方で、
+	// 両者は実データでも普通に別の足になる（届いた後もさらに伸びれば extremum は後ろへ動く）。
+	// **極値の走査には一切触らない**——`targetReachedPct` / `targetReached` /
+	// `targetReachedDate` / `targetReachedPrice` を 1 バイトも動かさないため。
+	let firstReachIdx = -1;
 	for (let i = startIdx; i <= lastIdx; i++) {
 		const candle = candles[i];
 		if (!candle) continue;
@@ -271,6 +321,7 @@ export function computeTargetReach(
 				extremePrice = lo;
 				extremeIdx = i;
 			}
+			if (firstReachIdx < 0 && lo <= target) firstReachIdx = i;
 		} else {
 			const hi = Number(candle.high ?? NaN);
 			if (!Number.isFinite(hi)) continue;
@@ -278,6 +329,7 @@ export function computeTargetReach(
 				extremePrice = hi;
 				extremeIdx = i;
 			}
+			if (firstReachIdx < 0 && hi >= target) firstReachIdx = i;
 		}
 	}
 	if (extremeIdx < 0 || !Number.isFinite(extremePrice)) return omittedTargetReach('no_bars_after_breakout');
@@ -298,12 +350,20 @@ export function computeTargetReach(
 		? Math.min(TARGET_REACHED_PCT_CAP, Math.max(100, Math.round(rawPct)))
 		: Math.min(99, Math.max(0, Math.floor(rawPct)));
 	const targetReachedDate = candles[extremeIdx]?.isoTime;
+	// **走査した本数は「ブレイク足を 0 本目とした後続の本数」**（`TARGET_REACH_MAX_BARS` と同じ
+	// 数え方）。ブレイク足自身は含めないので、上限まで走れたときちょうど 60 になる。
+	const targetScanBars = lastIdx - startIdx;
+	const targetFirstReachDate = firstReachIdx >= 0 ? candles[firstReachIdx]?.isoTime : undefined;
 	return {
 		kind: 'measured',
 		targetReachedPct,
 		targetReached,
 		...(targetReachedDate ? { targetReachedDate } : {}),
 		targetReachedPrice: extremePrice,
+		...(firstReachIdx >= 0 ? { targetFirstReachBars: firstReachIdx - startIdx } : {}),
+		...(targetFirstReachDate ? { targetFirstReachDate } : {}),
+		targetScanBars,
+		targetScanComplete: targetScanBars === TARGET_REACH_MAX_BARS,
 	};
 }
 
@@ -324,6 +384,10 @@ export function targetReachFields(reach: TargetReachResult): {
 	targetReached?: boolean;
 	targetReachedDate?: string;
 	targetReachedPrice?: number;
+	targetFirstReachBars?: number;
+	targetFirstReachDate?: string;
+	targetScanBars?: number;
+	targetScanComplete?: boolean;
 	targetProgressOmittedReason?: TargetReachOmissionReason;
 } {
 	if (reach.kind === 'omitted') return { targetProgressOmittedReason: reach.reason };
@@ -332,6 +396,12 @@ export function targetReachFields(reach: TargetReachResult): {
 		targetReached: reach.targetReached,
 		...(reach.targetReachedDate ? { targetReachedDate: reach.targetReachedDate } : {}),
 		targetReachedPrice: reach.targetReachedPrice,
+		// 到達の事実 4 フィールド（#288 Phase 2）。**`undefined` はキーごと落とす**——
+		// 既存 4 フィールドと同じ扱いにしないと、素の JSON 比較で `undefined` の有無が差分になる。
+		...(reach.targetFirstReachBars != null ? { targetFirstReachBars: reach.targetFirstReachBars } : {}),
+		...(reach.targetFirstReachDate ? { targetFirstReachDate: reach.targetFirstReachDate } : {}),
+		...(reach.targetScanBars != null ? { targetScanBars: reach.targetScanBars } : {}),
+		...(reach.targetScanComplete != null ? { targetScanComplete: reach.targetScanComplete } : {}),
 	};
 }
 
@@ -351,40 +421,131 @@ const TARGET_PROGRESS_OMISSION_NOTE: Record<TargetReachOmissionReason, string> =
 	degenerate_target_distance: `ブレイク足が想定値幅の${Math.round((1 - MIN_TARGET_DISTANCE_HEIGHT_RATIO) * 100)}%以上を消化済みで、残り距離が短く進捗率が意味を持たないため`,
 	// **他の 5 つと言い回しを分ける。** 他は「この構造では測れない」だが、これは
 	// 「測っていない」——構造の性質ではなく検出器の未配線なので、算出していない側の言い方にする。
-	not_computed_by_detector: 'この検出器がターゲット進捗を算出していないため。実装の未配線であり、構造の性質ではない',
+	// 行頭ラベルを `ターゲット:` に揃えた（#288 Phase 2）のに合わせて「ターゲット進捗」→「ターゲットへの到達」。
+	// **言っていることは同じ**——算出していない側の言い方も変えていない。
+	not_computed_by_detector:
+		'この検出器がターゲットへの到達を算出していないため。実装の未配線であり、構造の性質ではない',
 };
 
 /**
- * content テキストの「ターゲット進捗」行を組む（`tools/detect_patterns.ts` と
+ * content テキストの「ターゲット」行を組む（`tools/detect_patterns.ts` と
  * `src/handlers/detectPatternsViewsHandler.ts` の共通実装）。
  *
- * `content[0].text` が LLM への唯一のチャネルなので、**走査窓が有限であること**と
- * **上限に当たったこと / 出さなかったこと**をこの 1 行で言い切る。
- * 行そのものを返す（先頭の `\n` は呼び出し側が付ける）。
+ * ## 事実の記述にする（issue #288 Phase 2。**判定口調をやめた**）
  *
+ * 旧実装は `ターゲット進捗: 273%（ブレイク後60本以内に到達）` のように出していた。
+ * これは 2 つの意味で読み違えを誘う:
+ *
+ * 1. **`targetReachedPct` の 100 超は「進捗」ではない。** 分子は走査窓の extremum なので、
+ *    100 を超えた数字は**到達した後にどこまで伸びたか**の倍率。実機で「進捗 273%」が
+ *    出ており、到達後の超過倍率を進捗として読ませていた（issue #288 の症状）。
+ * 2. **「N 本以内に到達 / 未到達」は成績に聞こえる。** Phase 1 の実測では、どの N でも
+ *    パターン起点の到達率は帰無を上回っていない（`TARGET_REACH_MAX_BARS` の docstring）。
+ *
+ * そこで **100% 超の数字を content に出さず**、3 形の事実だけを書く:
+ *
+ * | 状態 | 行 |
+ * |---|---|
+ * | 到達 | `ターゲット: 到達（ブレイク後 14 本目、2026-09-08 06:00）` |
+ * | 未到達・走査完了 | `ターゲット: 未到達（走査 60 本完了、目標幅の 22% まで接近）` |
+ * | 未到達・走査中 | `ターゲット: 未到達（ブレイク後 13 本経過 / 走査上限 60 本、目標幅の 22% まで接近）` |
+ *
+ * 「目標幅の x%」の x は `targetReachedPct`（未到達側は 99 でキャップ済みなので 100 を超えない）。
+ * **価格は出さない**——呼び出し側が直前に `ターゲット価格: …円（投影方式）` を出しており、
+ * 2 か所に書くと数字が二重になる（どちらか 1 か所に出ていれば足りる）。
+ *
+ * ## 交絡は限定して申告する
+ *
+ * 素朴に「走査窓に他パターンのブレイクがあった」と書くと **94.7% の実体に付く**（Phase 1 §5）ので、
+ * 申告しているのと変わらない。付ける条件を 2 つに絞ってある（集合の定義は
+ * `tools/patterns/target-confounders.ts` が単一ソース）:
+ *
+ * - 到達した側 — `(ブレイク, 初到達)` の**開区間**に他パターンのブレイクがあるとき。方向は問わない。
+ * - 未到達の側 — 走査窓 `(ブレイク, ブレイク + targetScanBars]` に**逆方向**のブレイクがあるとき。
+ *
+ * ## 引数
+ *
+ * 行そのものを返す（先頭の `\n` は呼び出し側が付ける）。
  * **`targetProgressOmittedReason` があれば必ず 1 行返す**（#224 症状 2）。`null` を返すのは
  * 「進捗も理由も無い」＝ そもそも `computeTargetReach` の対象外だったときだけ。
- * 引数の型が `string` なのは `PatternEntry` を経由せず素の JSON を渡す消費者
- * （`detect_patterns.ts` の `SummaryPattern`）があるため。未知のコードが来ても
- * **黙らせない**——コードそのものを出す。
+ * 引数の型が緩いのは `PatternEntry` を経由せず素の JSON を渡す消費者
+ * （`detect_patterns.ts` の `SummaryPattern`）があるため——**新フィールドが 1 つも無い
+ * 素の JSON でも通る**ように、到達の本数・日時・走査本数はすべて optional として扱う。
+ * 未知のコードが来ても**黙らせない**——コードそのものを出す。
+ *
+ * 日時の整形は呼び出し側の tz 整形に合わせる（`opts.formatDate`）。渡されなければ
+ * UTC ISO をそのまま出す。
  */
-export function formatTargetProgressLine(p: {
-	targetReachedPct?: number;
-	targetReached?: boolean;
-	targetProgressOmittedReason?: string;
-}): string | null {
+export function formatTargetProgressLine(
+	p: {
+		targetReachedPct?: number;
+		targetReached?: boolean;
+		targetProgressOmittedReason?: string;
+		targetFirstReachBars?: number;
+		targetFirstReachDate?: string;
+		targetScanBars?: number;
+		targetScanComplete?: boolean;
+		targetOtherBreakoutBeforeReach?: readonly TargetBreakoutConfounder[];
+		targetOppositeBreakoutInWindow?: readonly TargetBreakoutConfounder[];
+	},
+	opts: { formatDate?: (iso: string) => string } = {},
+): string | null {
 	if (p.targetProgressOmittedReason) {
 		const note =
 			TARGET_PROGRESS_OMISSION_NOTE[p.targetProgressOmittedReason as TargetReachOmissionReason] ??
 			p.targetProgressOmittedReason;
-		return `   - ターゲット進捗: 出力なし（${note}）`;
+		return `${TARGET_LINE_PREFIX}出力なし（${note}）`;
 	}
 	if (p.targetReachedPct == null) return null;
 	const pct = Number(p.targetReachedPct);
-	const reached = pct >= 100;
-	const value = reached && pct >= TARGET_REACHED_PCT_CAP ? `${TARGET_REACHED_PCT_CAP}%以上` : `${pct}%`;
-	const verdict = reached
-		? `ブレイク後${TARGET_REACH_MAX_BARS}本以内に到達`
-		: `ブレイク後${TARGET_REACH_MAX_BARS}本以内は未到達`;
-	return `   - ターゲット進捗: ${value}（${verdict}）`;
+	// **`targetReached` があればそれを信じる。** 無い（素の JSON の古い消費者）ときだけ
+	// `pct >= 100` に落とす——旧実装と同じ判定なので、行の分岐は 1 バイトもずれない。
+	const reached = p.targetReached ?? pct >= 100;
+
+	if (reached) {
+		const bars = p.targetFirstReachBars;
+		const date = p.targetFirstReachDate ? formatIso(p.targetFirstReachDate, opts.formatDate) : null;
+		// 初到達の本数が無い（新フィールドを持たない素の JSON）ときは本数を騙らず、
+		// **走査窓の幅までしか言わない。**
+		const detail =
+			bars == null ? `ブレイク後${TARGET_REACH_MAX_BARS}本以内` : `ブレイク後 ${bars} 本目${date ? `、${date}` : ''}`;
+		const note = confounderNote(p.targetOtherBreakoutBeforeReach, '到達前に別パターンのブレイクあり');
+		return `${TARGET_LINE_PREFIX}到達（${detail}）${note}`;
+	}
+
+	const approach = `目標幅の ${pct}% まで接近`;
+	const scanBars = p.targetScanBars;
+	const complete = p.targetScanComplete ?? (scanBars != null && scanBars >= TARGET_REACH_MAX_BARS);
+	const detail = complete
+		? `走査 ${TARGET_REACH_MAX_BARS} 本完了、${approach}`
+		: scanBars == null
+			? `走査上限 ${TARGET_REACH_MAX_BARS} 本、${approach}`
+			: `ブレイク後 ${scanBars} 本経過 / 走査上限 ${TARGET_REACH_MAX_BARS} 本、${approach}`;
+	const note = confounderNote(p.targetOppositeBreakoutInWindow, '走査窓内に逆方向のブレイクあり');
+	return `${TARGET_LINE_PREFIX}未到達（${detail}）${note}`;
+}
+
+/** 行頭ラベル。3 形 + 出力なしで**同じ前置き**にする（規約 3 の上位集合テストが語で照合する）。 */
+const TARGET_LINE_PREFIX = '   - ターゲット: ';
+
+function formatIso(iso: string, formatDate?: (iso: string) => string): string {
+	if (!formatDate) return iso;
+	try {
+		const out = formatDate(iso);
+		return out && out !== 'n/a' ? out : iso;
+	} catch {
+		return iso;
+	}
+}
+
+/**
+ * 交絡の申告を行末に足す。空なら**何も足さない**（Phase 1 §5 の 94.7% を素朴に出さないため、
+ * 呼び出し側が集合を絞ったうえで空配列 / 未設定にしてくる）。
+ */
+function confounderNote(list: readonly TargetBreakoutConfounder[] | undefined, label: string): string {
+	if (!Array.isArray(list) || list.length === 0) return '';
+	const body = list
+		.map((c) => `${c.type} ${c.direction === 'down' ? '下方' : '上方'} +${c.barsAfterBreakout} 本`)
+		.join(', ');
+	return `。${label}（${body}）`;
 }
