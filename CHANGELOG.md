@@ -83,6 +83,86 @@
 | 68 | #281 | **`wedge_*` の `pivots` から**ブレイク足以降**を線を問わず落とした（出力のみ）。** `evaluateTouchesEx` は `isBreak` を**線ごとに独立に**立てるので、下側ラインを割った足でも高値が上側ラインの 0.5% 以内なら `upperTouches` 側は非ブレイクのまま残り、`kind: 'H'` の構成点として出ていた（PR #280 §5-1 で実体 8 / 59、うち 7 件が `rising_wedge`）。`buildTouchPivots` に `breakIdx` を渡して `idx >= breakIdx` を落とす。**`helpers.ts` は無変更で、`evaluateTouchesEx` の判定・タッチ数・`score`・`alternation`・採否は 1 つも動かない** | **判定は変わらない**（実データ 1hour の回帰 fixture 10 件を全フィールド突き合わせて**バイト単位で完全一致**——本 fixture の `wedge_*` 4 件はブレイク足より 3 〜 13 本手前で `pivots` が止まっており、打ち切りが 1 点も当たらない。**ベースライン更新は不要だった**。計測（`--no-rolling`）では「ブレイク足を含む」が実体 5 → **0** / 延べ 160 → **0**） |
 | 69 | #28 | **（`detect_patterns` 系ではない。読む順の連番だけ引き継ぐ）** `preview_cancel_order` の status ガードを `startsWith('CANCELED')` から**終端 4 状態の拒否リスト**（`TERMINAL_ORDER_STATUSES`）に広げた。`FULLY_FILLED` / `REJECTED` にも確認トークンが出ていた（＝押せるのに必ず失敗するボタン）のを、トークン生成より前で止める | **対象外**（`detect_patterns` は 1 行も触っていない） |
 | 70 | #27 | **（`detect_patterns` 系ではない。読む順の連番だけ引き継ぐ）** `clientSupportsElicitation` の判定を「`elicitation` があるか」から**「form モードを扱えるか」**に変えた。SEP-2322 の宣言形で `{ url: {} }` だけを宣言したホストが「form 対応あり」と判定され、サーバーが処理できない form 形式の elicitation を送っていた（CodeRabbit が #26 で指摘） | **対象外**（`detect_patterns` は 1 行も触っていない） |
+| 71 | #29 | **（`detect_patterns` 系ではない。読む順の連番だけ引き継ぐ）** 確認 UI（iframe）の pull 型 hydration を `src/mcp-apps-hydration.ts` に切り出し、**上限付きリトライ（計 3 回）と abort** を入れた。`get_ui_snapshot` を 2.5 秒後に 1 回だけ呼び、失敗すると「復元中」の案内のまま固まっていた（CodeRabbit が #26 で指摘）。サーバー側（`tools/` / `src/private/`）は無変更 | **対象外**（`detect_patterns` は 1 行も触っていない） |
+
+### Fixed（#29: 確認 UI のスナップショット復元が 1 回限りで、失敗すると「復元中」表示のまま固まる）
+
+**復元の制御を `src/mcp-apps-hydration.ts`（React 非依存の純粋モジュール）へ切り出し、上限付きリトライ（計 3 回）と abort を入れた。サーバー側（`tools/` / `src/private/`）は無変更で、依存追加も無い（`git diff --stat` にロックファイルが出ない）。**
+
+確認カードの iframe は、ツール結果通知（`ui/notifications/tool-result`）を配信しないホスト向けに、接続成立から 2.5 秒（`RESULT_WAIT_HINT_MS`）待って `get_ui_snapshot` を呼び、直近の preview 応答から自力で復元する（ADR-0007 判断事項 A）。この呼び出しが **1 回限り**で、サーバー側がその時点までに応答を保存できていない・往復が間に合わないと、UI は「復元を試みています」の案内を出したまま**終端に達しない**。2.5 秒はホストの push 遅延を見込んだ値で preview 自体の往復の遅さはカバーしていないため、通常利用でも到達しうる。公開済み 0.3.1 に含まれるコードで、CodeRabbit が #26 で指摘した。
+
+| 指摘 | 修正 |
+|---|---|
+| 1. リトライが無い | 初回 2.5 秒待ち + `[2_000, 4_000]` ms の 2 回で**計 3 回**試す。上限に達したら `onPhase('failed')` を**ちょうど 1 回**呼び、UI は「スナップショットから復元できませんでした。内容はチャット本文で確認できます。」に切り替える（**固まらせないのが要点なので、終端の表示を必ず持たせる**） |
+| 2. アンマウント後も promise チェーンが走る | 返り値の停止関数が `aborted` を立て、**タイマー発火・`fetchSnapshot` の resolve / reject・次のリトライ予約のすべての入口**で参照する。abort 後は `apply` も `onPhase` も一切呼ばない（従来の cleanup はタイマーしか解放しておらず、実行中の `.then()` が後から state を触りえた）。あわせて **`connect()` が pending のままアンマウントされた場合**に `.then()` が cleanup の後に走って hydration を**開始**してしまう経路も塞いだ（`disposed` フラグ。従来はそこで仕掛けたタイマーを誰も解放できなかった） |
+| 3. 同じロジックが 2 ファイルに複製 | 接続〜復元の `useEffect` から**待ち時間・リトライ・abort の制御を丸ごと**共有モジュールへ移し、各 UI には「何を呼ぶか」と「どの結果を取り込むか」のフィルタだけを残した |
+
+#### 切り出し先を `src/` にした理由（`ui/shared/` ではない）
+
+UI は既に `src/mcp-apps-meta.js` を `../../../src/` 経由で import しており、同じ作法に揃える。`tsconfig.json` の `include` は `ui/**` を含まないため、`ui/shared/` に置くと **typecheck・lint・banned-patterns の対象から外れる**。iframe（ブラウザ）で動くので、`src/mcp-apps-meta.ts` と同じく **Node 固有の import（`node:*` / `process`）と重い依存を持たせない**。
+
+#### 段階（`onPhase`）と UI の表示
+
+| phase | いつ | 表示（`waiting` / `restoring` は現行のまま） |
+|---|---|---|
+| `waiting` | 開始直後（初回待ち。まだ `fetchSnapshot` を呼んでいない） | 「preview_order の結果を待機中…」／「preview_cancel_order(s) の結果を待機中…」 |
+| `restoring` | 各試行の直前（リトライのたびに再通知） | 「ホストからツール結果（…）が届かないため、スナップショットからの復元を試みています。…」 |
+| `failed` | 上限到達（以後の試行は無い） | **新設。**「スナップショットから復元できませんでした。内容はチャット本文で確認できます。」 |
+
+`waiting` は開始時に同期で 1 回出る。現行の初期表示と同じ文言に対応させてあるので、**表示のタイミングは変わらない**（切り替わるのは 1 回目の試行に入った瞬間＝従来 `setResultWaitHint(true)` と同じ点）。
+
+#### リトライ経路に乗るもの / 乗らないもの
+
+| 事象 | 扱い |
+|---|---|
+| `fetchSnapshot` の reject | 次の間隔で再試行。間隔が尽きたら `failed` |
+| `fetchSnapshot` が**同期的に**投げた | 同上（`Promise.resolve()` の外で投げても落ちない） |
+| resolve したが `apply` が例外を投げた | 同上。**握りつぶさず次の試行へ**回す |
+| 途中で `isHydrated()` が true（push 配信が先に届いた） | **黙って終了。`failed` は出さない。** 各試行の前・resolve 直後・再試行の予約前の 3 点で見る |
+| 停止関数が呼ばれた後のあらゆるコールバック | 何もしない（`apply` / `onPhase` とも呼ばない） |
+
+待ち時間の合計は 2.5 + 2 + 4 = 8.5 秒 + 各試行の `SNAPSHOT_TIMEOUT_MS`（10 秒）で最悪 38.5 秒。UI の接続タイムアウト（`CONNECT_TIMEOUT_MS` = 7 秒）は hydration 開始より前に決着し、サーバーのツール実行 timeout（60 秒）は 1 リクエスト単位なので、**どちらとも矛盾しない**（この 1 行は関数の docstring にも置いた）。回数 3 回・間隔 2 / 4 秒は **UX 上の定数で検出閾値ではない**（#214 の非恣意性の対象外）。
+
+#### 両 UI に残った差分（実測）
+
+接続〜復元ブロック（`useEffect` 本体）を 2 ファイルで並べた diff:
+
+| | order-confirm | cancel-confirm | 2 ファイル間の diff |
+|---|---|---|---|
+| 切り出し前 | 97 行 | 98 行 | 27 行（コメント・空行を除くと **13 行**） |
+| 切り出し後 | 97 行 | 98 行 | 27 行（同 **13 行**） |
+
+**行数は減っていない。** 複製されていたのは「同一だった 84 行」の側で、そのうち pull 復元の 21 行（タイマー + promise チェーン）が 15 行の宣言的な呼び出しに置き換わり、**増える予定だったリトライ・abort の実装が 2 ファイルに増えずモジュール 1 本に閉じた**のが本変更の実体。残った 13 行は**フィルタと文言だけ**:
+
+- `new McpApp({ name: ... })` の名前
+- `applyPreviewResult` の取り込み条件（order は `data.preview` の有無、cancel は `meta.action` も見る）と、cancel だけが持つ `setAction` / `setOrder`
+- 失敗時メッセージ（「注文プレビューに失敗しました。」／「キャンセルプレビューに失敗しました。」）
+
+`RESULT_WAIT_HINT_MS` は両 UI から消し、モジュールの既定値（`DEFAULT_INITIAL_DELAY_MS`）に一本化した。`SNAPSHOT_TIMEOUT_MS` / `CONNECT_TIMEOUT_MS` は `callServerTool` と接続の引数なので UI に残る。
+
+#### 変えていないもの
+
+- **サーバー側。** `tools/get_ui_snapshot.ts` / `src/private/*` / `src/ui-snapshot-cache.ts` は 1 行も触っていない。`src/` への追加は `mcp-apps-hydration.ts` のみ
+- **取り込みのフィルタと描画。** どの結果を採用するかの判断は各 UI に残したままで、モジュールは**結果を透過的に `apply` へ渡すだけ**。確認トークンが `_meta` で流れる経路なので、**中身を読まない・ログに出さない**（`.claude/rules/sensitive-data.md`）
+- **依存関係。** jsdom / testing-library は足さない（クールダウン 7 日の制約もあり、本変更の大きさに見合わない）。モジュールを React 非依存にしたので、既存の node 環境の vitest とフェイクタイマーだけで固定できる
+
+#### テスト
+
+`tests/mcp-apps-hydration.test.ts`（19 ケース。node 環境 + `vi.useFakeTimers()`）。`.claude/rules/testing.md` のエッジケース優先順位に沿って:
+
+- 初回で成功（`fetchSnapshot` 1 回 / `apply` 1 回 / `onPhase` は `waiting` → `restoring` のみ）
+- 1 回目 reject → 2 回目成功。**間隔が `retryDelaysMs[0]` ちょうど**であること（1 ms 手前では走らない）
+- 全試行 reject（`fetchSnapshot` 3 回 / `apply` 0 回 / `failed` ちょうど 1 回 / `vi.getTimerCount() === 0`、さらに 60 秒進めても追加の試行が無い）
+- `retryDelaysMs: []`（**空配列**）で 1 回だけ試して `failed` ＝ 切り出し前の挙動の再現
+- abort 4 ケース: 初回待ちの途中（`fetchSnapshot` 0 回）／ pending 中に停止 → 後から resolve（`apply` も `onPhase` も呼ばれない）／ pending 中に停止 → 後から reject（次の試行が予約されない）／リトライ待ちの途中
+- 停止関数の**二重呼び出し**が壊れないこと
+- `isHydrated()` が途中で true: 初回待ちの間（1 回も呼ばない）／ 1 回目 reject の直後（2 回目も `failed` も無し）／ resolve 後・`apply` 前（`apply` を呼ばない）
+- `apply` が例外を投げる: 次の試行で成功すれば `failed` 無し／最後まで投げ続ければ `failed` 1 回
+- タイマー注入（`setTimeout` / `clearTimeout` の差し替え）と `onPhase` 未指定
+
+#### ビルド成果物
+
+`npm run build:ui` で両 UI を再生成し、`src/resources/app-resources.ts` が読む `ui/*/dist/*.html`（リポジトリ管理下）を差分に含めた。
 
 ### Fixed（#27: `clientSupportsElicitation` が url モードのみ宣言のクライアントを「form 対応あり」と判定していた）
 

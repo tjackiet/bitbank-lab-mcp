@@ -168,6 +168,8 @@ MCP 仕様（SEP-1624 の整理）では `CallToolResult.content` と `structure
 
    サーバーは iframe 起源と LLM 起源の `tools/call` を区別できないため、**トークン所持そのものが認可の実体**になる。この設計は「ホストが `_meta` をモデルコンテキストに入れない」という**観測された挙動**への依存であり、仕様上の保証ではない。だから既定 off。詳細と計測値は ADR-0007。
    `_meta` に載るのは **elicitation 非対応と判定した経路だけ**なので、elicitation 対応ホストには一切載らない（優先順位は逆転しない）。
+
+   ツール結果通知（`ui/notifications/tool-result`）を配信しないホストでは、iframe が接続成立後に `get_ui_snapshot` を呼んで確認カードを自力で復元する（pull 型 hydration）。この復元は**上限付きリトライ**（初回 2.5 秒待機 → 2 秒 → 4 秒の計 3 回）で行い、**すべて失敗したら「復元できませんでした。内容はチャット本文で確認できます」と明示する**（「復元中」の案内のまま固まらせない）。制御は `src/mcp-apps-hydration.ts` に一本化してあり、iframe のアンマウント時には実行中の取得も含めて停止する。
 3. **フォールバック（どちらの経路も使えないホスト）** — `content` / `structuredContent` / `_meta` のいずれにも `confirmation_token` / `expires_at` を返さない。プレビュー内容だけを返し、「このホストでは取引実行に対応していない」旨を `content[0].text` に明記する。LLM が `create_order` / `cancel_order` / `cancel_orders` を直接呼んでも、MCP ハンドラが `direct_execute_forbidden` で拒否する（加えて token 検証でも拒否される）。
 
 なお `content[0].text` には常に以下を載せる（LLM のハルシネーション防止）:
