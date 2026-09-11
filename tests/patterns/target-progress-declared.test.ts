@@ -197,7 +197,11 @@ describe('breakoutTarget を出したら進捗か理由を必ず名乗る（issu
 				if (!declares) continue;
 				const line = formatPatternLine(p, 0, view, meta, 'Asia/Tokyo', '1hour');
 				expect(line, `${view} / ${p.type}`).toContain(TARGET_PROGRESS_LABEL);
-				if (p.breakoutTarget != null) expect(line, `${view} / ${p.type}`).toContain(TARGET_PRICE_LABEL);
+				// **価格行の有無は `breakoutTarget` と 1 対 1。** 「あるときに出る」だけでなく
+				// 「無いときに出ない」も同時に固定する（分岐で書くと後者が抜ける）。
+				expect(line.includes(TARGET_PRICE_LABEL), `${view} / ${p.type}: 価格行の有無が breakoutTarget と食い違う`).toBe(
+					p.breakoutTarget != null,
+				);
 				checked++;
 			}
 		}
