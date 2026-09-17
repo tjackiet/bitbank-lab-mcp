@@ -4,7 +4,7 @@
  * 一時ディレクトリにチェックリストを配置し、
  * シェルスクリプトの各チェックタイプが正しく動作するかを検証する。
  */
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,12 +16,21 @@ const SCRIPT = join(import.meta.dirname, '../../.claude/hooks/checklist-verify.s
 // jq が無い環境（Windows の Git Bash 標準構成 等）では失敗レポート系テストを skip する。
 const hasJq = (() => {
 	try {
-		execSync('bash -c "command -v jq"', { stdio: 'pipe', timeout: 10_000 });
+		execFileSync('bash', ['-c', 'command -v jq'], { stdio: 'pipe', timeout: 10_000 });
 		return true;
 	} catch {
 		return false;
 	}
 })();
+
+// jq が CI ランナーから消えると、上の hasJq がそのまま false になり
+// jq 依存テストが黙って skip される（= 検証が消えたことに誰も気づかない）。
+// CI では jq を前提条件として明示的に検証し、欠けていればここで落とす。
+describe('テスト環境の前提', () => {
+	it.skipIf(!process.env.CI)('CI では jq が利用可能（jq 依存テストのサイレント skip 防止）', () => {
+		expect(hasJq).toBe(true);
+	});
+});
 
 describe('checklist-verify.sh', () => {
 	let tmpDir: string;
@@ -41,7 +50,7 @@ describe('checklist-verify.sh', () => {
 	function run(checklist: string): { stdout: string; exitCode: number } {
 		writeFileSync(checklistPath, checklist, 'utf8');
 		try {
-			const stdout = execSync(`bash "${SCRIPT}"`, {
+			const stdout = execFileSync('bash', [SCRIPT], {
 				cwd: tmpDir,
 				env: { ...process.env, PATH: process.env.PATH },
 				encoding: 'utf8',
@@ -68,7 +77,7 @@ describe('checklist-verify.sh', () => {
 	// ── チェックリストが存在しない場合 ──
 	it('チェックリストが無ければ何も出力せず終了する', () => {
 		// checklistPath を作成しない
-		const stdout = execSync(`bash "${SCRIPT}"`, {
+		const stdout = execFileSync('bash', [SCRIPT], {
 			cwd: tmpDir,
 			encoding: 'utf8',
 		});
@@ -184,7 +193,10 @@ cmd false`);
 		expect(existsSync(checklistPath)).toBe(false);
 	});
 
-	it('失敗があるとチェックリストは残る', () => {
+	// jq が無いと 95 行目の jq でスクリプトが set -euo pipefail により異常終了し、
+	// 「チェックが失敗したから残った」ではなく「異常終了して rm に到達しなかったから
+	// 残った」を見ることになる。通ってしまうが検証の意味が変わるため他の失敗系と揃える。
+	it.skipIf(!hasJq)('失敗があるとチェックリストは残る', () => {
 		run('file_exists nonexistent.txt');
 		expect(existsSync(checklistPath)).toBe(true);
 	});
