@@ -7,6 +7,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- `.claude-plugin/marketplace.json` の plugin `source` を fork 固定の `{ "source": "github", "repo": "tjackiet/bitbank-lab-mcp" }` から相対パス `"./"` に変更。`bitbankinc/bitbank-lab-mcp` を marketplace として登録した場合も、plugin が fork ではなく登録元リポジトリ自身から解決されるようになった。
+
 ## [0.5.0] - 2026-09-14
 
 `detect_patterns` 系の変更は #114 を起点とする一連の作業で、下の表に時系列で載せる（番号が大きいほど新しい）。各行の判断根拠と計測の記録は fork（tjackiet/bitbank-lab-mcp）の各 issue と PR に残る。
