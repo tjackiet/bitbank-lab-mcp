@@ -139,7 +139,7 @@ Claude Desktop では確認カードのボタンから実行するため、B の
 >
 > ※ **「出金」権限は有効化しないことを強く推奨します**。本サーバーは出金系ツール未実装のため不要です。
 
-発注・取消の実行には**ユーザーの明示確認が必須**です。確認トークンは `content` / `structuredContent` に載らないため、LLM が preview 応答から直接 execute することはできません。
+発注・取消の実行には**ユーザーの明示確認が必須**です。確認トークンは `content` / `structuredContent` には載りません。`BITBANK_MCP_APPS_EXECUTE=1` を設定し、かつクライアントが elicitation 非対応で MCP Apps UI を宣言している場合（Claude Desktop 等）に限り、確認カードに渡すためツール結果の `_meta` に載ります。この場合の安全性は「ホストが `_meta` を LLM に渡さない」ことに依存し、仕様上の保証はありません（下の「⚠️ `BITBANK_MCP_APPS_EXECUTE=1` を設定する前に読んでください」）。
 
 確認の経路はクライアントによって変わります。
 
