@@ -8,7 +8,7 @@
 ## [Unreleased]
 
 ### Fixed
-- `.claude-plugin/marketplace.json` の plugin `source` を fork 固定の `{ "source": "github", "repo": "tjackiet/bitbank-lab-mcp" }` から相対パス `"./"` に変更。`bitbankinc/bitbank-lab-mcp` を marketplace として登録した場合も、plugin が fork ではなく登録元リポジトリ自身から解決されるようになった。
+- `.claude-plugin/marketplace.json` の plugin `source` を fork 固定の `{ "source": "github", "repo": "tjackiet/bitbank-lab-mcp" }` から相対パス `"./"` に変更。`bitbankinc/bitbank-lab-mcp` を marketplace として登録した場合も、plugin が fork ではなく登録元リポジトリ自身から解決されるようになった。あわせて同エントリの `homepage` / `repository` を README が案内する `bitbankinc/bitbank-lab-mcp` に揃えた。
 
 ## [0.5.0] - 2026-09-14
 
