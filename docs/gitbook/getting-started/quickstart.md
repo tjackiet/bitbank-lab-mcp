@@ -172,7 +172,7 @@ bitbank 側で **「参照」+「取引」権限**のキーを発行します。
 ```
 
 {% hint style="warning" %}
-* 発注は preview → ユーザーの明示確認 → 実行の流れです。確認トークンは AI が読み取れる経路（`content` / `structuredContent`）には載らないため、LLM が preview から直接 execute することはできません。
+* 発注は preview → ユーザーの明示確認 → 実行の流れです。確認トークンは `content` / `structuredContent` には載りませんが、`BITBANK_MCP_APPS_EXECUTE=1` では確認カードに渡すためツール結果の `_meta` に載ります。この場合の安全性は「ホストが `_meta` を AI に渡さない」ことに依存し、仕様上の保証はありません。
 * `BITBANK_MCP_APPS_EXECUTE=1` を設定する前に、[取引の安全設計](../private-api/safety.md) の注意事項を必ず確認してください。
 * **「出金」権限は絶対に有効化しないでください**（本サーバーは出金系ツールを実装していないため不要です）。
 {% endhint %}
