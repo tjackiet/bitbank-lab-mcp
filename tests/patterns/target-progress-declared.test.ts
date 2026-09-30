@@ -5,9 +5,7 @@
  * **`breakoutTarget` を出しているのに、進捗行も理由行も content に無いパターンが 0 件。**
  *
  * `content[0].text` が LLM への唯一のチャネルなので、進捗行が消えると LLM は
- * 「進捗 0%」なのか「測っていない」のかを区別できない（issue 本文のライブ実例では
- * `triple_top` が `ターゲット価格: 12,644,737円` まで出しながら進捗を一切名乗らず、
- * 検証した LLM は「理由はこの出力からは分からないので、推測は避けます」と答えた）。
+ * 「進捗 0%」なのか「測っていない」のかを区別できない。
  *
  * ## なぜ 2 箇所で確認するのか
  *
@@ -23,9 +21,7 @@
  * `detect_patterns` をツール境界で叩く 3 本は、`globalDedup` や #218 の排他を通った後の
  * 実際の `data.patterns` / content を見たいので実データでしか組めない。
  *
- * **#228 まで、完成済み triple は `not_computed_by_detector` を名乗る唯一の経路だった**
- * （合成 fixture では到達しない、と本 docstring は書いていた）。配線後はそのコードを
- * 返す経路が無くなったので、下 2 本のテストは「復活しないこと」を押さえる側に変わっている。
+ * 完成済み triple の進捗配線は、方向ゲートを通過する合成 fixture で下のテストが固定する。
  */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -209,62 +205,22 @@ describe('breakoutTarget を出したら進捗か理由を必ず名乗る（issu
 	});
 
 	/**
-	 * **#225 で入れたときは `not_computed_by_detector` を期待するテストだった**
-	 * （`detect_triples.ts` の完成済み経路がブレイク足・target・パターン高さを揃えながら
-	 * `computeTargetReach` を一度も呼んでおらず、値を出さないまま理由だけを申告していた）。
-	 * #228 でその配線が入ったので、**同じライブ実例で期待値を進捗が出る側に更新**した。
-	 * テストそのものを消していないのは、これが issue #224 症状 2 のライブ実例——LLM が
-	 * 「理由はこの出力からは分からないので、推測は避けます」と答えた実際の系列——だからで、
-	 * **この 1 件が黙ったら #224 の受け入れ条件が壊れている**という関門の役割は変わらない。
+	 * **#225/#228 の進捗配線回帰は、方向ゲートを通過する合成 fixture で検証する。**
+	 * 実データ B の triple は PR4 の横ばい先行ゲートで除外されるため、ライブ系列では
+	 * 「不要な候補が進捗表示へ進まない」ことを確認する。
 	 *
-	 * **検出器を直接呼ぶ**（`data.patterns` は見ない）。完成済み triple は `globalDedup` と
-	 * #218 の triple×H&S 排他を通ると代表を取れないことがあり、**得点式が変われば
-	 * 出力から消える**——`tests/patterns/target-reach-window-invariance.test.ts` が
-	 * 同じ理由で対象を検出器層に移したのと同じ配慮。
+	 * **検出器を直接呼ぶ**（`data.patterns` は見ない）。完成済み triple の進捗契約を
+	 * globalDedup や型間排他の代表選択から独立して検証する。
 	 */
-	it('ライブ実例（完成済み triple）が進捗を出す: #228 の配線後', () => {
+	it('横ばい先行のライブ実例 triple は方向ゲートで除外される', () => {
 		const patterns = detectTriples(buildTripleCtx()).patterns as unknown as Array<Record<string, unknown>>;
 		const completed = patterns.filter((p) => p.status === 'completed');
-		expect(completed.length).toBeGreaterThan(0);
-		// **分岐で書かない**（`if` の中に `expect` を置くと、条件が偽になった日に空虚に通る）。
-		// 形だけを写し取って**全件を 1 回の等値比較**にかける。この窓では退化ガードが 1 件も
-		// 発火しない（#228 の実測: 比の下限 0.8160 に対し閾値 0.15）ので、期待値は全件同じ形。
-		const shapes = completed.map((t) => ({
-			omittedReason: t.targetProgressOmittedReason,
-			pct: typeof t.targetReachedPct,
-			reached: typeof t.targetReached,
-			// `targetReachedDate` は extremum の足に `isoTime` があるときだけなので形に含めない。
-			reachedPrice: typeof t.targetReachedPrice,
-			// `breakoutTarget` は据え置き（#228 は target の算出式を変えない）。
-			breakoutTarget: typeof t.breakoutTarget,
-		}));
-		expect(shapes).toEqual(
-			completed.map(() => ({
-				// **配線前に名乗っていたコード（`not_computed_by_detector`）はもう出ない。**
-				omittedReason: undefined,
-				pct: 'number',
-				reached: 'boolean',
-				reachedPrice: 'number',
-				breakoutTarget: 'number',
-			})),
-		);
-		// content には進捗率の行が出る（配線前の「出力なし（…算出していないため…）」ではない）。
-		const line = formatPatternLine(
-			completed[0] as unknown as PatternEntry,
-			0,
-			'full',
-			{} as Parameters<typeof formatFullView>[4],
-			'Asia/Tokyo',
-			'1hour',
-		);
-		expect(line).toContain(TARGET_PROGRESS_LABEL);
-		expect(line).not.toContain('この検出器がターゲットへの到達を算出していないため');
-		expect(line).not.toContain('not_computed_by_detector');
+		expect(completed).toHaveLength(0);
 	});
 
 	it('完成済み triple の 4 経路が理由コード not_computed_by_detector を返さない（#228 の配線の回帰）', () => {
-		// 上のテストはライブ実例 1 系列の期待値。こちらは**理由コードが復活しないこと**だけを
-		// コーパス側（合成 fixture の完成済み triple。strict top 経路）でも押さえる。
+		// こちらは**理由コードが復活しないこと**を、コーパス側（合成 fixture の完成済み triple。
+		// strict top 経路）で押さえる。
 		const candles = buildCompletedTripleTopCandles() as CandleData[];
 		const patterns = detectTriples(buildTripleCtxFor(candles, '1day', 2)).patterns as unknown as Array<
 			Record<string, unknown>

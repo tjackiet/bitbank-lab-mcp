@@ -180,7 +180,7 @@ describe('同じ形が凍結済み実データにも存在する（issue #261・
 	 * `patterns` で種別を絞るのは検出範囲のためではなく **`view=debug` の cap 対策**
 	 * （`detect_patterns.ts` は候補を要求種別で絞ってから cap = 200 でトリムする。#124）。
 	 */
-	it('#34: triple_top 329-338-364 が forming_peaks_below_neckline で落ちる', async () => {
+	it('#34: triple_top 329-338-364 が prior_trend_mismatch で落ちる', async () => {
 		const { patterns, candidates } = await detectForming(
 			buildBtcJpy1hour20260905Candles() as unknown as Candle[],
 			'1hour',
@@ -188,12 +188,9 @@ describe('同じ形が凍結済み実データにも存在する（issue #261・
 		);
 		expect(forming(patterns, 'triple_top')).toHaveLength(0);
 
-		const hits = withReason(candidates, 'triple_top', 'forming_peaks_below_neckline');
-		expect(hits).toHaveLength(1);
-		expect(hits[0].indices).toEqual([329, 338, 364]);
-		expect(hits[0].details?.necklinePrice).toBe(12480429.5);
-		expect(hits[0].details?.offenders).toEqual([
-			{ idx: 364, price: 12465523, deviation: 14906.5, deviationPct: expect.closeTo(0.0011944, 7) },
-		]);
+		const hit = withReason(candidates, 'triple_top', 'prior_trend_mismatch:sideways').find(
+			(c) => String(c.indices?.join('-')) === '329-338-364',
+		);
+		expect(hit).toBeDefined();
 	});
 });

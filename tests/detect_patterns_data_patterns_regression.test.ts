@@ -318,19 +318,16 @@ describe('detect_patterns: data.patterns の実データスナップショット
 		const withoutWedges = (patterns: typeof res.data.patterns) => patterns.filter((p) => !p.type.endsWith('_wedge'));
 		const actualNonWedges = withoutWedges(res.data.patterns);
 		const baselineNonWedges = withoutWedges(baseline as typeof res.data.patterns);
-		// PR3 は、横ばい先行の逆 H&S を除外し、同じ構成点を持つ triple bottom を
-		// globalDedup の代表にする意図的な再分類を含む。ここでは件数だけでなく、その
-		// 置換先と、除外対象が戻らないことを明示して固定する。
+		// PR3/PR4 は横ばい先行の逆 H&S / triple bottom を除外する。ここでは件数と、
+		// 除外対象が戻らないことを明示して固定する。
 		const pivotSignature = (p: { pivots?: Array<{ idx: number }> }) => (p.pivots ?? []).map((q) => q.idx).join('-');
-		expect(actualNonWedges).toHaveLength(baselineNonWedges.length);
+		expect(actualNonWedges).toHaveLength(baselineNonWedges.length - 1);
 		expect(
 			actualNonWedges.some(
 				(p) => p.type === 'inverse_head_and_shoulders' && pivotSignature(p) === '230-232-249-265-272',
 			),
 		).toBe(false);
-		expect(actualNonWedges.some((p) => p.type === 'triple_bottom' && pivotSignature(p) === '242-245-249-265-272')).toBe(
-			true,
-		);
+		expect(actualNonWedges.some((p) => p.type === 'triple_bottom')).toBe(false);
 
 		// wedge は本 PR で意図的に再判定する。残る候補は出力された構成点だけで
 		// 上下2点ずつ・合計5点以上を検算できること。
@@ -399,18 +396,12 @@ describe('detect_patterns: data.patterns の実データスナップショット
 		// 射影が空振り（全件 `{type}` だけ）していないことを先に見る。
 		expect(targetReachPre288.filter((p) => 'targetReachedPct' in p).length).toBeGreaterThan(0);
 		const nonWedge = (p: Record<string, unknown>) => !String(p.type).endsWith('_wedge');
-		// PR3 の横ばい先行 IHS は triple bottom に再分類される。これはターゲット計算の
-		// additive 性ではなく、検出器の候補選別を意図的に変えた差分なので比較から外す。
+		// PR3 の横ばい先行 IHS は出力から除外される。これはターゲット計算の additive 性
+		// ではなく、検出器の候補選別を意図的に変えた差分なので比較から外す。
 		const isPr3Reclassification = (p: Record<string, unknown>) =>
-			Number(p.breakoutBarIndex) === 280 &&
-			(['inverse_head_and_shoulders', 'triple_bottom'] as const).includes(
-				String(p.type) as 'inverse_head_and_shoulders' | 'triple_bottom',
-			);
+			Number(p.breakoutBarIndex) === 280 && String(p.type) === 'inverse_head_and_shoulders';
 		expect(project(res.data.patterns.filter(nonWedge).filter((p) => !isPr3Reclassification(p)))).toEqual(
 			targetReachPre288.filter(nonWedge).filter((p) => !isPr3Reclassification(p)),
 		);
-		expect(
-			res.data.patterns.some((p) => p.type === 'triple_bottom' && p.breakoutBarIndex === 280 && p.targetReached),
-		).toBe(true);
 	});
 });

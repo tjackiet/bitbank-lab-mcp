@@ -4,14 +4,12 @@
  * `tests/patterns/mutual-exclusion.test.ts` が純関数の契約を見るのに対し、こちらは
  * `detect_patterns` を通したときに
  *
- * 1. issue #218 の受け入れ条件（実データ B `1hour` の `triple_bottom` 242-249-272 が
- *    逆 H&S 230-232-249-265-272 と 249・272 を共有して落ちる）が成立すること
- * 2. **落ちるのは `triple_*` だけ**で H&S 系・double・wedge・triangle・pennant が 1 件も動かないこと
+ * 1. PR4 の先行トレンドゲートにより、横ばい先行の `triple_bottom` 242-249-272 と
+ *    逆 H&S 230-232-249-265-272 が型間排他へ到達する前に除外されること
+ * 2. **落ちるのは `triple_*` と該当 H&S**で、double・wedge・triangle・pennant が動かないこと
  * 3. 新しい縮小段が `meta.reduction` と `検出内訳:` 行に申告されること（#200 の契約）
  * 4. 落ちた理由が `view=debug` から追えること（**cap トリムで押し出されない**こと込み）
- * 5. **排他の根拠が「実際に出力される H&S」であること**——ライフサイクル絞り込みより後に
- *    置いていることの回帰。先に置くと、根拠にした H&S が後段で消えて「どちらも残らない」
- *    ケースが作れてしまう
+ * 5. 既存の型間排他の reduction 契約が、候補ゼロのケースでも壊れないこと
  *
  * を見る。
  */
@@ -44,11 +42,11 @@ async function run(opts: Record<string, unknown> = {}) {
 }
 
 describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）', () => {
-	it('横ばい先行の逆H&Sが出ない場合、triple_bottom は排他されない', async () => {
+	it('横ばい先行の逆H&Sとtriple_bottomはいずれも方向ゲートで除外される', async () => {
 		const res = await run();
 		const keys = res.data.patterns.map(keyOf);
 
-		expect(keys).toContain('triple_bottom|L242-H245-L249-H265-L272');
+		expect(keys).not.toContain('triple_bottom|L242-H245-L249-H265-L272');
 		expect(keys).not.toContain('inverse_head_and_shoulders|L230-H232-L249-H265-L272');
 	});
 
@@ -56,8 +54,8 @@ describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）
 		const res = await run();
 		const byType = new Map<string, number>();
 		for (const p of res.data.patterns) byType.set(p.type, (byType.get(p.type) ?? 0) + 1);
-		// 実データ B の 1hour（デフォルトオプション）の内訳。本段（型間排他）が落とすのは
-		// `triple_bottom` 242-249-272 の 1 件だけで、H&S 系 / double / triangle /
+		// 実データ B の 1hour（デフォルトオプション）の内訳。PR4 の方向ゲートで
+		// `triple_bottom` 242-249-272 も出力されなくなり、H&S 系 / double / triangle /
 		// pennant は 1 件も動かない。wedge は正当性PR1で形成窓内部の遡及ブレイクを除外した。
 		//
 		// **`triple_top` 219-223-232 は #216 Phase 2 で消えた**——本段の対象外
@@ -69,14 +67,14 @@ describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）
 		// **`head_and_shoulders` 2 件は #211（`necklineAt` の外挿クランプ）で消えた**——これも
 		// 本段の対象外で、ブレイクが右肩より後ろの外挿に依存していたため `near_completion` に
 		// 落ち、既定 `includeForming: false` で除かれている。逆 H&S 2 件は残るので、本段が
-		// 落とす `triple_bottom` 242-249-272（共有点 249 / 272）の前提は変わらない。
+		// 落とす `triple_bottom` 242-249-272（共有点 249 / 272）は、PR4 の先行トレンド不一致で
+		// 型間排他に到達する前に除外される。
 		expect(Object.fromEntries([...byType].sort())).toEqual({
 			inverse_head_and_shoulders: 1,
 			rising_wedge: 2,
 			triangle_ascending: 4,
-			triple_bottom: 1,
 		});
-		expect(res.meta.count).toBe(8);
+		expect(res.meta.count).toBe(7);
 	});
 
 	it('meta.reduction に新しい段が載り、waterfall が成立する', async () => {
@@ -99,10 +97,8 @@ describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）
 			const r = res.meta.reduction as Record<string, number>;
 			expect(r.tripleHsExcluded).toBe(0);
 			expect(r.tripleHsCandidateCount).toBe(0);
-			// 既定呼び出しで排他される 242-249-272（conf 0.81）が、比較対象が無いので残る（仕様どおり）。
-			// `pivots` にはネックライン定義点 245 / 265 も入る（#224 症状 3）。
-			expect(res.data.patterns.map(keyOf)).toContain('triple_bottom|L242-H245-L249-H265-L272');
-			expect(res.data.patterns.every((p) => p.type === 'triple_bottom')).toBe(true);
+			// 方向ゲートで先に落ちるため、H&S の比較対象が無くても出力は空になる。
+			expect(res.data.patterns).toHaveLength(0);
 			expect(r.dedupMerged + r.currentFiltered + r.lifecycleExcluded + r.tripleHsExcluded + r.output).toBe(r.detected);
 		});
 
@@ -167,7 +163,7 @@ describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）
 
 	// **ライフサイクル絞り込みより後に置いていることの回帰。** 先に置くと、根拠にした H&S が
 	// あとから `includeForming` / `includeCompleted` / `includeInvalid` で消え、
-	// **triple も H&S も残らない**組み合わせが作れてしまう。ここでは「落とした triple の
+	// **排他対象の triple も H&S も残らない**組み合わせが作れてしまう。ここでは「落とした triple の
 	// `matches` が、同じ応答の `data.patterns` に実在する H&S を指している」ことを
 	// 8 通りのライフサイクル組み合わせすべてで固定する。
 	const LIFECYCLE_COMBOS = [false, true].flatMap((includeForming) =>

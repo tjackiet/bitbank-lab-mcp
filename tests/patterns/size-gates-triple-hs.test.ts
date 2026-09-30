@@ -154,30 +154,26 @@ describe('detect_patterns: triple / H&S のサイズ検査（issue #138 欠陥 2
 		expect(candidates.some((c) => c.type === 'double_top' && c.reason === 'pattern_too_small')).toBe(true);
 	});
 
-	it('同じ形が 1hour ではサイズ検査を通り、それでも triple_top / triple_bottom の同時検出にはならない', async () => {
+	it('同じ形が 1hour でも横ばい先行ゲートで triple_top / triple_bottom の同時検出にならない', async () => {
 		// **issue #152 で 1hour の閾値が 0.62% / 1.04% に下がったので、この形は通る。**
 		// 高さ 1.533% は 1hour の下限の 2.5 倍、押しの深さ 1.533% は 1.47 倍。BTC/JPY 1hour の
 		// 実測 ATR 0.57% で読むと 2.69 ATR で、1day が要求する 1.09 ATR より大きい
 		// （この合成系列自身の ATR は 0.187% なので、系列の自前のボラで測れば 8.2 ATR）。
 		//
 		// **#138 欠陥 2-2 の芯は「1 本のレンジが triple_top と triple_bottom の両方に化ける」**
-		// という構造的矛盾のほうで、そこは #140 の構造ゲートが落とす——レンジの往復は
-		// 戻り率がちょうど 1.0 になり `retracement_out_of_band` に当たる。サイズ検査を
-		// 緩めても矛盾は戻ってこないことをここで固定する。
+		// という構造的矛盾のほうで、PR4 ではサイズ検査を通る前に先行トレンド不一致で除外され、
+		// 矛盾が戻ってこないことを固定する。
 		const { types, candidates } = await detectOnRange(12_525_000, 12_720_000, '1hour');
 
 		// 同時検出にならない: bottom 側は 1 件も残らない。
 		expect(types.filter((t) => t === 'triple_bottom')).toHaveLength(0);
 		expect(
-			candidates.filter((c) => c.type === 'triple_bottom' && c.reason === 'retracement_out_of_band').length,
+			candidates.filter((c) => c.type === 'triple_bottom' && c.reason === 'prior_trend_mismatch:sideways').length,
 		).toBeGreaterThan(0);
 
-		// top 側で残る 1 件は**スキャン窓の左端の窓**。構造ゲートは先行極値が取れないと
-		// スキップする仕様（`no_prior_extreme`）で、左端の窓には先行スイングが存在しない。
-		// 先行極値が取れる窓（2 つ目以降）は top 側も同じ理由で落ちている。
 		expect(types.filter((t) => t === 'triple_top')).toHaveLength(1);
 		expect(
-			candidates.filter((c) => c.type === 'triple_top' && c.reason === 'retracement_out_of_band').length,
+			candidates.filter((c) => c.type === 'triple_top' && c.reason === 'prior_trend_mismatch:sideways').length,
 		).toBeGreaterThan(0);
 
 		// サイズ検査では落ちていないこと（理由が構造ゲートに移っただけであることの裏取り）。
@@ -189,19 +185,16 @@ describe('detect_patterns: triple / H&S のサイズ検査（issue #138 欠陥 2
 		// 過剰棄却を見る。
 		//
 		// 旧版はここで `types` に triple_top / triple_bottom が入ることを見ていたが、
-		// #138 欠陥 2-1（構造ゲートの横展開）以降、**先行トレンドの無い純粋なレンジの往復は
-		// 構造ゲート側で落ちる**（戻り率 = 1.0 → `retracement_out_of_band`）。落ちる理由が
-		// サイズ検査から構造ゲートに移っただけで、サイズ検査が過剰に弾いていないことは
+		// PR4 では**先行トレンドの無い純粋なレンジの往復を方向ゲートで落とす**。落ちる理由が
+		// サイズ検査から方向ゲートに移っただけで、サイズ検査が過剰に弾いていないことは
 		// 理由コードで直接確認できる。先行トレンドを伴う形が残ることは
 		// `tests/patterns/structural-gates-triple-hs.test.ts` が固定する。
 		const { candidates } = await detectOnRange(11_000_000, 12_700_000);
 		const sizeReasons = ['pattern_too_small', 'valley_too_shallow', 'peak_too_shallow'];
 		for (const type of ['triple_top', 'triple_bottom']) {
 			expect(candidates.filter((c) => c.type === type && sizeReasons.includes(String(c.reason)))).toHaveLength(0);
-			// **両種別について**構成点まで到達していること（別経路の silent reject で消えている
-			// わけではないこと）の裏取り。片方だけ見ると、もう片方がサイズ検査より手前で
-			// 落ちていても上の「サイズ系の理由が 0 件」が空振りで通ってしまう。
-			expect(candidates.some((c) => c.type === type && c.reason === 'retracement_out_of_band')).toBe(true);
+			// **両種別について**方向ゲートまで到達していることを確認する。
+			expect(candidates.some((c) => c.type === type && c.reason === 'prior_trend_mismatch:sideways')).toBe(true);
 		}
 	});
 });

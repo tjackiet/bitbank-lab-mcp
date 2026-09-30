@@ -259,8 +259,8 @@ export function validateHorizontalNeckline(
 /**
  * 反転前に必要なトレンド方向。
  *
- * `*_or_sideways` は H&S / triple の既存契約を保つ緩い判定、`up` / `down` は
- * double のように「反転する既存トレンド」が定義要件であるパターンに使う。
+ * `*_or_sideways` は共有 API の後方互換用の緩い判定、`up` / `down` は
+ * double / triple / H&S のように「反転する既存トレンド」が定義要件である検出器に使う。
  */
 export type PriorTrendExpected = 'up_or_sideways' | 'down_or_sideways' | 'up' | 'down';
 

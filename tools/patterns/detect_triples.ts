@@ -1,5 +1,6 @@
 /**
- * Triple Top / Triple Bottom 検出（完成済み＋形成中）
+ * Triple Top / Triple Bottom 検出（完成済み＋形成中）。
+ * 反転パターンのため、構成点の前に triple_top は上昇、triple_bottom は下降の先行トレンドを要求する。
  * detect_patterns.ts Section 6 / 6b から抽出
  */
 import { generatePatternDiagram, type PatternDiagramData } from '../../lib/pattern-diagrams.js';
@@ -14,15 +15,68 @@ import {
 	levelSpreadDetailsFrom,
 	levelSpreadMetrics,
 	necklineSideDetailsFrom,
+	type PriorTrendResult,
 	type ReversalSide,
 	validateLevelSpread,
 	validateMainPointsNecklineSide,
 	validatePatternSize,
+	validatePriorTrend,
 } from './structural.js';
 import type { Pivot } from './swing.js';
 import { computeTargetReach, omittedTargetReach, targetReachFields } from './target-reach.js';
-import type { CandleData, DeduplicablePattern, DetectContext, DetectResult, PatternScoreBreakdown } from './types.js';
+import type {
+	CandleData,
+	DeduplicablePattern,
+	DetectContext,
+	DetectResult,
+	PatternPrecedingTrend,
+	PatternScoreBreakdown,
+} from './types.js';
 import { pushCand } from './types.js';
+
+// ── Helper: PriorTrendResult → PatternPrecedingTrend ──
+
+function buildPrecedingTrend(
+	candles: CandleData[],
+	trend: PriorTrendResult,
+	startIdx: number,
+): PatternPrecedingTrend | undefined {
+	const startIso = candles[trend.priorStartIdx]?.isoTime;
+	const endIso = candles[startIdx]?.isoTime;
+	if (!startIso || !endIso) return undefined;
+	return {
+		start: startIso,
+		end: endIso,
+		direction: trend.classification,
+		returnPct: Number((trend.priorReturn * 100).toFixed(2)),
+		lookbackBars: trend.lookbackBars,
+	};
+}
+
+function validateTriplePriorTrend(
+	candles: CandleData[],
+	startIdx: number,
+	endIdx: number,
+	type: 'triple_top' | 'triple_bottom',
+	debugCandidates: DetectContext['debugCandidates'],
+	indices: number[],
+): { trend: PriorTrendResult; precedingTrend?: PatternPrecedingTrend } | null {
+	const expected = type === 'triple_top' ? 'up' : 'down';
+	const trend = validatePriorTrend(candles, startIdx, endIdx - startIdx, expected);
+	if (!trend.ok) {
+		debugCandidates.push({
+			type,
+			accepted: false,
+			reason: `prior_trend_mismatch:${trend.classification}`,
+			indices,
+		});
+		return null;
+	}
+	if (trend.classification === 'insufficient_data') {
+		debugCandidates.push({ type, accepted: true, reason: 'prior_trend_insufficient_data', indices });
+	}
+	return { trend, precedingTrend: buildPrecedingTrend(candles, trend, startIdx) };
+}
 
 // ── 定数 ──
 
@@ -317,6 +371,12 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 			});
 			continue;
 		}
+		const priorTrend = validateTriplePriorTrend(candles, a.idx, c.idx, 'triple_top', ctx.debugCandidates, [
+			a.idx,
+			b.idx,
+			c.idx,
+		]);
+		if (!priorTrend) continue;
 		// **整合度の算出とゲートはブレイク検出の後**（issue #199 候補 1）。`breakoutQuality` 軸が
 		// ブレイク足の終値を要るため。理由の帰属が変わる点は {@link buildTripleScore} の
 		// 呼び出し側コメントを参照。
@@ -514,6 +574,7 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 			pivots: [a, v1, b, v2, c],
 			neckline,
 			...(structureGate ? { structureGate } : {}),
+			...(priorTrend.precedingTrend ? { precedingTrend: priorTrend.precedingTrend } : {}),
 			trendlineLabel: 'ネックライン',
 			breakoutTarget: ttTarget,
 			targetMethod: 'neckline_projection' as const,
@@ -609,6 +670,12 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 			});
 			continue;
 		}
+		const priorTrend = validateTriplePriorTrend(candles, a.idx, c.idx, 'triple_bottom', ctx.debugCandidates, [
+			a.idx,
+			b.idx,
+			c.idx,
+		]);
+		if (!priorTrend) continue;
 		// **整合度の算出とゲートはブレイク検出の後**（issue #199 候補 1）。理由は
 		// `findStrictTripleTop` の同じ箇所のコメントを参照。
 
@@ -792,6 +859,7 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 			pivots: [a, p1, b, p2, c],
 			neckline,
 			...(structureGate ? { structureGate } : {}),
+			...(priorTrend.precedingTrend ? { precedingTrend: priorTrend.precedingTrend } : {}),
 			trendlineLabel: 'ネックライン',
 			breakoutTarget: tbTarget,
 			targetMethod: 'neckline_projection' as const,
@@ -886,6 +954,12 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 			});
 			continue;
 		}
+		const priorTrend = validateTriplePriorTrend(candles, a.idx, c.idx, 'triple_top', ctx.debugCandidates, [
+			a.idx,
+			b.idx,
+			c.idx,
+		]);
+		if (!priorTrend) continue;
 		// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
 		const sizeReason = validatePatternSize('top', [a, v1, b, v2, c], ctx.sizeThresholds);
 		if (sizeReason) {
@@ -1074,6 +1148,7 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 			pivots: [a, v1, b, v2, c],
 			neckline,
 			...(structureGate ? { structureGate } : {}),
+			...(priorTrend.precedingTrend ? { precedingTrend: priorTrend.precedingTrend } : {}),
 			trendlineLabel: 'ネックライン',
 			breakoutTarget: ttRelTarget,
 			targetMethod: 'neckline_projection' as const,
@@ -1159,6 +1234,12 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 			});
 			continue;
 		}
+		const priorTrend = validateTriplePriorTrend(candles, a.idx, c.idx, 'triple_bottom', ctx.debugCandidates, [
+			a.idx,
+			b.idx,
+			c.idx,
+		]);
+		if (!priorTrend) continue;
 		// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
 		const sizeReason = validatePatternSize('bottom', [a, p1, b, p2, c], ctx.sizeThresholds);
 		if (sizeReason) {
@@ -1337,6 +1418,7 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 			pivots: [a, p1, b, p2, c],
 			neckline,
 			...(structureGate ? { structureGate } : {}),
+			...(priorTrend.precedingTrend ? { precedingTrend: priorTrend.precedingTrend } : {}),
 			trendlineLabel: 'ネックライン',
 			breakoutTarget: tbRelTarget,
 			targetMethod: 'neckline_projection' as const,
@@ -1563,6 +1645,12 @@ function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
 			});
 			continue;
 		}
+		const priorTrend = validateTriplePriorTrend(candles, peak1.idx, lastIdx, 'triple_top', ctx.debugCandidates, [
+			peak1.idx,
+			peak2.idx,
+			lastIdx,
+		]);
+		if (!priorTrend) continue;
 
 		// ネックライン構成点: H-L-H-L-(現在足) という構造を強制するため、
 		// 谷を peak1-peak2 区間と peak2-現在足 区間にそれぞれ 1 つ以上要求する。
@@ -1715,6 +1803,7 @@ function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
 			],
 			neckline,
 			...(structureGate ? { structureGate } : {}),
+			...(priorTrend.precedingTrend ? { precedingTrend: priorTrend.precedingTrend } : {}),
 			trendlineLabel: 'ネックライン',
 			breakoutTarget: formTtTarget,
 			targetMethod: 'neckline_projection' as const,
@@ -1841,6 +1930,12 @@ function tryFormingTripleBottom(ctx: DetectContext): DeduplicablePattern | null 
 			});
 			continue;
 		}
+		const priorTrend = validateTriplePriorTrend(candles, valley1.idx, lastIdx, 'triple_bottom', ctx.debugCandidates, [
+			valley1.idx,
+			valley2.idx,
+			lastIdx,
+		]);
+		if (!priorTrend) continue;
 
 		const progress = (currentPrice - avgValleyPrice) / Math.max(1e-12, avgPeakPrice - avgValleyPrice);
 		const completion = Math.min(1, 0.66 + Math.min(1, progress) * 0.34);
@@ -1954,6 +2049,7 @@ function tryFormingTripleBottom(ctx: DetectContext): DeduplicablePattern | null 
 			],
 			neckline,
 			...(structureGate ? { structureGate } : {}),
+			...(priorTrend.precedingTrend ? { precedingTrend: priorTrend.precedingTrend } : {}),
 			trendlineLabel: 'ネックライン',
 			breakoutTarget: formTbTarget,
 			targetMethod: 'neckline_projection' as const,

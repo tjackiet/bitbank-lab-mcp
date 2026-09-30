@@ -315,32 +315,22 @@ describe('同じ形が凍結済み実データにも存在する（issue #216 Ph
 		return candidates;
 	}
 
-	it('triple_top: 山3 がネックラインより 3,273.5 円下（Phase 1 が実測した構成点 219-223-232）', async () => {
+	it('triple_top: 横ばい先行の構成点 219-223-232 は方向ゲートで除外される', async () => {
 		const cands = await realDataCandidates('1hour', ['triple_top']);
-		const hit = cands.find((c) => c.reason === 'peaks_below_neckline' && c.indices?.[0] === 219);
+		const hit = cands.find((c) => c.reason === 'prior_trend_mismatch:sideways' && c.indices?.[0] === 219);
 		expect(hit?.indices).toEqual([219, 223, 232]);
-		expect(hit?.details?.necklinePrice).toBe(12285548.5);
-		expect(hit?.details?.offenders).toEqual([
-			{ idx: 232, price: 12282275, deviation: 3273.5, deviationPct: expect.closeTo(0.00026645, 8) },
-		]);
 	});
 
-	it('triple_top: 誤った側に来るのは最後の点とは限らない（第2構成点 211 が 40,605.5 円下）', async () => {
+	it('triple_top: 横ばい先行の構成点 211-219-223 も方向ゲートで除外される', async () => {
 		const cands = await realDataCandidates('1hour', ['triple_top']);
-		const hit = cands.find((c) => c.reason === 'peaks_below_neckline' && c.indices?.[0] === 204);
-		expect(hit?.indices).toEqual([204, 211, 219]);
-		expect(hit?.details?.offenders).toEqual([
-			{ idx: 211, price: 12260243, deviation: 40605.5, deviationPct: expect.closeTo(0.003301, 7) },
-		]);
+		expect(cands.some((c) => c.reason === 'prior_trend_mismatch:sideways' && String(c.indices) === '211,219,223')).toBe(
+			true,
+		);
 	});
 
-	it('triple_bottom: 谷3 がネックラインより 2,146.5 円上（Phase 1 の逸脱量の最小側）', async () => {
+	it('triple_bottom: 上昇先行の構成点 205-214-220 も方向ゲートで除外される', async () => {
 		const cands = await realDataCandidates('1hour', ['triple_bottom']);
-		const hit = cands.find((c) => c.reason === 'valleys_above_neckline' && c.indices?.[0] === 205);
-		expect(hit?.indices).toEqual([205, 214, 220]);
-		expect(hit?.details?.offenders).toEqual([
-			{ idx: 220, price: 12355098, deviation: 2146.5, deviationPct: expect.closeTo(0.00017376, 8) },
-		]);
+		expect(cands.some((c) => c.reason === 'prior_trend_mismatch:up' && String(c.indices) === '205,214,220')).toBe(true);
 	});
 
 	it('double_bottom: 谷2 がネックラインより 20,213 円上（Phase 1 の逸脱量の最大側）', async () => {
