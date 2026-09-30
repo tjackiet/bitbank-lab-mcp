@@ -44,22 +44,15 @@ async function run(opts: Record<string, unknown> = {}) {
 }
 
 describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）', () => {
-	it('受け入れ条件: triple_bottom 242-249-272 が落ち、共有した逆 H&S は残る', async () => {
+	it('横ばい先行の逆H&Sが出ない場合、triple_bottom は排他されない', async () => {
 		const res = await run();
 		const keys = res.data.patterns.map(keyOf);
 
-		// 落ちる側: issue #218 本文の実例（conf 0.81 / 構成点 idx 242 / 249 / 272）
-		expect(keys).not.toContain('triple_bottom|L242-L249-L272');
-		// 根拠側: 主構成点は左肩 230 / 頭 249 / 右肩 272。**249・272 の 2 点**を共有する
-		expect(keys).toContain('inverse_head_and_shoulders|L230-H232-L249-H265-L272');
-
-		// 逆 H&S の主構成点と triple の主構成点の共有が 2 点であることを実データで固定する
-		// （どちらかの構造が入れ替わったらこの数が変わり、受け入れ条件の前提が崩れる）。
-		const ihs = res.data.patterns.find((p) => keyOf(p) === 'inverse_head_and_shoulders|L230-H232-L249-H265-L272');
-		expect(mainPointIdxs(ihs as DeduplicablePattern)).toEqual([230, 249, 272]);
+		expect(keys).toContain('triple_bottom|L242-H245-L249-H265-L272');
+		expect(keys).not.toContain('inverse_head_and_shoulders|L230-H232-L249-H265-L272');
 	});
 
-	it('落ちるのは triple_* だけ — H&S 系 / double / wedge / triangle / pennant は 1 件も動かない', async () => {
+	it('横ばい先行のH&Sを除外した後の実データ内訳を固定する', async () => {
 		const res = await run();
 		const byType = new Map<string, number>();
 		for (const p of res.data.patterns) byType.set(p.type, (byType.get(p.type) ?? 0) + 1);
@@ -78,9 +71,10 @@ describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）
 		// 落ち、既定 `includeForming: false` で除かれている。逆 H&S 2 件は残るので、本段が
 		// 落とす `triple_bottom` 242-249-272（共有点 249 / 272）の前提は変わらない。
 		expect(Object.fromEntries([...byType].sort())).toEqual({
-			inverse_head_and_shoulders: 2,
+			inverse_head_and_shoulders: 1,
 			rising_wedge: 2,
 			triangle_ascending: 4,
+			triple_bottom: 1,
 		});
 		expect(res.meta.count).toBe(8);
 	});
@@ -88,10 +82,10 @@ describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）
 	it('meta.reduction に新しい段が載り、waterfall が成立する', async () => {
 		const res = await run();
 		const r = res.meta.reduction as Record<string, number>;
-		expect(r.tripleHsExcluded).toBe(1);
+		expect(r.tripleHsExcluded).toBe(0);
 		// 既定呼び出しでは H&S 系 2 件（逆 H&S 2。#211 のクランプで `head_and_shoulders` 2 件が
 		// `near_completion` に落ちた）が出力に残り、それが比較対象になる（#224 症状 1）。
-		expect(r.tripleHsCandidateCount).toBe(2);
+		expect(r.tripleHsCandidateCount).toBe(1);
 		expect(r.dedupMerged + r.currentFiltered + r.lifecycleExcluded + r.tripleHsExcluded + r.output).toBe(r.detected);
 		expect(r.output).toBe(res.meta.count);
 	});
@@ -155,12 +149,12 @@ describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）
 			content: Array<{ text: string }>;
 		};
 		const line = res.content[0].text.split('\n').find((l) => l.startsWith('検出内訳:'));
-		expect(line).toContain('triple×H&S排他 -1');
+		expect(line).toContain('triple×H&S排他 -0');
 		// 段の並びはパイプライン順（ライフサイクル絞り込みの**後**）。
 		expect(line).toMatch(/ライフサイクル除外 -\d+ → triple×H&S排他 -\d+ → 出力/);
 	});
 
-	it('view=debug で「どの H&S と何点共有したか」が追える（cap トリムで押し出されない）', async () => {
+	it('view=debug で横ばい先行のH&Sに起因する排他が無いことを示す', async () => {
 		const res = await run();
 		const candidates = (res.meta.debug?.candidates ?? []) as Array<Record<string, unknown>>;
 		// **cap（200 件）に対して候補は 1,900 件超ある。** 検出器の棄却理由と同じ優先度で積むと
@@ -168,27 +162,7 @@ describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）
 		expect(res.meta.debug?.candidatesOmitted).toBeGreaterThan(0);
 
 		const hit = candidates.filter((c) => c.reason === TRIPLE_HS_EXCLUSION_REASON);
-		expect(hit).toHaveLength(1);
-		expect(hit[0].type).toBe('triple_bottom');
-		expect(hit[0].accepted).toBe(false);
-		expect(hit[0].indices).toEqual([242, 249, 272]);
-		// #224 症状 3: triple の `pivots` にネックライン定義点（2 山）が入ったので、`points` は 5 点になる。
-		// role は `kind` から決めるため、`role: 'main'` の集合は `indices` と一致する（全点を main と
-		// 名乗ると `indices` と食い違う）。
-		const points = hit[0].points as Array<{ role: string; idx: number }>;
-		expect(points.map((p) => [p.role, p.idx])).toEqual([
-			['main', 242],
-			['neckline', 245],
-			['main', 249],
-			['neckline', 265],
-			['main', 272],
-		]);
-		expect(points.filter((p) => p.role === 'main').map((p) => p.idx)).toEqual(hit[0].indices);
-		expect(hit[0].details).toEqual({
-			tripleMainIdxs: [242, 249, 272],
-			sharedCount: 2,
-			matches: [{ hsType: 'inverse_head_and_shoulders', hsMainIdxs: [230, 249, 272], sharedIdxs: [249, 272] }],
-		});
+		expect(hit).toHaveLength(0);
 	});
 
 	// **ライフサイクル絞り込みより後に置いていることの回帰。** 先に置くと、根拠にした H&S が
@@ -225,13 +199,13 @@ describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）
 		}
 	});
 
-	it('8 通りのうち少なくとも 1 つで実際に排他が起きている（上のテストが空振りしていない）', async () => {
+	it('8通りすべてで横ばい先行のH&Sに基づく排他が起きない', async () => {
 		let total = 0;
 		for (const opts of LIFECYCLE_COMBOS) {
 			const res = await run(opts);
 			total += (res.meta.reduction as Record<string, number>).tripleHsExcluded;
 		}
-		expect(total).toBeGreaterThan(0);
+		expect(total).toBe(0);
 	});
 
 	// 上流失敗の早期 return（`if (!res.ok) return fail(...)`）は本段より**前**にあるので、

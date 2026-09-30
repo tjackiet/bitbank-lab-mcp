@@ -185,9 +185,8 @@ describe('targetReachedPct は系列の末尾に依存しない（issue #210 (3)
 			// **2.504%** で、`1hour` の肩の上限（`getHsShoulderMaxPctForTf('1hour')` = 1.04%）を
 			// 超える。この構造は Phase 1.5 §10 の**形 X**（実データ D の `30-32-49-83-85`。
 			// B の idx − 200 = D の idx）で、目視で「呼べない」と判定済み。
-			// **残る 5 件は `breakoutTarget` を含めて不変。**
-			['inverse_head_and_shoulders', '242-245-249-265-272', 12558124],
-			['inverse_head_and_shoulders', '230-232-249-265-272', 12602209],
+			// **PR3 の方向ゲートで 5 件 → 3 件**。横ばい先行の 2 構造
+			// （242-245-249-265-272 / 230-232-249-265-272）を除外する。
 			['inverse_head_and_shoulders', '20-26-42-106-109', 10279567],
 			['inverse_head_and_shoulders', '15-18-42-106-109', 10302900],
 			['inverse_head_and_shoulders', '3-9-42-106-109', 10304386],
