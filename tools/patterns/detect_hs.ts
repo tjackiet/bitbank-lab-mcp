@@ -65,6 +65,54 @@ const RELAXED_FACTORS = [
 	{ shoulder: 2.0, head: 0.4, tag: 'x2.0_0.4' },
 ] as const;
 
+// H&S の肩は頭の深さに対して最低でも一定割合の押し / 戻りを持つ必要がある。
+// 1hour 実データの「左肩の深さが頭の 7%」のような V 字の途中を除外するための hard gate。
+const HS_MIN_SHOULDER_DEPTH_RATIO = 0.2;
+
+type HsShoulderDepthCheck =
+	| { ok: true }
+	| {
+			ok: false;
+			details: Record<string, number>;
+	  };
+
+/**
+ * 逆 H&S の左右肩が、頭に対して十分な戻りを持つか検査する。
+ * 深さは各肩と隣接するネックライン定義点の終値差、頭は 2 点の平均ネックラインとの差で測る。
+ * 片側でも最小比率を下回る場合は debug 用の比率・差分を返す。
+ */
+function checkInverseHsShoulderDepth(
+	leftShoulder: Pivot,
+	neckline1: Pivot,
+	head: Pivot,
+	neckline2: Pivot,
+	rightShoulder: Pivot,
+): HsShoulderDepthCheck {
+	const necklinePrice = (neckline1.price + neckline2.price) / 2;
+	const headDepth = necklinePrice - head.price;
+	const leftDepth = neckline1.price - leftShoulder.price;
+	const rightDepth = neckline2.price - rightShoulder.price;
+	const leftRatio = headDepth > 0 ? leftDepth / headDepth : Number.NaN;
+	const rightRatio = headDepth > 0 ? rightDepth / headDepth : Number.NaN;
+	if (
+		headDepth > 0 &&
+		leftDepth >= headDepth * HS_MIN_SHOULDER_DEPTH_RATIO &&
+		rightDepth >= headDepth * HS_MIN_SHOULDER_DEPTH_RATIO
+	)
+		return { ok: true };
+	return {
+		ok: false,
+		details: {
+			leftShoulderDepth: leftDepth,
+			rightShoulderDepth: rightDepth,
+			headDepth,
+			leftShoulderDepthRatio: leftRatio,
+			rightShoulderDepthRatio: rightRatio,
+			minShoulderDepthRatio: HS_MIN_SHOULDER_DEPTH_RATIO,
+		},
+	};
+}
+
 /**
  * `RELAXED_FACTORS` の末尾の段か。**relaxed の棄却エントリはここでだけ積む**（issue #174）。
  *
@@ -843,6 +891,17 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 						type: 'inverse_head_and_shoulders',
 						accepted: false,
 						reason: sizeReason,
+						indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+					});
+					continue;
+				}
+				const shoulderDepth = checkInverseHsShoulderDepth(p0, p1, p2, p3, p4);
+				if (!shoulderDepth.ok) {
+					debugCandidates.push({
+						type: 'inverse_head_and_shoulders',
+						accepted: false,
+						reason: 'shoulder_depth_insufficient',
+						details: shoulderDepth.details,
 						indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
 					});
 					continue;
@@ -1688,6 +1747,19 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 					reason: sizeReason,
 					indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
 				});
+				continue;
+			}
+			const shoulderDepth = checkInverseHsShoulderDepth(p0, p1, p2, p3, p4);
+			if (!shoulderDepth.ok) {
+				if (isFinalRelaxedStage(factors)) {
+					debugCandidates.push({
+						type: 'inverse_head_and_shoulders',
+						accepted: false,
+						reason: 'shoulder_depth_insufficient',
+						details: shoulderDepth.details,
+						indices: [p0.idx, p1.idx, p2.idx, p3.idx, p4.idx],
+					});
+				}
 				continue;
 			}
 			const peaksBetween = allPeaks.filter((v: { idx: number }) => v.idx > p0.idx && v.idx < p4.idx);
