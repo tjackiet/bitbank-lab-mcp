@@ -152,9 +152,9 @@ describe('issue #126 構造ゲート — BTC/JPY 日足 実データ回帰', () 
 			);
 			expect(offendingCands).toHaveLength(0);
 
-			// 代わりに、正しい形が accepted の候補として残る
-			const accepted = cands.find((c) => c.accepted && (c.indices ?? []).includes(IDX.trueTrough2));
-			expect(accepted?.indices).toEqual([IDX.sharedTrough, IDX.trueNeckline, IDX.trueTrough2]);
+			// PR2: 構造ゲートを通っても、先行下降を観測できない二谷は反転として確定しない。
+			const trendRejected = cands.find((c) => c.reason === 'prior_trend_mismatch:sideways');
+			expect(trendRejected?.indices).toEqual([IDX.sharedTrough, IDX.trueNeckline, IDX.trueTrough2]);
 		});
 
 		// 条件 4
@@ -320,14 +320,14 @@ describe('issue #126 構造ゲート — BTC/JPY 日足 実データ回帰', () 
 
 		/**
 		 * **受け入れ条件そのもの（issue #130）。** 8/3 → 8/10 → 8/14 が完成済みの
-		 * `double_bottom` として検出され、ネックライン突破が 8/19（idx 82）で確定する。
+		 * `double_bottom` の候補は構造・ブレイクを満たすが、PR2 では先行下降も必要とする。
 		 *
 		 * 突破足の終値 10,949,999 はネックライン（8/10 の終値 10,191,324）を 7.4% 上回り、
 		 * `BREAKOUT_BUFFER_PCT`（1.5%）を明確に超えている。8/17（10,278,279）と
 		 * 8/18（10,330,037）はバッファ込みの閾値 10,344,194 に届かないので、
 		 * **突破の初出は 8/19 で一意に決まる**。
 		 */
-		it('完成済み double_bottom として検出され、ブレイクが 8/19（idx 82）で確定する', async () => {
+		it('横ばい先行なので完成済み double_bottom としては検出しない', async () => {
 			mockedAnalyzeIndicators.mockResolvedValue(indicatorsOk() as never);
 			const res = await detectPatterns('btc_jpy', '1day', 90, {
 				patterns: ['double_bottom'],
@@ -342,10 +342,12 @@ describe('issue #126 構造ゲート — BTC/JPY 日足 実データ回帰', () 
 				const idxs = (p.pivots ?? []).map((v) => v.idx);
 				return idxs.includes(IDX.sharedTrough) && idxs.includes(IDX.trueTrough2);
 			});
-			expect(found).toHaveLength(1);
-			expect((found[0].pivots ?? []).map((v) => v.idx)).toEqual([IDX.sharedTrough, IDX.trueNeckline, IDX.trueTrough2]);
-			expect(found[0].breakoutBarIndex).toBe(82);
-			expect(found[0].confirmation).toMatchObject({ type: 'neckline_breakout', idx: 82 });
+			expect(found).toHaveLength(0);
+			const candidates =
+				(res.meta?.debug as { candidates?: Array<{ reason?: string; indices?: number[] }> })?.candidates ?? [];
+			expect(
+				candidates.some((c) => c.reason === 'prior_trend_mismatch:sideways' && c.indices?.join('-') === '66-73-77'),
+			).toBe(true);
 			expect(candles[82].isoTime.slice(0, 10)).toBe('2026-08-19');
 			// 突破の初出が 8/19 で一意であること（8/17 / 8/18 はバッファ込み閾値に届かない）
 			const necklineThreshold = pivotAt(IDX.trueNeckline).price * 1.015;
@@ -355,7 +357,7 @@ describe('issue #126 構造ゲート — BTC/JPY 日足 実データ回帰', () 
 		});
 
 		/**
-		 * **issue #133 の修正を固定する — `includeForming: true` でも完成済みが返る。**
+		 * `includeForming: true` でも、先行下降が無い形を完成済みとして復活させない。
 		 *
 		 * かつて dedup は status を見ずに勝者を選んでいた（`globalDedup` は confidence →
 		 * `range.end`、`deduplicatePatterns` は `range.end` 最優先）ため、同一構成点で
@@ -374,7 +376,7 @@ describe('issue #126 構造ゲート — BTC/JPY 日足 実データ回帰', () 
 		 * 完成済みであることは status ではなく突破確定（`breakoutBarIndex` /
 		 * `confirmation`）で識別する。forming 候補はこれらを持たない。
 		 */
-		it('#133 修正済み: includeForming: true でも完成済み（突破 8/19）が形成中に押し出されない', async () => {
+		it('includeForming: true でも横ばい先行の形は完成済みとして出ない', async () => {
 			mockedAnalyzeIndicators.mockResolvedValue(indicatorsOk() as never);
 			const res = await detectPatterns('btc_jpy', '1day', 90, {
 				patterns: ['double_bottom'],
@@ -389,13 +391,7 @@ describe('issue #126 構造ゲート — BTC/JPY 日足 実データ回帰', () 
 				const idxs = (p.pivots ?? []).map((v) => v.idx);
 				return idxs.includes(IDX.sharedTrough) && idxs.includes(IDX.trueTrough2);
 			});
-			expect(found).toHaveLength(1);
-			// 完成済み＝ status 未設定（既存契約）。forming（status='forming'）ではないこと。
-			expect(found[0].status).toBeUndefined();
-			// 完成済みの実体は突破確定で識別する（1 つ上の it と同じ 8/19 = idx 82）
-			expect(found[0].breakoutBarIndex).toBe(82);
-			expect(found[0].confirmation).toMatchObject({ type: 'neckline_breakout', idx: 82 });
-			expect((found[0].pivots ?? []).map((v) => v.idx)).toEqual([IDX.sharedTrough, IDX.trueNeckline, IDX.trueTrough2]);
+			expect(found).toHaveLength(0);
 		});
 
 		it('高安基準は帯の中央付近、終値基準は下限すれすれ（基準選択の根拠）', () => {

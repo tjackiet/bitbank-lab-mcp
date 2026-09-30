@@ -256,7 +256,13 @@ export function validateHorizontalNeckline(
 	return { ok: diffPct <= maxPct, diffPct };
 }
 
-export type PriorTrendExpected = 'up_or_sideways' | 'down_or_sideways';
+/**
+ * 反転前に必要なトレンド方向。
+ *
+ * `*_or_sideways` は H&S / triple の既存契約を保つ緩い判定、`up` / `down` は
+ * double のように「反転する既存トレンド」が定義要件であるパターンに使う。
+ */
+export type PriorTrendExpected = 'up_or_sideways' | 'down_or_sideways' | 'up' | 'down';
 
 export type PriorTrendClassification = 'up' | 'down' | 'sideways' | 'insufficient_data';
 
@@ -297,6 +303,8 @@ export interface PriorTrendResult {
  * `ok` 判定:
  * - `expected='up_or_sideways'`  → `up` / `sideways` / `insufficient_data` を OK
  * - `expected='down_or_sideways'` → `down` / `sideways` / `insufficient_data` を OK
+ * - `expected='up'` / `'down'` → それぞれの方向だけを OK とする。履歴不足は
+ *   反対方向を立証できないので `insufficient_data` として保留（OK）のままにする
  *
  * close 欠損や window 不正の場合は安全側に `sideways` または `insufficient_data` に倒す。
  */
@@ -306,6 +314,16 @@ export function validatePriorTrend(
 	patternBars: number,
 	expected: PriorTrendExpected,
 ): PriorTrendResult {
+	const matchesExpected = (classification: PriorTrendClassification): boolean => {
+		// 走査窓の先頭にかかる候補は、先行トレンドを観測できないだけで反対方向とは限らない。
+		// ここで hard reject すると limit を短くしただけで同じ構造が消えるため、出力の
+		// precedingTrend.direction で未検証を明示して判定は保留する。
+		if (classification === 'insufficient_data') return true;
+		if (expected === 'up') return classification === 'up';
+		if (expected === 'down') return classification === 'down';
+		if (expected === 'up_or_sideways') return classification === 'up' || classification === 'sideways';
+		return classification === 'down' || classification === 'sideways';
+	};
 	const lookbackBars = Math.max(
 		PRIOR_TREND_LOOKBACK_MIN,
 		Math.min(PRIOR_TREND_LOOKBACK_MAX, Math.round(patternBars * 0.5)),
@@ -319,7 +337,7 @@ export function validatePriorTrend(
 
 	if (startIdx < lookbackBars) {
 		return {
-			ok: true,
+			ok: matchesExpected('insufficient_data'),
 			priorReturn,
 			lookbackBars,
 			priorStartIdx: priorStart,
@@ -330,9 +348,8 @@ export function validatePriorTrend(
 
 	// 両端の close が欠損／不正な場合は安全側に sideways
 	if (priorClose === 0 || startClose === 0) {
-		const okMissing = expected === 'up_or_sideways' || expected === 'down_or_sideways';
 		return {
-			ok: okMissing,
+			ok: matchesExpected('sideways'),
 			priorReturn,
 			lookbackBars,
 			priorStartIdx: priorStart,
@@ -344,7 +361,7 @@ export function validatePriorTrend(
 	// |priorReturn| が sideways 範囲内なら早期 return（補助指標の計算は不要）
 	if (Math.abs(priorReturn) <= PRIOR_TREND_SIDEWAYS_PCT) {
 		return {
-			ok: true,
+			ok: matchesExpected('sideways'),
 			priorReturn,
 			lookbackBars,
 			priorStartIdx: priorStart,
@@ -371,7 +388,7 @@ export function validatePriorTrend(
 	// window 内に欠損があれば安全側に sideways
 	if (hasMissingClose || points.length < 2 || !Number.isFinite(maxClose) || !Number.isFinite(minClose)) {
 		return {
-			ok: true,
+			ok: matchesExpected('sideways'),
 			priorReturn,
 			lookbackBars,
 			priorStartIdx: priorStart,
@@ -395,10 +412,7 @@ export function validatePriorTrend(
 		classification = 'down';
 	}
 
-	const ok =
-		expected === 'up_or_sideways'
-			? classification === 'up' || classification === 'sideways'
-			: classification === 'down' || classification === 'sideways';
+	const ok = matchesExpected(classification);
 
 	return { ok, priorReturn, lookbackBars, priorStartIdx: priorStart, classification, rangePct, efficiency, r2 };
 }

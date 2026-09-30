@@ -182,13 +182,11 @@ describe('detect_patterns: 実データに対する triple / H&S の構造ゲー
 		expect((rej[0].details as { retracementRatio: number }).retracementRatio).toBeCloseTo(0.7468, 3);
 	});
 
-	it('double の検出結果は構造ゲートの横展開で変わらない', async () => {
-		// #131 で既にゲートを通っている double は本 PR の対象外。実データの double_bottom
-		// （谷 8/3 → 山 8/10 → 谷 8/14、戻り率 0.528）が従来どおり返ることを固定する。
+	it('double は構造ゲートを通っても先行トレンドを満たさなければ返さない', async () => {
+		// 実データの double_bottom（谷 8/3 → 山 8/10 → 谷 8/14、戻り率 0.528）は
+		// 構造ゲートを通るが、PR2 からは先行下降も要件になる。
 		const { patterns } = await detect(buildBtcJpy2026Candles(), { type: '1day', swingDepth: 3 });
 		const db = patterns.filter((p) => p.type === 'double_bottom');
-		expect(db).toHaveLength(1);
-		expect(db[0].confidence).toBe(0.96);
-		expect(db[0].structureGate?.retracementRatio).toBeCloseTo(0.528, 3);
+		expect(db).toHaveLength(0);
 	});
 });

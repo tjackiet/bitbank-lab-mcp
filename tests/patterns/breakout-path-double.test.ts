@@ -326,16 +326,13 @@ describe('起票時のライブ実例そのもの（issue #242・実データ D 
 			expect(mainIdxs(doubles[0])).toEqual([41, 46, 50]);
 		});
 
-		it('swingDepth: 6 では同じ構成点の double_top が完成済みで accepted のまま残る', async () => {
-			const { patterns } = await liveWindow({ swingDepth: 6 });
+		it('swingDepth: 6 でも横ばい先行なら double_top を確定しない', async () => {
+			const { patterns, candidates } = await liveWindow({ swingDepth: 6 });
 			const doubles = patterns.filter((p) => p.type === 'double_top');
-			expect(doubles).toHaveLength(1);
-			expect(mainIdxs(doubles[0])).toEqual([41, 46, 50]);
-			// double の完成済みは `status` を持たない（`invalid` / `forming` のときだけ付く）。
-			// 既定の `includeInvalid: false` で出ていること自体が accepted の証拠。
-			expect(doubles[0].status).toBeUndefined();
-			expect(doubles[0].invalidReason).toBeUndefined();
-			expect(doubles[0].confirmation).toMatchObject({ type: 'neckline_breakout', idx: 56 });
+			expect(doubles).toHaveLength(0);
+			expect(
+				candidates.some((c) => c.reason === 'prior_trend_mismatch:sideways' && c.indices?.join('-') === '41-46-50'),
+			).toBe(true);
 		});
 
 		it('swingDepth: 6 では debug の swings に idx 55 の H が無い（深さ 6 で極値にならない事実）', async () => {
@@ -435,16 +432,15 @@ describe('窓の終端の余白: 同じ値動きが limit で completed / invali
 	});
 
 	describe('終端 09-04T13:00Z（slice(288, 346)/ 58 本）— 再上昇が余白の中', () => {
-		it('double_top が completed で data.patterns に出る（swingDepth 未指定）', async () => {
-			const { patterns, warnings } = await windowEndingAt(346);
+		it('経路が通っても横ばい先行なら double_top を確定しない（swingDepth 未指定）', async () => {
+			const { patterns, warnings, candidates } = await windowEndingAt(346);
 			const doubles = patterns.filter((p) => p.type === 'double_top');
-			expect(doubles).toHaveLength(1);
-			expect(mainIdxs(doubles[0])).toEqual(MAIN_POINTS);
-			expect(timesOf(doubles[0], windowCandles(346))).toEqual(MAIN_POINT_TIMES);
-			// double の完成済みは `status` を持たない（`invalid` / `near_completion` のときだけ付く）。
-			expect(doubles[0].status).toBeUndefined();
-			expect(doubles[0].invalidReason).toBeUndefined();
-			expect(doubles[0].confirmation).toMatchObject({ type: 'neckline_breakout', idx: rel(344) });
+			expect(doubles).toHaveLength(0);
+			expect(
+				candidates.some(
+					(c) => c.reason === 'prior_trend_mismatch:sideways' && c.indices?.join('-') === MAIN_POINTS.join('-'),
+				),
+			).toBe(true);
 			// 窓が構造的下限（1hour = 17 本）を割っていないこと。
 			expect(warnings).not.toContain('limit_too_small_for_timeframe');
 		});
@@ -514,22 +510,22 @@ describe('窓の終端の余白: 同じ値動きが limit で completed / invali
 			expect(mainIdxs(doubles[0])).toEqual(MAIN_POINTS);
 		});
 
-		it('1 本手前（slice(288, 346)）はまだ completed——遷移はこの 1 本で起きる', async () => {
-			const { patterns } = await windowEndingAt(346, { includeInvalid: true });
+		it('1 本手前（slice(288, 346)）も先行トレンド不足で確定しない', async () => {
+			const { patterns, candidates } = await windowEndingAt(346, { includeInvalid: true });
 			const doubles = patterns.filter((p) => p.type === 'double_top');
-			expect(doubles).toHaveLength(1);
-			expect(doubles[0].status).toBeUndefined();
+			expect(doubles).toHaveLength(0);
+			expect(candidates.some((c) => c.reason === 'prior_trend_mismatch:sideways')).toBe(true);
 		});
 	});
 
-	describe('実データ C の 365 本窓も既定パラメータで completed（終端が同じ 09-04T13:00Z）', () => {
+	describe('実データ C の 365 本窓も先行トレンドを検証する（終端が同じ 09-04T13:00Z）', () => {
 		/**
 		 * 実データ C（`btc_jpy_1hour_2026_09`）の終端は `2026-09-04T13:00:00.000Z` で、
 		 * 上の `slice(288, 346)` の終端と**同じ 1 時間**（C の末尾は取得時点の未確定足なので
 		 * OHLC は一致しない。fixture D の docstring を参照）。同じ形が C では構成点
 		 * **348-353-357**（= D の 329-334-338。`i + 19` の対応）として入っており、
-		 * **既定パラメータのまま `completed`** になる——issue #277 本文の観察そのもの。
-		 * 上の 58 本窓と結果が一致することの検算でもある。
+		 * 経路検査は通るが、PR2 では先行トレンドも必須となる。上の 58 本窓と同じく
+		 * 横ばいとして `prior_trend_mismatch:sideways` で棄却されることを固定する。
 		 */
 		async function realDataC(opts: Record<string, unknown> = {}) {
 			vi.mocked(analyzeIndicators).mockResolvedValueOnce(
@@ -544,13 +540,13 @@ describe('窓の終端の余白: 同じ値動きが limit で completed / invali
 			};
 		}
 
-		it('構成点 348-353-357 の double_top が既定で completed として出る', async () => {
+		it('構成点 348-353-357 は横ばい先行なので既定で出ない', async () => {
 			const { patterns, candidates } = await realDataC();
 			const hit = patterns.find((p) => mainIdxs(p).join('-') === '348-353-357');
-			expect(hit, JSON.stringify(patterns.map(mainIdxs))).toBeDefined();
-			expect(timesOf(hit as Record<string, unknown>, buildBtcJpy1hour202609Candles())).toEqual(MAIN_POINT_TIMES);
-			expect(hit?.status).toBeUndefined();
-			expect(hit?.invalidReason).toBeUndefined();
+			expect(hit, JSON.stringify(patterns.map(mainIdxs))).toBeUndefined();
+			expect(
+				candidates.some((c) => c.reason === 'prior_trend_mismatch:sideways' && c.indices?.join('-') === '348-353-357'),
+			).toBe(true);
 			// 再上昇の足は C の idx 362（= D の 343）で、終端 364 の 2 本前＝余白の中。
 			expect(
 				candidates.every((c) => !(c.reason === 'peak_after_last_pivot' && c.indices?.join('-') === '348-353-357')),
@@ -596,13 +592,13 @@ describe('relaxed 経路は invalid になった候補で走査を打ち切ら�
 		return detectDebug(toCandles(NESTED_DOUBLE_TOPS), { tolerancePct: 0.02, ...opts });
 	}
 
-	it('先頭の候補が invalid でも、後ろの成立した候補を completed で返す', async () => {
-		const { patterns } = await relaxed();
+	it('先頭が invalid でも、後ろの横ばい候補は completed として返さない', async () => {
+		const { patterns, candidates } = await relaxed();
 		const doubles = patterns.filter((p) => p.type === 'double_top');
-		expect(doubles).toHaveLength(1);
-		expect(mainIdxs(doubles[0])).toEqual([17, 21, 25]);
-		expect(doubles[0].status).toBeUndefined();
-		expect(doubles[0]._fallback).toBe('relaxed_double_x1.3');
+		expect(doubles).toHaveLength(0);
+		expect(
+			candidates.some((c) => c.reason === 'prior_trend_mismatch:sideways' && c.indices?.join('-') === '17-21-25'),
+		).toBe(true);
 	});
 
 	it('落ちた先頭の候補は view=debug に理由コード付きで残る', async () => {
@@ -613,10 +609,11 @@ describe('relaxed 経路は invalid になった候補で走査を打ち切ら�
 		expect(hit?.details).toMatchObject({ lastPivotIdx: 17, breakoutIdx: 29, offenderIdx: 25 });
 	});
 
-	it('1 件だけ返す契約は変わらない（invalid の候補は data.patterns に出さない）', async () => {
+	it('includeInvalid では経路不備の先頭候補だけを返す', async () => {
 		const { patterns } = await relaxed({ includeInvalid: true });
 		const doubles = patterns.filter((p) => p.type === 'double_top');
 		expect(doubles).toHaveLength(1);
-		expect(mainIdxs(doubles[0])).toEqual([17, 21, 25]);
+		expect(mainIdxs(doubles[0])).toEqual([9, 13, 17]);
+		expect(doubles[0]).toMatchObject({ status: 'invalid', invalidReason: 'peak_after_last_pivot' });
 	});
 });

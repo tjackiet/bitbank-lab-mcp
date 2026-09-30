@@ -663,30 +663,6 @@ function findRelaxedDoubleTop(
 			});
 			continue;
 		}
-		const trend = validatePriorTrend(candles, a.idx, (isCompleted ? breakoutIdx : lastIdx) - a.idx, 'up_or_sideways');
-		if (!trend.ok) {
-			pcand({
-				type: 'double_top',
-				accepted: false,
-				reason: `prior_trend_mismatch:${trend.classification}`,
-				idxs: [a.idx, b.idx, c.idx],
-				pts: [
-					{ role: 'peak1', idx: a.idx, price: a.price },
-					{ role: 'valley', idx: b.idx, price: b.price },
-					{ role: 'peak2', idx: c.idx, price: c.price },
-				],
-			});
-			continue;
-		}
-		if (trend.classification === 'insufficient_data') {
-			pcand({
-				type: 'double_top',
-				accepted: true,
-				reason: 'prior_trend_insufficient_data',
-				idxs: [a.idx, b.idx, c.idx],
-			});
-		}
-
 		const gate = applyStructuralGate(candles, pivots, 'top', a, b, c, necklinePrice, 'double_top', pcand);
 		if (!gate) continue;
 
@@ -716,6 +692,31 @@ function findRelaxedDoubleTop(
 			isCompleted && post.verdict === 'ok'
 				? checkBreakoutPath({ pivots, side: 'top', type: 'double_top', a, b, c, breakoutIdx, pcand })
 				: null;
+		// 診断用の既存ゲート（構造・再進入・ブレイク経路）を先に通す。横ばいを理由に
+		// 手前で止めると、debug view が実際の構造不備を報告できなくなる。
+		const trend = validatePriorTrend(candles, a.idx, (isCompleted ? breakoutIdx : lastIdx) - a.idx, 'up');
+		if (post.verdict === 'ok' && !pathTerminal && !trend.ok) {
+			pcand({
+				type: 'double_top',
+				accepted: false,
+				reason: `prior_trend_mismatch:${trend.classification}`,
+				idxs: [a.idx, b.idx, c.idx],
+				pts: [
+					{ role: 'peak1', idx: a.idx, price: a.price },
+					{ role: 'valley', idx: b.idx, price: b.price },
+					{ role: 'peak2', idx: c.idx, price: c.price },
+				],
+			});
+			continue;
+		}
+		if (trend.classification === 'insufficient_data') {
+			pcand({
+				type: 'double_top',
+				accepted: true,
+				reason: 'prior_trend_insufficient_data',
+				idxs: [a.idx, b.idx, c.idx],
+			});
+		}
 
 		const start = candles[a.idx].isoTime,
 			end = isCompleted ? candles[breakoutIdx]?.isoTime : candles[c.idx]?.isoTime;
@@ -896,30 +897,6 @@ function findRelaxedDoubleBottom(
 			});
 			continue;
 		}
-		const trend = validatePriorTrend(candles, a.idx, (isCompleted ? breakoutIdx : lastIdx) - a.idx, 'down_or_sideways');
-		if (!trend.ok) {
-			pcand({
-				type: 'double_bottom',
-				accepted: false,
-				reason: `prior_trend_mismatch:${trend.classification}`,
-				idxs: [a.idx, b.idx, c.idx],
-				pts: [
-					{ role: 'valley1', idx: a.idx, price: a.price },
-					{ role: 'peak', idx: b.idx, price: b.price },
-					{ role: 'valley2', idx: c.idx, price: c.price },
-				],
-			});
-			continue;
-		}
-		if (trend.classification === 'insufficient_data') {
-			pcand({
-				type: 'double_bottom',
-				accepted: true,
-				reason: 'prior_trend_insufficient_data',
-				idxs: [a.idx, b.idx, c.idx],
-			});
-		}
-
 		const gate = applyStructuralGate(candles, pivots, 'bottom', a, b, c, necklinePrice, 'double_bottom', pcand);
 		if (!gate) continue;
 
@@ -950,6 +927,29 @@ function findRelaxedDoubleBottom(
 			isCompleted && post.verdict === 'ok'
 				? checkBreakoutPath({ pivots, side: 'bottom', type: 'double_bottom', a, b, c, breakoutIdx, pcand })
 				: null;
+		const trend = validatePriorTrend(candles, a.idx, (isCompleted ? breakoutIdx : lastIdx) - a.idx, 'down');
+		if (post.verdict === 'ok' && !pathTerminal && !trend.ok) {
+			pcand({
+				type: 'double_bottom',
+				accepted: false,
+				reason: `prior_trend_mismatch:${trend.classification}`,
+				idxs: [a.idx, b.idx, c.idx],
+				pts: [
+					{ role: 'valley1', idx: a.idx, price: a.price },
+					{ role: 'peak', idx: b.idx, price: b.price },
+					{ role: 'valley2', idx: c.idx, price: c.price },
+				],
+			});
+			continue;
+		}
+		if (trend.classification === 'insufficient_data') {
+			pcand({
+				type: 'double_bottom',
+				accepted: true,
+				reason: 'prior_trend_insufficient_data',
+				idxs: [a.idx, b.idx, c.idx],
+			});
+		}
 
 		const start = candles[a.idx].isoTime,
 			end = isCompleted ? candles[breakoutIdx]?.isoTime : candles[c.idx]?.isoTime;
@@ -1143,35 +1143,6 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					});
 					continue;
 				}
-				// 先行トレンドの参照終端。未ブレイクではブレイク足が無いので最新足まで見る。
-				const trend = validatePriorTrend(
-					candles,
-					a.idx,
-					(isCompleted ? breakoutIdx : lastIdx) - a.idx,
-					'up_or_sideways',
-				);
-				if (!trend.ok) {
-					pcand({
-						type: 'double_top',
-						accepted: false,
-						reason: `prior_trend_mismatch:${trend.classification}`,
-						idxs: [a.idx, b.idx, c.idx],
-						pts: [
-							{ role: 'peak1', idx: a.idx, price: a.price },
-							{ role: 'valley', idx: b.idx, price: b.price },
-							{ role: 'peak2', idx: c.idx, price: c.price },
-						],
-					});
-					continue;
-				}
-				if (trend.classification === 'insufficient_data') {
-					pcand({
-						type: 'double_top',
-						accepted: true,
-						reason: 'prior_trend_insufficient_data',
-						idxs: [a.idx, b.idx, c.idx],
-					});
-				}
 				const gate = applyStructuralGate(candles, pivots, 'top', a, b, c, necklinePrice, 'double_top', pcand);
 				if (!gate) continue;
 				// 未ブレイクでは走査終端が最新足になる（#126 G5 を `near_completion` へ引き継ぐ。
@@ -1202,6 +1173,30 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					isCompleted && post.verdict === 'ok'
 						? checkBreakoutPath({ pivots, side: 'top', type: 'double_top', a, b, c, breakoutIdx, pcand })
 						: null;
+				// 先行トレンドは、より具体的な構造／経路の棄却理由を debug に残した後で検証する。
+				const trend = validatePriorTrend(candles, a.idx, (isCompleted ? breakoutIdx : lastIdx) - a.idx, 'up');
+				if (post.verdict === 'ok' && !pathTerminal && !trend.ok) {
+					pcand({
+						type: 'double_top',
+						accepted: false,
+						reason: `prior_trend_mismatch:${trend.classification}`,
+						idxs: [a.idx, b.idx, c.idx],
+						pts: [
+							{ role: 'peak1', idx: a.idx, price: a.price },
+							{ role: 'valley', idx: b.idx, price: b.price },
+							{ role: 'peak2', idx: c.idx, price: c.price },
+						],
+					});
+					continue;
+				}
+				if (trend.classification === 'insufficient_data') {
+					pcand({
+						type: 'double_top',
+						accepted: true,
+						reason: 'prior_trend_insufficient_data',
+						idxs: [a.idx, b.idx, c.idx],
+					});
+				}
 				const start = candles[a.idx].isoTime;
 				// 未ブレイクの `range.end` は第2構成点（＝`structureRange.end`）。
 				// `detect_triples` の `near_completion` と同じ取り方。
@@ -1354,34 +1349,6 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					});
 					continue;
 				}
-				const trend = validatePriorTrend(
-					candles,
-					a.idx,
-					(isCompleted ? breakoutIdx : lastIdx) - a.idx,
-					'down_or_sideways',
-				);
-				if (!trend.ok) {
-					pcand({
-						type: 'double_bottom',
-						accepted: false,
-						reason: `prior_trend_mismatch:${trend.classification}`,
-						idxs: [a.idx, b.idx, c.idx],
-						pts: [
-							{ role: 'valley1', idx: a.idx, price: a.price },
-							{ role: 'peak', idx: b.idx, price: b.price },
-							{ role: 'valley2', idx: c.idx, price: c.price },
-						],
-					});
-					continue;
-				}
-				if (trend.classification === 'insufficient_data') {
-					pcand({
-						type: 'double_bottom',
-						accepted: true,
-						reason: 'prior_trend_insufficient_data',
-						idxs: [a.idx, b.idx, c.idx],
-					});
-				}
 				const gate = applyStructuralGate(candles, pivots, 'bottom', a, b, c, necklinePrice, 'double_bottom', pcand);
 				if (!gate) continue;
 				const post = checkPostPivotInvalidation({
@@ -1410,6 +1377,29 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					isCompleted && post.verdict === 'ok'
 						? checkBreakoutPath({ pivots, side: 'bottom', type: 'double_bottom', a, b, c, breakoutIdx, pcand })
 						: null;
+				const trend = validatePriorTrend(candles, a.idx, (isCompleted ? breakoutIdx : lastIdx) - a.idx, 'down');
+				if (post.verdict === 'ok' && !pathTerminal && !trend.ok) {
+					pcand({
+						type: 'double_bottom',
+						accepted: false,
+						reason: `prior_trend_mismatch:${trend.classification}`,
+						idxs: [a.idx, b.idx, c.idx],
+						pts: [
+							{ role: 'valley1', idx: a.idx, price: a.price },
+							{ role: 'peak', idx: b.idx, price: b.price },
+							{ role: 'valley2', idx: c.idx, price: c.price },
+						],
+					});
+					continue;
+				}
+				if (trend.classification === 'insufficient_data') {
+					pcand({
+						type: 'double_bottom',
+						accepted: true,
+						reason: 'prior_trend_insufficient_data',
+						idxs: [a.idx, b.idx, c.idx],
+					});
+				}
 				const start = candles[a.idx].isoTime;
 				const end = isCompleted ? candles[breakoutIdx]?.isoTime : candles[c.idx]?.isoTime;
 				if (!start || !end) continue;

@@ -716,7 +716,7 @@ describe('detect_patterns fixtures', () => {
 
 	// ── 形成前トレンド方向の hard reject（PR #3） ──
 	describe('反転パターン形成前トレンドの hard reject', () => {
-		it('上昇トレンド継続中は forming の double_bottom を検出しない（priorReturn が up）', async () => {
+		it('上昇トレンド継続中は double_bottom を検出しない', async () => {
 			mockedAnalyzeIndicators.mockResolvedValueOnce(
 				asMockResult(indicatorsOk(buildUptrendThenFakeDoubleBottomCandles())),
 			);
@@ -733,13 +733,8 @@ describe('detect_patterns fixtures', () => {
 			const dbs = res.data.patterns.filter((p: { type: string }) => p.type === 'double_bottom');
 			expect(dbs).toHaveLength(0);
 
-			const debugCands =
-				(res.meta?.debug as { candidates?: Array<{ accepted?: boolean; reason?: string }> } | undefined)?.candidates ??
-				[];
-			const priorTrendRejects = debugCands.filter(
-				(c) => !c.accepted && typeof c.reason === 'string' && c.reason.startsWith('prior_trend_mismatch'),
-			);
-			expect(priorTrendRejects.length).toBeGreaterThan(0);
+			// double は forming を出さないため、未ブレイクなら no_breakout で先に終了する。
+			// 先行トレンドの理由コードは、構造・経路の診断を残すため最後に評価する。
 		});
 
 		it('下降トレンド継続中は head_and_shoulders を検出しない（priorReturn が down）', async () => {

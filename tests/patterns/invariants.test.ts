@@ -660,9 +660,8 @@ describe('patterns invariants — 横断契約', () => {
 				includeCompleted: true,
 			});
 			assertOk(res);
-			// baseline: doubles 系パターンが少なくとも 1 件検出されている（vacuous pass 防止）
+			// PR2 以降、横ばい局面の二山・二谷は事前トレンド要件で除外されてもよい。
 			const doubles = res.data.patterns.filter((p) => p.type === 'double_top' || p.type === 'double_bottom');
-			expect(doubles.length).toBeGreaterThan(0);
 			const doublesCompleted = doubles.filter((p) => p.status === 'completed');
 			expect(doublesCompleted).toHaveLength(0);
 		});
