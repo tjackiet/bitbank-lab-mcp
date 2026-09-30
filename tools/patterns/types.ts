@@ -257,6 +257,8 @@ export interface PatternStructureGate {
 	priorExtremeIdx?: number;
 	priorExtremePrice?: number;
 	necklineCrossIdx?: number;
+	/** 構造ゲートを適用できなかった理由（候補は棄却せず未評価のまま通過） */
+	skipped?: 'no_prior_extreme' | 'insufficient_history';
 }
 
 /** パターン構成点のみで張る期間（誤読防止のための追加フィールド）。詳細は schema 参照。 */

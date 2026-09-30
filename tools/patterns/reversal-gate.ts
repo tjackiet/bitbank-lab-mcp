@@ -95,6 +95,7 @@ export function buildStructureGate(gate: ReversalStructureResult): PatternStruct
 		out.priorExtremePrice = gate.priorExtreme.extremePrice;
 	}
 	if (gate.necklineCrossIdx !== undefined) out.necklineCrossIdx = gate.necklineCrossIdx;
+	if (gate.skipped !== undefined) out.skipped = gate.skipped;
 	return Object.keys(out).length > 0 ? out : undefined;
 }
 

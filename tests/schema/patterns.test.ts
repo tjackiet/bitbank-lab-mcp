@@ -169,6 +169,18 @@ describe('DetectedPatternSchema', () => {
 		expect(result.precedingTrend?.direction).toBe('down');
 	});
 
+	it('structureGate.skipped に先行値幅の未評価理由を受け入れる', () => {
+		for (const skipped of ['no_prior_extreme', 'insufficient_history'] as const) {
+			const result = DetectedPatternSchema.parse({
+				type: 'triple_top',
+				confidence: 0.8,
+				range: { start: '2025-09-01', end: '2025-10-02' },
+				structureGate: { skipped },
+			});
+			expect(result.structureGate?.skipped).toBe(skipped);
+		}
+	});
+
 	it('confirmation=not_confirmed を受け入れる', () => {
 		const result = DetectedPatternSchema.parse({
 			type: 'head_and_shoulders',

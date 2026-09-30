@@ -2223,7 +2223,7 @@ describe('formatPatternLine: 山2 / 谷2 の位置行（#245）', () => {
 		expect(formatPatternLine(p, 0, 'full', emptyMeta)).not.toContain('山2 の位置');
 	});
 
-	it('triple / H&S には出さない（#178 項目 3。同じ量が意味を持たない）', () => {
+	it('H&S には出さない（肩の位置は別定義のため）', () => {
 		const triple = makePattern({
 			type: 'triple_top',
 			pivots: [
@@ -2244,10 +2244,75 @@ describe('formatPatternLine: 山2 / 谷2 の位置行（#245）', () => {
 				{ idx: 20, price: 97000, kind: 'H', extremePrice: 99000 },
 			],
 		});
-		for (const p of [triple, hs]) {
-			const line = formatPatternLine(p, 0, 'full', emptyMeta);
-			expect(line, String(p.type)).not.toContain('の位置: 終値はネックライン');
-		}
+		expect(formatPatternLine(hs, 0, 'full', emptyMeta)).not.toContain('の位置: 終値はネックライン');
+		expect(formatPatternLine(triple, 0, 'full', emptyMeta)).toContain('山1 の位置: 終値はネックライン');
+	});
+
+	it('triple_top / triple_bottom: 各主構成点の終値とヒゲを表示する', () => {
+		const top = makePattern({
+			type: 'triple_top',
+			pivots: [
+				{ idx: 0, price: 100000, kind: 'H', extremePrice: 101000 },
+				{ idx: 5, price: 90000, kind: 'L', extremePrice: 89000 },
+				{ idx: 10, price: 98000, kind: 'H', extremePrice: 100000 },
+				{ idx: 15, price: 91000, kind: 'L', extremePrice: 90000 },
+				{ idx: 20, price: 95000, kind: 'H', extremePrice: 99000 },
+			],
+		});
+		const bottom = makePattern({
+			type: 'triple_bottom',
+			pivots: [
+				{ idx: 0, price: 90000, kind: 'L', extremePrice: 89000 },
+				{ idx: 5, price: 100000, kind: 'H', extremePrice: 101000 },
+				{ idx: 10, price: 92000, kind: 'L', extremePrice: 90000 },
+				{ idx: 15, price: 99000, kind: 'H', extremePrice: 100000 },
+				{ idx: 20, price: 95000, kind: 'L', extremePrice: 91000 },
+			],
+		});
+		const topLine = formatPatternLine(top, 0, 'summary', emptyMeta);
+		const bottomLine = formatPatternLine(bottom, 0, 'summary', emptyMeta);
+		expect(topLine).toContain('山1 の位置: 終値はネックラインの +79.2%（パターン高さ比）/ ヒゲ 8.3%');
+		expect(topLine).toContain('山2 の位置: 終値はネックラインの +62.5%（パターン高さ比）/ ヒゲ 16.7%');
+		expect(topLine).toContain('山3 の位置: 終値はネックラインの +37.5%（パターン高さ比）/ ヒゲ 33.3%');
+		expect(bottomLine).toContain('谷1 の位置: 終値はネックラインの -79.2%（パターン高さ比）/ ヒゲ 8.3%');
+		expect(bottomLine).toContain('谷2 の位置: 終値はネックラインの -62.5%（パターン高さ比）/ ヒゲ 16.7%');
+		expect(bottomLine).toContain('谷3 の位置: 終値はネックラインの -37.5%（パターン高さ比）/ ヒゲ 33.3%');
+	});
+
+	it('triple forming: 確定済みの2主構成点だけ表示する', () => {
+		const forming = makePattern({
+			type: 'triple_top',
+			status: 'forming',
+			pivots: [
+				{ idx: 0, price: 100000, kind: 'H', extremePrice: 101000 },
+				{ idx: 5, price: 90000, kind: 'L', extremePrice: 89000 },
+				{ idx: 10, price: 98000, kind: 'H', extremePrice: 100000 },
+				{ idx: 15, price: 91000, kind: 'L', extremePrice: 90000 },
+			],
+		});
+		const line = formatPatternLine(forming, 0, 'full', emptyMeta);
+		expect(line).toContain('山1 の位置:');
+		expect(line).toContain('山2 の位置:');
+		expect(line).not.toContain('山3 の位置:');
+	});
+});
+
+describe('formatPatternLine: 先行値幅の未評価理由', () => {
+	it('structureGate.skipped を理由付きで表示する', () => {
+		const noPrior = formatPatternLine(
+			makePattern({ structureGate: { skipped: 'no_prior_extreme' } }),
+			0,
+			'summary',
+			emptyMeta,
+		);
+		const insufficient = formatPatternLine(
+			makePattern({ structureGate: { skipped: 'insufficient_history' } }),
+			0,
+			'summary',
+			emptyMeta,
+		);
+		expect(noPrior).toContain('先行値幅: 窓の先頭のため未評価');
+		expect(insufficient).toContain('先行値幅: 交差確認に必要な履歴が不足しているため未評価');
 	});
 });
 

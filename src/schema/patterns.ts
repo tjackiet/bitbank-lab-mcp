@@ -815,9 +815,13 @@ export const DetectedPatternSchema = z.object({
 					'第1構成点より前にネックライン水準を**終値で**抜けたバーの位置。' +
 						`この事象が無い候補は棄却される。${PATTERN_INDEX_NOTE}`,
 				),
+			skipped: z
+				.enum(['no_prior_extreme', 'insufficient_history'])
+				.optional()
+				.describe('構造ゲートを適用できず、先行値幅を未評価のまま通過した理由'),
 		})
 		.optional()
-		.describe('構造ゲートが実際に計測した値。棄却されなかった理由を呼び出し側が検算できるようにする。'),
+		.describe('構造ゲートが実際に計測した値、または未評価理由。呼び出し側が判定経路を検算できるようにする。'),
 	// 形成中パターン用フィールド
 	apexDate: z.string().optional(), // アペックス（頂点）到達予定日
 	daysToApex: z.number().int().optional(), // アペックスまでの日数

@@ -24,6 +24,7 @@ import { buildPeriodBlock, buildScanRange } from './patterns/period.js';
 import { rankPatterns } from './patterns/ranking.js';
 import { linearRegressionWithR2, near as nearFn, pct as pctFn } from './patterns/regression.js';
 import { buildScanWindowWarning } from './patterns/scan-window.js';
+import { formatStructureGateSkipLine, formatTriplePositionLines } from './patterns/structure-diagnostics.js';
 import { type Candle, detectSwingPoints, filterPeaks, filterValleys } from './patterns/swing.js';
 import { annotateTargetBreakoutConfounders, type TargetBreakoutConfounder } from './patterns/target-confounders.js';
 import { formatTargetProgressLine } from './patterns/target-reach.js';
@@ -80,6 +81,7 @@ interface SummaryPattern extends DeduplicablePattern {
 	isTrendContinuation?: boolean;
 	timeframe?: string;
 	timeframeLabel?: string;
+	structureGate?: { skipped?: 'no_prior_extreme' | 'insufficient_history' };
 }
 
 /**
@@ -544,6 +546,10 @@ export default async function detectPatterns(
 					};
 					detail += `\n   - 状態: ${statusJa[p.status] || p.status}`;
 				}
+
+				const structureGateSkipLine = formatStructureGateSkipLine(p.structureGate?.skipped);
+				if (structureGateSkipLine) detail += `\n${structureGateSkipLine}`;
+				for (const positionLine of formatTriplePositionLines(p.type, p.pivots)) detail += `\n${positionLine}`;
 
 				// ブレイクアウト情報（全パターン共通）
 				if (p.breakoutDirection && p.outcome) {
