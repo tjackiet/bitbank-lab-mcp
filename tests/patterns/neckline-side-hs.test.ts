@@ -233,10 +233,9 @@ describe('実データ（`btc_jpy_1hour_2026_08`）の H&S 候補が誤った側
 		expect(patterns.filter((p) => rejectedIdxs.has(idxsOf(p)))).toEqual([]);
 	});
 
-	it('既定の `swingDepth` でも逆 H&S 225-232-249-265-272 は横ばい先行で落ちる', async () => {
-		// #211 マージ後の実データで**既定パラメータのまま**落ちる唯一の構造。
-		// `tests/patterns/target-reach-window-invariance.test.ts` の退化ターゲット一覧が
-		// 7 件 → 6 件になったのはこれ。
+	it('既定の `swingDepth` でも逆 H&S 225-232-249-265-272 は反対方向ゲートで落ちる', async () => {
+		// 時間足別の横ばい閾値により、sideways ではなく up と分類されるが、
+		// 逆 H&S に必要な down 先行ではないため棄却される。
 		const { candidates, patterns } = await detectDebug('1hour', {
 			patterns: ['head_and_shoulders', 'inverse_head_and_shoulders'],
 		});
@@ -244,8 +243,10 @@ describe('実データ（`btc_jpy_1hour_2026_08`）の H&S 候補が誤った側
 		expect(rejected.map((c) => [c.type, c.reason, c.indices?.join('-')])).toEqual([
 			['inverse_head_and_shoulders', 'prior_trend_mismatch:sideways', '242-245-249-265-272'],
 			['inverse_head_and_shoulders', 'prior_trend_mismatch:sideways', '230-232-249-265-272'],
-			['inverse_head_and_shoulders', 'prior_trend_mismatch:sideways', '225-232-249-265-272'],
 		]);
+		expect(
+			candidates.some((c) => c.reason === 'prior_trend_mismatch:up' && c.indices?.join('-') === '225-232-249-265-272'),
+		).toBe(true);
 		expect(patterns.filter((p) => idxsOf(p) === '225-232-249-265-272')).toEqual([]);
 	});
 });

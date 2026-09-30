@@ -261,10 +261,10 @@ describe('未ブレイクの double は near_completion（issue #262）', () => 
  * この実体が実際に残ることを指名で固定する。
  */
 describe('凍結済み実データ（実データ B・Phase 1 §8 の形 07）', () => {
-	it('double_top 219-230-236 は先行上昇が無いため near_completion にしない', async () => {
+	it('double_top 219-230-236 は時間足別閾値で上昇先行として near_completion に残る', async () => {
 		const candles = buildBtcJpy1hour202608Candles().slice(0, 254) as unknown as Candle[];
 		const found = await detect(candles, 'double_top', { swingDepth: 6 }, '1hour');
 		const hit = found.find((p) => p.pivots?.map((v) => v.idx).join('-') === '219-230-236');
-		expect(hit, '先行トレンド要件を満たさない形は data.patterns に出ない').toBeUndefined();
+		expect((hit as { precedingTrend?: { direction?: string } } | undefined)?.precedingTrend?.direction).toBe('up');
 	});
 });

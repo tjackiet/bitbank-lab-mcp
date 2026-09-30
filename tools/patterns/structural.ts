@@ -217,6 +217,23 @@ export const PRIOR_TREND_MIN_EFFICIENCY = 0.55;
 /** 前提トレンド判定で「方向性のあるトレンド」とみなす R² 下限 */
 export const PRIOR_TREND_MIN_R2 = 0.35;
 
+/** 先行トレンド検査の時間足別パラメータ。値は呼び出し側で時間足から解決する。 */
+export interface PriorTrendParams {
+	/** この絶対リターン以下を横ばいとみなす上限 */
+	sidewaysPct: number;
+	/** lookback バー数の下限 */
+	lookbackMin: number;
+	/** lookback バー数の上限 */
+	lookbackMax: number;
+}
+
+/** 従来の1day相当の既定値（直接呼び出しと未知の時間足の後方互換用）。 */
+export const DEFAULT_PRIOR_TREND_PARAMS: PriorTrendParams = {
+	sidewaysPct: PRIOR_TREND_SIDEWAYS_PCT,
+	lookbackMin: PRIOR_TREND_LOOKBACK_MIN,
+	lookbackMax: PRIOR_TREND_LOOKBACK_MAX,
+};
+
 // ---------- 純粋関数 ----------
 
 /**
@@ -282,7 +299,7 @@ export interface PriorTrendResult {
 /**
  * 形成前トレンド方向の検証。
  *
- * - `lookbackBars = clamp(round(patternBars * 0.5), PRIOR_TREND_LOOKBACK_MIN, PRIOR_TREND_LOOKBACK_MAX)`
+ * - `lookbackBars = clamp(round(patternBars * 0.5), params.lookbackMin, params.lookbackMax)`
  * - `priorStart  = max(0, startIdx - lookbackBars)`
  * - `priorReturn = (close[startIdx] - close[priorStart]) / close[priorStart]`
  *
@@ -294,8 +311,8 @@ export interface PriorTrendResult {
  * 分類ルール:
  * - データ不足（`startIdx < lookbackBars`）は `classification='insufficient_data'` で
  *   `ok=true`（hard reject しない）
- * - `|priorReturn| <= PRIOR_TREND_SIDEWAYS_PCT` は `classification='sideways'`
- * - `|priorReturn| > PRIOR_TREND_SIDEWAYS_PCT` でも、
+ * - `|priorReturn| <= params.sidewaysPct` は `classification='sideways'`
+ * - `|priorReturn| > params.sidewaysPct` でも、
  *   `efficiency >= PRIOR_TREND_MIN_EFFICIENCY` も `r2 >= PRIOR_TREND_MIN_R2` も
  *   満たさない場合は `classification='sideways'`（レンジ内の端点移動を弾く）
  * - 上記を満たす場合のみ `priorReturn > 0 → 'up'` / `priorReturn < 0 → 'down'`
@@ -313,6 +330,7 @@ export function validatePriorTrend(
 	startIdx: number,
 	patternBars: number,
 	expected: PriorTrendExpected,
+	params: PriorTrendParams = DEFAULT_PRIOR_TREND_PARAMS,
 ): PriorTrendResult {
 	const matchesExpected = (classification: PriorTrendClassification): boolean => {
 		// 走査窓の先頭にかかる候補は、先行トレンドを観測できないだけで反対方向とは限らない。
@@ -324,10 +342,7 @@ export function validatePriorTrend(
 		if (expected === 'up_or_sideways') return classification === 'up' || classification === 'sideways';
 		return classification === 'down' || classification === 'sideways';
 	};
-	const lookbackBars = Math.max(
-		PRIOR_TREND_LOOKBACK_MIN,
-		Math.min(PRIOR_TREND_LOOKBACK_MAX, Math.round(patternBars * 0.5)),
-	);
+	const lookbackBars = Math.max(params.lookbackMin, Math.min(params.lookbackMax, Math.round(patternBars * 0.5)));
 	const priorStart = Math.max(0, startIdx - lookbackBars);
 	const startCloseRaw = candles[startIdx]?.close;
 	const priorCloseRaw = candles[priorStart]?.close;
@@ -359,7 +374,7 @@ export function validatePriorTrend(
 	}
 
 	// |priorReturn| が sideways 範囲内なら早期 return（補助指標の計算は不要）
-	if (Math.abs(priorReturn) <= PRIOR_TREND_SIDEWAYS_PCT) {
+	if (Math.abs(priorReturn) <= params.sidewaysPct) {
 		return {
 			ok: matchesExpected('sideways'),
 			priorReturn,

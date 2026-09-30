@@ -9,6 +9,7 @@ import {
 	getDefaultToleranceForTf,
 	getHeadProminenceForTf,
 	getMinFitForTf,
+	getPriorTrendParamsForTf,
 	getSizeThresholdsForTf,
 	getTriangleCoeffForTf,
 	getTriangleWindowSize,
@@ -113,6 +114,21 @@ describe('getDefaultToleranceForTf', () => {
 
 	it('短期足はより広い許容誤差を返す', () => {
 		expect(getDefaultToleranceForTf('15min')).toBe(0.06);
+	});
+});
+
+describe('getPriorTrendParamsForTf', () => {
+	it('1day は従来の5% / 10〜30本を維持する', () => {
+		expect(getPriorTrendParamsForTf('1day')).toEqual({ sidewaysPct: 0.05, lookbackMin: 10, lookbackMax: 30 });
+	});
+
+	it('1hour はATR比の横ばい閾値と相対lookbackを返す', () => {
+		expect(getPriorTrendParamsForTf('1hour')).toEqual({ sidewaysPct: 0.0104, lookbackMin: 10, lookbackMax: 30 });
+	});
+
+	it('1day以上と未知の時間足は1day相当へフォールバックする', () => {
+		expect(getPriorTrendParamsForTf('1week')).toEqual(getPriorTrendParamsForTf('1day'));
+		expect(getPriorTrendParamsForTf('unknown')).toEqual(getPriorTrendParamsForTf('1day'));
 	});
 });
 

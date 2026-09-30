@@ -6,7 +6,7 @@
 // `TargetProgressOmittedReasonEnum`）。ここから型を取ることで、宣言漏れで `parse()` に
 // 黙って剥がされる形を作れなくしてある。`import type` なので実行時の依存は増えない。
 import type { TargetProgressOmittedReason } from '../../src/schema/patterns.js';
-import type { SizeThresholds } from './structural.js';
+import type { PriorTrendParams, SizeThresholds } from './structural.js';
 import type { Pivot } from './swing.js';
 import type { TargetBreakoutConfounder } from './target-confounders.js';
 
@@ -164,6 +164,8 @@ export interface DetectContext {
 	 * （`getHsShoulderMaxPctForTf` の docstring）。
 	 */
 	hsShoulderMaxPct: number;
+	/** 先行トレンド検査の時間足別閾値・lookback（`config.ts` で1回だけ解決） */
+	priorTrendParams?: PriorTrendParams;
 	minDist: number;
 	/** 検出対象パターン種別。空 = 全種 */
 	want: Set<string>;

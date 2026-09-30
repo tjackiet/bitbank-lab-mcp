@@ -6,7 +6,12 @@ import { DetectPatternsOutputSchema, type PatternFilterEnum } from '../src/schem
 import analyzeIndicators from './analyze_indicators.js';
 import { buildStatistics } from './patterns/aftermath.js';
 import { filterCandidatesByWant } from './patterns/candidate-filter.js';
-import { getHsShoulderMaxPctForTf, getSizeThresholdsForTf, resolveParams } from './patterns/config.js';
+import {
+	getHsShoulderMaxPctForTf,
+	getPriorTrendParamsForTf,
+	getSizeThresholdsForTf,
+	resolveParams,
+} from './patterns/config.js';
 // --- 各パターン検出モジュール ---
 import { detectDoubles } from './patterns/detect_doubles.js';
 import { detectHeadAndShoulders } from './patterns/detect_hs.js';
@@ -251,6 +256,7 @@ export default async function detectPatterns(
 			// 窓生成（`outerShoulderOk`）は `HS_SHOULDER_MAX_PCT`（5%）のまま——理由は
 			// `getHsShoulderMaxPctForTf` の docstring（無音の偽陰性を避けるため窓生成は緩く残す）。
 			hsShoulderMaxPct: getHsShoulderMaxPctForTf(type),
+			priorTrendParams: getPriorTrendParamsForTf(type),
 			minDist,
 			want,
 			includeForming,
