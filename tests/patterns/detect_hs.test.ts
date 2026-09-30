@@ -414,6 +414,37 @@ describe('detectHeadAndShoulders', () => {
 		expect(ihs?.breakoutTarget).toBe(160);
 	});
 
+	it('Inverse H&S の肩が浅すぎる場合は shoulder_depth_insufficient で rejected', () => {
+		// 左右肩はネックラインから 1、頭は 45 下なので、肩の深さ比は約 2.2%。
+		// 形状の戻りとしては浅すぎるため、肩の同水準ゲートを通っても除外する。
+		const { candles, pivots } = buildInverseHS({ leftShoulder: 114, rightShoulder: 114, head: 70 });
+		const ctx = buildCtx({ candles, pivots });
+		const result = detectHeadAndShoulders(ctx);
+
+		expect(result.patterns.filter((p) => p.type === 'inverse_head_and_shoulders')).toHaveLength(0);
+		const rejected = ctx.debugCandidates.find(
+			(d) => d.type === 'inverse_head_and_shoulders' && d.reason === 'shoulder_depth_insufficient',
+		);
+		const details = rejected?.details as Record<string, unknown> | undefined;
+		expect(details).toMatchObject({ minShoulderDepthRatio: 0.2 });
+		expect(Number(details?.leftShoulderDepthRatio)).toBeCloseTo(1 / 45, 3);
+	});
+
+	it('relaxed Inverse H&S でも浅い肩を救済しない', () => {
+		// 肩の差は strict の tolerance(4%)を超えるが、relaxed と cap(5%)には収まる。
+		// それでも左肩の深さ 1 / 45 は同じ hard gate で落ちる。
+		const { candles, pivots } = buildInverseHS({ leftShoulder: 114, rightShoulder: 109, head: 70 });
+		const ctx = buildCtx({ candles, pivots });
+		const result = detectHeadAndShoulders(ctx);
+
+		expect(result.patterns.filter((p) => p.type === 'inverse_head_and_shoulders')).toHaveLength(0);
+		expect(
+			ctx.debugCandidates.some(
+				(d) => d.type === 'inverse_head_and_shoulders' && d.reason === 'shoulder_depth_insufficient',
+			),
+		).toBe(true);
+	});
+
 	it('頭が両肩より低くない → head_not_lower で rejected', () => {
 		// head=97, shoulders=100 → 97 < 100*(1-headProminencePct=0.04)=96? No (97 > 96)（tolerancePct は無関係。issue #149）
 		const { candles, pivots } = buildInverseHS({ head: 97 });
