@@ -12,6 +12,7 @@ import { formatFixed, formatInt, formatPctFromRatio, formatRounded } from '../..
 import { toStructured } from '../../lib/result.js';
 import { BREAKOUT_AGAINST_EXPECTATION, levelSpreadMetrics } from '../../tools/patterns/structural.js';
 import type { Pivot } from '../../tools/patterns/swing.js';
+import { formatStructureGateSkipLine, formatTriplePositionLines } from '../../tools/patterns/structure-diagnostics.js';
 import { formatTargetProgressLine } from '../../tools/patterns/target-reach.js';
 import type { PatternEntry } from '../../tools/patterns/types.js';
 import type { McpResponse } from '../tool-definition.js';
@@ -1492,6 +1493,8 @@ export function formatPatternLine(
 		formingTripleNote,
 		priceRange ? `   - 価格範囲: ${priceRange}` : null,
 		...(pivotLines.length ? pivotLines : []),
+		formatStructureGateSkipLine(p?.structureGate?.skipped),
+		...formatTriplePositionLines(p?.type, p?.pivots),
 		// 山2 / 谷2 の位置（issue #245）。**`view` で分岐しない**——`pivotLines` は full / debug
 		// 限定だが、本行は 1 行で、軽い view でも「山2 がヒゲだけ」を LLM が読めるべきなので
 		// 全 view に出す（規約 3 の上位集合もこれで保たれる）。
