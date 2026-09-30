@@ -4,7 +4,16 @@
  * パターン検出で使用するデフォルトパラメータを時間軸ごとに提供する。
  */
 
-import { HS_SHOULDER_MAX_PCT, MIN_DEPTH_PCT, MIN_PATTERN_HEIGHT_PCT, type SizeThresholds } from './structural.js';
+import {
+	HS_SHOULDER_MAX_PCT,
+	MIN_DEPTH_PCT,
+	MIN_PATTERN_HEIGHT_PCT,
+	PRIOR_TREND_LOOKBACK_MAX,
+	PRIOR_TREND_LOOKBACK_MIN,
+	PRIOR_TREND_SIDEWAYS_PCT,
+	type PriorTrendParams,
+	type SizeThresholds,
+} from './structural.js';
 
 /**
  * パターンごとの最小整合度（下限ゲート）。
@@ -104,6 +113,41 @@ export const SCHEMA_DEFAULTS = {
 	minBarsBetweenSwings: 5,
 	tolerancePct: 0.04,
 } as const;
+
+/**
+ * 先行トレンド検査の時間足別パラメータを返す（issue #297 項目 2）。
+ *
+ * 旧実装は `sidewaysPct=5%` と lookback `10〜30本` を全時間足で共有していた。
+ * 1hour では 5% が約 8.8 ATR、30 本は 30 時間にしかならず、短期の方向性を横ばいと誤分類しやすい。
+ * ここでは 1day をアンカーに、短い足の横ばい閾値だけを ATR 比で補正する。実行時の ATR 取得や
+ * 走査窓長への依存は行わない。
+ *
+ * `sidewaysPct` はサイズ閾値と同じ凍結 ATR 比（1hour は実測、その他の intraday は √t 推定）を
+ * 5% に掛ける。lookback は現段階ではパターンの構成点数に対する相対値（10〜30本）を維持する。
+ * 履歴本数を時間換算で増やすには取得窓の拡張も必要で、1hour の標準窓ではほぼ全候補が
+ * `insufficient_data` となり PR2〜4 の方向ゲートが無音になるためである。実データが短く履歴不足になる
+ * 場合は、従来どおり `insufficient_data` として候補を保留し、窓の長さだけで棄却しない。
+ */
+export function getPriorTrendParamsForTf(tf: string): PriorTrendParams {
+	const t = String(tf);
+	const atrScaleByTf: Record<string, number> = {
+		'1min': 0.0264,
+		'5min': 0.0589,
+		'15min': 0.1021,
+		'30min': 0.1443,
+		'1hour': 0.2073,
+		'4hour': 0.4082,
+		'8hour': 0.5774,
+		'12hour': Math.SQRT1_2,
+	};
+	const atrScale = atrScaleByTf[t] ?? 1;
+	const sidewaysPct = Number((PRIOR_TREND_SIDEWAYS_PCT * atrScale).toFixed(4));
+	return {
+		sidewaysPct,
+		lookbackMin: PRIOR_TREND_LOOKBACK_MIN,
+		lookbackMax: PRIOR_TREND_LOOKBACK_MAX,
+	};
+}
 
 /**
  * 時間軸に応じたスイング検出パラメータを返す

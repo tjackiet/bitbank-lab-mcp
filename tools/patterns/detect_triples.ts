@@ -60,9 +60,10 @@ function validateTriplePriorTrend(
 	type: 'triple_top' | 'triple_bottom',
 	debugCandidates: DetectContext['debugCandidates'],
 	indices: number[],
+	priorTrendParams: DetectContext['priorTrendParams'],
 ): { trend: PriorTrendResult; precedingTrend?: PatternPrecedingTrend } | null {
 	const expected = type === 'triple_top' ? 'up' : 'down';
-	const trend = validatePriorTrend(candles, startIdx, endIdx - startIdx, expected);
+	const trend = validatePriorTrend(candles, startIdx, endIdx - startIdx, expected, priorTrendParams);
 	if (!trend.ok) {
 		debugCandidates.push({
 			type,
@@ -371,11 +372,15 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 			});
 			continue;
 		}
-		const priorTrend = validateTriplePriorTrend(candles, a.idx, c.idx, 'triple_top', ctx.debugCandidates, [
+		const priorTrend = validateTriplePriorTrend(
+			candles,
 			a.idx,
-			b.idx,
 			c.idx,
-		]);
+			'triple_top',
+			ctx.debugCandidates,
+			[a.idx, b.idx, c.idx],
+			ctx.priorTrendParams,
+		);
 		if (!priorTrend) continue;
 		// **整合度の算出とゲートはブレイク検出の後**（issue #199 候補 1）。`breakoutQuality` 軸が
 		// ブレイク足の終値を要るため。理由の帰属が変わる点は {@link buildTripleScore} の
@@ -670,11 +675,15 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 			});
 			continue;
 		}
-		const priorTrend = validateTriplePriorTrend(candles, a.idx, c.idx, 'triple_bottom', ctx.debugCandidates, [
+		const priorTrend = validateTriplePriorTrend(
+			candles,
 			a.idx,
-			b.idx,
 			c.idx,
-		]);
+			'triple_bottom',
+			ctx.debugCandidates,
+			[a.idx, b.idx, c.idx],
+			ctx.priorTrendParams,
+		);
 		if (!priorTrend) continue;
 		// **整合度の算出とゲートはブレイク検出の後**（issue #199 候補 1）。理由は
 		// `findStrictTripleTop` の同じ箇所のコメントを参照。
@@ -954,11 +963,15 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 			});
 			continue;
 		}
-		const priorTrend = validateTriplePriorTrend(candles, a.idx, c.idx, 'triple_top', ctx.debugCandidates, [
+		const priorTrend = validateTriplePriorTrend(
+			candles,
 			a.idx,
-			b.idx,
 			c.idx,
-		]);
+			'triple_top',
+			ctx.debugCandidates,
+			[a.idx, b.idx, c.idx],
+			ctx.priorTrendParams,
+		);
 		if (!priorTrend) continue;
 		// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
 		const sizeReason = validatePatternSize('top', [a, v1, b, v2, c], ctx.sizeThresholds);
@@ -1234,11 +1247,15 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 			});
 			continue;
 		}
-		const priorTrend = validateTriplePriorTrend(candles, a.idx, c.idx, 'triple_bottom', ctx.debugCandidates, [
+		const priorTrend = validateTriplePriorTrend(
+			candles,
 			a.idx,
-			b.idx,
 			c.idx,
-		]);
+			'triple_bottom',
+			ctx.debugCandidates,
+			[a.idx, b.idx, c.idx],
+			ctx.priorTrendParams,
+		);
 		if (!priorTrend) continue;
 		// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
 		const sizeReason = validatePatternSize('bottom', [a, p1, b, p2, c], ctx.sizeThresholds);
@@ -1645,11 +1662,15 @@ function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
 			});
 			continue;
 		}
-		const priorTrend = validateTriplePriorTrend(candles, peak1.idx, lastIdx, 'triple_top', ctx.debugCandidates, [
+		const priorTrend = validateTriplePriorTrend(
+			candles,
 			peak1.idx,
-			peak2.idx,
 			lastIdx,
-		]);
+			'triple_top',
+			ctx.debugCandidates,
+			[peak1.idx, peak2.idx, lastIdx],
+			ctx.priorTrendParams,
+		);
 		if (!priorTrend) continue;
 
 		// ネックライン構成点: H-L-H-L-(現在足) という構造を強制するため、
@@ -1930,11 +1951,15 @@ function tryFormingTripleBottom(ctx: DetectContext): DeduplicablePattern | null 
 			});
 			continue;
 		}
-		const priorTrend = validateTriplePriorTrend(candles, valley1.idx, lastIdx, 'triple_bottom', ctx.debugCandidates, [
+		const priorTrend = validateTriplePriorTrend(
+			candles,
 			valley1.idx,
-			valley2.idx,
 			lastIdx,
-		]);
+			'triple_bottom',
+			ctx.debugCandidates,
+			[valley1.idx, valley2.idx, lastIdx],
+			ctx.priorTrendParams,
+		);
 		if (!priorTrend) continue;
 
 		const progress = (currentPrice - avgValleyPrice) / Math.max(1e-12, avgPeakPrice - avgValleyPrice);

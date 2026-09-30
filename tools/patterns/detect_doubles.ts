@@ -584,6 +584,7 @@ function findRelaxedDoubleTop(
 	tz: string | undefined,
 	type: string,
 	includeForming: boolean,
+	priorTrendParams: DetectContext['priorTrendParams'],
 ): PatternEntry | null {
 	const tolRelax = tolerancePct * factor;
 	const lastIdx = candles.length - 1;
@@ -695,7 +696,13 @@ function findRelaxedDoubleTop(
 				: null;
 		// 診断用の既存ゲート（構造・再進入・ブレイク経路）を先に通す。横ばいを理由に
 		// 手前で止めると、debug view が実際の構造不備を報告できなくなる。
-		const trend = validatePriorTrend(candles, a.idx, (isCompleted ? breakoutIdx : lastIdx) - a.idx, 'up');
+		const trend = validatePriorTrend(
+			candles,
+			a.idx,
+			(isCompleted ? breakoutIdx : lastIdx) - a.idx,
+			'up',
+			priorTrendParams,
+		);
 		if (post.verdict === 'ok' && !pathTerminal && !trend.ok) {
 			pcand({
 				type: 'double_top',
@@ -818,6 +825,7 @@ function findRelaxedDoubleBottom(
 	tz: string | undefined,
 	type: string,
 	includeForming: boolean,
+	priorTrendParams: DetectContext['priorTrendParams'],
 ): PatternEntry | null {
 	const tolRelax = tolerancePct * factor;
 	const lastIdx = candles.length - 1;
@@ -928,7 +936,13 @@ function findRelaxedDoubleBottom(
 			isCompleted && post.verdict === 'ok'
 				? checkBreakoutPath({ pivots, side: 'bottom', type: 'double_bottom', a, b, c, breakoutIdx, pcand })
 				: null;
-		const trend = validatePriorTrend(candles, a.idx, (isCompleted ? breakoutIdx : lastIdx) - a.idx, 'down');
+		const trend = validatePriorTrend(
+			candles,
+			a.idx,
+			(isCompleted ? breakoutIdx : lastIdx) - a.idx,
+			'down',
+			priorTrendParams,
+		);
 		if (post.verdict === 'ok' && !pathTerminal && !trend.ok) {
 			pcand({
 				type: 'double_bottom',
@@ -1175,7 +1189,13 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 						? checkBreakoutPath({ pivots, side: 'top', type: 'double_top', a, b, c, breakoutIdx, pcand })
 						: null;
 				// 先行トレンドは、より具体的な構造／経路の棄却理由を debug に残した後で検証する。
-				const trend = validatePriorTrend(candles, a.idx, (isCompleted ? breakoutIdx : lastIdx) - a.idx, 'up');
+				const trend = validatePriorTrend(
+					candles,
+					a.idx,
+					(isCompleted ? breakoutIdx : lastIdx) - a.idx,
+					'up',
+					ctx.priorTrendParams,
+				);
 				if (post.verdict === 'ok' && !pathTerminal && !trend.ok) {
 					pcand({
 						type: 'double_top',
@@ -1378,7 +1398,13 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					isCompleted && post.verdict === 'ok'
 						? checkBreakoutPath({ pivots, side: 'bottom', type: 'double_bottom', a, b, c, breakoutIdx, pcand })
 						: null;
-				const trend = validatePriorTrend(candles, a.idx, (isCompleted ? breakoutIdx : lastIdx) - a.idx, 'down');
+				const trend = validatePriorTrend(
+					candles,
+					a.idx,
+					(isCompleted ? breakoutIdx : lastIdx) - a.idx,
+					'down',
+					ctx.priorTrendParams,
+				);
 				if (post.verdict === 'ok' && !pathTerminal && !trend.ok) {
 					pcand({
 						type: 'double_bottom',
@@ -1501,6 +1527,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					ctx.tz,
 					ctx.type,
 					includeForming,
+					ctx.priorTrendParams,
 				);
 				if (result) {
 					push(patterns, result);
@@ -1519,6 +1546,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 					ctx.tz,
 					ctx.type,
 					includeForming,
+					ctx.priorTrendParams,
 				);
 				if (result) {
 					push(patterns, result);

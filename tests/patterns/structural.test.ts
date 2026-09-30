@@ -167,6 +167,19 @@ describe('validatePriorTrend', () => {
 		});
 	});
 
+	it('時間足別パラメータで横ばい閾値とlookbackを上書きできる', () => {
+		const closes = Array.from({ length: 13 }, () => 100);
+		closes[12] = 102;
+		const result = validatePriorTrend(makeCandles(closes), 12, 5, 'up', {
+			sidewaysPct: 0.01,
+			lookbackMin: 12,
+			lookbackMax: 24,
+		});
+		expect(result.lookbackBars).toBe(12);
+		expect(result.classification).toBe('up');
+		expect(result.ok).toBe(true);
+	});
+
 	describe('bullish 反転前提 (down_or_sideways)', () => {
 		it('priorReturn=-10% → ok=true, classification=down', () => {
 			// close[5]=100, close[15]=90 → priorReturn=(90-100)/100=-0.1

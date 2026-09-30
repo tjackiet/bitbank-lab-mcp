@@ -315,9 +315,9 @@ describe('同じ形が凍結済み実データにも存在する（issue #216 Ph
 		return candidates;
 	}
 
-	it('triple_top: 横ばい先行の構成点 219-223-232 は方向ゲートで除外される', async () => {
+	it('triple_top: 構成点 219-223-232 は neckline-side gate で除外される', async () => {
 		const cands = await realDataCandidates('1hour', ['triple_top']);
-		const hit = cands.find((c) => c.reason === 'prior_trend_mismatch:sideways' && c.indices?.[0] === 219);
+		const hit = cands.find((c) => c.reason === 'peaks_below_neckline' && c.indices?.[0] === 219);
 		expect(hit?.indices).toEqual([219, 223, 232]);
 	});
 

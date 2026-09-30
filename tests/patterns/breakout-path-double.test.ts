@@ -326,13 +326,17 @@ describe('起票時のライブ実例そのもの（issue #242・実データ D 
 			expect(mainIdxs(doubles[0])).toEqual([41, 46, 50]);
 		});
 
-		it('swingDepth: 6 でも横ばい先行なら double_top を確定しない', async () => {
+		it('swingDepth: 6 では時間足別閾値により上昇先行の double_top を確定する', async () => {
 			const { patterns, candidates } = await liveWindow({ swingDepth: 6 });
 			const doubles = patterns.filter((p) => p.type === 'double_top');
-			expect(doubles).toHaveLength(0);
+			expect(doubles).toHaveLength(1);
+			expect(mainIdxs(doubles[0])).toEqual([41, 46, 50]);
+			expect((doubles[0] as { precedingTrend?: { direction?: string } } | undefined)?.precedingTrend?.direction).toBe(
+				'up',
+			);
 			expect(
 				candidates.some((c) => c.reason === 'prior_trend_mismatch:sideways' && c.indices?.join('-') === '41-46-50'),
-			).toBe(true);
+			).toBe(false);
 		});
 
 		it('swingDepth: 6 では debug の swings に idx 55 の H が無い（深さ 6 で極値にならない事実）', async () => {
@@ -432,15 +436,18 @@ describe('窓の終端の余白: 同じ値動きが limit で completed / invali
 	});
 
 	describe('終端 09-04T13:00Z（slice(288, 346)/ 58 本）— 再上昇が余白の中', () => {
-		it('経路が通っても横ばい先行なら double_top を確定しない（swingDepth 未指定）', async () => {
+		it('経路が通った上昇先行の double_top は時間足別閾値で確定する（swingDepth 未指定）', async () => {
 			const { patterns, warnings, candidates } = await windowEndingAt(346);
 			const doubles = patterns.filter((p) => p.type === 'double_top');
-			expect(doubles).toHaveLength(0);
+			expect(doubles).toHaveLength(1);
+			expect((doubles[0] as { precedingTrend?: { direction?: string } } | undefined)?.precedingTrend?.direction).toBe(
+				'up',
+			);
 			expect(
 				candidates.some(
 					(c) => c.reason === 'prior_trend_mismatch:sideways' && c.indices?.join('-') === MAIN_POINTS.join('-'),
 				),
-			).toBe(true);
+			).toBe(false);
 			// 窓が構造的下限（1hour = 17 本）を割っていないこと。
 			expect(warnings).not.toContain('limit_too_small_for_timeframe');
 		});
@@ -510,11 +517,14 @@ describe('窓の終端の余白: 同じ値動きが limit で completed / invali
 			expect(mainIdxs(doubles[0])).toEqual(MAIN_POINTS);
 		});
 
-		it('1 本手前（slice(288, 346)）も先行トレンド不足で確定しない', async () => {
+		it('1 本手前（slice(288, 346)）も上昇先行として確定する', async () => {
 			const { patterns, candidates } = await windowEndingAt(346, { includeInvalid: true });
 			const doubles = patterns.filter((p) => p.type === 'double_top');
-			expect(doubles).toHaveLength(0);
-			expect(candidates.some((c) => c.reason === 'prior_trend_mismatch:sideways')).toBe(true);
+			expect(doubles).toHaveLength(1);
+			expect((doubles[0] as { precedingTrend?: { direction?: string } } | undefined)?.precedingTrend?.direction).toBe(
+				'up',
+			);
+			expect(candidates.some((c) => c.reason === 'prior_trend_mismatch:sideways')).toBe(false);
 		});
 	});
 
@@ -524,8 +534,7 @@ describe('窓の終端の余白: 同じ値動きが limit で completed / invali
 		 * 上の `slice(288, 346)` の終端と**同じ 1 時間**（C の末尾は取得時点の未確定足なので
 		 * OHLC は一致しない。fixture D の docstring を参照）。同じ形が C では構成点
 		 * **348-353-357**（= D の 329-334-338。`i + 19` の対応）として入っており、
-		 * 経路検査は通るが、PR2 では先行トレンドも必須となる。上の 58 本窓と同じく
-		 * 横ばいとして `prior_trend_mismatch:sideways` で棄却されることを固定する。
+		 * 経路検査と時間足別の先行トレンド検査を通り、完成済みとして残ることを固定する。
 		 */
 		async function realDataC(opts: Record<string, unknown> = {}) {
 			vi.mocked(analyzeIndicators).mockResolvedValueOnce(
@@ -540,13 +549,14 @@ describe('窓の終端の余白: 同じ値動きが limit で completed / invali
 			};
 		}
 
-		it('構成点 348-353-357 は横ばい先行なので既定で出ない', async () => {
+		it('構成点 348-353-357 は上昇先行として既定で残る', async () => {
 			const { patterns, candidates } = await realDataC();
 			const hit = patterns.find((p) => mainIdxs(p).join('-') === '348-353-357');
-			expect(hit, JSON.stringify(patterns.map(mainIdxs))).toBeUndefined();
+			expect(hit, JSON.stringify(patterns.map(mainIdxs))).toBeDefined();
+			expect((hit as { precedingTrend?: { direction?: string } } | undefined)?.precedingTrend?.direction).toBe('up');
 			expect(
 				candidates.some((c) => c.reason === 'prior_trend_mismatch:sideways' && c.indices?.join('-') === '348-353-357'),
-			).toBe(true);
+			).toBe(false);
 			// 再上昇の足は C の idx 362（= D の 343）で、終端 364 の 2 本前＝余白の中。
 			expect(
 				candidates.every((c) => !(c.reason === 'peak_after_last_pivot' && c.indices?.join('-') === '348-353-357')),

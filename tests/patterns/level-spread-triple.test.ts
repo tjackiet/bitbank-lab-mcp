@@ -255,8 +255,7 @@ describe('detect_patterns: 高さ相対の hard gate（issue #138 ステップ 2
 
 		// 理由コードだけでなく `indices` でも名指しする（下の triple_bottom 側と同じ理由）。
 		const hit = candidates.find(
-			(c) =>
-				c.type === 'triple_top' && c.reason === 'prior_trend_mismatch:sideways' && String(c.indices) === '47,53,59',
+			(c) => c.type === 'triple_top' && c.reason === 'peak_spread_vs_height_excess' && String(c.indices) === '47,53,59',
 		);
 		expect(hit).toBeDefined();
 

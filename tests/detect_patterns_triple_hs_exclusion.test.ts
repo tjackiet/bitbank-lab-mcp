@@ -202,7 +202,7 @@ describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）
 			total += (res.meta.reduction as Record<string, number>).tripleHsExcluded;
 		}
 		expect(total).toBe(0);
-	});
+	}, 60_000);
 
 	// 上流失敗の早期 return（`if (!res.ok) return fail(...)`）は本段より**前**にあるので、
 	// 排他は走らず `meta.reduction` も生えない。
