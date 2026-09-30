@@ -274,8 +274,8 @@ vi.mock('../tools/analyze_indicators.js', () => ({ default: vi.fn() }));
 import analyzeIndicators from '../tools/analyze_indicators.js';
 import detectPatterns from '../tools/detect_patterns.js';
 import { asMockResult, assertOk } from './_assertResult.js';
-import { buildBtcJpy1hour202608Candles } from './fixtures/btc_jpy_1hour_2026_08.js';
 import { buildBtcJpy2026ThroughSep30Candles } from './fixtures/btc_jpy_1day_2026.js';
+import { buildBtcJpy1hour202608Candles } from './fixtures/btc_jpy_1hour_2026_08.js';
 import baseline from './fixtures/detect_patterns_1hour_data_patterns_baseline.json' with { type: 'json' };
 import targetReachPre288 from './fixtures/detect_patterns_1hour_target_reach_pre288.json' with { type: 'json' };
 
