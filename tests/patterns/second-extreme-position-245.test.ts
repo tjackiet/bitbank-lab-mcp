@@ -73,9 +73,10 @@ describe('#245 の発端の形（実データ D の limit=72 窓 / swingDepth: 6
 	// `formatPatternLine` に 4 つの `view` 値を直接通す検算は
 	// `tests/detectPatternsViewsHandler.test.ts` 側が持つ。
 	for (const view of ['detailed', 'full'] as const) {
-		it(`view=${view}: 山2 の位置行が PR #276 の計測値そのものを出す`, async () => {
+		it(`view=${view}: 横ばい先行の double_top は表示しない`, async () => {
 			const text = await liveWindowContent(view);
-			expect(text).toContain('山2 の位置: 終値はネックラインの +9.9%（パターン高さ比）/ ヒゲ 73.3%');
+			expect(text).not.toContain('山2 の位置: 終値はネックラインの +9.9%（パターン高さ比）/ ヒゲ 73.3%');
+			expect(text).not.toContain('double_top');
 		});
 	}
 

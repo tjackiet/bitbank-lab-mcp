@@ -92,7 +92,7 @@ describe('issue #142 dedup の勝者選択 — BTC/JPY 日足 実データ回帰
 	});
 
 	describe('#133 / PR #135 の不変条件', () => {
-		it('confidence を先に見ても形成中が完成済みを押し出さない', async () => {
+		it('横ばい先行の二谷を completed として dedup の対象にしない', async () => {
 			mockedAnalyzeIndicators.mockResolvedValue(indicatorsOk() as never);
 			const res = await detectPatterns('btc_jpy', '1day', 90, {
 				includeCompleted: true,
@@ -100,10 +100,9 @@ describe('issue #142 dedup の勝者選択 — BTC/JPY 日足 実データ回帰
 				view: 'debug',
 			});
 			if (!res.ok) throw new Error('detectPatterns failed');
-			// #135 が固定した完成済み（構成点 8/3 → 8/10 → 8/14、突破 8/19 = idx 82）。
-			// includeForming: true でも形成中に押し出されない。
+			// 構成点 8/3 → 8/10 → 8/14 は、PR2 以降は先行下降が無いため候補段階で棄却される。
 			const doubleBottoms = res.data.patterns.filter((p) => p.type === 'double_bottom');
-			expect(doubleBottoms.some((p) => day(p.range.end) === '2026-08-19')).toBe(true);
+			expect(doubleBottoms.some((p) => day(p.range.end) === '2026-08-19')).toBe(false);
 		});
 	});
 });

@@ -221,6 +221,42 @@ describe('validatePriorTrend', () => {
 		});
 	});
 
+	describe('方向必須の反転前提 (up / down)', () => {
+		it('明確な上昇トレンドだけを up として受け入れる', () => {
+			const closes = [100, 100, 100, 100, 100, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110];
+			const result = validatePriorTrend(makeCandles(closes), 15, 5, 'up');
+			expect(result.classification).toBe('up');
+			expect(result.ok).toBe(true);
+		});
+
+		it('明確な下降トレンドだけを down として受け入れる', () => {
+			const closes = [100, 100, 100, 100, 100, 100, 99, 98, 97, 96, 95, 94, 93, 92, 91, 90];
+			const result = validatePriorTrend(makeCandles(closes), 15, 5, 'down');
+			expect(result.classification).toBe('down');
+			expect(result.ok).toBe(true);
+		});
+
+		it('横ばいは up / down のどちらにも使えない', () => {
+			const closes = Array.from({ length: 16 }, () => 100);
+			const up = validatePriorTrend(makeCandles(closes), 15, 5, 'up');
+			const down = validatePriorTrend(makeCandles(closes), 15, 5, 'down');
+			expect(up).toMatchObject({ classification: 'sideways', ok: false });
+			expect(down).toMatchObject({ classification: 'sideways', ok: false });
+		});
+
+		it('履歴不足は方向が未検証なだけなので保留として通す', () => {
+			const candles = makeCandles([100, 100, 100]);
+			expect(validatePriorTrend(candles, 2, 5, 'up')).toMatchObject({
+				classification: 'insufficient_data',
+				ok: true,
+			});
+			expect(validatePriorTrend(candles, 2, 5, 'down')).toMatchObject({
+				classification: 'insufficient_data',
+				ok: true,
+			});
+		});
+	});
+
 	// ── レンジ性フィルタ（efficiency / r2） ──
 	describe('レンジ性フィルタ', () => {
 		it('レンジ内の擬似下降は sideways（priorReturn -7% でも efficiency/r2 低い）', () => {

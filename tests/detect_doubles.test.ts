@@ -132,7 +132,98 @@ function buildDoubleBottom(opts?: { valley1?: number; peak?: number; valley2?: n
 	return { candles, pivots };
 }
 
+/**
+ * ダブルの手前に十分な履歴を付け、先行トレンドの検証を可能にする。
+ * 元の fixture は先頭から始まるため、通常経路では `insufficient_data` になる。
+ */
+function withPrecedingTrend(
+	pattern: ReturnType<typeof buildDoubleTop> | ReturnType<typeof buildDoubleBottom>,
+	direction: 'up' | 'down' | 'sideways',
+) {
+	const precedingBars = 20;
+	const firstClose = pattern.candles[0].close;
+	const leading = Array.from({ length: precedingBars }, (_, i) => {
+		const progress = i / (precedingBars - 1);
+		const start = direction === 'up' ? firstClose * 0.8 : direction === 'down' ? firstClose * 1.2 : firstClose;
+		const close = start + (firstClose - start) * progress;
+		return mkCandle(70 - i, close, close + 3, close - 3, close);
+	});
+
+	return {
+		candles: [...leading, ...pattern.candles],
+		pivots: pattern.pivots.map((pivot) => ({ ...pivot, idx: pivot.idx + precedingBars })),
+	};
+}
+
+/** 第2ピーク／第2谷の直後に反対側へ戻し、再進入 invalid ではなく先行トレンドを検証できる形にする。 */
+function withCleanBreakoutPath(candles: CandleData[], secondPivotIdx: number, side: 'top' | 'bottom'): CandleData[] {
+	const closes = side === 'top' ? [190, 185, 180, 175] : [110, 115, 120, 125];
+	return candles.map((candle, idx) => {
+		const close = closes[idx - secondPivotIdx - 1];
+		if (close === undefined) return candle;
+		return { ...candle, open: close, high: close + 3, low: close - 3, close };
+	});
+}
+
 describe('detectDoubles', () => {
+	describe('反転に必要な先行トレンド', () => {
+		it('横ばいの二山はダブルトップとして確定しない', () => {
+			const pattern = buildDoubleTop();
+			const prepended = withPrecedingTrend({ ...pattern, pivots: pattern.pivots.slice(0, 3) }, 'sideways');
+			const candles = withCleanBreakoutPath(prepended.candles, prepended.pivots[2].idx, 'top');
+			const { pivots } = prepended;
+			const ctx = buildCtx({ candles, pivots });
+			const result = detectDoubles(ctx);
+
+			expect(result.patterns.filter((pattern) => pattern.type === 'double_top')).toHaveLength(0);
+			expect(
+				ctx.debugCandidates.some(
+					(candidate) => candidate.type === 'double_top' && candidate.reason === 'prior_trend_mismatch:sideways',
+				),
+			).toBe(true);
+		});
+
+		it('上昇後の二山はダブルトップとして確定できる', () => {
+			const pattern = buildDoubleTop();
+			const prepended = withPrecedingTrend({ ...pattern, pivots: pattern.pivots.slice(0, 3) }, 'up');
+			const candles = withCleanBreakoutPath(prepended.candles, prepended.pivots[2].idx, 'top');
+			const { pivots } = prepended;
+			const result = detectDoubles(buildCtx({ candles, pivots }));
+			const doubleTop = result.patterns.find((pattern) => pattern.type === 'double_top');
+
+			expect(doubleTop?.precedingTrend?.direction).toBe('up');
+			expect(doubleTop?.status).toBeUndefined();
+		});
+
+		it('横ばいの二谷はダブルボトムとして確定しない', () => {
+			const pattern = buildDoubleBottom();
+			const prepended = withPrecedingTrend({ ...pattern, pivots: pattern.pivots.slice(0, 3) }, 'sideways');
+			const candles = withCleanBreakoutPath(prepended.candles, prepended.pivots[2].idx, 'bottom');
+			const { pivots } = prepended;
+			const ctx = buildCtx({ candles, pivots });
+			const result = detectDoubles(ctx);
+
+			expect(result.patterns.filter((pattern) => pattern.type === 'double_bottom')).toHaveLength(0);
+			expect(
+				ctx.debugCandidates.some(
+					(candidate) => candidate.type === 'double_bottom' && candidate.reason === 'prior_trend_mismatch:sideways',
+				),
+			).toBe(true);
+		});
+
+		it('下降後の二谷はダブルボトムとして確定できる', () => {
+			const pattern = buildDoubleBottom();
+			const prepended = withPrecedingTrend({ ...pattern, pivots: pattern.pivots.slice(0, 3) }, 'down');
+			const candles = withCleanBreakoutPath(prepended.candles, prepended.pivots[2].idx, 'bottom');
+			const { pivots } = prepended;
+			const result = detectDoubles(buildCtx({ candles, pivots }));
+			const doubleBottom = result.patterns.find((pattern) => pattern.type === 'double_bottom');
+
+			expect(doubleBottom?.precedingTrend?.direction).toBe('down');
+			expect(doubleBottom?.status).toBeUndefined();
+		});
+	});
+
 	// ── ダブルトップ（完成済み） ─────────────────────────
 
 	it('H-L-H パターンでネックライン下抜け → ダブルトップ検出', () => {
