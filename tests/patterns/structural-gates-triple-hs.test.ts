@@ -28,6 +28,7 @@ type Pat = {
 	status?: string;
 	confidence: number;
 	structureGate?: Record<string, number>;
+	precedingTrend?: { direction: string; returnPct: number; lookbackBars: number };
 	pivots?: Array<{ idx: number }>;
 };
 
@@ -101,18 +102,20 @@ describe('detect_patterns: triple の構造ゲート（issue #138 欠陥 2-1）'
 			// 先行値幅 2.0M に対して戻りは 0.7M。帯 [0.2, 0.9] の中に収まる。
 			expect(hit?.structureGate?.retracementRatio).toBeCloseTo(0.35, 2);
 			expect(hit?.structureGate?.priorExtremeIdx).toBe(10);
+			expect(hit?.precedingTrend?.direction).toBe(side === 'bottom' ? 'down' : 'up');
+			expect(hit?.precedingTrend?.lookbackBars).toBeGreaterThan(0);
 			// ネックライン水準を第1構成点より前に終値で抜けたバーがある＝ゲート通過の証拠。
 			expect(hit?.structureGate?.necklineCrossIdx).toBeDefined();
 		});
 
-		it(`同じ窓の逆向きの読み（${mirror}）は retracement_out_of_band で落ちる`, async () => {
+		it(`同じ窓の逆向きの読み（${mirror}）は先行トレンド不一致で落ちる`, async () => {
 			// issue #138 欠陥 2 の「同一の窓で triple_top と triple_bottom が両方検出される」に対応する。
 			// 反転の形を作ると、ネックラインが先行値幅の起点と一致する側（戻り率 1.0）が逆向きの読みになる。
 			const { patterns, candidates } = await detect(reversalSeries(side));
 			expect(patterns.filter((p) => p.type === mirror)).toHaveLength(0);
-			const rej = rejected(candidates, mirror, 'retracement_out_of_band');
+			const expectedReason = mirror === 'triple_bottom' ? 'prior_trend_mismatch:up' : 'prior_trend_mismatch:down';
+			const rej = rejected(candidates, mirror, expectedReason);
 			expect(rej.length).toBeGreaterThan(0);
-			expect((rej[0].details as { retracementRatio: number }).retracementRatio).toBeCloseTo(1, 3);
 		});
 	}
 });

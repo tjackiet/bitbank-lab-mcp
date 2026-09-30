@@ -99,6 +99,17 @@ const UNEVEN_VALLEYS = [
 	100, 108, 116, 124, 130, 100, 108, 116, 124, 130, 70, 82, 94, 106, 118, 130, 100, 108, 116, 124, 130, 134, 138, 142,
 ];
 
+// Direction-valid fixtures for the detector-level spread gate. The first leg is
+// deliberately monotonic (up for top, down for bottom), while the three main
+// points remain within the level tolerance. The alternating pivots are deep
+// enough for the size gate, but their main-point spread exceeds half the total
+// pattern height.
+const DIRECTIONAL_SPREAD_TOP = [
+	80, 82, 84, 86, 88, 90, 92, 94, 96, 100, 99, 98, 97, 98, 100, 102, 104, 102, 100, 98, 97.5, 99, 100, 101, 99, 98, 97,
+	96, 95, 94,
+];
+const DIRECTIONAL_SPREAD_BOTTOM = DIRECTIONAL_SPREAD_TOP.map((price) => 200 - price);
+
 describe('levelSpreadMetrics（issue #138）', () => {
 	it('分子は price・分母は extremePrice で測る', () => {
 		// 主構成点の price は 100 / 104 / 101 → ばらつき 4。
@@ -244,12 +255,10 @@ describe('detect_patterns: 高さ相対の hard gate（issue #138 ステップ 2
 
 		// 理由コードだけでなく `indices` でも名指しする（下の triple_bottom 側と同じ理由）。
 		const hit = candidates.find(
-			(c) => c.type === 'triple_top' && c.reason === 'peak_spread_vs_height_excess' && String(c.indices) === '47,53,59',
+			(c) =>
+				c.type === 'triple_top' && c.reason === 'prior_trend_mismatch:sideways' && String(c.indices) === '47,53,59',
 		);
 		expect(hit).toBeDefined();
-		expect(hit?.details?.spreadRatio).toBeCloseTo(0.5414, 3);
-		expect(hit?.details?.heightAbs).toBe(736_794);
-		expect(hit?.details?.spreadAbs).toBe(398_864);
 
 		expect(
 			patterns.filter((p) => p.type === 'triple_top' && p.range.start === '2026-07-15T00:00:00.000Z'),
@@ -267,10 +276,9 @@ describe('detect_patterns: 高さ相対の hard gate（issue #138 ステップ 2
 		// 「別の構造の値を検証していた」に静かにすり替わる。
 		const hit = candidates.find(
 			(c) =>
-				c.type === 'triple_bottom' && c.reason === 'valley_spread_vs_height_excess' && String(c.indices) === '56,66,77',
+				c.type === 'triple_bottom' && c.reason === 'prior_trend_mismatch:sideways' && String(c.indices) === '56,66,77',
 		);
 		expect(hit).toBeDefined();
-		expect(hit?.details?.spreadRatio).toBeCloseTo(0.5219, 3);
 
 		expect(
 			patterns.filter((p) => p.type === 'triple_bottom' && p.range.start === '2026-07-24T00:00:00.000Z'),
@@ -289,5 +297,19 @@ describe('detect_patterns: 高さ相対の hard gate（issue #138 ステップ 2
 		expect(
 			candidates.filter((c) => c.type === 'triple_top' && c.reason === 'peak_spread_vs_height_excess'),
 		).toHaveLength(0);
+	});
+
+	it('方向が有効な triple_top でも peak spread 超過を検出器経由で棄却する', async () => {
+		const { candidates } = await detectOn(DIRECTIONAL_SPREAD_TOP, '1day', 2);
+		const hit = candidates.find((c) => c.type === 'triple_top' && c.reason === 'peak_spread_vs_height_excess');
+		expect(hit?.indices).toEqual([9, 16, 23]);
+		expect(hit?.details?.spreadRatio).toBeGreaterThan(MAX_LEVEL_SPREAD_RATIO);
+	});
+
+	it('方向が有効な triple_bottom でも valley spread 超過を検出器経由で棄却する', async () => {
+		const { candidates } = await detectOn(DIRECTIONAL_SPREAD_BOTTOM, '1day', 2);
+		const hit = candidates.find((c) => c.type === 'triple_bottom' && c.reason === 'valley_spread_vs_height_excess');
+		expect(hit?.indices).toEqual([9, 16, 23]);
+		expect(hit?.details?.spreadRatio).toBeGreaterThan(MAX_LEVEL_SPREAD_RATIO);
 	});
 });

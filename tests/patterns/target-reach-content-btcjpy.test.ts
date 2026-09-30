@@ -88,12 +88,10 @@ describe('#288 Phase 2 のターゲット行（実データ B / 365 本 / 既定
 		expect(text).toContain(
 			`${TARGET_LABEL}到達（ブレイク後 47 本目、2026-08-19 23:00）。到達前に別パターンのブレイクあり（inverse_head_and_shoulders 上方 +3 本）`,
 		);
-		expect(text).toContain(
-			`${TARGET_LABEL}未到達（走査 60 本完了、目標幅の 22% まで接近）。走査窓内に逆方向のブレイクあり（triple_bottom 上方 +42 本, rising_wedge 上方 +44 本, triangle_ascending 上方 +57 本）`,
-		);
+		expect(text).not.toContain('triple_bottom 上方 +42 本');
 		// **Phase 1 の 94.7% と比べて限定が効いていること。** 素朴な申告に戻ればここが跳ねる。
 		const lines = targetLines(text);
-		expect(lines).toHaveLength(8);
+		expect(lines).toHaveLength(7);
 		expect(lines.filter((l) => l.includes('ブレイクあり（'))).toHaveLength(2);
 	});
 
