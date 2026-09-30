@@ -106,8 +106,8 @@ describe('スキャン窓の単調性（issue #154）', () => {
 				p.range?.end === ISSUE_154_PATTERN.end,
 		);
 
-	it('90 本の窓で形成中 head_and_shoulders を検出する（前提の確認）', async () => {
-		expect(hasIssue154Pattern(await detect(buildBtcJpy2026Candles()))).toBe(true);
+	it('90 本の窓の横ばい先行 head_and_shoulders を検出しない', async () => {
+		expect(hasIssue154Pattern(await detect(buildBtcJpy2026Candles()))).toBe(false);
 	});
 
 	// 前置きの水準を変えても結論は同じであることを示す。9.5M は窓の頭より**安い**前置きで、
@@ -115,8 +115,8 @@ describe('スキャン窓の単調性（issue #154）', () => {
 	it.each([
 		['前置きが窓の頭より安い（9.5M）', 9_500_000],
 		['前置きが窓の頭より高い（11.7M）', 11_700_000],
-	])('200 本へ窓を広げても同じ形成中 H&S が残る: %s', async (_label, level) => {
-		expect(hasIssue154Pattern(await detect(prependBars(110, level)))).toBe(true);
+	])('200 本へ窓を広げても横ばい先行 H&S は戻らない: %s', async (_label, level) => {
+		expect(hasIssue154Pattern(await detect(prependBars(110, level)))).toBe(false);
 	});
 
 	it('頭が形成区間の極値でない読みは採らない（出力に含まれない対抗ピボットまで見る）', async () => {

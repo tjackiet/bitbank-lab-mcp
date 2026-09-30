@@ -255,8 +255,8 @@ describe('debug candidates: status / breakoutDirection の配線（issue #160）
 		}
 	});
 
-	it('形成中 H&S の成功エントリ（#155）の status が候補行に出る', async () => {
-		// #155 の再現条件（実データ fixture）。合成列では形成中 H&S の成功パスに入らない。
+	it('横ばい先行の形成中 H&S は候補行で trend mismatch として出る', async () => {
+		// #155 の実データ fixture は横ばい先行なので、PR3 の方向ゲート以降は成功候補にしない。
 		const res = await run(buildBtcJpy2026Candles() as Candle[], {
 			patterns: ['head_and_shoulders', 'inverse_head_and_shoulders'],
 			headProminencePct: 0.01,
@@ -266,14 +266,11 @@ describe('debug candidates: status / breakoutDirection の配線（issue #160）
 		assertOk(res);
 		const cands = (res.meta.debug?.candidates ?? []) as Candidate[];
 		const forming = cands.filter((c) => c.accepted && c.status === 'forming');
-		expect(forming.length).toBeGreaterThan(0);
+		expect(forming).toHaveLength(0);
 
 		const text = debugText(res);
-		const headers = candidateHeaderLines(text, 'head_and_shoulders').filter((l) => l.includes('✅'));
-		expect(headers.filter((l) => l.includes('status=forming')).length).toBe(forming.length);
-		// `details.method` は status と重複するが落とさない。`forming_hs_provisional`（暫定右肩）の
-		// 区別は method 側にしか無く、status だけでは表現できない。
-		expect(text).toMatch(/method: forming_i?hs/);
+		expect(cands.some((c) => c.reason === 'prior_trend_mismatch:sideways')).toBe(true);
+		expect(text).toContain('prior_trend_mismatch:sideways');
 	});
 });
 

@@ -89,7 +89,7 @@ describe('#288 Phase 2 のターゲット行（実データ B / 365 本 / 既定
 			`${TARGET_LABEL}到達（ブレイク後 47 本目、2026-08-19 23:00）。到達前に別パターンのブレイクあり（inverse_head_and_shoulders 上方 +3 本）`,
 		);
 		expect(text).toContain(
-			`${TARGET_LABEL}未到達（走査 60 本完了、目標幅の 22% まで接近）。走査窓内に逆方向のブレイクあり（inverse_head_and_shoulders 上方 +42 本, rising_wedge 上方 +44 本, triangle_ascending 上方 +57 本）`,
+			`${TARGET_LABEL}未到達（走査 60 本完了、目標幅の 22% まで接近）。走査窓内に逆方向のブレイクあり（triple_bottom 上方 +42 本, rising_wedge 上方 +44 本, triangle_ascending 上方 +57 本）`,
 		);
 		// **Phase 1 の 94.7% と比べて限定が効いていること。** 素朴な申告に戻ればここが跳ねる。
 		const lines = targetLines(text);
@@ -136,11 +136,11 @@ describe('#288 Phase 2 のターゲット行（実データ B / 365 本 / 既定
 		expect(res.summary).not.toContain('到達（ブレイク後 47 本目、2026-08-19）');
 	});
 
-	it('view=full: 進捗を出さなかった3件は理由を名乗る', async () => {
+	it('view=full: 進捗を出さなかった2件は理由を名乗る', async () => {
 		const text = await liveContent('full');
 		const omitted = targetLines(text).filter((l) => l.includes('出力なし'));
-		expect(omitted).toHaveLength(3);
-		expect(omitted.filter((line) => line.includes('残り距離が短く進捗率が意味を持たないため'))).toHaveLength(2);
+		expect(omitted).toHaveLength(2);
+		expect(omitted.filter((line) => line.includes('残り距離が短く進捗率が意味を持たないため'))).toHaveLength(1);
 		expect(
 			omitted.filter((line) => line.includes('期待方向と逆のブレイクで、標準的なパターン目標値を適用しないため')),
 		).toHaveLength(1);

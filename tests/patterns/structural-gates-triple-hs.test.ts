@@ -122,20 +122,16 @@ describe('detect_patterns: 実データに対する triple / H&S の構造ゲー
 		vi.clearAllMocks();
 	});
 
-	it('#139 が「実在する H&S」として固定した形成中 H&S は既定 swingDepth で残る', async () => {
+	it('#139 の形成中H&S候補は、先行上昇が無いため残さない', async () => {
 		// 左肩 idx 38 / 頭 53 / 谷 66 / 右肩 73、整合度 0.78。#139 の CHANGELOG が
 		// 「実在する H&S を落としていないことの確認」として記録したもの。
-		const { patterns } = await detect(buildBtcJpy2026Candles(), { type: '1day' });
+		const { patterns, candidates } = await detect(buildBtcJpy2026Candles(), { type: '1day' });
 		const hs = patterns.find((p) => p.type === 'head_and_shoulders');
-		expect(hs).toBeDefined();
-		expect(hs?.confidence).toBe(0.78);
-		// ゲートは**適用されたうえで通っている**（素通しではない）。
-		expect(hs?.structureGate?.retracementRatio).toBeCloseTo(0.7661, 3);
-		expect(hs?.structureGate?.priorExtremeIdx).toBe(33);
-		expect(hs?.structureGate?.necklineCrossIdx).toBe(9);
+		expect(hs).toBeUndefined();
+		expect(candidates.some((c) => c.reason === 'prior_trend_mismatch:sideways')).toBe(true);
 	});
 
-	it('swingDepth=3 の H&S: 縮退した 4 点の読みは落ち、#146 以降は 5 点の読みが残る', async () => {
+	it('swingDepth=3 の H&S: 縮退した4点も、横ばい先行の5点も確定しない', async () => {
 		// **左肩 idx 47 で読んだ 4 点の形は落ちたまま。** 左肩-頭の間に谷ピボットが無いため
 		// サイズ検査ともども頭-戻り-右肩の 3 点に縮退し、`first` は頭（idx 53）になる。
 		// 頭への上昇 851,964 円に対し谷までの下落が 1,150,754 円（戻り率 1.35）で、
@@ -152,12 +148,10 @@ describe('detect_patterns: 実データに対する triple / H&S の構造ゲー
 		const { patterns, candidates } = await detect(buildBtcJpy2026Candles(), { type: '1day', swingDepth: 3 });
 
 		const hs = patterns.filter((p) => p.type === 'head_and_shoulders');
-		expect(hs).toHaveLength(1);
-		expect(hs[0].pivots?.map((q) => q.idx)).toEqual([38, 45, 53, 66, 73]);
-		// ゲートは**適用されたうえで通っている**（素通しではない）。
-		expect(hs[0].structureGate?.retracementRatio).toBeCloseTo(0.3923, 3);
-		expect(hs[0].structureGate?.priorExtremeIdx).toBe(33);
-		expect(hs[0].structureGate?.necklineCrossIdx).toBe(9);
+		expect(hs).toHaveLength(0);
+		expect(
+			candidates.some((c) => c.reason === 'prior_trend_mismatch:sideways' && c.indices?.join('-') === '38-45-53-66-73'),
+		).toBe(true);
 
 		const rej = rejected(candidates, 'head_and_shoulders', 'neckline_below_pre_decline_low');
 		expect(rej).toHaveLength(1);

@@ -133,6 +133,26 @@ function buildInverseHS(opts?: {
 	return { candles, pivots };
 }
 
+/** H&S の手前に十分な履歴を足し、先行トレンドを検証できるようにする。 */
+function withPrecedingTrend(
+	pattern: ReturnType<typeof buildHS> | ReturnType<typeof buildInverseHS>,
+	direction: 'up' | 'down' | 'sideways',
+) {
+	const precedingBars = 30;
+	const firstClose = pattern.candles[0].close;
+	const leading = Array.from({ length: precedingBars }, (_, i) => {
+		const progress = i / (precedingBars - 1);
+		const start = direction === 'up' ? firstClose * 0.8 : direction === 'down' ? firstClose * 1.2 : firstClose;
+		const close = start + (firstClose - start) * progress;
+		return mkCandle(100 - i, close, close + 3, close - 3, close);
+	});
+
+	return {
+		candles: [...leading, ...pattern.candles],
+		pivots: pattern.pivots.map((pivot) => ({ ...pivot, idx: pivot.idx + precedingBars })),
+	};
+}
+
 /**
  * H&S 構造の後にネックライン下抜けを付与したフィクスチャ。
  * - 構造: H(0)-L(15)-H(30)-L(45)-H(60) で buildHS と同じ。
@@ -248,6 +268,52 @@ afterEach(() => {
 });
 
 describe('detectHeadAndShoulders', () => {
+	describe('反転に必要な先行トレンド', () => {
+		it('横ばいのH&Sは反転として検出しない', () => {
+			const { candles, pivots } = withPrecedingTrend(buildHS(), 'sideways');
+			const ctx = buildCtx({ candles, pivots });
+			const result = detectHeadAndShoulders(ctx);
+
+			expect(result.patterns.filter((pattern) => pattern.type === 'head_and_shoulders')).toHaveLength(0);
+			expect(
+				ctx.debugCandidates.some(
+					(candidate) =>
+						candidate.type === 'head_and_shoulders' && candidate.reason === 'prior_trend_mismatch:sideways',
+				),
+			).toBe(true);
+		});
+
+		it('上昇後のH&Sは反転候補として検出できる', () => {
+			const { candles, pivots } = withPrecedingTrend(buildHS(), 'up');
+			const result = detectHeadAndShoulders(buildCtx({ candles, pivots }));
+			const hs = result.patterns.find((pattern) => pattern.type === 'head_and_shoulders');
+
+			expect(hs?.precedingTrend?.direction).toBe('up');
+		});
+
+		it('横ばいの逆H&Sは反転として検出しない', () => {
+			const { candles, pivots } = withPrecedingTrend(buildInverseHS(), 'sideways');
+			const ctx = buildCtx({ candles, pivots });
+			const result = detectHeadAndShoulders(ctx);
+
+			expect(result.patterns.filter((pattern) => pattern.type === 'inverse_head_and_shoulders')).toHaveLength(0);
+			expect(
+				ctx.debugCandidates.some(
+					(candidate) =>
+						candidate.type === 'inverse_head_and_shoulders' && candidate.reason === 'prior_trend_mismatch:sideways',
+				),
+			).toBe(true);
+		});
+
+		it('下降後の逆H&Sは反転候補として検出できる', () => {
+			const { candles, pivots } = withPrecedingTrend(buildInverseHS(), 'down');
+			const result = detectHeadAndShoulders(buildCtx({ candles, pivots }));
+			const inverseHs = result.patterns.find((pattern) => pattern.type === 'inverse_head_and_shoulders');
+
+			expect(inverseHs?.precedingTrend?.direction).toBe('down');
+		});
+	});
+
 	// ── H&S（完成済み） ──────────────────────────────────────
 
 	it('H-L-H-L-H ピボット → head_and_shoulders 検出', () => {

@@ -189,23 +189,19 @@ describe('BTC/JPY 1hour 2026-08 fixture のスキャン窓（issue #157）', () 
 			expect(findIssueWindow(ctx)).toBeDefined();
 		});
 
-		it("既定（時間軸オート = getHeadProminenceForTf('1hour') = 0.83%）では accepted になる（issue #198 の修正確認）", () => {
+		it('頭の突出が十分でも横ばい先行なら prior_trend_mismatch で棄却する', () => {
 			// 頭 12,851,000 / 両肩の高いほう 12,617,817 → 実際の突出は +1.85%。
 			// #198 以前は auto が tolerancePct の表（1hour=5%）を流用しており 1.85% < 5% で
 			// head_not_higher により棄却されていた（起票者が報告した偽陰性そのもの）。
 			// #198 で auto を専用テーブル（1hour=0.83%）に差し替えたので、1.85% >= 0.83% を満たし
-			// accepted になる。
+			// 形状判定は通るが、PR3では上昇トレンドも必須とする。
 			const ctx = buildCtx();
 			expect(TF_HEAD_PROMINENCE).toBe(0.0083);
 			detectHeadAndShoulders(ctx);
 
 			const cand = findIssueWindow(ctx);
-			expect(cand?.accepted).toBe(true);
-			expect(cand?.reason).toBeUndefined();
-			const points = cand?.points as Array<{ role: string; idx: number; price: number }>;
-			expect(points.find((p) => p.role === 'head')).toMatchObject({ idx: 294, price: 12_851_000 });
-			expect(points.find((p) => p.role === 'left_shoulder')).toMatchObject({ idx: 283, price: 12_582_009 });
-			expect(points.find((p) => p.role === 'right_shoulder')).toMatchObject({ idx: 308, price: 12_617_817 });
+			expect(cand?.accepted).toBe(false);
+			expect(cand?.reason).toBe('prior_trend_mismatch:sideways');
 		});
 
 		it('headProminencePct を明示的に 0.05（#198 以前の旧オート値）に戻すと head_not_higher で棄却される', () => {

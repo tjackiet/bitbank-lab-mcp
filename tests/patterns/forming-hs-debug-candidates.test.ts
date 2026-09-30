@@ -96,7 +96,7 @@ async function runDebug(
 }
 
 describe('forming H&S debug candidates (#155)', () => {
-	it('#155 の再現条件で、検出された形成中 H&S と同じ構成点の accepted 候補が積まれる', async () => {
+	it('#155 の実データ候補は横ばい先行なら形成中 H&S として積まれない', async () => {
 		const { patterns, candidates } = await runDebug(buildBtcJpy2026Candles() as Candle[], {
 			patterns: ['head_and_shoulders', 'inverse_head_and_shoulders'],
 			headProminencePct: 0.01,
@@ -106,22 +106,15 @@ describe('forming H&S debug candidates (#155)', () => {
 		});
 
 		// issue #155 が実測した検出結果（形成中 H&S、構成点 38 / 53 / 66 / 73）
-		expect(patterns).toHaveLength(1);
-		expect(patterns[0]).toMatchObject({ type: 'head_and_shoulders', status: 'forming' });
-		expect((patterns[0].pivots as Array<{ idx: number }>).map((p) => p.idx)).toEqual([38, 53, 66, 73]);
+		expect(patterns).toHaveLength(0);
 
 		// #155 以前はこの候補が 1 件も無く、3 件すべてが accepted: false だった
-		const accepted = candidates.filter((c) => c.accepted);
-		const hit = accepted.find((c) => JSON.stringify(c.indices) === JSON.stringify([38, 53, 66, 73]));
-		expect(hit).toBeDefined();
+		const hit = candidates.find(
+			(c) =>
+				c.reason === 'prior_trend_mismatch:sideways' && JSON.stringify(c.indices) === JSON.stringify([38, 53, 66, 73]),
+		);
 		expect(hit?.type).toBe('head_and_shoulders');
-		// 完成済みとして採用されたと誤読させないための印
-		expect(hit?.status).toBe('forming');
-		expect(hit?.details).toMatchObject({ confidence: 0.78, method: 'forming_hs' });
-		// 構成点は 4 点。頭後の谷は strict の valley1 / valley2 と混同しない専用 role で出す
-		expect(hit?.points?.map((p) => p.role)).toEqual(['left_shoulder', 'head', 'post_head_valley', 'right_shoulder']);
-		expect(hit?.points?.map((p) => p.idx)).toEqual([38, 53, 66, 73]);
-		expect(hit?.points?.every((p) => typeof p.isoTime === 'string')).toBe(true);
+		expect(hit?.accepted).toBe(false);
 	});
 
 	it('accepted: true は dedup 前の「組み立てた」であって最終出力に残ったではない', async () => {

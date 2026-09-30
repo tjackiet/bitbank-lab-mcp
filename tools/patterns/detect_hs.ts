@@ -818,7 +818,7 @@ function findStrictInverseHS(ctx: DetectContext): { patterns: DeduplicablePatter
 			const start = candles[p0.idx].isoTime;
 			const end = candles[p4.idx].isoTime;
 			if (start && end) {
-				const trend = validatePriorTrend(candles, p0.idx, p4.idx - p0.idx, 'down_or_sideways');
+				const trend = validatePriorTrend(candles, p0.idx, p4.idx - p0.idx, 'down');
 				if (!trend.ok) {
 					debugCandidates.push({
 						type: 'inverse_head_and_shoulders',
@@ -1074,7 +1074,7 @@ function findStrictHS(ctx: DetectContext): { patterns: DeduplicablePattern[]; fo
 			const start = candles[p0.idx].isoTime;
 			const end = candles[p4.idx].isoTime;
 			if (start && end) {
-				const trend = validatePriorTrend(candles, p0.idx, p4.idx - p0.idx, 'up_or_sideways');
+				const trend = validatePriorTrend(candles, p0.idx, p4.idx - p0.idx, 'up');
 				if (!trend.ok) {
 					debugCandidates.push({
 						type: 'head_and_shoulders',
@@ -1377,7 +1377,7 @@ function findRelaxedHS(ctx: DetectContext): DeduplicablePattern | null {
 			const start = candles[p0.idx].isoTime;
 			const end = candles[p4.idx].isoTime;
 			if (!start || !end) continue;
-			const trend = validatePriorTrend(candles, p0.idx, p4.idx - p0.idx, 'up_or_sideways');
+			const trend = validatePriorTrend(candles, p0.idx, p4.idx - p0.idx, 'up');
 			if (!trend.ok) {
 				debugCandidates.push({
 					type: 'head_and_shoulders',
@@ -1661,7 +1661,7 @@ function findRelaxedInverseHS(ctx: DetectContext): DeduplicablePattern | null {
 			const start = candles[p0.idx].isoTime;
 			const end = candles[p4.idx].isoTime;
 			if (!start || !end) continue;
-			const trend = validatePriorTrend(candles, p0.idx, p4.idx - p0.idx, 'down_or_sideways');
+			const trend = validatePriorTrend(candles, p0.idx, p4.idx - p0.idx, 'down');
 			if (!trend.ok) {
 				debugCandidates.push({
 					type: 'inverse_head_and_shoulders',
@@ -1983,7 +1983,7 @@ function formingHsForHead(
 		return null;
 	}
 
-	const trend = validatePriorTrend(candles, left.idx, rightShoulder.idx - left.idx, 'up_or_sideways');
+	const trend = validatePriorTrend(candles, left.idx, rightShoulder.idx - left.idx, 'up');
 	if (!trend.ok) {
 		ctx.debugCandidates.push({
 			type: 'head_and_shoulders',
@@ -2275,7 +2275,7 @@ function formingInverseHsForHead(
 		return null;
 	}
 
-	const trend = validatePriorTrend(candles, left.idx, rightShoulder.idx - left.idx, 'down_or_sideways');
+	const trend = validatePriorTrend(candles, left.idx, rightShoulder.idx - left.idx, 'down');
 	if (!trend.ok) {
 		ctx.debugCandidates.push({
 			type: 'inverse_head_and_shoulders',

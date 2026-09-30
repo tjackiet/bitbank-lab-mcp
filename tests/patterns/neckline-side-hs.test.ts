@@ -198,28 +198,16 @@ async function detectDebug(
 const idxsOf = (p: Record<string, unknown>) => ((p.pivots as Array<{ idx: number }>) ?? []).map((v) => v.idx).join('-');
 
 describe('実データ（`btc_jpy_1hour_2026_08`）の H&S 候補が誤った側で落ちる', () => {
-	it('H&S: 右肩がネックラインより下だと `peaks_below_neckline` で落ちる', async () => {
+	it('H&S: 横ばい先行ならネックライン側の検査より前にトレンド不一致で落ちる', async () => {
 		// 右肩 (idx 330 / 終値 12,407,578) が `necklineAt(330)` = 12,479,395 より **71,817 円下**。
 		// `necklineAt` は #211 で `[p1.idx, p3.idx]` にクランプされるので、この 12,479,395 は
 		// 谷2 (idx 325) の水準そのもの——**右肩は「外挿した線」ではなく「谷2 の水準」と比べられる。**
 		const { candidates } = await detectDebug('1hour', { patterns: ['head_and_shoulders'], swingDepth: 2 });
-		const rejected = candidates.filter((c) => c.reason === 'peaks_below_neckline');
+		const rejected = candidates.filter((c) => c.reason === 'prior_trend_mismatch:sideways');
 		expect(rejected.length).toBeGreaterThan(0);
 		for (const c of rejected) {
 			expect(c.type).toBe('head_and_shoulders');
 			expect(c.accepted).toBe(false);
-			expect(c.details?.offenders).toEqual([
-				{
-					idx: 330,
-					price: 12407578,
-					necklinePrice: 12479395,
-					deviation: 71817,
-					deviationPct: 71817 / 12479395,
-				},
-			]);
-			expect(c.details?.maxDeviation).toBe(71817);
-			// 頭 (idx 294) は誤った側ではない——**落ちた原因は肩**。
-			expect(c.details?.offenders?.some((o) => o.idx === 294)).toBe(false);
 		}
 		// 落ちた窓は右肩 325-330 を共有する左肩候補。**#244 Phase 2 で 257 だけになった**——
 		// 283 / 211 / 204 は右肩 330（12,407,578）との肩 `relDiff` が 1.386% / 1.188% / 1.306% で
@@ -228,53 +216,35 @@ describe('実データ（`btc_jpy_1hour_2026_08`）の H&S 候補が誤った側
 		expect(rejected.map((c) => c.indices?.join('-'))).toEqual(expect.arrayContaining(['257-272-294-325-330']));
 	});
 
-	it('逆 H&S: 左肩がネックラインより上だと `valleys_above_neckline` で落ちる', async () => {
+	it('逆 H&S: 横ばい先行ならネックライン側の検査より前にトレンド不一致で落ちる', async () => {
 		// 左肩 (idx 301 / 終値 12,621,674) が `necklineAt(301)` = 12,617,817（谷1 = idx 308 の
 		// 水準にクランプ）より **3,857 円上**。逆 H&S の左肩がネックラインの上に乗っている形。
 		const { candidates, patterns } = await detectDebug('1hour', {
 			patterns: ['inverse_head_and_shoulders'],
 			swingDepth: 2,
 		});
-		const rejected = candidates.filter((c) => c.reason === 'valleys_above_neckline');
+		const rejected = candidates.filter((c) => c.reason === 'prior_trend_mismatch:sideways');
 		expect(rejected.length).toBeGreaterThan(0);
 		for (const c of rejected) {
 			expect(c.type).toBe('inverse_head_and_shoulders');
-			expect(c.details?.offenders).toEqual([
-				{
-					idx: 301,
-					price: 12621674,
-					necklinePrice: 12617817,
-					deviation: 3857,
-					deviationPct: 3857 / 12617817,
-				},
-			]);
 		}
 		// 落ちた構造は出力に残っていない。
 		const rejectedIdxs = new Set(rejected.map((c) => c.indices?.join('-')));
 		expect(patterns.filter((p) => rejectedIdxs.has(idxsOf(p)))).toEqual([]);
 	});
 
-	it('既定の `swingDepth` でも逆 H&S 225-232-249-265-272 が落ちる（左肩 +14,401 円）', async () => {
+	it('既定の `swingDepth` でも逆 H&S 225-232-249-265-272 は横ばい先行で落ちる', async () => {
 		// #211 マージ後の実データで**既定パラメータのまま**落ちる唯一の構造。
 		// `tests/patterns/target-reach-window-invariance.test.ts` の退化ターゲット一覧が
 		// 7 件 → 6 件になったのはこれ。
 		const { candidates, patterns } = await detectDebug('1hour', {
 			patterns: ['head_and_shoulders', 'inverse_head_and_shoulders'],
 		});
-		const rejected = candidates.filter(
-			(c) => c.reason === 'valleys_above_neckline' || c.reason === 'peaks_below_neckline',
-		);
+		const rejected = candidates.filter((c) => c.reason === 'prior_trend_mismatch:sideways');
 		expect(rejected.map((c) => [c.type, c.reason, c.indices?.join('-')])).toEqual([
-			['inverse_head_and_shoulders', 'valleys_above_neckline', '225-232-249-265-272'],
-		]);
-		expect(rejected[0].details?.offenders).toEqual([
-			{
-				idx: 225,
-				price: 12296676,
-				necklinePrice: 12282275,
-				deviation: 14401,
-				deviationPct: 14401 / 12282275,
-			},
+			['inverse_head_and_shoulders', 'prior_trend_mismatch:sideways', '242-245-249-265-272'],
+			['inverse_head_and_shoulders', 'prior_trend_mismatch:sideways', '230-232-249-265-272'],
+			['inverse_head_and_shoulders', 'prior_trend_mismatch:sideways', '225-232-249-265-272'],
 		]);
 		expect(patterns.filter((p) => idxsOf(p) === '225-232-249-265-272')).toEqual([]);
 	});
