@@ -76,6 +76,11 @@ type HsShoulderDepthCheck =
 			details: Record<string, number>;
 	  };
 
+/**
+ * 逆 H&S の左右肩が、頭に対して十分な戻りを持つか検査する。
+ * 深さは各肩と隣接するネックライン定義点の終値差、頭は 2 点の平均ネックラインとの差で測る。
+ * 片側でも最小比率を下回る場合は debug 用の比率・差分を返す。
+ */
 function checkInverseHsShoulderDepth(
 	leftShoulder: Pivot,
 	neckline1: Pivot,
