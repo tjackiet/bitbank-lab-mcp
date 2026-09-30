@@ -481,6 +481,7 @@ const PATTERN_INDEX_NOTE =
 export const TargetProgressOmittedReasonEnum = z.enum([
 	'not_broken_out',
 	'no_target',
+	'breakout_against_expectation',
 	'invalid_breakout_price',
 	'no_bars_after_breakout',
 	'degenerate_target_distance',
@@ -960,11 +961,12 @@ export const DetectedPatternSchema = z.object({
 			`「進捗 0%」と「測っていない」を取り違えないための唯一の手がかりになる。\n` +
 			`**再問い合わせで答えが変わりうるかは 3 通りある。**\n` +
 			`  (i) 足が増えれば測れるようになりうる（暫定）: 'not_broken_out' / 'no_bars_after_breakout'\n` +
-			`  (ii) その構造では変わらない（確定）: 'no_target' / 'invalid_breakout_price' / 'degenerate_target_distance'\n` +
+			`  (ii) その構造では変わらない（確定）: 'no_target' / 'breakout_against_expectation' / 'invalid_breakout_price' / 'degenerate_target_distance'\n` +
 			`  (iii) 実装ギャップ。再問い合わせでは変わらないが将来のリリースで消える: 'not_computed_by_detector'\n` +
 			`- 'not_broken_out' = ブレイクが確定していない（status が near_completion / forming、` +
 			`またはブレイク足を特定できない）。**最も多い経路。** (i)——後の足でネックラインを抜ければ進捗が出る。\n` +
 			`- 'no_target' = ターゲット価格またはパターン高さを算出できない（ネックライン投影が解けない等）。(ii)\n` +
+			`- 'breakout_against_expectation' = パターンが期待方向と逆にブレイクし、標準ターゲットを適用しない。(ii)\n` +
 			`- 'invalid_breakout_price' = ブレイク足の終値が非有限（欠損足など）。(ii)——その足は後から直らない。\n` +
 			`- 'no_bars_after_breakout' = ブレイク足以降に走査できるローソク足が無い。(i)\n` +
 			`- 'degenerate_target_distance' = |breakoutTarget − ブレイク価格| がパターン高さの ` +

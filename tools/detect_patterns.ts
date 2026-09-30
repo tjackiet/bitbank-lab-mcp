@@ -566,8 +566,8 @@ export default async function detectPatterns(
 					const expectedDir = expectedDirMap[p.type];
 
 					const meaningMap: Record<string, Record<string, string>> = {
-						falling_wedge: { success: '強気転換', failure: '弱気継続' },
-						rising_wedge: { success: '弱気転換', failure: '強気継続' },
+						falling_wedge: { success: '強気転換', failure: '上方転換シナリオ無効化' },
+						rising_wedge: { success: '弱気転換', failure: '下方転換シナリオ無効化' },
 						triangle_ascending: { success: '上方ブレイク（強気）', failure: '下方ブレイク（弱気転換）' },
 						triangle_descending: { success: '下方ブレイク（弱気）', failure: '上方ブレイク（強気転換）' },
 						pennant: {

@@ -210,7 +210,7 @@ export interface TargetReachInfo {
  * | 区分 | コード | 意味 |
  * |---|---|---|
  * | **(i) 暫定** | `not_broken_out` / `no_bars_after_breakout` | **足が増えれば測れるようになりうる。** 形成中のパターンが後の足でネックラインを抜ければ進捗が出る |
- * | **(ii) 確定** | `no_target` / `invalid_breakout_price` / `degenerate_target_distance` | **その構造では変わらない。** 分母はブレイク価格と target だけで決まり、欠損したブレイク足は後から直らない |
+ * | **(ii) 確定** | `no_target` / `breakout_against_expectation` / `invalid_breakout_price` / `degenerate_target_distance` | **その構造では変わらない。** パターンの成否や、ブレイク価格と target から決まる条件は後続足で変わらない |
  * | **(iii) 実装ギャップ** | `not_computed_by_detector` | 再問い合わせでは変わらないが、**将来のリリースで消える**（配線されたら進捗が出る） |
  *
  * 初版は (i) と (ii) をまとめて「データ条件 = 問い合わせ直しても変わらない」と書いていたが、
@@ -225,6 +225,7 @@ export interface TargetReachInfo {
  * | `degenerate_target_distance` | 278 | 60 | `inverse_head_and_shoulders` 59 / `double_bottom` 1（#210 から不変） |
  * | `not_computed_by_detector` | 72 → **0** | 13 → **0** | `triple_bottom` 11 / `triple_top` 2 だったが、**#228 の配線で全件が進捗を出す側に移った** |
  * | `no_target` | 0 | **0** | — |
+ * | `breakout_against_expectation` | — | — | wedge が期待と逆方向にブレイクしたとき、標準ターゲットを適用しない |
  * | `invalid_breakout_price` | 0 | **0** | — |
  * | `no_bars_after_breakout` | 0 | **0** | — |
  *
@@ -416,6 +417,7 @@ export function targetReachFields(reach: TargetReachResult): {
 const TARGET_PROGRESS_OMISSION_NOTE: Record<TargetReachOmissionReason, string> = {
 	not_broken_out: '未ブレイクのため未算出',
 	no_target: 'ターゲット価格またはパターン高さが算出できないため',
+	breakout_against_expectation: '期待方向と逆のブレイクで、標準的なパターン目標値を適用しないため',
 	invalid_breakout_price: 'ブレイク足の終値が取得できないため',
 	no_bars_after_breakout: 'ブレイク足以降のローソク足が無いため',
 	degenerate_target_distance: `ブレイク足が想定値幅の${Math.round((1 - MIN_TARGET_DISTANCE_HEIGHT_RATIO) * 100)}%以上を消化済みで、残り距離が短く進捗率が意味を持たないため`,

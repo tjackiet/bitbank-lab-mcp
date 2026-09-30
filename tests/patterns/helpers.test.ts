@@ -426,7 +426,23 @@ describe('detectWedgeBreak', () => {
 		const lower = { valueAt: () => 80 };
 		const result = detectWedgeBreak(candles, 'falling_wedge', upper, lower, 0, 50, 59, 5);
 		expect(result.detected).toBe(true);
+		expect(result.breakIdx).toBe(51);
 		expect(result.breakPrice).toBeGreaterThan(120);
+	});
+
+	it('形成終端以前の境界外終値を過去のブレイクとして検出しない', () => {
+		const candles: CandleData[] = Array.from({ length: 60 }, (_, i) => ({
+			open: 100,
+			close: i === 40 ? 250 : 100,
+			high: i === 40 ? 260 : 110,
+			low: 90,
+			isoTime: `2024-01-${String(i + 1).padStart(2, '0')}`,
+		}));
+		const upper = { valueAt: () => 120 };
+		const lower = { valueAt: () => 80 };
+		const result = detectWedgeBreak(candles, 'falling_wedge', upper, lower, 0, 50, 59, 5);
+		expect(result.detected).toBe(false);
+		expect(result.breakIdx).toBe(-1);
 	});
 });
 

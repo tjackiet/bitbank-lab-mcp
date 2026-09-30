@@ -951,17 +951,17 @@ describe('formatPatternLine', () => {
 		expect(result).toContain('成功');
 	});
 
-	it('falling_wedge: down breakout → 弱気継続（失敗）', () => {
+	it('falling_wedge: down breakout → 上方転換シナリオ無効化（失敗）', () => {
 		const p = makePattern({ type: 'falling_wedge', breakoutDirection: 'down', outcome: 'failure' });
 		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
-		expect(result).toContain('弱気継続');
+		expect(result).toContain('上方転換シナリオ無効化');
 		expect(result).toContain('失敗');
 	});
 
-	it('rising_wedge: up breakout → 強気継続（失敗）', () => {
+	it('rising_wedge: up breakout → 下方転換シナリオ無効化（失敗）', () => {
 		const p = makePattern({ type: 'rising_wedge', breakoutDirection: 'up', outcome: 'failure' });
 		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
-		expect(result).toContain('強気継続');
+		expect(result).toContain('下方転換シナリオ無効化');
 	});
 
 	it('rising_wedge: down breakout → 弱気転換（成功）', () => {

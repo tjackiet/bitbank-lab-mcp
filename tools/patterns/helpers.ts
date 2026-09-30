@@ -111,14 +111,16 @@ export function detectWedgeBreak(
 	_wedgeType: 'falling_wedge' | 'rising_wedge',
 	upper: { valueAt: (x: number) => number },
 	lower: { valueAt: (x: number) => number },
-	startIdx: number,
+	_startIdx: number,
 	endIdx: number,
 	lastIdx: number,
 	atr: number,
 ): WedgeBreakResult {
-	const patternBars = endIdx - startIdx;
-	const scanStart = startIdx + Math.max(20, Math.floor(patternBars * 0.3));
-	const scanEnd = Math.max(endIdx, lastIdx);
+	// トレンドラインは endIdx までの足で推定済み。形成区間の内部を再走査すると、
+	// endIdx より後の点で引いた線を過去へ外挿して「過去のブレイク」を作る
+	// look-ahead bias になる。ブレイク候補は形成終端の次足以降に限定する。
+	const scanStart = endIdx + 1;
+	const scanEnd = Math.min(lastIdx, candles.length - 1);
 
 	let firstBreakIdx = -1;
 

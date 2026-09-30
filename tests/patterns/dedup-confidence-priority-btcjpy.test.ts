@@ -61,23 +61,20 @@ describe('issue #142 dedup の勝者選択 — BTC/JPY 日足 実データ回帰
 		vi.restoreAllMocks();
 	});
 
-	describe('1day の rising_wedge', () => {
-		it('confidence 0.95 の狭い窓が残り、0.82 の広い窓は残らない', async () => {
+	describe('1day の wedge', () => {
+		it('形成窓内部の遡及ブレイクだけで完成扱いだった候補は残らない', async () => {
 			const res = await run('1day');
-			const rising = res.data.patterns.filter((p) => p.type === 'rising_wedge');
-			expect(rising).toHaveLength(1);
-			expect(rising[0].confidence).toBe(0.95);
-			expect(day(rising[0].range.start)).toBe('2026-06-23');
-			expect(day(rising[0].range.end)).toBe('2026-07-13');
+			expect(res.data.patterns.filter((p) => p.type.endsWith('_wedge'))).toEqual([]);
 		});
 
-		it('広い窓に飲まれていた falling_wedge と両立する（globalDedup で衝突しない）', async () => {
+		it('旧0.95候補の期間を completed wedge として報告しない', async () => {
 			const res = await run('1day');
 			const wedges = res.data.patterns
 				.filter((p) => p.type.endsWith('_wedge'))
 				.map((p) => `${p.type}|${p.confidence}|${day(p.range.start)}|${day(p.range.end)}`)
 				.sort();
-			expect(wedges).toEqual(['falling_wedge|0.95|2026-07-08|2026-08-17', 'rising_wedge|0.95|2026-06-23|2026-07-13']);
+			expect(wedges).not.toContain('rising_wedge|0.95|2026-06-23|2026-07-13');
+			expect(wedges).not.toContain('falling_wedge|0.95|2026-07-08|2026-08-17');
 		});
 	});
 
