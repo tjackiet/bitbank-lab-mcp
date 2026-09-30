@@ -45,9 +45,7 @@ import type {
 // ── Configuration ──
 
 // SG Filter
-const SG_WINDOW_MIN = 5;
 const SG_WINDOW_MAX = 11;
-const SG_CANDLE_RATIO = 20;
 const MIN_SG_PIVOTS = 6;
 
 // Wedge Detection params（時間軸非依存）
@@ -68,20 +66,17 @@ const MIN_TOUCH_BALANCE = 0.45;
 const MIN_R2_THRESHOLD = 0.55;
 const MIN_HIGHS_RATIO = 0.99;
 
-// Scoring weights
-const CONVERGENCE_WEIGHT = 0.4;
-const SLOPE_WEIGHT = 0.3;
-const DURATION_WEIGHT = 0.3;
-
 // Confidence bounds
-const CONFIDENCE_MIN = 0.65;
-const CONFIDENCE_MAX = 0.95;
-const CONFIDENCE_BOOST = 0.3;
+const RELAXED_CONFIDENCE_MAX = 0.9;
+const RELAXED_MIN_SCORE = 0.5;
 
 // Forming wedge params（時間軸非依存）
-const FORMING_MIN_CONTAINMENT = 0.75;
+const FORMING_MIN_CONTAINMENT = 0.85;
 const FORMING_MAX_CONV_RATIO = 0.8;
 const FORMING_BREAKOUT_FACTOR = 0.015;
+const FORMING_MIN_TOUCHES_PER_LINE = 2;
+const FORMING_MIN_TOTAL_TOUCHES = 5;
+const FORMING_MIN_TOUCH_SPAN_RATIO = 0.3;
 
 // ATR multiplier for break direction
 const ATR_BREAK_THRESHOLD = 0.3;
@@ -115,11 +110,9 @@ const FORMING_WINDOW_MAX_DAYS = 120;
 const WINDOW_STEP_RATIO = 5 / WINDOW_MIN_DAYS;
 const MAX_TOUCH_GAP_RATIO = 25 / WINDOW_MIN_DAYS;
 const MAX_START_GAP_RATIO = 10 / WINDOW_MIN_DAYS;
-const MIN_BARS_BEFORE_BREAK_RATIO = 15 / WINDOW_MIN_DAYS;
 /** 上の比が小さくなりすぎたときの絶対下限（旧実装から据え置き）。 */
 const MIN_TOUCH_GAP_BARS = 8;
 const MIN_START_GAP_BARS = 3;
-const MIN_BARS_BEFORE_BREAK_BARS = 5;
 
 /**
  * 時間軸別ウェッジ検出のバー数パラメータ。
@@ -132,7 +125,6 @@ const MIN_BARS_BEFORE_BREAK_BARS = 5;
  * - maxTouchGap: 隣接タッチ間の最大ギャップ
  * - maxStartGap: 上下最初タッチの開始位置差
  * - formingWindowMin / formingWindowMax: 形成中ウェッジのスキャンウィンドウ
- * - formingMinBarsBeforeBreak: 形成中ブレイク判定の最小バー数
  *
  * `patterns/min-bars.ts` が「時間足 → 最小要求バー数」を導出するのに参照するため export する。
  */
@@ -147,10 +139,6 @@ export function getWedgeBarParams(tf: string) {
 		maxStartGap: Math.max(MIN_START_GAP_BARS, Math.round(windowSizeMin * MAX_START_GAP_RATIO)),
 		formingWindowMin: forming.minBars,
 		formingWindowMax: forming.maxBars,
-		formingMinBarsBeforeBreak: Math.max(
-			MIN_BARS_BEFORE_BREAK_BARS,
-			Math.round(windowSizeMin * MIN_BARS_BEFORE_BREAK_RATIO),
-		),
 	};
 }
 
@@ -190,10 +178,10 @@ interface RegressionValidation {
 function preparePivots(ctx: DetectContext): PivotData {
 	const { candles, swingDepth } = ctx;
 
-	const sgWindowSize = Math.max(
-		SG_WINDOW_MIN,
-		Math.min(SG_WINDOW_MAX, Math.floor(candles.length / SG_CANDLE_RATIO) * 2 + 1),
-	);
+	// 入力本数で平滑化カーネルを変えると、同じ直近区間でも limit=90 と limit=120 で
+	// ピボットそのものが変わる。ウェッジの構造は追加した古い足に依存させず、固定幅で平滑化する。
+	// データが 11 本未満なら savgolFilter 側が原系列をそのまま返す。
+	const sgWindowSize = SG_WINDOW_MAX;
 	const { smoothHigh, smoothLow } = smoothCandleExtremes(candles, sgWindowSize, 2);
 
 	const sgPeaks: Array<{ index: number; price: number }> = [];
@@ -520,6 +508,8 @@ function buildRegressionEntry(
 			breakoutDirection = 'up';
 		}
 	}
+	const expectedBreakoutDirection = wedgeType === 'falling_wedge' ? 'up' : 'down';
+	const isSuccessfulBreakout = breakInfo.detected && breakoutDirection === expectedBreakoutDirection;
 
 	const { apex, conv, containment, touches, alternation, insideRatio, score } = v;
 	const confidence = Math.max(0, Math.min(1, Number(score.toFixed(2))));
@@ -530,7 +520,7 @@ function buildRegressionEntry(
 	// 未ブレイク / ブレイク足の終値が非有限でも**理由を名乗る**（#224 症状 2）。
 	// **`breakoutTarget` を出す条件は 1 文字も変えない**——理由の申告だけを足している。
 	let targetReach: TargetReachResult = omittedTargetReach('not_broken_out');
-	if (breakInfo.detected && breakoutDirection) {
+	if (breakInfo.detected && breakoutDirection && isSuccessfulBreakout) {
 		if (Number.isFinite(breakInfo.breakPrice)) {
 			const bp = breakInfo.breakPrice as number;
 			breakoutTarget = breakoutDirection === 'up' ? bp + patternHeight : bp - patternHeight;
@@ -546,13 +536,13 @@ function buildRegressionEntry(
 		} else {
 			targetReach = omittedTargetReach('invalid_breakout_price');
 		}
+	} else if (breakInfo.detected && breakoutDirection) {
+		targetReach = omittedTargetReach('breakout_against_expectation');
 	}
 
-	// 構成点（`pivots`）はタッチ点の非ブレイク分を**全件**、`price` は高安で出す（#252）。
+	// 構成点（`pivots`）は形成区間内の非ブレイクタッチを**全件**、`price` は高安で出す（#252）。
 	// 下の図用の点（`pivForDiagram`）とは**別に組む**——図は間引き済みで `price` が終値なので流用できない。
-	// **ブレイク足以降は線を問わず落とす**（#281）。このパスのタッチは `validateRegressionCandidate` が
-	// `[startIdx, endIdx]`（窓全体）で取っているのでブレイク後の足まで含みうるが、走査範囲そのものは
-	// 変えない——変えるとタッチ数とスコアが動く。
+	// ブレイク探索は endIdx の次足から始まるため通常は不要だが、境界契約としてブレイク足以降を落とす。
 	const pivots = buildTouchPivots(candles, touches, breakInfo.detected ? breakInfo.breakIdx : null);
 
 	// ダイアグラム用にタッチポイントから主要点を間引きして pivots を構成
@@ -578,12 +568,6 @@ function buildRegressionEntry(
 	}
 
 	// aftermath情報
-	const isSuccessfulBreakout = breakInfo.detected
-		? wedgeType === 'falling_wedge'
-			? breakoutDirection === 'up'
-			: breakoutDirection === 'down'
-		: false;
-
 	const aftermath = breakInfo.detected
 		? {
 				breakoutDate: breakInfo.breakIsoTime,
@@ -624,6 +608,7 @@ function buildRegressionEntry(
 		status: status4b,
 		indices: [startIdx, actualEndIdx],
 		details: {
+			formationEndIdx: endIdx,
 			slopeHigh: upper.slope,
 			slopeLow: lower.slope,
 			r2High: upper.r2,
@@ -646,7 +631,7 @@ function buildRegressionEntry(
 		range: { start, end },
 		status: status4b,
 		pivots,
-		daysToApex: apex.isValid ? apex.barsToApex : undefined,
+		daysToApex: apex.isValid ? Math.max(0, apex.apexIdx - actualEndIdx) : undefined,
 		breakoutDirection: breakoutDirection ?? undefined,
 		outcome: outcome4b,
 		breakoutDate: breakInfo.detected ? breakInfo.breakIsoTime : undefined,
@@ -962,7 +947,8 @@ function findLowerTrendlineF(
 
 /**
  * 形成中ウェッジ（4d）を検出する。回帰ベース（4b）より緩い条件で、SG 平滑化した
- * リラックスピボットから 2 点でトレンドラインを引き、収束・Apex・包含だけを見る。
+ * リラックスピボットからトレンドラインを引く。上下 2 タッチ以上・合計 5 タッチ以上と
+ * タッチ区間、交互性、収束、Apex、包含を検証し、ブレイクは形成区間の次の足からだけ探す。
  *
  * ブレイクを確認できた候補は `status: 'completed'` になるため、**`includeForming: false`
  * でも出力に残る**（実データの既定オプションで出てくる `wedge_*` はほぼこれ）。
@@ -1102,7 +1088,7 @@ function detectFormingWedges(
 			continue;
 		}
 
-		// 包含チェック（形成中は緩めに 75%）
+		// 包含チェック（relaxed 経路でも終値の 85% 以上をチャネル内に要求）
 		const fContainment = checkContainment(candles, upperLine, lowerLine, startIdx, endIdx, 0.005);
 		if (fContainment.closeInsideRatio < FORMING_MIN_CONTAINMENT) {
 			formingWedgeDebug.push({
@@ -1115,14 +1101,93 @@ function detectFormingWedges(
 			continue;
 		}
 
-		// ブレイク検出（終値ベース、トレンドライン乖離1.5%）
+		// relaxed 経路でも、出力から検算できる構成点を採否に使う。
+		// 線を引くための 2 点だけでは任意のジグザグを wedge にできるため、上下 2 点ずつ、
+		// 合計 5 点、十分な時間方向の広がり、交互性を要求する。
+		const fTouches = evaluateTouchesEx(candles, upperLine, lowerLine, startIdx, endIdx);
+		const validUpper = fTouches.upperTouches.filter((t) => !t.isBreak);
+		const validLower = fTouches.lowerTouches.filter((t) => !t.isBreak);
+		const totalTouches = validUpper.length + validLower.length;
+		if (
+			validUpper.length < FORMING_MIN_TOUCHES_PER_LINE ||
+			validLower.length < FORMING_MIN_TOUCHES_PER_LINE ||
+			totalTouches < FORMING_MIN_TOTAL_TOUCHES
+		) {
+			formingWedgeDebug.push({
+				type: wedgeType,
+				accepted: false,
+				reason: 'insufficient_touches',
+				indices: [startIdx, endIdx],
+				details: {
+					upperTouches: validUpper.length,
+					lowerTouches: validLower.length,
+					totalTouches,
+					minPerLine: FORMING_MIN_TOUCHES_PER_LINE,
+					minTotal: FORMING_MIN_TOTAL_TOUCHES,
+				},
+			});
+			continue;
+		}
+
+		const patternBars = Math.max(1, endIdx - startIdx);
+		const spanRatio = (touches: readonly TouchPoint[]) => {
+			const indices = touches.map((t) => t.index);
+			return (Math.max(...indices) - Math.min(...indices)) / patternBars;
+		};
+		const upperSpanRatio = spanRatio(validUpper);
+		const lowerSpanRatio = spanRatio(validLower);
+		if (upperSpanRatio < FORMING_MIN_TOUCH_SPAN_RATIO || lowerSpanRatio < FORMING_MIN_TOUCH_SPAN_RATIO) {
+			formingWedgeDebug.push({
+				type: wedgeType,
+				accepted: false,
+				reason: 'touch_span_too_short',
+				indices: [startIdx, endIdx],
+				details: {
+					upperSpanRatio: Number(upperSpanRatio.toFixed(3)),
+					lowerSpanRatio: Number(lowerSpanRatio.toFixed(3)),
+					minRequired: FORMING_MIN_TOUCH_SPAN_RATIO,
+				},
+			});
+			continue;
+		}
+
+		const cleanTouches: TouchResult = {
+			upperTouches: validUpper,
+			lowerTouches: validLower,
+			upperQuality: validUpper.length,
+			lowerQuality: validLower.length,
+			score: Math.min(1, totalTouches / 8),
+		};
+		const fAlternation = calcAlternationScoreEx(cleanTouches);
+		if (fAlternation < MIN_ALTERNATION) {
+			formingWedgeDebug.push({
+				type: wedgeType,
+				accepted: false,
+				reason: 'insufficient_alternation',
+				indices: [startIdx, endIdx],
+				details: { alternation: Number(fAlternation.toFixed(3)), minRequired: MIN_ALTERNATION },
+			});
+			continue;
+		}
+		const fTouchBalance =
+			Math.min(validUpper.length, validLower.length) / Math.max(validUpper.length, validLower.length);
+		if (fTouchBalance < MIN_TOUCH_BALANCE) {
+			formingWedgeDebug.push({
+				type: wedgeType,
+				accepted: false,
+				reason: 'unbalanced_touches',
+				indices: [startIdx, endIdx],
+				details: { balance: Number(fTouchBalance.toFixed(3)), minRequired: MIN_TOUCH_BALANCE },
+			});
+			continue;
+		}
+
+		// ブレイク検出（終値ベース、トレンドライン乖離1.5%）。ライン推定に使った
+		// endIdx の次足からだけ走査する。形成窓内部を遡ると未来参照になる。
 		let breakoutIdx = -1;
 		let breakoutDirection: 'up' | 'down' | null = null;
-		for (
-			let i = startIdx + Math.max(barParams.formingMinBarsBeforeBreak, Math.floor((endIdx - startIdx) * 0.3));
-			i <= lastIdx;
-			i++
-		) {
+		const breakoutScanEnd = Math.min(lastIdx, fApex.apexIdx - 1);
+		for (let i = endIdx + 1; i <= breakoutScanEnd; i++) {
 			const close = Number(candles[i]?.close);
 			const uVal = upperLine.valueAt(i);
 			const lVal = lowerLine.valueAt(i);
@@ -1161,10 +1226,29 @@ function detectFormingWedges(
 		// スコア計算
 		const convergenceScore = 1 - convRatio;
 		const slopeScore = Math.min(absU, absL) / Math.max(absU, absL);
-		const durationDays = actualEndIdx - startIdx;
-		const durationScore = durationDays >= 20 && durationDays <= 60 ? 1.0 : 0.8;
-		const score = convergenceScore * CONVERGENCE_WEIGHT + slopeScore * SLOPE_WEIGHT + durationScore * DURATION_WEIGHT;
-		const confidence = Math.max(CONFIDENCE_MIN, Math.min(CONFIDENCE_MAX, score + CONFIDENCE_BOOST));
+		const durationScore = calcDurationScoreEx(endIdx - startIdx, {
+			windowSizeMin: barParams.formingWindowMin,
+			windowSizeMax: barParams.formingWindowMax,
+		});
+		const score = calculatePatternScoreEx({
+			fitScore: slopeScore,
+			convergeScore: convergenceScore,
+			touchScore: cleanTouches.score,
+			alternationScore: fAlternation,
+			insideScore: fContainment.closeInsideRatio,
+			durationScore,
+		});
+		if (score < RELAXED_MIN_SCORE) {
+			formingWedgeDebug.push({
+				type: wedgeType,
+				accepted: false,
+				reason: 'score_below_threshold',
+				indices: [startIdx, endIdx],
+				details: { score: Number(score.toFixed(3)), minRequired: RELAXED_MIN_SCORE },
+			});
+			continue;
+		}
+		const confidence = Math.min(RELAXED_CONFIDENCE_MAX, Number(score.toFixed(2)));
 
 		// ステータス判定
 		let status: 'forming' | 'near_completion' | 'completed' | 'invalid' = 'forming';
@@ -1186,7 +1270,9 @@ function detectFormingWedges(
 		let fBreakoutTarget: number | undefined;
 		// 上と同じ（#224 症状 2）。`undefined` 初期化＝無言の畳み込みを型で潰してある。
 		let fTargetReach: TargetReachResult = omittedTargetReach('not_broken_out');
-		if (breakoutDirection && breakoutIdx !== -1) {
+		const expectedBreakoutDirection = wedgeType === 'falling_wedge' ? 'up' : 'down';
+		const isExpectedBreakout = breakoutDirection === expectedBreakoutDirection;
+		if (breakoutDirection && breakoutIdx !== -1 && isExpectedBreakout) {
 			const bp = Number(candles[breakoutIdx]?.close);
 			if (Number.isFinite(bp)) {
 				fBreakoutTarget = breakoutDirection === 'up' ? bp + fPatternHeight : bp - fPatternHeight;
@@ -1195,17 +1281,15 @@ function detectFormingWedges(
 			} else {
 				fTargetReach = omittedTargetReach('invalid_breakout_price');
 			}
+		} else if (breakoutDirection && breakoutIdx !== -1) {
+			// 期待と逆向きの突破は wedge 仮説の無効化であり、標準的な wedge 目標値を
+			// 反対側へ機械的に投影しない。
+			fTargetReach = omittedTargetReach('breakout_against_expectation');
 		}
 
-		// 構成点（`pivots`）。回帰パスと同じ定義——上下トレンドラインの非ブレイクタッチ点を
-		// `evaluateTouchesEx` で取り、`price` は高安で出す（#252）。**検出には一切使わない**
-		// （このパスの採否は上のゲートで既に決まっている）ので、閾値も判定も動かない。
-		// 形成中パスもここで `pivots` を出さないと、同じ `wedge_*` なのに検出経路によって
-		// 構成点が有ったり無かったりする（実データの既定オプションで出る wedge はこちらのパス）。
-		// 走査終端が `actualEndIdx = breakoutIdx` なのでブレイク足は必ず走査範囲に入る。
-		// `breakoutIdx` を渡してその足以降を落とす（#281）。未ブレイクなら `null` で打ち切らない。
-		const fTouches = evaluateTouchesEx(candles, upperLine, lowerLine, startIdx, actualEndIdx);
-		const fPivots = buildTouchPivots(candles, fTouches, breakoutIdx !== -1 ? breakoutIdx : null);
+		// 構成点（`pivots`）には、採否判定にも使った形成区間内の有効タッチをそのまま出す。
+		// ブレイク探索は形成区間の次の足から始まるため、ブレイク足や後続足は混入しない。
+		const fPivots = buildTouchPivots(candles, cleanTouches, null);
 
 		const entry: DeduplicablePattern = {
 			type: wedgeType,
@@ -1213,7 +1297,7 @@ function detectFormingWedges(
 			range: { start, end },
 			status,
 			pivots: fPivots,
-			daysToApex: fApex.isValid ? fApex.barsToApex : undefined,
+			daysToApex: fApex.isValid ? Math.max(0, fApex.apexIdx - actualEndIdx) : undefined,
 			breakoutDirection: breakoutDirection ?? undefined,
 			outcome,
 			breakoutDate,
@@ -1234,8 +1318,12 @@ function detectFormingWedges(
 			status,
 			breakoutDirection,
 			details: {
-				apex: { idx: fApex.apexIdx, barsToApex: fApex.barsToApex },
+				formationEndIdx: endIdx,
+				apex: { idx: fApex.apexIdx, barsToApex: Math.max(0, fApex.apexIdx - actualEndIdx) },
 				containment: fContainment.closeInsideRatio,
+				touches: { up: validUpper.length, lo: validLower.length },
+				alternation: fAlternation,
+				score,
 			},
 		});
 	}

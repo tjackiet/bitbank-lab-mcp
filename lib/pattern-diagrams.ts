@@ -517,7 +517,7 @@ export function generateSupportResistanceDiagram(
 			emoji = '📍';
 		}
 
-		const stars = level.strength > 0 ? ' ' + '★'.repeat(level.strength) + '☆'.repeat(3 - level.strength) : '';
+		const stars = level.strength > 0 ? ` ${'★'.repeat(level.strength)}${'☆'.repeat(3 - level.strength)}` : '';
 		const labelText = `${emoji} ${level.label}: ${priceStr}円 ${pctStr}${stars}`;
 
 		return {

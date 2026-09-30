@@ -22,6 +22,7 @@
  * | #244 Phase 2 | H&S の肩の同水準判定を時間足別にした（`getHsShoulderMaxPctForTf`。`1hour` = 1.04%）。**件数は 10 のまま**だが、`inverse_head_and_shoulders` の `globalDedup` 代表が `3-9-42-147-154`（肩 `relDiff` **1.356%** で肩ゲート超過）から `3-9-42-106-109`（同 **0.325%**）へ入れ替わり、`rankPatterns` の並びが 1 つずれた |
  * | #252 | `wedge_*` に `pivots`（上下トレンドラインの非ブレイクタッチ点。`price` は高安）を出すようにした。**件数は 10 のまま**で、差分は `rising_wedge` 2 件 / `falling_wedge` 2 件に `pivots` 配列が**増えたぶんだけ**（`diff` が純粋な 4 ハンクの追加になることを確認した。他のキーは 1 バイトも動いていない）。**実データの既定オプションで出る `wedge_*` は形成中パス由来**（回帰パス由来なら `aftermath` を持つ）なので、回帰パスだけに足していたらこの fixture は 1 バイトも動かなかった |
  * | #288 Phase 2 | ターゲット到達の**事実**（`targetFirstReachBars` / `targetFirstReachDate` / `targetScanBars` / `targetScanComplete`）と**交絡**（`targetOtherBreakoutBeforeReach` / `targetOppositeBreakoutInWindow`）を足した。**件数は 10 のまま**で、差分は 6 キーが**増えたぶんだけ**（全 10 件 × 全キーを突き合わせて、**既存キーで値が変わったもの 0 / 消えたキー 0**。`targetReachedPct` / `targetReached` / `targetReachedDate` / `targetReachedPrice` は 1 バイトも動かない）。内訳は `targetFirstReach*` が 5 件・`targetScan*` が 8 件・交絡 2 キーが 1 件ずつ |
+ * | wedge 正当性 PR1 | 形成窓内部をブレイクとして遡及検出していた4件を除去。非 wedge 6件は全フィールド不変。以後このスナップショットは非 wedge の不変性を比較し、wedge は構造不変条件を個別に検証する |
  *
  * **#206 では更新していない**（`MIN_CONFIDENCE` から未配線の 4 エントリを消しただけで、
  * `data.patterns` は 940 ケース全件で完全一致。行を足す必要が無かった）。
@@ -273,6 +274,7 @@ vi.mock('../tools/analyze_indicators.js', () => ({ default: vi.fn() }));
 import analyzeIndicators from '../tools/analyze_indicators.js';
 import detectPatterns from '../tools/detect_patterns.js';
 import { asMockResult, assertOk } from './_assertResult.js';
+import { buildBtcJpy2026ThroughSep30Candles } from './fixtures/btc_jpy_1day_2026.js';
 import { buildBtcJpy1hour202608Candles } from './fixtures/btc_jpy_1hour_2026_08.js';
 import baseline from './fixtures/detect_patterns_1hour_data_patterns_baseline.json' with { type: 'json' };
 import targetReachPre288 from './fixtures/detect_patterns_1hour_target_reach_pre288.json' with { type: 'json' };
@@ -281,12 +283,45 @@ import targetReachPre288 from './fixtures/detect_patterns_1hour_target_reach_pre
 function stripStructureDiagram(patterns: ReadonlyArray<Record<string, unknown>>): unknown[] {
 	return patterns.map((p) => {
 		const diagram = p.structureDiagram as { artifact?: { identifier?: string } } | undefined;
-		if (!diagram) return p;
-		return { ...p, structureDiagram: { artifact: { identifier: diagram.artifact?.identifier } } };
+		const out: Record<string, unknown> = diagram
+			? { ...p, structureDiagram: { artifact: { identifier: diagram.artifact?.identifier } } }
+			: { ...p };
+		// wedge の削除に連動して変わる「他パターンのブレイク」参照だけを比較対象から外す。
+		for (const key of ['targetOtherBreakoutBeforeReach', 'targetOppositeBreakoutInWindow'] as const) {
+			const rows = out[key];
+			if (Array.isArray(rows))
+				out[key] = rows.filter((row) => !String((row as { type?: string }).type).endsWith('_wedge'));
+		}
+		// JSON fixture には存在できない undefined キーを揃える。
+		return JSON.parse(JSON.stringify(out)) as unknown;
 	});
 }
 
 describe('detect_patterns: data.patterns の実データスナップショット（issue #200 起点。#202 / #199 / #208 / #210 / #204 / #199 候補 2 / #218 / #216 / #211 / #244 / #252 / #288 Phase 2 で更新）', () => {
+	it('報告例の120日窓では bull flag を維持し、09-01〜09-21 の偽 rising wedge だけを除く', async () => {
+		const candles = buildBtcJpy2026ThroughSep30Candles();
+		vi.mocked(analyzeIndicators).mockResolvedValueOnce(
+			asMockResult({ ok: true, summary: 'ok', data: { chart: { candles } } }),
+		);
+
+		const res = await detectPatterns('btc_jpy', '1day', candles.length, {});
+		assertOk(res);
+		const falseWedge = res.data.patterns.find(
+			(p) =>
+				p.type === 'rising_wedge' &&
+				String(p.range?.start).slice(0, 10) === '2026-09-01' &&
+				String(p.range?.end).slice(0, 10) === '2026-09-21',
+		);
+		const reportedFlag = res.data.patterns.find(
+			(p) => p.type === 'bull_flag' && String(p.range?.end).slice(0, 10) === '2026-09-22',
+		);
+
+		expect(falseWedge).toBeUndefined();
+		expect(reportedFlag).toBeDefined();
+		expect(reportedFlag?.status).toBe('completed');
+		expect(reportedFlag?.outcome).toBe('success');
+	});
+
 	it('btc_jpy 1hour（デフォルトオプション）で data.patterns が構造図の svg/title を除きベースラインと一致する', async () => {
 		const candles = buildBtcJpy1hour202608Candles();
 		vi.mocked(analyzeIndicators).mockResolvedValueOnce(
@@ -298,18 +333,33 @@ describe('detect_patterns: data.patterns の実データスナップショット
 
 		// 検出件数を先に固定する。件数がずれているなら以下の deep-equal は
 		// 「どのフィールドが変わったか」ではなく「何件増減したか」を先に見せたほうが速い。
-		expect(res.data.patterns).toHaveLength(baseline.length);
+		const withoutWedges = (patterns: typeof res.data.patterns) => patterns.filter((p) => !p.type.endsWith('_wedge'));
+		const actualNonWedges = withoutWedges(res.data.patterns);
+		const baselineNonWedges = withoutWedges(baseline as typeof res.data.patterns);
+		expect(actualNonWedges).toHaveLength(baselineNonWedges.length);
+		expect(stripStructureDiagram(actualNonWedges)).toEqual(stripStructureDiagram(baselineNonWedges));
 
-		expect(stripStructureDiagram(res.data.patterns)).toEqual(stripStructureDiagram(baseline));
+		// wedge は本 PR で意図的に再判定する。残る候補は出力された構成点だけで
+		// 上下2点ずつ・合計5点以上を検算できること。
+		for (const p of res.data.patterns.filter((q) => q.type.endsWith('_wedge'))) {
+			const pivots = p.pivots ?? [];
+			expect(pivots.length).toBeGreaterThanOrEqual(5);
+			expect(pivots.filter((q) => q.kind === 'H').length).toBeGreaterThanOrEqual(2);
+			expect(pivots.filter((q) => q.kind === 'L').length).toBeGreaterThanOrEqual(2);
+		}
+		for (const p of res.data.patterns.filter((q) => q.type.endsWith('_wedge') && q.outcome === 'failure')) {
+			expect(p.breakoutTarget).toBeUndefined();
+			expect(p.targetProgressOmittedReason).toBe('breakout_against_expectation');
+		}
 
 		// artifact.identifier は tz 修正の対象外（表示ではなく成果物 ID）。個別にも明示して固定する。
-		const identifiers = res.data.patterns
+		const identifiers = actualNonWedges
 			.map(
 				(p) =>
 					(p as { structureDiagram?: { artifact?: { identifier?: string } } }).structureDiagram?.artifact?.identifier,
 			)
 			.filter((id): id is string => typeof id === 'string');
-		const baselineIdentifiers = baseline
+		const baselineIdentifiers = baselineNonWedges
 			.map(
 				(p) =>
 					(p as { structureDiagram?: { artifact?: { identifier?: string } } }).structureDiagram?.artifact?.identifier,
@@ -361,6 +411,7 @@ describe('detect_patterns: data.patterns の実データスナップショット
 
 		// 射影が空振り（全件 `{type}` だけ）していないことを先に見る。
 		expect(targetReachPre288.filter((p) => 'targetReachedPct' in p).length).toBeGreaterThan(0);
-		expect(project(res.data.patterns)).toEqual(targetReachPre288);
+		const nonWedge = (p: Record<string, unknown>) => !String(p.type).endsWith('_wedge');
+		expect(project(res.data.patterns.filter(nonWedge))).toEqual(targetReachPre288.filter(nonWedge));
 	});
 });

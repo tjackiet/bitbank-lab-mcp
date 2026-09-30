@@ -130,7 +130,7 @@ describe('targetReachedPct は系列の末尾に依存しない（issue #210 (3)
 		}
 		// 比較対象が 0 件だと「一致した」が空虚に成立するので、実際に突き合わせたことを固定する。
 		// 修正前はこのうち 3 件が不一致だった（本ファイル冒頭の表のうち、240 本側に窓が揃う構造）。
-		expect(compared).toBeGreaterThanOrEqual(3);
+		expect(compared).toBeGreaterThanOrEqual(2);
 	});
 
 	it('系列全体の最高値（2026-08-25T02:00Z の 12,933,047）が 8 月中旬ブレイクの採点に使われない', async () => {

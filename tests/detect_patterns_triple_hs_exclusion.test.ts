@@ -64,9 +64,8 @@ describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）
 		const byType = new Map<string, number>();
 		for (const p of res.data.patterns) byType.set(p.type, (byType.get(p.type) ?? 0) + 1);
 		// 実データ B の 1hour（デフォルトオプション）の内訳。本段（型間排他）が落とすのは
-		// `triple_bottom` 242-249-272 の 1 件だけで、H&S 系 / double / wedge / triangle /
-		// pennant は 1 件も動かない（`tripleHsExcluded` が 1 のままであることは下の
-		// waterfall のテストが固定する）。
+		// `triple_bottom` 242-249-272 の 1 件だけで、H&S 系 / double / triangle /
+		// pennant は 1 件も動かない。wedge は正当性PR1で形成窓内部の遡及ブレイクを除外した。
 		//
 		// **`triple_top` 219-223-232 は #216 Phase 2 で消えた**——本段の対象外
 		// （出力に残る 2 件の `head_and_shoulders` と主構成点を 1 点も共有しない）だが、
@@ -79,12 +78,11 @@ describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）
 		// 落ち、既定 `includeForming: false` で除かれている。逆 H&S 2 件は残るので、本段が
 		// 落とす `triple_bottom` 242-249-272（共有点 249 / 272）の前提は変わらない。
 		expect(Object.fromEntries([...byType].sort())).toEqual({
-			falling_wedge: 2,
 			inverse_head_and_shoulders: 2,
 			rising_wedge: 2,
 			triangle_ascending: 4,
 		});
-		expect(res.meta.count).toBe(10);
+		expect(res.meta.count).toBe(8);
 	});
 
 	it('meta.reduction に新しい段が載り、waterfall が成立する', async () => {

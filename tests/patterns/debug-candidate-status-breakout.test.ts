@@ -204,28 +204,32 @@ describe('debug candidates: status / breakoutDirection の配線（issue #160）
 		for (const l of headers) expect(l).toMatch(/ status=(completed|invalid|forming|near_completion)\b/);
 	});
 
-	it('完成済みウェッジ（revamped_ok）の status / breakoutDirection が候補行に出る（issue #162）', async () => {
+	it('回帰窓内部の逸脱を completed breakout として遡及検出しない', async () => {
 		const res = await run(buildCompletedFallingWedgeCandles({ breakout: true }), { patterns: ['falling_wedge'] });
 		assertOk(res);
 		const cands = (res.meta.debug?.candidates ?? []) as Candidate[];
-		const completed = cands.filter((c) => c.accepted && c.reason === 'revamped_ok');
-		expect(completed.length).toBeGreaterThan(0);
-		for (const c of completed) {
-			// status は top-level。**この push 地点の式は completed / near_completion しか返さない**
-			// （`status4b` の型には invalid もあるが到達しない）ので値を固定で見る。
-			expect(c.status).toBe('completed');
-			// 方向は 3 つ目の置き場所。top-level にも `details.breakout` にも無い。
+		const accepted = cands.filter((c) => c.accepted && c.reason === 'revamped_ok');
+		expect(accepted.length).toBeGreaterThan(0);
+		for (const c of accepted.filter((row) => row.status === 'completed')) {
 			expect(c.breakoutDirection).toBeUndefined();
 			expect(c.details?.breakout).toBeUndefined();
-			expect((c.details?.breakInfo as { direction?: string } | null)?.direction).toBe('up');
+			const formationEndIdx = Number(c.details?.formationEndIdx);
+			const breakInfo = c.details?.breakInfo as { breakIdx?: number; direction?: string } | null;
+			expect(breakInfo?.breakIdx).toBeGreaterThan(formationEndIdx);
+			expect(breakInfo?.direction).toBe('up');
+		}
+		for (const c of accepted.filter((row) => row.status !== 'completed')) {
+			expect(c.status).toBe('near_completion');
+			expect(c.breakoutDirection).toBeUndefined();
+			expect(c.details?.breakout).toBeUndefined();
+			expect(c.details?.breakInfo).toBeNull();
 		}
 
 		const text = debugText(res);
 		const headers = candidateHeaderLines(text, 'falling_wedge').filter((l) => l.includes('(revamped_ok)'));
-		expect(headers.length).toBe(completed.length);
+		expect(headers.length).toBe(accepted.length);
 		for (const l of headers) {
-			expect(l).toMatch(/ status=completed\b/);
-			expect(l).toMatch(/ breakoutDirection=up\b/);
+			expect(l).toMatch(/ status=(completed|near_completion)\b/);
 		}
 	});
 

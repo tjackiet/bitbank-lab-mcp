@@ -45,6 +45,7 @@ function measured(r: TargetReachResult): TargetReachInfo {
 const ALL_OMISSION_REASONS = [
 	'not_broken_out',
 	'no_target',
+	'breakout_against_expectation',
 	'invalid_breakout_price',
 	'no_bars_after_breakout',
 	'degenerate_target_distance',

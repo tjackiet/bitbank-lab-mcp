@@ -181,11 +181,11 @@ describe('#291 継続系の invalid（実データ D の同じ窓の triangle_as
 		});
 	});
 
-	// `completed` の継続系には付かない（`invalid` 限定の additive な付与であること）。
-	it('completed / その他の status には invalidReason が付かない', async () => {
+	it('invalidReason は invalid 状態の entry にだけ付く', async () => {
 		const patterns = await liveWindowPatterns();
-		const nonInvalid = patterns.filter((p) => p.status !== 'invalid');
-		expect(nonInvalid.length).toBeGreaterThan(0);
-		for (const p of nonInvalid) expect(p.invalidReason, String(p.type)).toBeUndefined();
+		expect(patterns.length).toBeGreaterThan(0);
+		for (const p of patterns.filter((row) => row.status === 'invalid')) expect(p.invalidReason).toBeDefined();
+		for (const p of patterns.filter((row) => row.status !== 'invalid'))
+			expect(p.invalidReason, String(p.type)).toBeUndefined();
 	});
 });
