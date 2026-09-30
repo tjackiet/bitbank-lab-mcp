@@ -1,7 +1,7 @@
 /**
- * PR4 の実データ回帰。BTC/JPY 1hour / 4hour の triple 候補は、既存の
- * ネックライン側ゲートより先に先行トレンドを検証する。時間足別の横ばい閾値により、
- * 1hour/4hour の実データで一定の方向性がある候補は「横ばい」と誤分類されず残ることを確認する。
+ * PR4 / PR7 の実データ回帰。BTC/JPY 1hour / 4hour の triple 候補は、既存の
+ * ネックライン側ゲートより先に先行トレンドを検証する。時間足別の横ばい閾値による方向判定と、
+ * 完成済み triple の単調階段除外をそれぞれ確認する。
  */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -29,10 +29,20 @@ async function runForming(tf = '1hour') {
 }
 
 describe('detect_patterns: triple の先行トレンド方向ゲート（実データ B）', () => {
-	it('1hour の triple_bottom は時間足別閾値で下降先行として残る', async () => {
-		const res = await runForming();
-		const tb = res.data.patterns.find((p) => p.type === 'triple_bottom' && p.status === 'near_completion');
-		expect(tb?.precedingTrend?.direction).toBe('down');
+	it('1hour の単調な triple_bottom は階段形状として除外される', async () => {
+		mockCandles();
+		const res = await detectPatterns('btc_jpy', '1hour', 365, {
+			includeForming: true,
+			view: 'debug',
+			patterns: ['triple_bottom'],
+		});
+		assertOk(res);
+		const tb = res.data.patterns.find((p) => p.type === 'triple_bottom');
+		expect(tb).toBeUndefined();
+
+		const meta = res.meta as { debug?: { candidates?: Array<Record<string, unknown>> } } | undefined;
+		const candidates = meta?.debug?.candidates ?? [];
+		expect(candidates.some((c) => c.type === 'triple_bottom' && c.reason === 'stair_step_down')).toBe(true);
 	});
 
 	it('4hour の forming triple_top は時間足別閾値で上昇先行として残る', async () => {
@@ -87,8 +97,8 @@ describe('detect_patterns: triple の先行トレンド方向ゲート（実デ�
 		return out.content[0].text;
 	}
 
-	it('content: 方向性のある triple_bottom は出力される（1hour）', async () => {
-		expect(await fullContent('1hour')).toContain('triple_bottom');
+	it('content: 単調な triple_bottom は出力されない（1hour）', async () => {
+		expect(await fullContent('1hour')).not.toContain('triple_bottom');
 	});
 
 	it('content: 方向性のある forming triple_top も出力される（4hour）', async () => {

@@ -242,6 +242,74 @@ describe('detectTriples', () => {
 		expect(tt).toHaveLength(0);
 	});
 
+	it.each([
+		['up', [100, 101, 102] as const],
+		['down', [102, 101, 100] as const],
+	])('完成済み triple_top の単調な切り上がり/切り下がり（%s）を除外する', (direction, prices) => {
+		const { candles, pivots } = buildTripleTop({
+			peak: prices[0],
+			peak2Price: prices[1],
+			peak3Price: prices[2],
+			withBreakout: true,
+			breakoutExcessOfHeight: 1,
+		});
+		const ctx = buildCtx({ candles, pivots });
+		const result = detectTriples(ctx);
+
+		expect(result.patterns.filter((p) => p.type === 'triple_top')).toHaveLength(0);
+		expect(ctx.debugCandidates.some((d) => d.type === 'triple_top' && d.reason === `stair_step_${direction}`)).toBe(
+			true,
+		);
+	});
+
+	it.each([
+		['up', [100, 101, 102] as const],
+		['down', [102, 101, 100] as const],
+	])('完成済み triple_bottom の単調な切り上がり/切り下がり（%s）を除外する', (direction, prices) => {
+		const { candles, pivots } = buildTripleBottom({
+			valley: prices[0],
+			v2Price: prices[1],
+			v3Price: prices[2],
+			withBreakout: true,
+			breakoutExcessOfHeight: 1,
+		});
+		const ctx = buildCtx({ candles, pivots });
+		const result = detectTriples(ctx);
+
+		expect(result.patterns.filter((p) => p.type === 'triple_bottom')).toHaveLength(0);
+		expect(ctx.debugCandidates.some((d) => d.type === 'triple_bottom' && d.reason === `stair_step_${direction}`)).toBe(
+			true,
+		);
+	});
+
+	it('relaxed triple_top でも単調な3山を除外する', () => {
+		const { candles, pivots } = buildTripleTop({
+			peak: 100,
+			peak2Price: 102.5,
+			peak3Price: 105,
+			withBreakout: true,
+			breakoutExcessOfHeight: 1,
+		});
+		const ctx = buildCtx({ candles, pivots });
+		detectTriples(ctx);
+
+		expect(ctx.debugCandidates.some((d) => d.type === 'triple_top' && d.reason === 'stair_step_up')).toBe(true);
+	});
+
+	it('relaxed triple_bottom でも単調な3谷を除外する', () => {
+		const { candles, pivots } = buildTripleBottom({
+			valley: 105,
+			v2Price: 102.5,
+			v3Price: 100,
+			withBreakout: true,
+			breakoutExcessOfHeight: 1,
+		});
+		const ctx = buildCtx({ candles, pivots });
+		detectTriples(ctx);
+
+		expect(ctx.debugCandidates.some((d) => d.type === 'triple_bottom' && d.reason === 'stair_step_down')).toBe(true);
+	});
+
 	it('谷のネックライン傾斜が急すぎ → neckline_slope_excess rejected', () => {
 		// v1=80, v2=82.5 → |2.5|/82.5 = 0.030 > NECKLINE_SLOPE_LIMIT(0.02)。
 		// #186 以前は同じ式を tolerancePct(0.04) でも測っており（`valleysNear`）、
@@ -385,7 +453,7 @@ describe('detectTriples', () => {
 	// 旧テスト「谷スプレッド超過 → valley_spread_excess rejected」の入力をそのまま引き継ぐ。
 	// `MAX_VALLEY_SPREAD`（1.5%）を削除した（#178 項目 2）ので、同じ入力が strict で受理される。
 	it('谷スプレッド 3%（tolerancePct 内）→ strict で受理される', () => {
-		// v1=100, v2=101, v3=103 → 価格水準基準のばらつきは (103-100)/100 = 3%。
+		// v1=101, v2=100, v3=103 → 価格水準基準のばらつきは (103-100)/100 = 3%。
 		// - 段 1（`nearAll`）: tolerancePct = 4% 以内なので通る
 		// - 段 3（`validateLevelSpread`）: 高さ 120-100=20 に対し 3/20 = 0.15 で
 		//   MAX_LEVEL_SPREAD_RATIO（0.5）に遠く通る
@@ -395,8 +463,8 @@ describe('detectTriples', () => {
 		// `breakoutQuality` が 0.11 に張り付き、**谷スプレッドとは無関係な軸**で
 		// `confidence_below_min` に落ちてしまう（本テストの主題は段 1 / 段 3 の水準判定）。
 		const { candles, pivots } = buildTripleBottom({
-			valley: 100,
-			v2Price: 101,
+			valley: 101,
+			v2Price: 100,
 			v3Price: 103,
 			withBreakout: true,
 			breakoutExcessOfHeight: 1,
@@ -424,15 +492,15 @@ describe('detectTriples', () => {
 		// 既定のギリギリのブレイクは top / bottom でパターン高さが違うぶん
 		// `breakoutQuality` も違う値になり、**対称性の主張そのものが崩れる**。
 		const top = buildTripleTop({
-			peak: 100,
-			peak2Price: 101,
+			peak: 101,
+			peak2Price: 100,
 			peak3Price: 103,
 			withBreakout: true,
 			breakoutExcessOfHeight: 1,
 		});
 		const bottom = buildTripleBottom({
-			valley: 100,
-			v2Price: 101,
+			valley: 101,
+			v2Price: 100,
 			v3Price: 103,
 			withBreakout: true,
 			breakoutExcessOfHeight: 1,
@@ -476,14 +544,14 @@ describe('detectTriples', () => {
 	it('strict 不検出 → relaxed (x1.25) + ブレイクで Triple Top フォールバック検出', () => {
 		// 24 バー（山1 idx 0 → 山3 idx 24。`periodScoreBars` の 26 本未満 = 0.8 区分）に
 		// 3 山 2 谷 + ブレイクを配置。
-		// peak3=105 → diff/max=5/105=0.0476 > strict(0.04) だが ≤ 0.05(x1.25) で relaxed が起動。
+		// peak2=105 → diff/max=5/105=0.0476 > strict(0.04) だが ≤ 0.05(x1.25) で relaxed が起動。
 		const total = 32;
 		const candles: CandleData[] = Array.from({ length: total }, (_, i) => mkCandle(total - i, 85, 90, 75, 85));
 		candles[0] = mkCandle(total, 99, 100, 97, 99);
 		candles[6] = mkCandle(total - 6, 81, 83, 80, 81);
-		candles[12] = mkCandle(total - 12, 99, 100, 97, 99);
+		candles[12] = mkCandle(total - 12, 104, 105, 102, 104);
 		candles[18] = mkCandle(total - 18, 81, 83, 80, 81);
-		candles[24] = mkCandle(total - 24, 104, 105, 102, 104);
+		candles[24] = mkCandle(total - 24, 99, 100, 97, 99);
 		// ネックライン（=80）を 1.5% 以上下抜け
 		for (let i = 25; i < total; i++) {
 			candles[i] = mkCandle(total - i, 70, 71, 68, 70);
@@ -491,9 +559,9 @@ describe('detectTriples', () => {
 		const pivots: Pivot[] = [
 			{ idx: 0, price: 100, kind: 'H', extremePrice: 100 },
 			{ idx: 6, price: 80, kind: 'L', extremePrice: 80 },
-			{ idx: 12, price: 100, kind: 'H', extremePrice: 100 },
+			{ idx: 12, price: 105, kind: 'H', extremePrice: 105 },
 			{ idx: 18, price: 80, kind: 'L', extremePrice: 80 },
-			{ idx: 24, price: 105, kind: 'H', extremePrice: 105 },
+			{ idx: 24, price: 100, kind: 'H', extremePrice: 100 },
 		];
 		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.04 });
 		const result = detectTriples(ctx);
@@ -516,14 +584,14 @@ describe('detectTriples', () => {
 
 	it('strict 不検出 → relaxed (x1.25) + ブレイクで Triple Bottom フォールバック検出', () => {
 		// 24 日間に 3 谷 2 山 + ブレイクを配置。
-		// valley3=95 → diff/max=5/100=0.05 > strict(0.04) だが ≤ 0.05(x1.25) で relaxed が起動。
+		// valley2=95 → diff/max=5/100=0.05 > strict(0.04) だが ≤ 0.05(x1.25) で relaxed が起動。
 		const total = 32;
 		const candles: CandleData[] = Array.from({ length: total }, (_, i) => mkCandle(total - i, 105, 115, 95, 105));
 		candles[0] = mkCandle(total, 101, 102, 99, 101);
 		candles[6] = mkCandle(total - 6, 119, 120, 118, 119);
-		candles[12] = mkCandle(total - 12, 101, 102, 99, 101);
+		candles[12] = mkCandle(total - 12, 96, 97, 95, 96);
 		candles[18] = mkCandle(total - 18, 119, 120, 118, 119);
-		candles[24] = mkCandle(total - 24, 96, 97, 95, 96);
+		candles[24] = mkCandle(total - 24, 101, 102, 99, 101);
 		// ネックライン（=120）を 1.5% 以上上抜け
 		for (let i = 25; i < total; i++) {
 			candles[i] = mkCandle(total - i, 132, 133, 131, 132);
@@ -531,9 +599,9 @@ describe('detectTriples', () => {
 		const pivots: Pivot[] = [
 			{ idx: 0, price: 100, kind: 'L', extremePrice: 100 },
 			{ idx: 6, price: 120, kind: 'H', extremePrice: 120 },
-			{ idx: 12, price: 100, kind: 'L', extremePrice: 100 },
+			{ idx: 12, price: 95, kind: 'L', extremePrice: 95 },
 			{ idx: 18, price: 120, kind: 'H', extremePrice: 120 },
-			{ idx: 24, price: 95, kind: 'L', extremePrice: 95 },
+			{ idx: 24, price: 100, kind: 'L', extremePrice: 100 },
 		];
 		const ctx = buildCtx({ candles, pivots, tolerancePct: 0.04 });
 		const result = detectTriples(ctx);
@@ -1792,13 +1860,13 @@ describe('detectTriples', () => {
 
 		it('levelMargin はその経路の許容幅で正規化する（同じ 3 点でも tolerancePct が変われば変わる）', () => {
 			const { candles, pivots } = buildTripleTop({
-				peak: 100,
-				peak2Price: 102,
+				peak: 102,
+				peak2Price: 100,
 				peak3Price: 104,
 				withBreakout: true,
 				breakoutExcessOfHeight: 1,
 			});
-			// 3 ペアの relDev 平均 = (2/102 + 2/104 + 4/104) / 3 ≈ 0.02577
+			// 3 ペアの relDev 平均 = (2/102 + 4/104 + 2/104) / 3 ≈ 0.02577
 			const tight = detectTriples(buildCtx({ candles, pivots, tolerancePct: 0.04 })).patterns.find(
 				(p) => p.type === 'triple_top',
 			);
@@ -1811,9 +1879,9 @@ describe('detectTriples', () => {
 		});
 
 		it('confidence_below_min は details に confidence / 閾値 / 軸の内訳を載せる', () => {
-			// 3 山 100 / 102 / 104（levelMargin 0.36）+ 浅いブレイク（breakoutQuality 0.09）で
+			// 3 山 102 / 100 / 104（levelMargin 0.36）+ 浅いブレイク（breakoutQuality 0.09）で
 			// 0.6 を割る。谷は 80 なので押しの深さ・パターン高さ・水準ばらつきはすべて通る。
-			const { candles, pivots } = buildTripleTop({ peak: 100, peak2Price: 102, peak3Price: 104, withBreakout: true });
+			const { candles, pivots } = buildTripleTop({ peak: 102, peak2Price: 100, peak3Price: 104, withBreakout: true });
 			const ctx = buildCtx({ candles, pivots });
 			detectTriples(ctx);
 
@@ -1837,8 +1905,8 @@ describe('detectTriples', () => {
 		it('固有のゲートと confidence の両方に該当する候補は、固有の理由コードを返す', () => {
 			// 谷を 97 にすると押しの深さ 3.96% < depthPct(1day = 5%) で `valley_too_shallow`。
 			const shallow = buildTripleTop({
-				peak: 100,
-				peak2Price: 102,
+				peak: 102,
+				peak2Price: 100,
 				peak3Price: 104,
 				v1Price: 97,
 				v2Price: 97,
@@ -1854,8 +1922,8 @@ describe('detectTriples', () => {
 			// ——つまり上のケースは「confidence でも落ちる候補」であり、順序の入れ替わりを
 			// 見ていることの証明になる（片方だけだと「そもそも confidence は足りていた」を排除できない）。
 			const deepValley = buildTripleTop({
-				peak: 100,
-				peak2Price: 102,
+				peak: 102,
+				peak2Price: 100,
 				peak3Price: 104,
 				withBreakout: true,
 			});

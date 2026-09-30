@@ -759,12 +759,14 @@ issue #288 の症状）。行頭ラベルは 4 形とも `ターゲット:` で�
 - **同水準判定（`forming_peaks_not_level` / `forming_valleys_not_level`）より前に評価する。**
   単調な階段は同水準判定でも落ちうるが、「ばらつきが大きい」より「単調に切り下がっている」の
   ほうが形を言い当てているため。`view=debug` で理由コードを集計するときはこの順序が見える。
-- **完成済み経路（`near_completion` を含む）にはこのゲートは無い**
-  （3 点すべてが確定ピボットで `tolerancePct` と高さ相対の 2 段が掛かるため）。
-  **double にはそもそも形成中経路が無い**——`double_bottom` は #262、`double_top` は #268 案 C で
-  削除され、同じ 3 点は完成済み経路が `near_completion` として組む（上と同じ理由でゲートは無い）。
-  形成中 `double_top` が残っていた頃は「主構成点が 2 点なので階段が定義できない」ことが
-  例外の理由だったが、その例外ごと消えた。
+- 完成済み経路（`near_completion` を含む）にも、3 点すべてが確定ピボットになった時点で
+  同じ単調性を適用する。`main1 < main2 < main3` / `main1 > main2 > main3` は
+  `stair_step_up` / `stair_step_down` として落とし、形成中のような累積差の 2% 閾値は設けない。
+  完成済みは点が確定しているため、1% 程度の切り上がり・切り下がりでも「同水準への反復接触」では
+  ないことを判定できる。
+- **double にはそもそも形成中経路が無い**——`double_bottom` は #262、`double_top` は #268 案 C で
+  削除され、同じ 3 点は完成済み経路が `near_completion` として組む。形成中 `double_top` が残っていた頃は
+  「主構成点が 2 点なので階段が定義できない」ことが例外の理由だったが、その例外ごと消えた。
 
 契約は `tests/patterns/detect_triples.test.ts`（合成 fixture の最小対）と
 `tests/patterns/stair-step-both-directions-263.test.ts`（実データの実例）が固定している。
@@ -1425,4 +1427,3 @@ accepted も押し出されうる（`content` はこの 2 つを区別して書�
 ```bash
 export BACKTEST_OUTPUT_DIR_ALLOWLIST="/path/to/outputs:/another/dir"
 ```
-

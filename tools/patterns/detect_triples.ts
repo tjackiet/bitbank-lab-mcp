@@ -193,6 +193,14 @@ const FORMING_NECKLINE_SPREAD_FACTOR = 1.0; // tolerancePct × 1.0
 // 形成中トリプル: 完全に単調な切り上がり / 切り下がり（peak1 < peak2 < current 等）
 // は triple ではなく上昇継続 / 下降継続として扱うため、累積ステップがこれを超えると弾く。
 const FORMING_STAIR_STEP_LIMIT = 0.02;
+
+type StairStepDirection = 'up' | 'down';
+
+function stairStepDirection(main1: number, main2: number, main3: number): StairStepDirection | null {
+	if (main1 < main2 && main2 < main3) return 'up';
+	if (main1 > main2 && main2 > main3) return 'down';
+	return null;
+}
 // ネックラインブレイク判定（detect_doubles と同じ値）
 const BREAKOUT_BUFFER_PCT = 0.015;
 const MAX_BARS_FROM_EXTREMUM = 20;
@@ -382,6 +390,7 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 			ctx.priorTrendParams,
 		);
 		if (!priorTrend) continue;
+		if (rejectCompletedStairStep('triple_top', a, b, c, pcand)) continue;
 		// **整合度の算出とゲートはブレイク検出の後**（issue #199 候補 1）。`breakoutQuality` 軸が
 		// ブレイク足の終値を要るため。理由の帰属が変わる点は {@link buildTripleScore} の
 		// 呼び出し側コメントを参照。
@@ -685,6 +694,7 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 			ctx.priorTrendParams,
 		);
 		if (!priorTrend) continue;
+		if (rejectCompletedStairStep('triple_bottom', a, b, c, pcand)) continue;
 		// **整合度の算出とゲートはブレイク検出の後**（issue #199 候補 1）。理由は
 		// `findStrictTripleTop` の同じ箇所のコメントを参照。
 
@@ -973,6 +983,7 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 			ctx.priorTrendParams,
 		);
 		if (!priorTrend) continue;
+		if (rejectCompletedStairStep('triple_top', a, b, c, pcand)) continue;
 		// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
 		const sizeReason = validatePatternSize('top', [a, v1, b, v2, c], ctx.sizeThresholds);
 		if (sizeReason) {
@@ -1257,6 +1268,7 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 			ctx.priorTrendParams,
 		);
 		if (!priorTrend) continue;
+		if (rejectCompletedStairStep('triple_bottom', a, b, c, pcand)) continue;
 		// サイズ検査（#138 欠陥 2-2）。配置が最後なのは `validatePatternSize` の docstring を参照。
 		const sizeReason = validatePatternSize('bottom', [a, p1, b, p2, c], ctx.sizeThresholds);
 		if (sizeReason) {
@@ -1546,12 +1558,8 @@ function rejectFormingStairStep(
 	lastIdx: number,
 	pcand: Pcand,
 ): boolean {
-	const ascending = main1.price < main2.price && main2.price < currentPrice;
-	const descending = main1.price > main2.price && main2.price > currentPrice;
-	// [issue #263] 両向き。**この 1 行が #263 の変更の実体**で、以前は
-	// `type === 'triple_top' ? ascending : descending`（type ごとに片側だけ）だった。
-	const monotonic = ascending || descending;
-	if (!monotonic) return false;
+	const direction = stairStepDirection(main1.price, main2.price, currentPrice);
+	if (!direction) return false;
 
 	const totalStep = Math.abs(currentPrice - main1.price) / Math.max(1, main1.price);
 	if (totalStep <= FORMING_STAIR_STEP_LIMIT) return false;
@@ -1560,12 +1568,42 @@ function rejectFormingStairStep(
 	pcand({
 		type,
 		accepted: false,
-		reason: ascending ? 'forming_stair_step_up' : 'forming_stair_step_down',
+		reason: `forming_stair_step_${direction}`,
 		idxs: [main1.idx, main2.idx, lastIdx],
 		pts: [
 			{ role: `${role}1`, idx: main1.idx, price: main1.price },
 			{ role: `${role}2`, idx: main2.idx, price: main2.price },
 			{ role: 'current', idx: lastIdx, price: currentPrice },
+		],
+	});
+	return true;
+}
+
+/**
+ * 完成済み triple の主構成点 3 点が単調な階段になっていないかを見る。
+ * 形成中と違って 3 点すべてが確定ピボットなので、累積差の閾値は設けず、
+ * `main1 < main2 < main3` / `main1 > main2 > main3` をそのまま棄却する。
+ */
+function rejectCompletedStairStep(
+	type: 'triple_top' | 'triple_bottom',
+	main1: Pivot,
+	main2: Pivot,
+	main3: Pivot,
+	pcand: Pcand,
+): boolean {
+	const direction = stairStepDirection(main1.price, main2.price, main3.price);
+	if (!direction) return false;
+
+	const role = type === 'triple_top' ? 'peak' : 'valley';
+	pcand({
+		type,
+		accepted: false,
+		reason: `stair_step_${direction}`,
+		idxs: [main1.idx, main2.idx, main3.idx],
+		pts: [
+			{ role: `${role}1`, idx: main1.idx, price: main1.price },
+			{ role: `${role}2`, idx: main2.idx, price: main2.price },
+			{ role: `${role}3`, idx: main3.idx, price: main3.price },
 		],
 	});
 	return true;
