@@ -52,6 +52,7 @@ const FULL_INPUT = {
 	pair: 'eth_jpy',
 	type: '4hour',
 	limit: 120,
+	date: '20250831',
 	patterns: ['head_and_shoulders'],
 	swingDepth: 4,
 	tolerancePct: 0.03,

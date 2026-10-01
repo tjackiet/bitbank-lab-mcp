@@ -186,6 +186,8 @@ export default async function detectPatterns(
 		patterns: Array<z.infer<typeof PatternFilterEnum>>;
 		requireCurrentInPattern: boolean;
 		currentRelevanceDays: number;
+		/** get_candles と同じ終端アンカー。指定日の終端以前の limit 本を走査する。 */
+		date: string;
 		// 統合オプション
 		includeForming: boolean;
 		includeCompleted: boolean;
@@ -234,7 +236,7 @@ export default async function detectPatterns(
 			want.add('triangle_symmetrical');
 		}
 
-		const res = await analyzeIndicators(pair, type, limit);
+		const res = await analyzeIndicators(pair, type, limit, opts.date, tz);
 		if (!res.ok) return DetectPatternsOutputSchema.parse(fail(res.summary || 'failed', 'internal'));
 
 		// 上流 analyze_indicators の meta を取り込む（取得層 / 計算層は別系統）。
@@ -266,6 +268,7 @@ export default async function detectPatterns(
 
 		// 検出器に実際に渡す配列のレンジ。slice 後の配列から出す。
 		const scan = buildScanRange(candles);
+		if (scan && opts.date) scan.anchorDate = opts.date;
 		if (!Array.isArray(candles) || candles.length < 20) {
 			return DetectPatternsOutputSchema.parse(
 				ok(
@@ -398,12 +401,13 @@ export default async function detectPatterns(
 				? Number(opts.currentRelevanceDays)
 				: defaultDaysByType(String(type));
 			if (requireCurrent && patterns.length) {
-				const nowMs = Date.now();
+				const anchoredMs = opts.date && scan ? Date.parse(scan.end) : Number.NaN;
+				const referenceMs = Number.isFinite(anchoredMs) ? anchoredMs : Date.now();
 				const inDays = (iso?: string) => {
 					if (!iso) return Infinity;
 					const t = Date.parse(iso);
 					if (!Number.isFinite(t)) return Infinity;
-					return Math.abs(nowMs - t) / 86400000;
+					return Math.abs(referenceMs - t) / 86400000;
 				};
 				patterns = patterns.filter((p) => inDays(p?.range?.end) <= maxAgeDays);
 			}

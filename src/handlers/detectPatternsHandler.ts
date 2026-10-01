@@ -54,6 +54,7 @@ export const toolDef: ToolDefinition = {
 		'- limit はスキャン窓の本数であり、同時に「何が検出可能か」も決める。小さすぎる場合は data.warnings に limit_too_small_for_timeframe が載る（content 先頭にも警告行を出す）。\n' +
 		'- 各検出器はパターンの大きさの下限をバー数で持つ。既定 limit（90）ではどの時間足・どの種別も到達可能だが、limit をこれより小さくすると**特定の種別だけが静かに 0 件になる**ことがある（下限の表は docs/tools.md の「limit の実効下限」）。\n' +
 		'- 既定 limit（90）は形成中〜完成直後のパターンを見るための窓。**過去のパターンの統計（data.statistics の成功率 / 平均リターン）や aftermath を調べるなら limit を上げる**（上限 365）。summary / detailed の content 量はほぼ変わらず、増えるのは API 呼び出し回数。\n' +
+		'- date を指定すると、その tz の指定日終端以前を limit 本走査する。過去時点を再現する場合は、requireCurrentInPattern の「現在」も走査終端日に固定される。\n' +
 		'- 検出が 0 件、または期待した種別が出ない理由を答えるときは **view=debug を使う**。候補ごとの棄却理由コードが candidates に載る（例: poor_trendline_fit / r2_below_threshold / neckline_above_pre_decline_high。コードの意味は docs/tools.md の「detect_patterns 詳細ガイド」）。\n' +
 		'- **その理由を推測で説明しないこと。** 「上昇局面だったので構造的に成立しない」のような一般的なテクニカル分析の知識からの説明は、もっともらしくてもツールの出力に基づいていない。debug の実出力（棄却理由コード、候補が 1 件も積まれていないという事実を含む）だけを根拠にする。\n\n' +
 		'視覚確認: 結果の overlays を render_chart_svg に渡して描画可能。\n' +
@@ -73,6 +74,7 @@ export const toolDef: ToolDefinition = {
 		view,
 		requireCurrentInPattern,
 		currentRelevanceDays,
+		date,
 		includeForming,
 		includeCompleted,
 		includeInvalid,
@@ -89,6 +91,7 @@ export const toolDef: ToolDefinition = {
 			headProminencePct,
 			requireCurrentInPattern,
 			currentRelevanceDays,
+			date,
 			includeForming,
 			includeCompleted,
 			includeInvalid,
@@ -100,7 +103,8 @@ export const toolDef: ToolDefinition = {
 		const meta = res.meta;
 		const count = Number(meta.count ?? pats.length ?? 0);
 		const tfLabel = timeframeLabel(String(type));
-		const hdr = `${String(pair).toUpperCase()} ${tfLabel}（${String(type)}） ${limit ?? count}本から${pats.length}件を検出`;
+		const anchorSuffix = date ? `（終端 date=${date} 指定）` : '';
+		const hdr = `${String(pair).toUpperCase()} ${tfLabel}（${String(type)}） ${limit ?? count}本から${pats.length}件を検出${anchorSuffix}`;
 		// 実効パラメータ行（#184 欠陥 C）。**4 つの view すべてに同じ文字列を通す。**
 		// `hdr` は各 view で `${hdr}（${typeSummary}…）` と構文的に包まれるため末尾に足せず、
 		// また `summary` に出さないと上位集合規約（`.claude/rules/tools.md` §3）違反になる。

@@ -483,8 +483,8 @@ export const toolDef: ToolDefinition = {
 	description:
 		'[Technical Indicators / RSI / MACD / SMA] テクニカル指標の総合分析。最新値・トレンド判定・シグナルをテキストで返す。十分な limit を指定（例: 日足200本）。\n\n描画 → prepare_chart_data / render_chart_svg。バックテスト → run_backtest。',
 	inputSchema: GetIndicatorsInputSchema,
-	handler: async ({ pair, type, limit }: z.infer<typeof GetIndicatorsInputSchema>) => {
-		const res = await analyzeIndicators(pair, type, limit);
+	handler: async ({ pair, type, date, tz, limit }: z.infer<typeof GetIndicatorsInputSchema>) => {
+		const res = await analyzeIndicators(pair, type, limit, date, tz);
 		if (!res.ok) return res;
 		const ind = (res?.data?.indicators ?? {}) as Record<string, number | null | undefined> & {
 			OBV_trend?: string | null;

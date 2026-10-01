@@ -21,6 +21,8 @@ export interface ScanRange {
 	start: string;
 	end: string;
 	bars: number;
+	/** 入力 date による終端アンカー（省略時は現在時刻基準）。 */
+	anchorDate?: string;
 }
 
 /** range を持つ最小形（PatternEntry / DeduplicablePattern 双方を受けられる）。 */
@@ -81,7 +83,8 @@ export function buildScanRangeLine(
 	const start = formatScanBoundary(toTs(scan.start), displayTz, intraday);
 	const end = formatScanBoundary(toTs(scan.end), displayTz, intraday);
 	if (!start || !end) return '';
-	return `スキャン範囲: ${start} ~ ${end}（${scan.bars}本）`;
+	const anchor = scan.anchorDate ? `、終端 date=${scan.anchorDate} 指定` : '';
+	return `スキャン範囲: ${start} ~ ${end}（${scan.bars}本${anchor}）`;
 }
 
 /**

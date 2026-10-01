@@ -486,7 +486,12 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 
 `debug` view は出力を置換する階梯外の view なので、この 2 行は出ない。
 
-### スキャン窓 = 直近 `limit` 本
+### スキャン窓 = 直近 `limit` 本（`date` 指定時は終端アンカー以前）
+
+`detect_patterns` の `date` は `get_candles` と同じ形式・`tz` の暦日として解釈され、指定日の終端以前の
+`limit` 本を走査する。省略時だけ現在時刻を終端とする。`meta.scan.anchorDate` と content の
+「スキャン範囲」行に指定値が出るため、過去時点の再現では必ず走査終端を確認できる。
+`requireCurrentInPattern=true` を併用した場合の「現在」はこの走査終端日に固定される。
 
 `analyze_indicators` は「表示窓 `limit` 本」の前に指標の warmup 分を足した配列を返す
 （`SMA_200` / `EMA_200` のぶん `fetchCount = limit + 199`）。先頭の warmup 本数は
