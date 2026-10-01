@@ -29,6 +29,7 @@ import { buildPeriodBlock, buildScanRange } from './patterns/period.js';
 import { rankPatterns } from './patterns/ranking.js';
 import { linearRegressionWithR2, near as nearFn, pct as pctFn } from './patterns/regression.js';
 import { buildScanWindowWarning } from './patterns/scan-window.js';
+import { REVERSAL_HISTORY_WARMUP_BARS } from './patterns/structural.js';
 import { formatStructureGateSkipLine, formatTriplePositionLines } from './patterns/structure-diagnostics.js';
 import { type Candle, detectSwingPoints, filterPeaks, filterValleys } from './patterns/swing.js';
 import { annotateTargetBreakoutConfounders, type TargetBreakoutConfounder } from './patterns/target-confounders.js';
@@ -87,6 +88,70 @@ interface SummaryPattern extends DeduplicablePattern {
 	timeframe?: string;
 	timeframeLabel?: string;
 	structureGate?: { skipped?: 'no_prior_extreme' | 'insufficient_history' };
+}
+
+const REVERSAL_PATTERN_TYPES = new Set([
+	'double_top',
+	'double_bottom',
+	'triple_top',
+	'triple_bottom',
+	'head_and_shoulders',
+	'inverse_head_and_shoulders',
+]);
+const PIPELINE_REJECTION_REASONS = new Set(['reversal_history_insufficient', TRIPLE_HS_EXCLUSION_REASON]);
+
+/**
+ * 窓の先頭で先行トレンド／ネックライン交差を評価できない反転候補を除外する。
+ *
+ * 検出器は各パターンを同じ `candles` 配列上で走査するため、ここで最終結果を一度だけ
+ * 絞る。継続系には先行反転トレンドの要件が無いので対象にしない。除外理由は debug
+ * candidates に残し、`meta.reduction.reversalHistoryExcluded` でも件数を申告する。
+ */
+function filterReversalPatternsWithoutHistory(
+	patterns: DeduplicablePattern[],
+	debugCandidates: CandDebugEntry[],
+	availableBars: number,
+): { patterns: DeduplicablePattern[]; excluded: number } {
+	// 60本未満の要求窓は、そもそも先行履歴を含む反転判定に使えない。
+	// この場合は既存の scan-window 警告を優先し、短い合成 fixture や小窓の後方互換を
+	// 保つ。十分な窓では先頭60本以内で履歴不足を申告する候補を通さず、limit による未評価の通過を防ぐ。
+	if (availableBars <= REVERSAL_HISTORY_WARMUP_BARS) return { patterns, excluded: 0 };
+	let excluded = 0;
+	const kept: DeduplicablePattern[] = [];
+	for (const pattern of patterns) {
+		if (!pattern.type || !REVERSAL_PATTERN_TYPES.has(pattern.type)) {
+			kept.push(pattern);
+			continue;
+		}
+		const firstPivotIdx = pattern.pivots?.[0]?.idx;
+		const structureSkipped = (pattern.structureGate as { skipped?: string } | undefined)?.skipped;
+		const precedingTrend = pattern.precedingTrend as { direction?: string } | undefined;
+		const historyUnverified =
+			structureSkipped === 'no_prior_extreme' ||
+			structureSkipped === 'insufficient_history' ||
+			precedingTrend?.direction === 'insufficient_data';
+		if (
+			typeof firstPivotIdx !== 'number' ||
+			!Number.isInteger(firstPivotIdx) ||
+			firstPivotIdx >= REVERSAL_HISTORY_WARMUP_BARS ||
+			!historyUnverified
+		) {
+			kept.push(pattern);
+			continue;
+		}
+		excluded += 1;
+		debugCandidates.push({
+			type: pattern.type,
+			accepted: false,
+			reason: 'reversal_history_insufficient',
+			indices: [firstPivotIdx as number],
+			details: {
+				firstPivotIdx,
+				requiredBars: REVERSAL_HISTORY_WARMUP_BARS,
+			},
+		});
+	}
+	return { patterns: kept, excluded };
 }
 
 /**
@@ -217,6 +282,7 @@ export default async function detectPatterns(
 						effective_params: effectiveParams,
 						reduction: {
 							detected: 0,
+							reversalHistoryExcluded: 0,
 							dedupMerged: 0,
 							currentFiltered: 0,
 							lifecycleExcluded: 0,
@@ -298,18 +364,26 @@ export default async function detectPatterns(
 		const triples = detectTriples(ctx);
 		patterns.push(...triples.patterns);
 
+		// 反転系は第1構成点より前の先行トレンドとネックライン交差が定義要件。
+		// 窓の先頭付近でこの履歴を評価できない候補は、出力へ通さない。
+		// 継続系（triangle / wedge / flag）はこの制約の対象外。
+		const detectedBeforeHistoryFilter = patterns.length;
+		const historyFiltered = filterReversalPatternsWithoutHistory(patterns, debugCandidates, candles.length);
+		patterns = historyFiltered.patterns;
+		const reductionReversalHistoryExcluded = historyFiltered.excluded;
+
 		// --- 縮小段の件数申告（issue #200 要件 E） ---
-		// 検出結果は 3 段で縮小するが、旧実装はどの段で何件減ったかを一切申告していなかった
+		// 検出結果は 4 段で縮小するが、旧実装はどの段で何件減ったかを一切申告していなかった
 		// （1hour の H&S で accepted 76 件 → data.patterns 2 件のような縮小が「理由不明」に見えた）。
-		// 件数は各段の直前直後で `.length` を取るだけで、フィルタの判定ロジック自体は変えない
-		// （本 PR は検出結果 data.patterns を 1 件も変えないことが受け入れ条件）。
+		// 件数は各段の直前直後で `.length` を取る。履歴不足段の棄却理由は debug candidates に残す。
 		// 集計は必ずここ 1 箇所で行う——2 箇所で別々に数えると見出しと実体が食い違う事故が
 		// 過去に起きている（#180 の `resolveTrimCounts` docstring）。
-		const reductionDetected = patterns.length;
+		const reductionDetected = detectedBeforeHistoryFilter;
 
 		// グローバル重複排除: 全パターン種別横断で期間が70%以上重複する同一タイプを統合
+		const reductionBeforeDedup = patterns.length;
 		patterns = globalDedup(patterns);
-		const reductionDedupMerged = reductionDetected - patterns.length;
+		const reductionDedupMerged = reductionBeforeDedup - patterns.length;
 
 		// Optional filter: only patterns whose end is within N days from now (current relevance)
 		const reductionBeforeCurrentFilter = patterns.length;
@@ -408,12 +482,13 @@ export default async function detectPatterns(
 		// **判定フィールドは 1 つも触らない**——追加は 2 キーだけで、既存キーは動かない。
 		annotateTargetBreakoutConfounders(patterns);
 
-		// detected = dedupMerged + currentFiltered + lifecycleExcluded + tripleHsExcluded + output
+		// detected = reversalHistoryExcluded + dedupMerged + currentFiltered + lifecycleExcluded + tripleHsExcluded + output
 		// （waterfall の不変条件）。`tripleHsCandidateCount` は件数の減少ではなく比較対象の
 		// 申告なので**この等式の外**。
 		// tests/detect_patterns_meta_schema_parity.test.ts が実データでこの等式を固定する。
 		const reduction = {
 			detected: reductionDetected,
+			reversalHistoryExcluded: reductionReversalHistoryExcluded,
 			dedupMerged: reductionDedupMerged,
 			currentFiltered: reductionCurrentFiltered,
 			lifecycleExcluded: reductionLifecycleExcluded,
@@ -486,13 +561,15 @@ export default async function detectPatterns(
 		const cap = 200;
 		const swingsTrimmed = Array.isArray(debugSwings) ? debugSwings.slice(0, cap) : [];
 		const acc = relevantCandidates.filter((c) => !!c?.accepted);
-		// 型間排他（#218）の棄却は**検出器の棄却理由ではなく「accepted になった候補が output に
+		// 履歴不足段と型間排他（#218）の棄却は**検出器の棄却理由ではなく「accepted になった候補が output に
 		// 居ない理由」**なので、accepted と同じ優先度で残す。検出器の棄却と一緒に末尾へ積むと、
 		// この段は最後に push されるため**実データでは必ず cap で押し出される**
 		// （実測: 実データ B の 1hour で候補 1,994 件 / cap 200）——消えた理由を追うという
 		// `view=debug` の目的そのものが果たせなくなる。#180 の「押し出しは棄却理由から始まる」は維持。
-		const pipelineRej = relevantCandidates.filter((c) => !c?.accepted && c?.reason === TRIPLE_HS_EXCLUSION_REASON);
-		const rej = relevantCandidates.filter((c) => !c?.accepted && c?.reason !== TRIPLE_HS_EXCLUSION_REASON);
+		const pipelineRej = relevantCandidates.filter(
+			(c) => !c?.accepted && PIPELINE_REJECTION_REASONS.has(c?.reason ?? ''),
+		);
+		const rej = relevantCandidates.filter((c) => !c?.accepted && !PIPELINE_REJECTION_REASONS.has(c?.reason ?? ''));
 		const candidatesTrimmed: CandDebugEntry[] = [...acc, ...pipelineRej, ...rej].slice(0, cap);
 		// --- トリムの申告（#180 案 1） ---
 		// 配列を黙って切り詰めると、呼び出し側は 200 件を受け取っても全件か一部か判別できない。

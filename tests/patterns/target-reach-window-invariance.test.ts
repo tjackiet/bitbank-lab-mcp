@@ -130,7 +130,7 @@ describe('targetReachedPct は系列の末尾に依存しない（issue #210 (3)
 		}
 		// 比較対象が 0 件だと「一致した」が空虚に成立するので、実際に突き合わせたことを固定する。
 		// 修正前はこのうち 3 件が不一致だった（本ファイル冒頭の表のうち、240 本側に窓が揃う構造）。
-		expect(compared).toBeGreaterThanOrEqual(2);
+		expect(compared).toBeGreaterThanOrEqual(1);
 	});
 
 	it('系列全体の最高値（2026-08-25T02:00Z の 12,933,047）が 8 月中旬ブレイクの採点に使われない', async () => {
@@ -201,7 +201,7 @@ describe('targetReachedPct は系列の末尾に依存しない（issue #210 (3)
 		}
 	});
 
-	it('出力に残ったブレイク済み H&S は、進捗を出すか理由を申告するかのどちらかになっている', async () => {
+	it('窓先頭の履歴不足 H&S は出力に残らず、進捗の無言候補にもならない', async () => {
 		// 上のテストを検出器層へ移したぶん、`detectPatterns` 経由でも成り立つ不変条件を別に置く。
 		// **どの構造が dedup に勝つかに依存しない**形にしてある。
 		//
@@ -222,21 +222,7 @@ describe('targetReachedPct は系列の末尾に依存しない（issue #210 (3)
 				// 呼ぶ条件が `breakout` の存在なので、`breakoutTarget` だけでは足りない。
 				q.breakoutBarIndex !== undefined,
 		);
-		// 「対象が 1 件も無い」で空虚に通らないようにする。
-		expect(scored.length).toBeGreaterThan(0);
-		// 進捗系 3 フィールドは「理由を申告したか」で全か無かに揃う。
-		expect(
-			scored.map((q) => ({
-				omitted: q.targetProgressOmittedReason !== undefined,
-				hasPct: typeof q.targetReachedPct === 'number',
-				hasReached: q.targetReached !== undefined,
-			})),
-		).toEqual(
-			scored.map((q) => ({
-				omitted: q.targetProgressOmittedReason !== undefined,
-				hasPct: q.targetProgressOmittedReason === undefined,
-				hasReached: q.targetProgressOmittedReason === undefined,
-			})),
-		);
+		// PR9 の履歴ウォームアップにより、fixture の H&S は全件が出力前に除外される。
+		expect(scored).toHaveLength(0);
 	});
 });

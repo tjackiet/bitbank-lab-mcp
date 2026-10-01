@@ -74,7 +74,8 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 				'`limit_too_small_for_timeframe` を載せ、content 先頭にも警告行を出す。\n' +
 				'逆に既定の 90 は「いま形成中〜完成直後のパターンを見る」ための窓なので、' +
 				'**過去のパターンの統計（data.statistics の成功率 / 平均リターン）や aftermath を調べる用途では上げる**' +
-				'（上限 365）。view=summary / detailed の content 量はほぼ変わらず、増えるのは API 呼び出し回数。',
+				'（上限 365）。反転系は先行履歴の検証に60本を使うため、61本未満では履歴不足候補を一律に' +
+				'除外せず `limit_too_small_for_timeframe` 警告を優先する。view=summary / detailed の content 量はほぼ変わらず、増えるのは API 呼び出し回数。',
 		),
 	patterns: z
 		.array(PatternFilterEnum)
@@ -205,12 +206,12 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 				'——行が無いことを「relaxed なし」と読ませないため（値が無いのか content に出していないのかを' +
 				'呼び出し側が区別できない状態が #189 / #191 の直した欠陥）。構造化データは data.patterns[]._fallback。\n' +
 				'**`検出内訳:` 行は 4 view すべて（`debug` を含む）に出る**（issue #200）。' +
-				'`検出 N件 → 重複統合 -M → [現在時点フィルタ -K →] ライフサイクル除外 -L → triple×H&S排他 -X → 出力 P件` の形で、' +
+				'`検出 N件 → 反転履歴不足 -H → 重複統合 -M → [現在時点フィルタ -K →] ライフサイクル除外 -L → triple×H&S排他 -X → 出力 P件` の形で、' +
 				'globalDedup / requireCurrentInPattern（既定 false）/ ライフサイクル絞り込み（includeForming 等）/ ' +
 				'triple×H&S の型間排他（issue #218。**減るのは triple_* だけ**）の' +
-				'4 段でどれだけ減ったかを申告する。`現在時点フィルタ` は 0 のとき区間ごと省くが、' +
-				'`重複統合` / `ライフサイクル除外` / `triple×H&S排他` は 0 でも省かない。構造化データは meta.reduction' +
-				'（`detected` = `dedupMerged + currentFiltered + lifecycleExcluded + tripleHsExcluded + output`）。\n' +
+				'5 段でどれだけ減ったかを申告する。`現在時点フィルタ` は 0 のとき区間ごと省くが、' +
+				'`反転履歴不足` / `重複統合` / `ライフサイクル除外` / `triple×H&S排他` は 0 でも省かない。構造化データは meta.reduction' +
+				'（`detected` = `reversalHistoryExcluded + dedupMerged + currentFiltered + lifecycleExcluded + tripleHsExcluded + output`）。\n' +
 				'- summary: ヘッダ ＋ 分類内訳 ＋ 直近30日/90日件数 ＋ 上記 2 行 ＋ 実効パラメータ行 ＋ 検出経路行 ＋ 検出内訳行 ＋ 検討パターン。' +
 				'個々のパターンの詳細は content に出ない（**どのパターンが relaxed 由来かも出ない**——届くのは検出経路行の件数だけ）。\n' +
 				'- detailed（既定）: 上位 5 件の詳細。6 件目以降は content に出ない。' +
@@ -387,16 +388,17 @@ const EffectiveParamsSchema = z
 /**
  * `detect_patterns` の**縮小段の件数申告**（issue #200 要件 E）。
  *
- * 検出結果は `tools/detect_patterns.ts` 内で 3 段を経て縮小する:
- * 1. `globalDedup`（同一 type / 同カテゴリで期間 70% 重複を統合）
- * 2. `requireCurrentInPattern`（既定 false。古いパターンを除外）
- * 3. ライフサイクル絞り込み（`includeForming` / `includeCompleted` / `includeInvalid`）
+ * 検出結果は `tools/detect_patterns.ts` 内で 4 段を経て縮小する:
+ * 1. 反転系の履歴不足候補を除外（第1構成点が窓の先頭60本以内）
+ * 2. `globalDedup`（同一 type / 同カテゴリで期間 70% 重複を統合）
+ * 3. `requireCurrentInPattern`（既定 false。古いパターンを除外）
+ * 4. ライフサイクル絞り込み（`includeForming` / `includeCompleted` / `includeInvalid`）
  *
  * どこで何件減ったかを申告しないと、「1hour の H&S で accepted 76 件 → data.patterns 2 件」
  * のような縮小が「理由不明」に見える（減ること自体は正常な挙動）。件数は `tools/detect_patterns.ts`
  * が単一箇所で数える（`resolveTrimCounts` と同じ理由——2 箇所で計算すると見出しと集計が食い違う）。
  *
- * `detected = dedupMerged + currentFiltered + lifecycleExcluded + output` が常に成り立つ
+ * `detected = reversalHistoryExcluded + dedupMerged + currentFiltered + lifecycleExcluded + tripleHsExcluded + output` が常に成り立つ
  * （waterfall。`tests/detect_patterns_meta_schema_parity.test.ts` が実データで固定する）。
  *
  * **`optional()` だが `detect_patterns` の出力では常に埋まる**（`effective_params` と同じ理由。
@@ -405,6 +407,13 @@ const EffectiveParamsSchema = z
 const ReductionSchema = z
 	.object({
 		detected: z.number().int().describe('globalDedup 前の検出件数（全検出器の合計、重複排除前）。'),
+		reversalHistoryExcluded: z
+			.number()
+			.int()
+			.optional()
+			.describe(
+				'反転系で先行トレンド／ネックライン交差を評価する履歴が不足し、窓の先頭60本以内を開始点とするため除外された件数（issue #297 項目1(b)）。',
+			),
 		dedupMerged: z.number().int().describe('globalDedup で統合されて減った件数。'),
 		currentFiltered: z
 			.number()
@@ -436,14 +445,14 @@ const ReductionSchema = z
 					'ように H&S を要求しない呼び出しでは H&S 検出器が走らず、必ずこの状態になる（排他の根拠は' +
 					'呼び出し側が実際に受け取る H&S に限る仕様。`tools/patterns/mutual-exclusion.ts` 冒頭）。' +
 					'1 以上なら `tripleHsExcluded` は実際に比較した結果。件数の減少ではないので waterfall の等式' +
-					'（`detected = dedupMerged + currentFiltered + lifecycleExcluded + tripleHsExcluded + output`）には入らない。' +
+					'（`detected = reversalHistoryExcluded + dedupMerged + currentFiltered + lifecycleExcluded + tripleHsExcluded + output`）には入らない。' +
 					'content の「検出内訳:」行は 0 のときだけ `triple×H&S排他 -0（比較対象 H&S 無し）` と注記する。',
 			),
 		output: z.number().int().describe('最終的に data.patterns へ残った件数（meta.count と同値）。'),
 	})
 	.optional()
 	.describe(
-		'検出結果が縮小する 4 段（globalDedup → requireCurrentInPattern → ライフサイクル絞り込み → ' +
+		'検出結果が縮小する 5 段（反転履歴不足 → globalDedup → requireCurrentInPattern → ライフサイクル絞り込み → ' +
 			'triple×H&S 排他）の件数内訳。**入力フィルタの結果を変えるものではなく、既存の縮小を可視化するだけ**。' +
 			'content には「検出内訳:」行として summary / detailed / full / debug に出る。',
 	);

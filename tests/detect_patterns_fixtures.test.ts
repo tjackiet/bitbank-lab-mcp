@@ -821,6 +821,32 @@ describe('detect_patterns fixtures', () => {
 			);
 			expect(insufficientEntry).toBeDefined();
 		});
+
+		it('十分な窓では先頭60本以内に始まる反転候補を履歴不足で除外する', async () => {
+			const base = buildCompletedDoubleTopCandles();
+			const candles = [...base, ...Array.from({ length: 70 }, (_, i) => makeCandle(base.length + i, 100))];
+			mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(indicatorsOk(candles)));
+
+			const res = await detectPatterns('btc_jpy', '1day', candles.length, {
+				patterns: ['double_top'],
+				swingDepth: 2,
+				tolerancePct: 0.02,
+				includeCompleted: true,
+				includeForming: false,
+				view: 'debug',
+			});
+
+			assertOk(res);
+			expect(res.data.patterns.filter((p: { type: string }) => p.type === 'double_top')).toHaveLength(0);
+			const reduction = res.meta.reduction as { reversalHistoryExcluded?: number };
+			expect(reduction.reversalHistoryExcluded).toBeGreaterThan(0);
+			expect(
+				(
+					(res.meta.debug as { candidates?: Array<{ type?: string; accepted?: boolean; reason?: string }> })
+						.candidates ?? []
+				).some((c) => c.type === 'double_top' && c.accepted === false && c.reason === 'reversal_history_insufficient'),
+			).toBe(true);
+		});
 	});
 
 	// ── 上流 warning の伝播（取得層 meta.warning / 計算層 meta.warnings） ──

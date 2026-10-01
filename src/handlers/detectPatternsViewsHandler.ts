@@ -72,12 +72,14 @@ interface PatternMeta {
 /**
  * `meta.reduction`（issue #200 要件 E）。`src/schema/patterns.ts` の `ReductionSchema` と対。
  * `PatternMeta.reduction` 自体が optional なのは、ハンドラを直接呼ぶテスト経路で欠けうるため
- * （`effective_params` 等と同じ事情）。存在するときは 5 つとも `tools/detect_patterns.ts` が
- * 1 箇所でまとめて設定するので、フィールド単位では optional にしない
- * （一部だけ欠けた不完全な reduction を型で許容しない）。
+ * （`effective_params` 等と同じ事情）。検出器から返る主要フィールドは `tools/detect_patterns.ts` が
+ * 1 箇所でまとめて設定する。`reversalHistoryExcluded` はこの段をまだ持たない旧ハンドラ直呼び
+ * 経路との互換のため optional とする。
  */
 interface ReductionCounts {
 	detected: number;
+	/** 反転系の開始点が履歴ウォームアップ内にあり、出力前に除外された件数（#297 項目1(b)）。 */
+	reversalHistoryExcluded?: number;
 	dedupMerged: number;
 	currentFiltered: number;
 	lifecycleExcluded: number;
@@ -301,10 +303,10 @@ export const TRIPLE_HS_NO_CANDIDATE_NOTE = '（比較対象 H&S 無し）';
  * （#180）と同じ理由で、2 箇所で計算すると見出しと集計が食い違う事故になる。
  *
  * **`currentFiltered`（requireCurrentInPattern。既定 false）は 0 のとき区間ごと省く。**
- * 他の 3 段と違い、このフィルタは無効時でも必ず評価されて
+ * 他の 4 段と違い、このフィルタは無効時でも必ず評価されて
  * 確定的に 0 を返す（`buildDetectionRouteLine` の relaxed 0 件のような「試したかどうか
  * 分からない」曖昧さが無い）ため、省いても `検出 - 重複統合 - ライフサイクル除外 - triple×H&S排他 = 出力` の
- * 対応は崩れない。一方 `dedupMerged` / `lifecycleExcluded` / `tripleHsExcluded` は 0 でも省かない——
+ * 対応は崩れない。一方 `reversalHistoryExcluded` / `dedupMerged` / `lifecycleExcluded` / `tripleHsExcluded` は 0 でも省かない——
  * 本 issue の主眼（各段でどれだけ減ったか）を呼び出しごとに揺らさず答えるため
  * （`buildDetectionRouteLine` の「relaxed 0 件でも明示する」と同じ方針）。
  * `tripleHsExcluded`（issue #218 Phase 2）も同じ扱いで 0 でも省かない。
@@ -324,6 +326,7 @@ export function buildReductionLine(meta: PatternMeta | undefined): string {
 	if (!r) return '';
 	const {
 		detected,
+		reversalHistoryExcluded,
 		dedupMerged,
 		currentFiltered,
 		lifecycleExcluded,
@@ -333,7 +336,11 @@ export function buildReductionLine(meta: PatternMeta | undefined): string {
 	} = r;
 	if (![detected, dedupMerged, currentFiltered, lifecycleExcluded, tripleHsExcluded, output].every(Number.isFinite))
 		return '';
-	const parts = [`検出 ${formatInt(detected)}件`, `重複統合 -${formatInt(dedupMerged)}`];
+	const parts = [`検出 ${formatInt(detected)}件`];
+	if (Number.isFinite(reversalHistoryExcluded)) {
+		parts.push(`反転履歴不足 -${formatInt(reversalHistoryExcluded as number)}`);
+	}
+	parts.push(`重複統合 -${formatInt(dedupMerged)}`);
 	if (currentFiltered > 0) parts.push(`現在時点フィルタ -${formatInt(currentFiltered)}`);
 	// 比較対象の H&S が 0 件なら「排他を試せなかった」ので注記する（issue #224 症状 1）。
 	// `tripleHsCandidateCount` が無い古い meta（ハンドラ直呼びのテスト等）では注記を出さない

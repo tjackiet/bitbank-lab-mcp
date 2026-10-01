@@ -740,6 +740,20 @@ issue #288 の症状）。行頭ラベルは 4 形とも `ターゲット:` で�
 
 契約は `tests/patterns/structural-gates-btcjpy.test.ts`（実データ fixture）が固定している。
 
+### 反転パターンの先頭履歴ウォームアップ（#297 項目1(b))
+
+double / triple / H&S 系は、第1構成点より前の先行トレンドとネックライン交差を確認できて
+初めて反転パターンとして成立する。必要な履歴は
+`max(PRIOR_TREND_LOOKBACK_MAX, NECKLINE_CROSS_LOOKBACK_BARS) = 60` 本を基準にする。
+
+十分なスキャン窓（61本以上）で第1構成点が先頭60本以内にあり、構造ゲートまたは先行トレンドが
+`no_prior_extreme` / `insufficient_history` を申告した候補は、整合度を下げるのではなく出力から除外する。
+除外理由は `view=debug` の `candidates` に `reversal_history_insufficient` として残り、件数は
+`meta.reduction.reversalHistoryExcluded` に載る。継続系（triangle / wedge / flag）は対象外。
+
+60本以下の小さな窓では、パターンを一律に消す代わりに既存の `limit_too_small_for_timeframe` 警告を
+優先する。反転パターンの精度を確認する用途では、少なくとも61本以上を要求すること。
+
 ### 形成中 triple の単調性ゲート（#263）
 
 `triple_top` / `triple_bottom` の**形成中**経路は、主構成点 3 点（確定 2 点 ＋ 最新足の終値）が
