@@ -818,6 +818,36 @@ describe('detectWedges', () => {
 			expect(piv.length).toBe(9);
 		});
 
+		it('形成中パスの completed は構造ゲートを通過した候補だけ返す', () => {
+			const candles = buildBtcJpy2026Candles();
+			const resolved = resolveParams('1day', {});
+			const swings = detectSwingPoints(candles, { swingDepth: resolved.swingDepth, strictPivots: true });
+			const ctx = buildCtx({
+				candles,
+				pivots: swings,
+				tolerancePct: resolved.tolerancePct,
+				includeForming: true,
+				swingDepth: resolved.swingDepth,
+			});
+			const result = detectWedges(ctx);
+
+			const completedForming = result.patterns.filter(
+				(p) => p.status === 'completed' && (p as { _method?: string })._method === 'forming_relaxed',
+			);
+			for (const p of completedForming) {
+				const pivots = p.pivots ?? [];
+				expect(pivots.filter((p) => p.kind === 'H').length).toBeGreaterThanOrEqual(3);
+				expect(pivots.filter((p) => p.kind === 'L').length).toBeGreaterThanOrEqual(3);
+			}
+
+			// completed として昇格した候補には、通過したタッチ数も debug に残す。
+			expect(
+				ctx.debugCandidates.some(
+					(c) => c.accepted === true && (c.details as { completedGate?: unknown } | undefined)?.completedGate,
+				),
+			).toBe(true);
+		});
+
 		it('falling_wedge でも kind が上限 / 下限に対応する', () => {
 			// upper(i) = 200 − 0.5i / lower(i) = 180 − 0.25i。両ライン下向きで**上側がより急**。
 			const candles = buildFallingWedgeWithUpBreakout();

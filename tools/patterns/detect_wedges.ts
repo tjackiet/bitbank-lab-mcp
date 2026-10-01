@@ -866,6 +866,46 @@ function detectRegressionWedges(
 
 type FormingLine = { slope: number; intercept: number; valueAt: (idx: number) => number };
 
+/**
+ * 形成中パスでブレイクを検出した候補を completed として昇格させる前の構造ゲート。
+ *
+ * 形成中の早期シグナルは 2 点ライン / containment 75% のまま許可するが、
+ * ブレイク後は回帰パスと同じ最低限のタッチ数（各ライン3点）を要求する。
+ * ここを通さずに completed へ昇格させると、タッチが上下合わせて数点しかない
+ * 候補まで「失敗したウェッジ」として出力される（forming-completed parity）。
+ */
+function validateFormingCompletedCandidate(
+	candles: readonly CandleData[],
+	upper: FormingLine,
+	lower: FormingLine,
+	startIdx: number,
+	breakoutIdx: number,
+	wedgeType: 'rising_wedge' | 'falling_wedge',
+	debugCandidates: CandDebugEntry[],
+): TouchResult | null {
+	const touches = evaluateTouchesEx(candles, upper, lower, startIdx, breakoutIdx);
+	const reject = (reason: string, details: Record<string, unknown>) => {
+		debugCandidates.push({
+			type: wedgeType,
+			accepted: false,
+			reason,
+			indices: [startIdx, breakoutIdx],
+			details,
+		});
+	};
+
+	if (touches.upperQuality < MIN_TOUCHES_PER_LINE || touches.lowerQuality < MIN_TOUCHES_PER_LINE) {
+		reject('insufficient_completed_touches', {
+			upperTouches: touches.upperQuality,
+			lowerTouches: touches.lowerQuality,
+			minRequired: MIN_TOUCHES_PER_LINE,
+		});
+		return null;
+	}
+
+	return touches;
+}
+
 function makeLineF(p1: { idx: number; price: number }, p2: { idx: number; price: number }): FormingLine {
 	const slope = (p2.price - p1.price) / Math.max(1, p2.idx - p1.idx);
 	const intercept = p1.price - slope * p1.idx;
@@ -1139,6 +1179,24 @@ function detectFormingWedges(
 			}
 		}
 
+		// 形成中の緩いゲートで候補化したものを completed として出す場合は、
+		// 回帰パスと同じ構造品質を要求する。未ブレイク候補は早期シグナルとして
+		// 従来どおり緩い条件のまま残す。
+		let completedTouches: TouchResult | undefined;
+		if (breakoutIdx !== -1) {
+			const validatedTouches = validateFormingCompletedCandidate(
+				candles,
+				upperLine,
+				lowerLine,
+				startIdx,
+				breakoutIdx,
+				wedgeType,
+				formingWedgeDebug,
+			);
+			if (!validatedTouches) continue;
+			completedTouches = validatedTouches;
+		}
+
 		// ブレイクがない場合は形成中
 		const isForming = breakoutIdx === -1;
 		const actualEndIdx = isForming ? endIdx : breakoutIdx;
@@ -1198,13 +1256,14 @@ function detectFormingWedges(
 		}
 
 		// 構成点（`pivots`）。回帰パスと同じ定義——上下トレンドラインの非ブレイクタッチ点を
-		// `evaluateTouchesEx` で取り、`price` は高安で出す（#252）。**検出には一切使わない**
-		// （このパスの採否は上のゲートで既に決まっている）ので、閾値も判定も動かない。
+		// `evaluateTouchesEx` で取り、`price` は高安で出す（#252）。ブレイク済み候補では
+		// 上の completed 構造ゲートで得たタッチ結果を再利用し、未ブレイク候補では従来どおり
+		// 表示用に評価する。
 		// 形成中パスもここで `pivots` を出さないと、同じ `wedge_*` なのに検出経路によって
 		// 構成点が有ったり無かったりする（実データの既定オプションで出る wedge はこちらのパス）。
 		// 走査終端が `actualEndIdx = breakoutIdx` なのでブレイク足は必ず走査範囲に入る。
 		// `breakoutIdx` を渡してその足以降を落とす（#281）。未ブレイクなら `null` で打ち切らない。
-		const fTouches = evaluateTouchesEx(candles, upperLine, lowerLine, startIdx, actualEndIdx);
+		const fTouches = completedTouches ?? evaluateTouchesEx(candles, upperLine, lowerLine, startIdx, actualEndIdx);
 		const fPivots = buildTouchPivots(candles, fTouches, breakoutIdx !== -1 ? breakoutIdx : null);
 
 		const entry: DeduplicablePattern = {
@@ -1236,6 +1295,14 @@ function detectFormingWedges(
 			details: {
 				apex: { idx: fApex.apexIdx, barsToApex: fApex.barsToApex },
 				containment: fContainment.closeInsideRatio,
+				...(completedTouches
+					? {
+							completedGate: {
+								upperTouches: completedTouches.upperQuality,
+								lowerTouches: completedTouches.lowerQuality,
+							},
+						}
+					: {}),
 			},
 		});
 	}
