@@ -14,6 +14,10 @@ export const CandleTypeEnum = z.enum([
 	'1month',
 ]);
 
+/** get_candles 系ツールで共有する終端アンカーの形式・暦日解釈。 */
+export const CANDLE_DATE_DESCRIPTION =
+	'type により形式が異なる: 1min/5min/15min/30min/1hour は YYYYMMDD、4hour/8hour/12hour/1day/1week/1month は YYYY（YYYYMMDD も先頭4桁として互換受理）。date は tz（既定 Asia/Tokyo）の暦日として解釈し、指定日の終端以前を対象にします。';
+
 // ── Shared base schemas ──
 
 /** レートリミット情報スキーマ（レスポンスヘッダから抽出、ヘッダ未提供時は省略） */

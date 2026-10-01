@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
 	BaseMetaSchema,
 	BasePairInputSchema,
+	CANDLE_DATE_DESCRIPTION,
 	CandleSchema,
 	CandleTypeEnum,
 	NumericSeriesSchema,
@@ -124,6 +125,8 @@ export const GetIndicatorsMetaSchema = BaseMetaSchema.extend({
 
 export const GetIndicatorsInputSchema = BasePairInputSchema.extend({
 	type: CandleTypeEnum.optional().default('1day'),
+	date: z.string().optional().describe(`${CANDLE_DATE_DESCRIPTION} 指標計算に使う足を取得します。`),
+	tz: z.string().optional().describe('date の暦日解釈と表示に使う IANA タイムゾーン（既定: Asia/Tokyo）。'),
 	limit: z.number().int().min(1).max(1000).optional(),
 });
 

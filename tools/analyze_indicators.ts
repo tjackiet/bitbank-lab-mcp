@@ -602,6 +602,8 @@ export default async function analyzeIndicators(
 	pair: string = 'btc_jpy',
 	type: CandleType | string = '1day',
 	limit: number | null = null,
+	date?: string,
+	tz?: string,
 ): Promise<OkResult<GetIndicatorsData, GetIndicatorsMeta> | FailResult> {
 	const chk = ensurePair(pair);
 	if (!chk.ok) return failFromValidation(chk);
@@ -627,14 +629,19 @@ export default async function analyzeIndicators(
 	const fetchCount = getFetchCount(displayCount, indicatorKeys);
 
 	// Check cache before fetching & computing
-	const cacheKey = `${chk.pair}:${type}`;
+	// 終端アンカーとその暦日解釈はデータ集合そのものを変えるため、キャッシュキーに含める。
+	// tz を落とすと同じ date でも暦日境界の異なる結果を混ぜてしまう。
+	// tz は date 指定時だけでなく、未指定時の「現在日」の暦日解釈にも影響する。
+	// 省略時は getCandles の既定値と揃え、明示した Asia/Tokyo と同じキャッシュを共有する。
+	const cacheTz = tz ?? 'Asia/Tokyo';
+	const cacheKey = `${chk.pair}:${type}:${date ?? ''}:${cacheTz}`;
 	const cached = indicatorCache.get(cacheKey);
 	let computed: IndicatorCacheComputed;
 
 	if (cached && cached.fetchCount >= fetchCount) {
 		computed = cached;
 	} else {
-		const candlesResult = await getCandles(chk.pair, type, undefined, fetchCount);
+		const candlesResult = await getCandles(chk.pair, type, date, fetchCount, tz);
 		if (!candlesResult.ok) return fail(candlesResult.summary.replace(/^Error: /, ''), candlesResult.meta.errorType);
 
 		const normalized = candlesResult.data.normalized;

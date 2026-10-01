@@ -299,6 +299,12 @@ describe('resolveParams: MCP 入力経路（DetectPatternsInputSchema.parse を�
 		return { parsed, resolved: resolveParams(parsed.type, parsed) };
 	}
 
+	it('detect_patterns は過去走査用の終端 date と tz を受け付ける', () => {
+		const { parsed } = resolveViaSchema({ pair: 'btc_jpy', type: '1day', date: '20250831', tz: 'UTC' });
+		expect(parsed.date).toBe('20250831');
+		expect(parsed.tz).toBe('UTC');
+	});
+
 	it('.default() が sentinel 値を埋める（未指定が resolveParams に届かない）', () => {
 		const { parsed } = resolveViaSchema({ pair: 'btc_jpy', type: '1hour' });
 		// ここが崩れたら #182 案 B（`.default()` 除去）が入ったということ。

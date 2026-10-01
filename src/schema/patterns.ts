@@ -10,6 +10,7 @@ import {
 import {
 	BaseMetaSchema,
 	BasePairInputSchema,
+	CANDLE_DATE_DESCRIPTION,
 	CandleTypeEnum,
 	FailResultSchema,
 	toolResultSchema,
@@ -76,6 +77,12 @@ export const DetectPatternsInputSchema = BasePairInputSchema.extend({
 				'**過去のパターンの統計（data.statistics の成功率 / 平均リターン）や aftermath を調べる用途では上げる**' +
 				'（上限 365）。反転系は先行履歴の検証に60本を使うため、61本未満では履歴不足候補を一律に' +
 				'除外せず `limit_too_small_for_timeframe` 警告を優先する。view=summary / detailed の content 量はほぼ変わらず、増えるのは API 呼び出し回数。',
+		),
+	date: z
+		.string()
+		.optional()
+		.describe(
+			`${CANDLE_DATE_DESCRIPTION} limit 本を走査します。省略時は最新足を終端にします。date 指定時の requireCurrentInPattern は終端日を「現在」として判定します。`,
 		),
 	patterns: z
 		.array(PatternFilterEnum)
@@ -1093,6 +1100,7 @@ export const DetectPatternsOutputSchema = z.union([
 					start: z.string().describe('スキャンした先頭足の UTC ISO 文字列。'),
 					end: z.string().describe('スキャンした末尾足の UTC ISO 文字列。'),
 					bars: z.number().int().describe('検出器に渡した足の本数。'),
+					anchorDate: z.string().optional().describe('入力 date による終端アンカー。省略時は現在時刻基準。'),
 				})
 				.optional()
 				.describe(

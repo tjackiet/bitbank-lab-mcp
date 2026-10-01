@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
 	BaseMetaSchema,
 	BasePairInputSchema,
+	CANDLE_DATE_DESCRIPTION,
 	CandleSchema,
 	CandleTypeEnum,
 	deprecatedViewNote,
@@ -231,14 +232,14 @@ export const GetCandlesInputSchema = z.object({
 		.string()
 		.optional()
 		.describe(
-			'type により形式が異なる:\n' +
+			CANDLE_DATE_DESCRIPTION +
+				'\n' +
 				'- 1min/5min/15min/30min/1hour → YYYYMMDD（例: 20251022）\n' +
 				'- 4hour/8hour/12hour/1day/1week/1month → YYYY（例: 2025）\n' +
 				'date=YYYYMMDD は tz（既定 Asia/Tokyo）の暦日として解釈します（get_transactions / get_flow_metrics の date は UTC 暦日で基準が異なります）。' +
 				'指定日の終端（23:59:59.999 in tz）以前の limit 本を返します。' +
 				'limit は日数ではなくローソク足本数です。例: 1hour, date=20251002, limit=24 は指定 tz の 10/2 24 本（00:00〜23:00）。\n' +
-				'省略時は最新。\n' +
-				'（互換: 年足系で YYYYMMDD を渡した場合は先頭4桁を年として使用）',
+				'省略時は最新。',
 		),
 	limit: z
 		.number()

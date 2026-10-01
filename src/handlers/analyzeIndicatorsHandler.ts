@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import { nowIso, toDisplayTime } from '../../lib/datetime.js';
+import { nowIso, resolveTz, toDisplayTime } from '../../lib/datetime.js';
 import { formatDeviation, formatPercent, formatPriceJPY, formatTrendSymbol } from '../../lib/formatter.js';
 import { ICHIMOKU_SHIFT, RSI_OVERBOUGHT, RSI_OVERSOLD } from '../../lib/indicator-config.js';
 import { lastCrossover } from '../../lib/indicators.js';
@@ -17,6 +17,7 @@ export interface BuildIndicatorsTextInput {
 	pair: string;
 	type: string;
 	nowJst: string;
+	timeContext?: string;
 	close: number | null;
 	prev: number | null;
 	deltaPrev: { amt: number; pct: number } | null;
@@ -82,6 +83,7 @@ export function buildIndicatorsText(input: BuildIndicatorsTextInput): string {
 		pair,
 		type,
 		nowJst,
+		timeContext,
 		close,
 		prev,
 		deltaPrev,
@@ -147,7 +149,7 @@ export function buildIndicatorsText(input: BuildIndicatorsTextInput): string {
 	const lines: string[] = [];
 	// Header with time and 24h change
 	lines.push(`=== ${String(pair).toUpperCase()} ${String(type)} 分析 ===`);
-	lines.push(`${nowJst} 現在`);
+	lines.push(timeContext ?? `${nowJst} 現在`);
 	const chgLine = deltaPrev ? `(${deltaLabel}: ${formatPercent(deltaPrev.pct, { sign: true, digits: 1 })})` : '';
 	lines.push(deltaPrev ? `${formatPriceJPY(close)} ${chgLine}` : formatPriceJPY(close));
 	lines.push('');
@@ -483,8 +485,8 @@ export const toolDef: ToolDefinition = {
 	description:
 		'[Technical Indicators / RSI / MACD / SMA] テクニカル指標の総合分析。最新値・トレンド判定・シグナルをテキストで返す。十分な limit を指定（例: 日足200本）。\n\n描画 → prepare_chart_data / render_chart_svg。バックテスト → run_backtest。',
 	inputSchema: GetIndicatorsInputSchema,
-	handler: async ({ pair, type, limit }: z.infer<typeof GetIndicatorsInputSchema>) => {
-		const res = await analyzeIndicators(pair, type, limit);
+	handler: async ({ pair, type, date, tz, limit }: z.infer<typeof GetIndicatorsInputSchema>) => {
+		const res = await analyzeIndicators(pair, type, limit, date, tz);
 		if (!res.ok) return res;
 		const ind = (res?.data?.indicators ?? {}) as Record<string, number | null | undefined> & {
 			OBV_trend?: string | null;
@@ -495,7 +497,11 @@ export const toolDef: ToolDefinition = {
 		}>;
 		const close = candles.at(-1)?.close ?? null;
 		const prev = candles.at(-2)?.close ?? null;
-		const nowJst = toDisplayTime(undefined) ?? nowIso();
+		const effectiveTz = resolveTz(tz);
+		const nowJst = toDisplayTime(undefined, effectiveTz) ?? nowIso();
+		const latestTimestamp = Number((candles.at(-1) as { timestamp?: number } | undefined)?.timestamp);
+		const anchoredTime = date && Number.isFinite(latestTimestamp) ? toDisplayTime(latestTimestamp, effectiveTz) : null;
+		const timeContext = date ? `${anchoredTime ?? date} 時点（終端 date=${date} 指定）` : undefined;
 		const deltaPrev = calcDeltaPrev(close, prev);
 		const deltaLabel = calcDeltaLabel(type);
 		const rsi = ind.RSI_14 ?? null;
@@ -614,6 +620,7 @@ export const toolDef: ToolDefinition = {
 			pair,
 			type,
 			nowJst,
+			timeContext,
 			close,
 			prev,
 			deltaPrev,

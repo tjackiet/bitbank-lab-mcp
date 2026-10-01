@@ -525,6 +525,9 @@ describe('detect_patterns: meta に載せたキーが出力スキーマで strip
 			tripleHsCandidateCount: 0,
 			output: 0,
 		});
+		// 上流の取得層 / 計算層 warning も、検出器を呼ばない早期経路で失われない。
+		expect(metaOf(output).warning).toBe('取得層: 一部の足が欠損しています');
+		expect(metaOf(output).warnings).toEqual(['計算層: SMA_200 はデータ不足']);
 		// この経路でも宣言漏れが無いこと
 		expectNoStrippedKeys(metaOf(input), metaOf(output), 'detect_patterns meta（insufficient data）');
 	});

@@ -85,6 +85,12 @@ describe('buildScanRangeLine', () => {
 		expect(buildScanRangeLine(scan, '1hour', 'UTC')).toBe('スキャン範囲: 2026-08-05 07:00 ~ 2026-08-21 21:00（399本）');
 	});
 
+	it('終端アンカーを指定したスキャンは date を明示する', () => {
+		expect(buildScanRangeLine({ ...scan, anchorDate: '20250831' }, '1hour', 'UTC')).toBe(
+			'スキャン範囲: 2026-08-05 07:00 ~ 2026-08-21 21:00（399本、終端 date=20250831 指定）',
+		);
+	});
+
 	it('intraday（4hour / 12hour）も時刻まで出す', () => {
 		expect(buildScanRangeLine(scan, '4hour', 'UTC')).toContain('07:00 ~ 2026-08-21 21:00');
 		expect(buildScanRangeLine(scan, '12hour', 'UTC')).toContain('07:00 ~ 2026-08-21 21:00');
