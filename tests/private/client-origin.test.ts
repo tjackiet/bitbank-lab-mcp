@@ -7,6 +7,8 @@
  * - `setDefaultClient` は既定のクライアントが作られる前に 1 回だけ使えること
  */
 
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BitbankPrivateClient, PrivateApiError } from '../../src/private/client.js';
 import { createMockFetcher, jsonResponse, mockBitbankSuccess } from '../fixtures/private-api.js';
@@ -29,6 +31,7 @@ async function freshClientModule() {
 	return import('../../src/private/client.js');
 }
 
+/** 常に成功を返す globalThis.fetch のスパイ（既定のクライアントが束縛する fetch を差し替える） */
 function okFetch() {
 	return vi.spyOn(globalThis, 'fetch').mockImplementation(async () => jsonResponse(mockBitbankSuccess({})));
 }
@@ -162,6 +165,59 @@ describe('origin オプション', () => {
 			'http://127.0.0.1:14000/v1/user/assets',
 			'http://127.0.0.1:14000/v1/user/assets',
 		]);
+	});
+});
+
+describe('差し替え先からのリダイレクト', () => {
+	const servers: Server[] = [];
+
+	afterEach(async () => {
+		await Promise.all(servers.splice(0).map((s) => new Promise((resolve) => s.close(resolve))));
+	});
+
+	/** ループバックに HTTP サーバーを立て、受けた要求のパスを記録する */
+	async function listen(handler: (url: string) => { status: number; headers?: Record<string, string> }) {
+		const received: string[] = [];
+		const server = createServer((req, res) => {
+			received.push(`${req.method} ${req.url}`);
+			const { status, headers } = handler(req.url ?? '');
+			res.writeHead(status, headers).end(JSON.stringify(mockBitbankSuccess({})));
+		});
+		servers.push(server);
+		await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+		return { origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, received };
+	}
+
+	it.each([
+		['POST / 307', 'post', 307],
+		['POST / 308', 'post', 308],
+		['GET / 302', 'get', 302],
+	] as const)('%s → 従わずに失敗し、転送先には何も届かない（認証ヘッダと本文を外へ出さない）', async (_label, method, status) => {
+		// 転送先（本来は遠隔のホスト。ここでは観測できるよう別のループバックで代用する）
+		const elsewhere = await listen(() => ({ status: 200 }));
+		const lab = await listen((url) => ({ status, headers: { Location: `${elsewhere.origin}${url}` } }));
+		const client = new BitbankPrivateClient({ origin: lab.origin, maxRetries: 0 });
+
+		const call =
+			method === 'post' ? client.post('/v1/user/spot/order', { pair: 'btc_jpy' }) : client.get('/v1/user/assets');
+
+		await expect(call).rejects.toBeInstanceOf(PrivateApiError);
+		expect(lab.received).toHaveLength(1);
+		expect(elsewhere.received).toEqual([]);
+	});
+
+	it('リダイレクトを拒むのは差し替え時だけ（既定の接続先への要求の設定は変えない）', async () => {
+		const viaDefault = createMockFetcher([jsonResponse(mockBitbankSuccess({}))]);
+		const viaLab = createMockFetcher([jsonResponse(mockBitbankSuccess({}))]);
+
+		await new BitbankPrivateClient({ fetcher: viaDefault }).post('/v1/user/spot/order', { pair: 'btc_jpy' });
+		await new BitbankPrivateClient({ origin: 'http://127.0.0.1:14000', fetcher: viaLab }).post('/v1/user/spot/order', {
+			pair: 'btc_jpy',
+		});
+
+		expect(Object.keys(viaDefault.calls[0].init).sort()).toEqual(['body', 'headers', 'method', 'signal']);
+		expect(viaDefault.calls[0].init.redirect).toBeUndefined();
+		expect(viaLab.calls[0].init.redirect).toBe('error');
 	});
 });
 

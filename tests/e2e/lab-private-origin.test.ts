@@ -50,6 +50,7 @@ async function startFakePrivateApi(): Promise<{ origin: string; received: Receiv
 	return { origin: `http://127.0.0.1:${port}`, received, server };
 }
 
+/** 起動口に渡す環境変数（ダミーのキー。ログは一時ディレクトリへ逃がしてリポジトリを汚さない） */
 function labEnv(): Record<string, string> {
 	return {
 		...(process.env as Record<string, string>),

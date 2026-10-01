@@ -50,8 +50,9 @@ export function parseLabArgs(argv: readonly string[]): ParsedLabArgs {
 		} else if (arg.startsWith(`${ORIGIN_FLAG}=`)) {
 			value = arg.slice(ORIGIN_FLAG.length + 1);
 		} else {
-			// 値に秘密が混じりうるので、`=` より後ろは出さない
-			return { ok: false, error: `未知の引数です: ${arg.split('=')[0]}` };
+			// 引数の中身は出さない。userinfo 付きの URL（`http://user:pass@…`）を
+			// フラグ無しで渡したときに、パスワードが stderr に残るため
+			return { ok: false, error: `未知の引数があります（受け付けるのは ${ORIGIN_FLAG} だけです）` };
 		}
 		if (origin !== undefined) return { ok: false, error: `${ORIGIN_FLAG} が 2 回以上指定されています` };
 		origin = value;

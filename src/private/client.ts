@@ -95,6 +95,14 @@ export interface PrivateClientOptions {
 
 export class BitbankPrivateClient {
 	private readonly origin: string;
+	/**
+	 * 差し替え時だけ fetch に足す設定。既定の接続先では空で、要求は 1 文字も変わらない。
+	 *
+	 * 差し替え先がリダイレクトを返したら、従わずに失敗させる（`redirect: 'error'`）。fetch は既定で
+	 * リダイレクトに従い、307 / 308 では POST の本文も、`ACCESS-*` のような独自ヘッダーも
+	 * 転送先へそのまま送る。従うと、ループバックに限った検査を差し替え先が外へ迂回させられる。
+	 */
+	private readonly overrideInit: RequestInit;
 	private readonly fetcher: HttpFetcher;
 	private readonly timeoutMs: number;
 	private readonly maxRetries: number;
@@ -105,6 +113,7 @@ export class BitbankPrivateClient {
 	constructor(opts: PrivateClientOptions = {}) {
 		// 既定に戻すのは「指定なし」のときだけ。空文字や null も検査に通して落とす。
 		this.origin = opts.origin === undefined ? DEFAULT_ORIGIN : assertLoopbackOrigin(opts.origin);
+		this.overrideInit = opts.origin === undefined ? {} : { redirect: 'error' };
 		this.fetcher = opts.fetcher ?? globalThis.fetch.bind(globalThis);
 		this.timeoutMs = opts.timeoutMs ?? 5000;
 		this.maxRetries = opts.maxRetries ?? 2;
@@ -179,7 +188,7 @@ export class BitbankPrivateClient {
 			const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
 
 			try {
-				const res = await this.fetcher(url, { ...init, signal: ctrl.signal });
+				const res = await this.fetcher(url, { ...init, ...this.overrideInit, signal: ctrl.signal });
 				clearTimeout(timer);
 
 				// 429 Rate Limit（HTTP レベル）

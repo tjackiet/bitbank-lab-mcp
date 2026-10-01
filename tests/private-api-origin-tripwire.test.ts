@@ -50,6 +50,7 @@ const REQUIREMENT = [
 	'',
 ].join('\n');
 
+/** 配布物のディレクトリ配下のソース（.ts / .js 系。生成された .d.ts は除く）を、リポジトリ相対の / 区切りで返す */
 function listSourceFiles(dir: string): string[] {
 	const abs = path.join(PACKAGE_ROOT, dir);
 	return fs

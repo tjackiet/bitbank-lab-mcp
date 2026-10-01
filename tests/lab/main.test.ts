@@ -33,6 +33,7 @@ async function freshModules() {
 	return { lab, client };
 }
 
+/** runLab に渡す依存（stderr の記録・サーバー起動のスパイ）と、stdout への書き込みの監視を用意する */
 function harness(argv: string[], startServer: () => Promise<unknown> = async () => undefined) {
 	const stderr: string[] = [];
 	const stdoutSpy = vi.spyOn(process.stdout, 'write');
@@ -68,10 +69,18 @@ describe('parseLabArgs', () => {
 		expect(lab.parseLabArgs(argv)).toEqual({ ok: false, error: expect.stringMatching(message) });
 	});
 
-	it('未知の引数の値（= より後ろ）はエラーに出さない', async () => {
+	it.each([
+		['フラグの値', '--api-secret=s3cr3t'],
+		['フラグ無しの userinfo 付き URL', 'http://user:s3cr3t@127.0.0.1:14000'],
+	])('未知の引数の中身はエラーに出さない（%s）', async (_label, arg) => {
 		const { lab } = await freshModules();
-		const parsed = lab.parseLabArgs(['--api-secret=s3cr3t']);
-		expect(parsed).toEqual({ ok: false, error: '未知の引数です: --api-secret' });
+		const parsed = lab.parseLabArgs([arg]);
+
+		expect(parsed).toEqual({
+			ok: false,
+			error: '未知の引数があります（受け付けるのは --private-api-origin だけです）',
+		});
+		expect(JSON.stringify(parsed)).not.toContain('s3cr3t');
 	});
 });
 
