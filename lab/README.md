@@ -29,10 +29,14 @@
 ## 起動のしかた
 
 ```bash
+BITBANK_MOCK_API_KEY=dummy BITBANK_MOCK_API_SECRET=dummy npm run dev  # モック側。検証するときだけ。モックの checkout で
 npm ci
 BITBANK_API_KEY=dummy BITBANK_API_SECRET=dummy \
   node_modules/.bin/tsx lab/start.ts --private-api-origin=http://127.0.0.1:14000
 ```
+
+1 行目はモック（bitbank-lab-mock）の起動で、モックの checkout から別の端末で動かす（このリポジトリにも `npm run dev`
+があるので取り違えない）。認証ヘッダを検証させるときだけ要り、キーとシークレットは MCP 側と同じ値にする（下の「注意」節）。
 
 Claude Desktop などのホスト設定の例（パスは絶対パスにする。ホストが起動するときの cwd は `/` になりうる）:
 
@@ -61,8 +65,15 @@ Claude Desktop などのホスト設定の例（パスは絶対パスにする�
 
 ## 注意
 
-- **モックに向けるときはダミーのキーを使う。** [bitbank-lab-mock](https://github.com/tjackiet/bitbank-lab-mock) は
-  認証ヘッダを検証しない（同 README の「無いもの」節）。本物のキーを向けない
+- **モックに向けるときはダミーのキーを使う。** 検証の有無に関わらず、本物のキーを向けない。
+  [bitbank-lab-mock](https://github.com/tjackiet/bitbank-lab-mock) が認証ヘッダを検証するかは、モックの起動のしかたで決まる
+  （モックの `docs/fidelity.md`「認証」節）
+  - **既定では検証しない。** どんなキーでも通る
+  - **`BITBANK_MOCK_API_KEY` と `BITBANK_MOCK_API_SECRET` を両方設定して起動したときだけ検証する。** 効いていれば
+    モックの起動の行に `auth=on` が出る（付かなければ検証していない）。片方だけだとモックは起動しない
+  - 検証させるときは、MCP の `BITBANK_API_KEY` / `BITBANK_API_SECRET` を、それぞれモックの `BITBANK_MOCK_API_KEY` /
+    `BITBANK_MOCK_API_SECRET` と同じ値にする（「起動のしかた」の例ではどれも `dummy`）。違うと private API の要求が
+    断られ、MCP にはシークレットが違えば「署名が無効です」、キーが違えば「API キーが無効です」と表示される
 - モックが実装していないエンドポイント（信用・入出金など）は、モックが `20003` を返し、MCP では
   「API キーが見つかりません」と表示される（モックの `docs/fidelity.md`「封筒に包まれない応答」節）。キーの問題ではない
 - 差し替え先が返す応答（残高・注文の状態）は、本物の bitbank の応答として扱われる
