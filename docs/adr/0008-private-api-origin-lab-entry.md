@@ -69,6 +69,18 @@ main には何も入れない案。配布物への影響は無いが、却下し
 
 この案は向きを反転させて採用した（下記「実行時の遮断」）。書き換えではなく遮断なら、壊れたときに止まる側に倒れる。
 
+### 研究用の起動口で確認を外すオプション（トークン無しで `create_order` を実行させる）
+
+DCL の研究は、1 件ずつの人間の確認を発注経路から外した状態で、委譲した上限を超えないことを示す。そのために
+起動口から確認（preview → 実行。ADR-0007）を外し、`create_order` などを直接実行させる案。却下した。
+
+- **起動口が `lab/` に閉じていても、トークンの検査を外す分岐は `create_order` などの配布物側のコードに入る。**
+  ADR-0007 の前提（直接実行の禁止）に例外が生まれ、その分岐を既存の利用者と同じコードが通る
+- クライアント側で確認に応えれば（elicitation を宣言し、確認要求に自動で応える）、MCP を変えずに同じ実験ができる
+  （`lab/README.md`「確認（preview → 実行）の扱い」）
+- MCP の確認は差し替え先に届かない。差し替え先が受け取るのは bitbank の REST 要求そのもので、確認を経たかどうかの
+  情報は含まれない。外しても外さなくても、DCL の確認閾値（人間の確認を DCL 側に残す仕組み）の検証には影響しない
+
 ## Decision の詳細
 
 ### 差し込み口（配布物）
@@ -123,7 +135,8 @@ private API の要求はすべて既定のクライアントを通って差し�
 - 公開 API（`lib/http.ts` の `https://public.bitbank.cc`）
 - ペア情報（`lib/pairs.ts` の `https://api.bitbank.cc/v1/spot/pairs`）。取得に失敗しても
   `preview_order` / `create_order` は警告を出して続行する
-- 既存の挙動（POST を再試行しない、GET は 429 で Retry-After に従う、確認トークンによる 2 段階確認）
+- 既存の挙動（POST を再試行しない、GET は 429 で Retry-After に従う、確認トークンによる 2 段階確認）。
+  確認を外す案は却下した（「却下した案」の「研究用の起動口で確認を外すオプション」）
 
 ## 想定リスクの境界
 
@@ -164,15 +177,18 @@ private API の要求はすべて既定のクライアントを通って差し�
 ## 既知の制約
 
 - `localhost` は hosts ファイルに依存する。`lab/README.md` では `127.0.0.1` を勧める
-- モックは認証ヘッダを検証しない。モックに向けるときはダミーのキーを使う（`lab/README.md`）
+- モック（`e60aac9` 以降）は、既定では認証ヘッダを検証しない。テスト用のキーとシークレット
+  （`BITBANK_MOCK_API_KEY` と `BITBANK_MOCK_API_SECRET`）を両方渡して起動したときだけ検証する。
+  どちらの場合も、モックに向けるときはダミーのキーを使う（`lab/README.md`）
 - DCL の構成について: MCP にダミーのキーを渡し、DCL が本物のキーで署名し直す構成にすれば、MCP から本番への
   迂回が構造的に不可能になり、再送の問題も DCL の内側に閉じる。本 ADR の差し込み口はどちらの構成でも使える
 
 ## 関連
 
-- ADR-0007（取引系 HITL の確認トークン受け渡し設計）。確認トークンは差し替え後もそのまま効く
+- ADR-0007（取引系 HITL の確認トークン受け渡し設計）。確認トークンは差し替え後もそのまま効く。
+  確認は差し替え先には届かない（`lab/README.md`「確認（preview → 実行）の扱い」）
 - `.claude/rules/sensitive-data.md`（`BITBANK_API_KEY` は CRITICAL。HTTP ヘッダーの送り先が本 ADR の対象）
-- `lab/README.md`（起動のしかたと注意）
+- `lab/README.md`（起動のしかた・確認の扱い・注意）
 
 ## 実装マップ
 
@@ -181,7 +197,7 @@ private API の要求はすべて既定のクライアントを通って差し�
 | `src/private/client.ts` | `origin` オプション、`assertLoopbackOrigin()`、`setDefaultClient()` |
 | `lab/main.ts` | 引数の解析、キーの確認、実行時の遮断、差し替え、記録、サーバーの起動 |
 | `lab/start.ts` | 副作用のある入口（`src/env.js` → `runLab()`） |
-| `lab/README.md` | 起動のしかたと注意 |
+| `lab/README.md` | 起動のしかた・確認の扱い・注意 |
 | `tests/private/client-origin.test.ts` | 差し込み口の不変条件 |
 | `tests/private-api-origin-tripwire.test.ts` | 差し替えの経路を lab/ に閉じ込める tripwire |
 | `tests/lab/main.test.ts` | 起動口の不変条件 |
