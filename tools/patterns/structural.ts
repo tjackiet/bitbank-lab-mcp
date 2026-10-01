@@ -528,6 +528,16 @@ export const RETRACEMENT_MAX = 0.9;
 export const NECKLINE_CROSS_LOOKBACK_BARS = 60;
 
 /**
+ * 反転パターンの第1構成点に必要な最小履歴本数。
+ *
+ * 先行トレンド（最大30本）と第1構成点より前のネックライン交差（最大60本）の
+ * どちらも窓の先頭で欠けないよう、履歴不足を申告した候補はこの本数より前を開始点に
+ * しない。窓の先頭を「未評価のまま通す」旧挙動は、limit の違いで同じ形の判定が
+ * 変わる原因になっていた（issue #297 項目1(b)）。
+ */
+export const REVERSAL_HISTORY_WARMUP_BARS = Math.max(PRIOR_TREND_LOOKBACK_MAX, NECKLINE_CROSS_LOOKBACK_BARS);
+
+/**
  * 谷ゾーン（top なら山ゾーン）の高さ。パターン高さに対する比率で定義する。
  *
  * 谷2 確定後にこの水準まで戻した＝谷2 からの上昇をほぼ吐き出した、とみなす。

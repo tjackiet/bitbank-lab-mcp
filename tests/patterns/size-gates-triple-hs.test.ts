@@ -171,7 +171,8 @@ describe('detect_patterns: triple / H&S のサイズ検査（issue #138 欠陥 2
 			candidates.filter((c) => c.type === 'triple_bottom' && c.reason === 'prior_trend_mismatch:sideways').length,
 		).toBeGreaterThan(0);
 
-		expect(types.filter((t) => t === 'triple_top')).toHaveLength(1);
+		// PR9 の履歴ウォームアップにより、窓先頭の triple_top も出力前に除外される。
+		expect(types.filter((t) => t === 'triple_top')).toHaveLength(0);
 		expect(
 			candidates.filter((c) => c.type === 'triple_top' && c.reason === 'prior_trend_mismatch:sideways').length,
 		).toBeGreaterThan(0);

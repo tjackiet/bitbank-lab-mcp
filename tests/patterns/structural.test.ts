@@ -9,6 +9,7 @@ import {
 	PRIOR_TREND_MIN_EFFICIENCY,
 	PRIOR_TREND_MIN_R2,
 	PRIOR_TREND_SIDEWAYS_PCT,
+	REVERSAL_HISTORY_WARMUP_BARS,
 	relDiff,
 	validateHorizontalNeckline,
 	validatePriorTrend,
@@ -24,6 +25,7 @@ describe('定数', () => {
 		expect(PRIOR_TREND_LOOKBACK_MAX).toBe(30);
 		expect(PRIOR_TREND_MIN_EFFICIENCY).toBe(0.55);
 		expect(PRIOR_TREND_MIN_R2).toBe(0.35);
+		expect(REVERSAL_HISTORY_WARMUP_BARS).toBe(60);
 	});
 });
 

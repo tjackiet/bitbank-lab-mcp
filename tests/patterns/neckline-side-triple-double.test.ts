@@ -343,7 +343,7 @@ describe('同じ形が凍結済み実データにも存在する（issue #216 Ph
 		]);
 	});
 
-	it('H&S 側の配線と方向ゲートを入れても 1hour の H&S 系は 1 件に絞られる', async () => {
+	it('H&S 側の配線と方向ゲートに加え、窓先頭の履歴不足候補も出力されない', async () => {
 		// **本ファイルが検証するスカラー版ゲート（`validateMainPointsNecklineSide`）は
 		// triple / double にしか配線していない。** H&S 系には #216 の H&S 分で
 		// **別関数**（`validateMainPointsAgainstNecklineAt`。点ごとに `necklineAt` を評価する
@@ -361,7 +361,7 @@ describe('同じ形が凍結済み実データにも存在する（issue #216 Ph
 		// これは `globalDedup` の代表ではないので `data.patterns` の件数に出ない。
 		const { patterns, candidates } = await detectDebug(buildBtcJpy1hour202608Candles(), '1hour');
 		const hs = patterns.filter((p) => String(p.type).includes('head_and_shoulders'));
-		expect(hs).toHaveLength(1);
+		expect(hs).toHaveLength(0);
 		// スカラー版の理由コードは triple / double からしか出ない。
 		expect(
 			candidates.some(

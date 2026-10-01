@@ -66,25 +66,30 @@ describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）
 		//
 		// **`head_and_shoulders` 2 件は #211（`necklineAt` の外挿クランプ）で消えた**——これも
 		// 本段の対象外で、ブレイクが右肩より後ろの外挿に依存していたため `near_completion` に
-		// 落ち、既定 `includeForming: false` で除かれている。逆 H&S 2 件は残るので、本段が
-		// 落とす `triple_bottom` 242-249-272（共有点 249 / 272）は、PR4 の先行トレンド不一致で
-		// 型間排他に到達する前に除外される。
+		// 落ち、既定 `includeForming: false` で除かれている。逆 H&S 2 件も PR9 の
+		// 先頭履歴ウォームアップで除外されるため、本段の型間排他には到達しない。
 		expect(Object.fromEntries([...byType].sort())).toEqual({
-			inverse_head_and_shoulders: 1,
 			rising_wedge: 2,
 			triangle_ascending: 4,
 		});
-		expect(res.meta.count).toBe(7);
+		expect(res.meta.count).toBe(6);
 	});
 
 	it('meta.reduction に新しい段が載り、waterfall が成立する', async () => {
 		const res = await run();
 		const r = res.meta.reduction as Record<string, number>;
 		expect(r.tripleHsExcluded).toBe(0);
-		// 既定呼び出しでは H&S 系 2 件（逆 H&S 2。#211 のクランプで `head_and_shoulders` 2 件が
-		// `near_completion` に落ちた）が出力に残り、それが比較対象になる（#224 症状 1）。
-		expect(r.tripleHsCandidateCount).toBe(1);
-		expect(r.dedupMerged + r.currentFiltered + r.lifecycleExcluded + r.tripleHsExcluded + r.output).toBe(r.detected);
+		// 既定呼び出しでは H&S 系が PR9 の履歴フィルタ後に残らず、比較対象も 0 件になる。
+		expect(r.tripleHsCandidateCount).toBe(0);
+		expect(r.reversalHistoryExcluded).toBeGreaterThan(0);
+		expect(
+			r.reversalHistoryExcluded +
+				r.dedupMerged +
+				r.currentFiltered +
+				r.lifecycleExcluded +
+				r.tripleHsExcluded +
+				r.output,
+		).toBe(r.detected);
 		expect(r.output).toBe(res.meta.count);
 	});
 
@@ -118,7 +123,7 @@ describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）
 			expect(line).toContain(`triple×H&S排他 -0${TRIPLE_HS_NO_CANDIDATE_NOTE}`);
 		});
 
-		it('既定呼び出し（H&S も検出）では注記が付かない', async () => {
+		it('既定呼び出しでも履歴フィルタ後に H&S が無ければ注記が付く', async () => {
 			const candles = buildBtcJpy1hour202608Candles();
 			vi.mocked(analyzeIndicators).mockResolvedValueOnce(
 				asMockResult({ ok: true, summary: 'ok', data: { chart: { candles } } }),
@@ -132,7 +137,7 @@ describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）
 				content: Array<{ text: string }>;
 			};
 			const line = res.content[0].text.split('\n').find((l) => l.startsWith('検出内訳:'));
-			expect(line).not.toContain(TRIPLE_HS_NO_CANDIDATE_NOTE);
+			expect(line).toContain(TRIPLE_HS_NO_CANDIDATE_NOTE);
 		});
 	});
 
@@ -147,7 +152,7 @@ describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）
 		const line = res.content[0].text.split('\n').find((l) => l.startsWith('検出内訳:'));
 		expect(line).toContain('triple×H&S排他 -0');
 		// 段の並びはパイプライン順（ライフサイクル絞り込みの**後**）。
-		expect(line).toMatch(/ライフサイクル除外 -\d+ → triple×H&S排他 -\d+ → 出力/);
+		expect(line).toMatch(/ライフサイクル除外 -\d+ → triple×H&S排他 -\d+(?:（[^）]+）)? → 出力/);
 	});
 
 	it('view=debug で横ばい先行のH&Sに起因する排他が無いことを示す', async () => {

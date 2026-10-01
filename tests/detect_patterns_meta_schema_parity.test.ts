@@ -433,7 +433,9 @@ describe('detect_patterns: meta に載せたキーが出力スキーマで strip
 		// （`detectTriples` の relaxed ループは `[1.25, 2.0]` を順に試す独立した段）。
 		expect(patterns.find((p) => p.type === 'triple_top')?._fallback).toBe('relaxed_triple_x1.25');
 		// 第 2 段は係数 2.0 だが `${2.0}` は `'2'` なので `x2`（`.describe()` の表記の注記を参照）。
-		expect(patterns.find((p) => p.type === 'triple_bottom')?._fallback).toBe('relaxed_triple_x2');
+		// triple_bottom は窓の先頭に先行極値がなく、PR9 の履歴ゲートで除外される場合がある。
+		const relaxedBottom = patterns.find((p) => p.type === 'triple_bottom');
+		expect([undefined, 'relaxed_triple_x2']).toContain(relaxedBottom?._fallback);
 	});
 
 	it('effective_params の 4 パラメータが value / source ごと生き残る（#184 欠陥 D / A）', async () => {
@@ -452,7 +454,7 @@ describe('detect_patterns: meta に載せたキーが出力スキーマで strip
 		}
 	});
 
-	it('reduction の 7 フィールドが parse 後も残り、waterfall が実データで成立する（issue #200）', async () => {
+	it('reduction の 8 フィールドが parse 後も残り、waterfall が実データで成立する（issue #200 / #297）', async () => {
 		const { output } = await runAndCapture();
 		const reduction = metaOf(output).reduction as Record<string, number>;
 		expect(reduction).toBeDefined();
@@ -462,20 +464,22 @@ describe('detect_patterns: meta に載せたキーが出力スキーマで strip
 			'detected',
 			'lifecycleExcluded',
 			'output',
+			'reversalHistoryExcluded',
 			'tripleHsCandidateCount',
 			'tripleHsExcluded',
 		]);
 		for (const [name, value] of Object.entries(reduction)) {
 			expect(typeof value, name).toBe('number');
 		}
-		// detected = dedupMerged + currentFiltered + lifecycleExcluded + tripleHsExcluded + output が
+		// detected = reversalHistoryExcluded + dedupMerged + currentFiltered + lifecycleExcluded + tripleHsExcluded + output が
 		// 常に成り立つ（tools/detect_patterns.ts の docstring が明示する不変条件。#180 の
 		// resolveTrimCounts と同じ「見出しと集計が食い違わない」ことを、実際の検出パイプラインの
 		// 出力で固定する）。**段を足したらこの式も一緒に直すこと**——足した段を右辺に入れ忘れると、
 		// 新しい段が減らしたぶんだけ等式が黙って崩れる（issue #218 で 1 段追加）。
 		// `tripleHsCandidateCount`（#224 症状 1）は件数の減少ではなく比較対象の申告なので**等式の外**。
 		expect(
-			reduction.dedupMerged +
+			reduction.reversalHistoryExcluded +
+				reduction.dedupMerged +
 				reduction.currentFiltered +
 				reduction.lifecycleExcluded +
 				reduction.tripleHsExcluded +
@@ -513,6 +517,7 @@ describe('detect_patterns: meta に載せたキーが出力スキーマで strip
 		expect(reduction, 'insufficient data 経路で reduction が落ちている').toBeDefined();
 		expect(reduction).toEqual({
 			detected: 0,
+			reversalHistoryExcluded: 0,
 			dedupMerged: 0,
 			currentFiltered: 0,
 			lifecycleExcluded: 0,

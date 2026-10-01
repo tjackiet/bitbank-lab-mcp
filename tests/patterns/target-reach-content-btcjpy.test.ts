@@ -83,16 +83,15 @@ describe('#288 Phase 2 のターゲット行（実データ B / 365 本 / 既定
 		);
 	});
 
-	it('view=full: 交絡は該当した 2 件にだけ付く（全件には付かない）', async () => {
+	it('view=full: 履歴不足で除外された反転候補は交絡対象にも残らない', async () => {
 		const text = await liveContent('full');
-		expect(text).toContain(
-			`${TARGET_LABEL}到達（ブレイク後 47 本目、2026-08-19 23:00）。到達前に別パターンのブレイクあり（inverse_head_and_shoulders 上方 +3 本）`,
-		);
+		expect(text).toContain(`${TARGET_LABEL}到達（ブレイク後 47 本目、2026-08-19 23:00）`);
+		expect(text).not.toContain('inverse_head_and_shoulders 上方 +3 本');
 		expect(text).not.toContain('triple_bottom 上方 +42 本');
-		// **Phase 1 の 94.7% と比べて限定が効いていること。** 素朴な申告に戻ればここが跳ねる。
+		// 反転候補は履歴不足段で除外されるため、残る交絡は rising_wedge の 1 件だけ。
 		const lines = targetLines(text);
-		expect(lines).toHaveLength(7);
-		expect(lines.filter((l) => l.includes('ブレイクあり（'))).toHaveLength(2);
+		expect(lines).toHaveLength(6);
+		expect(lines.filter((l) => l.includes('ブレイクあり（'))).toHaveLength(1);
 	});
 
 	// ── issue #288 の症状そのもの ──────────────────────────────
@@ -134,11 +133,11 @@ describe('#288 Phase 2 のターゲット行（実データ B / 365 本 / 既定
 		expect(res.summary).not.toContain('到達（ブレイク後 47 本目、2026-08-19）');
 	});
 
-	it('view=full: 進捗を出さなかった2件は理由を名乗る', async () => {
+	it('view=full: 進捗を出さなかったパターンは理由を名乗る', async () => {
 		const text = await liveContent('full');
 		const omitted = targetLines(text).filter((l) => l.includes('出力なし'));
-		expect(omitted).toHaveLength(2);
-		expect(omitted.filter((line) => line.includes('残り距離が短く進捗率が意味を持たないため'))).toHaveLength(1);
+		expect(omitted).toHaveLength(1);
+		expect(omitted.filter((line) => line.includes('残り距離が短く進捗率が意味を持たないため'))).toHaveLength(0);
 		expect(
 			omitted.filter((line) => line.includes('期待方向と逆のブレイクで、標準的なパターン目標値を適用しないため')),
 		).toHaveLength(1);

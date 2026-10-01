@@ -318,10 +318,10 @@ describe('detect_patterns: data.patterns の実データスナップショット
 		const withoutWedges = (patterns: typeof res.data.patterns) => patterns.filter((p) => !p.type.endsWith('_wedge'));
 		const actualNonWedges = withoutWedges(res.data.patterns);
 		const baselineNonWedges = withoutWedges(baseline as typeof res.data.patterns);
-		// PR3/PR4 は横ばい先行の逆 H&S / triple bottom を除外する。ここでは件数と、
-		// 除外対象が戻らないことを明示して固定する。
+		// PR3/PR4 は横ばい先行の逆 H&S / triple bottom を除外し、PR9 は窓先頭の
+		// 履歴不足候補も除外する。ここでは件数と、除外対象が戻らないことを明示して固定する。
 		const pivotSignature = (p: { pivots?: Array<{ idx: number }> }) => (p.pivots ?? []).map((q) => q.idx).join('-');
-		expect(actualNonWedges).toHaveLength(baselineNonWedges.length - 1);
+		expect(actualNonWedges).toHaveLength(baselineNonWedges.length - 2);
 		expect(
 			actualNonWedges.some(
 				(p) => p.type === 'inverse_head_and_shoulders' && pivotSignature(p) === '230-232-249-265-272',
@@ -343,13 +343,14 @@ describe('detect_patterns: data.patterns の実データスナップショット
 		}
 
 		// artifact.identifier は tz 修正の対象外（表示ではなく成果物 ID）。個別にも明示して固定する。
-		const identifiers = actualNonWedges
+		const identifiers = res.data.patterns
 			.map(
 				(p) =>
 					(p as { structureDiagram?: { artifact?: { identifier?: string } } }).structureDiagram?.artifact?.identifier,
 			)
 			.filter((id): id is string => typeof id === 'string');
-		expect(identifiers.length).toBeGreaterThan(0);
+		// PR9 の履歴ウォームアップ後はこの fixture に構造図付きの反転パターンが残らない。
+		// 空集合でも一意性（重複がない）という契約はそのまま成立する。
 		expect(new Set(identifiers).size).toBe(identifiers.length);
 	});
 
@@ -396,12 +397,25 @@ describe('detect_patterns: data.patterns の実データスナップショット
 		// 射影が空振り（全件 `{type}` だけ）していないことを先に見る。
 		expect(targetReachPre288.filter((p) => 'targetReachedPct' in p).length).toBeGreaterThan(0);
 		const nonWedge = (p: Record<string, unknown>) => !String(p.type).endsWith('_wedge');
-		// PR3 の横ばい先行 IHS は出力から除外される。これはターゲット計算の additive 性
-		// ではなく、検出器の候補選別を意図的に変えた差分なので比較から外す。
+		// PR3 の横ばい先行 IHS と PR9 の窓先頭履歴不足 IHS は出力から除外される。
+		// これはターゲット計算の additive 性ではなく、検出器の候補選別を意図的に変えた差分
+		// なので比較から外す。
 		const isPr3Reclassification = (p: Record<string, unknown>) =>
 			Number(p.breakoutBarIndex) === 280 && String(p.type) === 'inverse_head_and_shoulders';
-		expect(project(res.data.patterns.filter(nonWedge).filter((p) => !isPr3Reclassification(p)))).toEqual(
-			targetReachPre288.filter(nonWedge).filter((p) => !isPr3Reclassification(p)),
+		const isPr9HistoryExcluded = (p: Record<string, unknown>) =>
+			Number(p.breakoutBarIndex) === 118 && String(p.type) === 'inverse_head_and_shoulders';
+		expect(
+			project(
+				res.data.patterns
+					.filter(nonWedge)
+					.filter((p) => !isPr3Reclassification(p))
+					.filter((p) => !isPr9HistoryExcluded(p)),
+			),
+		).toEqual(
+			targetReachPre288
+				.filter(nonWedge)
+				.filter((p) => !isPr3Reclassification(p))
+				.filter((p) => !isPr9HistoryExcluded(p)),
 		);
 	});
 });
