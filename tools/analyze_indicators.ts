@@ -631,7 +631,10 @@ export default async function analyzeIndicators(
 	// Check cache before fetching & computing
 	// 終端アンカーとその暦日解釈はデータ集合そのものを変えるため、キャッシュキーに含める。
 	// tz を落とすと同じ date でも暦日境界の異なる結果を混ぜてしまう。
-	const cacheKey = `${chk.pair}:${type}:${date ?? ''}:${date ? (tz ?? '') : ''}`;
+	// tz は date 指定時だけでなく、未指定時の「現在日」の暦日解釈にも影響する。
+	// 省略時は getCandles の既定値と揃え、明示した Asia/Tokyo と同じキャッシュを共有する。
+	const cacheTz = tz ?? 'Asia/Tokyo';
+	const cacheKey = `${chk.pair}:${type}:${date ?? ''}:${cacheTz}`;
 	const cached = indicatorCache.get(cacheKey);
 	let computed: IndicatorCacheComputed;
 

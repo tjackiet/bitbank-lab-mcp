@@ -281,6 +281,8 @@ export default async function detectPatterns(
 						pair,
 						type,
 						count: 0,
+						...(upstream.warning ? { warning: upstream.warning } : {}),
+						...(upstream.warnings && upstream.warnings.length > 0 ? { warnings: upstream.warnings } : {}),
 						...(scan ? { scan } : {}),
 						effective_params: effectiveParams,
 						reduction: {

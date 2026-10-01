@@ -173,9 +173,13 @@ describe('analyze_indicators', () => {
 		const cached = await analyzeIndicators('btc_jpy', '1day', 60, '20250831', 'UTC');
 		assertOk(cached);
 		expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsAfterFirst);
+		const differentTimezone = await analyzeIndicators('btc_jpy', '1day', 60, '20250831', 'America/New_York');
+		assertOk(differentTimezone);
+		expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(callsAfterFirst);
+		const callsAfterTimezone = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length;
 		const second = await analyzeIndicators('btc_jpy', '1day', 60, '20250901', 'UTC');
 		assertOk(second);
-		expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(callsAfterFirst);
+		expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(callsAfterTimezone);
 	});
 
 	// --- analyzeTrend branches ---

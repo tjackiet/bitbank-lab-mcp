@@ -113,8 +113,8 @@ export function toDisplayTime(ts: number | undefined, tz: string = 'Asia/Tokyo')
 	try {
 		const d = dayjs(ts).tz(tz);
 		if (!d.isValid()) return null;
-		const tzShort = tz === 'UTC' ? 'UTC' : 'JST';
-		return `${d.format('YYYY/MM/DD HH:mm:ss')} ${tzShort}`;
+		const tzLabel = tz === 'UTC' ? 'UTC' : tz === 'Asia/Tokyo' ? 'JST' : `${tz} (UTC${d.format('Z')})`;
+		return `${d.format('YYYY/MM/DD HH:mm:ss')} ${tzLabel}`;
 	} catch {
 		return null;
 	}
