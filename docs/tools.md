@@ -492,6 +492,7 @@ total = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − mar
 `limit` 本を走査する。省略時だけ現在時刻を終端とする。`meta.scan.anchorDate` と content の
 「スキャン範囲」行に指定値が出るため、過去時点の再現では必ず走査終端を確認できる。
 `requireCurrentInPattern=true` を併用した場合の「現在」はこの走査終端日に固定される。
+終端の `swingDepth` 本ぶんの余白（未確定ピボットを検査しない）は、過去の `date` を指定した場合も同じように適用される。
 
 `analyze_indicators` は「表示窓 `limit` 本」の前に指標の warmup 分を足した配列を返す
 （`SMA_200` / `EMA_200` のぶん `fetchCount = limit + 199`）。先頭の warmup 本数は

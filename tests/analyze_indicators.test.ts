@@ -43,6 +43,23 @@ describe('analyze_indicators', () => {
 		expect(parsed.tz).toBe('UTC');
 	});
 
+	it('date 指定時の本文ヘッダは現在時刻ではなくアンカー終端を示す', async () => {
+		const rows = makeOhlcvRows(600);
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			status: 200,
+			statusText: 'OK',
+			json: async () => ({ success: 1, data: { candlestick: [{ type: '1day', ohlcv: rows }] } }),
+		}) as unknown as typeof fetch;
+
+		const result = await toolDef.handler({ pair: 'btc_jpy', type: '1day', date: '20250831', tz: 'UTC', limit: 60 });
+		const content = (result as { content?: Array<{ type: string; text?: string }> }).content;
+		const text = content?.[0]?.type === 'text' ? content[0].text || '' : '';
+		expect(text).toContain('終端 date=20250831 指定');
+		expect(text.split('\n')[1]).toContain('時点');
+		expect(text.split('\n')[1]).not.toContain('現在');
+	});
+
 	it('正常系: 指標データとチャート時系列を返す', async () => {
 		const rows = makeOhlcvRows(600);
 		globalThis.fetch = vi.fn().mockResolvedValue({
