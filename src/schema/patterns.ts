@@ -452,7 +452,7 @@ const ReductionSchema = z
 	})
 	.optional()
 	.describe(
-		'検出結果が縮小する 4 段（globalDedup → requireCurrentInPattern → ライフサイクル絞り込み → ' +
+		'検出結果が縮小する 5 段（反転履歴不足 → globalDedup → requireCurrentInPattern → ライフサイクル絞り込み → ' +
 			'triple×H&S 排他）の件数内訳。**入力フィルタの結果を変えるものではなく、既存の縮小を可視化するだけ**。' +
 			'content には「検出内訳:」行として summary / detailed / full / debug に出る。',
 	);
