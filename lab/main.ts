@@ -26,9 +26,10 @@ const USAGE = `使い方: tsx lab/start.ts ${ORIGIN_FLAG}=<origin>
   <origin> はループバックの http(s) origin（例: http://127.0.0.1:14000）。詳細は lab/README.md
 `;
 
-/** 本番の接続先。このホストへの要求は `/v1/spot/`（認証不要のペア情報）だけを通す */
+/** 本番の接続先。このホストへの要求は、ここに挙げたパス（認証不要のペア情報）だけを通す */
 const PRODUCTION_ORIGIN = 'https://api.bitbank.cc';
-const PRODUCTION_PUBLIC_PATH_PREFIX = '/v1/spot/';
+/** 完全一致で比べる（接頭辞にしない。`/v1/spot/` 配下の未知のパスも止める）。クエリは pathname に含まれない */
+const PRODUCTION_PUBLIC_PATHS = new Set(['/v1/spot/pairs']);
 
 export type ParsedLabArgs = { ok: true; origin: string } | { ok: false; error: string };
 
@@ -63,7 +64,7 @@ export function parseLabArgs(argv: readonly string[]): ParsedLabArgs {
 
 /**
  * 本番の接続先へ向かう要求のうち、通してはいけないものか。
- * `https://api.bitbank.cc` へは `/v1/spot/`（ペア情報。認証不要）だけを通し、それ以外
+ * `https://api.bitbank.cc` へは `/v1/spot/pairs`（ペア情報。認証不要）だけを通し、それ以外
  * （`/v1/user/…` の private API と、将来足されうる未知のパス）は止める。
  */
 export function isBlockedProductionUrl(url: string): boolean {
@@ -73,7 +74,7 @@ export function isBlockedProductionUrl(url: string): boolean {
 	} catch {
 		return false;
 	}
-	return parsed.origin === PRODUCTION_ORIGIN && !parsed.pathname.startsWith(PRODUCTION_PUBLIC_PATH_PREFIX);
+	return parsed.origin === PRODUCTION_ORIGIN && !PRODUCTION_PUBLIC_PATHS.has(parsed.pathname);
 }
 
 /**
@@ -145,7 +146,7 @@ export async function runLab(deps: LabDeps): Promise<number> {
 
 	deps.writeStderr(
 		`${PREFIX} private API の接続先: ${parsed.origin}\n` +
-			`${PREFIX} https://api.bitbank.cc への要求は /v1/spot/（ペア情報）以外を止めます。公開 API（public.bitbank.cc）は本番のままです\n`,
+			`${PREFIX} https://api.bitbank.cc への要求は /v1/spot/pairs（ペア情報）以外を止めます。公開 API（public.bitbank.cc）は本番のままです\n`,
 	);
 	log('warn', { type: 'private_api_origin_override', origin: parsed.origin });
 

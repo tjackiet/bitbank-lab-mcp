@@ -179,7 +179,12 @@ describe('isBlockedProductionUrl', () => {
 		['https://api.bitbank.cc/v1/user/assets', true],
 		['https://api.bitbank.cc/v1/user/spot/order', true],
 		['https://api.bitbank.cc/', true],
+		// 例外は完全一致。`/v1/spot/` 配下でも挙げていないパスは止める
+		['https://api.bitbank.cc/v1/spot/unknown', true],
+		['https://api.bitbank.cc/v1/spot/pairs/extra', true],
+		['https://api.bitbank.cc/v1/spot/', true],
 		['https://api.bitbank.cc/v1/spot/pairs', false],
+		['https://api.bitbank.cc/v1/spot/pairs?x=1', false],
 		['https://public.bitbank.cc/btc_jpy/ticker', false],
 		['http://127.0.0.1:14000/v1/user/assets', false],
 		['not a url', false],
