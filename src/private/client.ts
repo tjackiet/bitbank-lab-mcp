@@ -4,7 +4,8 @@
  * - 認証ヘッダーの付与を隠蔽し、ツールから直接認証を意識させない
  * - HTTP 層を注入可能にし、テスト時に mock に差し替えられる
  * - レート制限（429 / エラーコード 10009）は Retry-After に従いリトライ
- * - Base URL: https://api.bitbank.cc（public.bitbank.cc とは別）
+ * - 接続先: https://api.bitbank.cc（public.bitbank.cc とは別）。研究用の起動口（`lab/`）だけが
+ *   ループバックの origin に差し替える。環境変数や設定からは変えられない（ADR-0008）
  *
  * @see https://github.com/bitbankinc/bitbank-api-docs/blob/master/rest-api.md
  * @see https://github.com/bitbankinc/bitbank-api-docs/blob/master/errors.md
@@ -47,14 +48,53 @@ const RATE_LIMIT_CODES = new Set([10009]);
 // メンテナンス/過負荷: 10007, 10008
 const MAINTENANCE_CODES = new Set([10007, 10008]);
 
+/** 既定の接続先。既定の経路で送る URL は、この文字列にパスを連結したもの */
+const DEFAULT_ORIGIN = 'https://api.bitbank.cc';
+
+/** 差し替え先として許すホスト名（`URL#hostname` の正規化後の値と完全一致で比べる） */
+const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', '[::1]', 'localhost']);
+
+const INVALID_ORIGIN_MESSAGE =
+	'private API の接続先として受け付けるのは、ループバック（127.0.0.1 / [::1] / localhost）の ' +
+	'http(s) origin だけです（例: http://127.0.0.1:14000）。パス・末尾の /・クエリ・userinfo は付けられません（ADR-0008）';
+
+/**
+ * 差し替え先の origin を検査する（ADR-0008）。通らなければ throw し、既定の接続先へは戻さない。
+ *
+ * - **origin だけを受ける**（入力が `new URL(入力).origin` と完全一致）。パスの接頭辞を受けないのは、
+ *   GET の署名が「パス + クエリ」に対して作られるため（`auth.ts`）。接頭辞を付けると、署名した
+ *   パスと実際に送るパスがずれる。末尾の `/`・userinfo・`127.1` のような非正規の表記もここで落ちる
+ * - **ホストはループバックだけ**。API キーのヘッダーと署名付きの要求を、同じマシンの外へ出さない
+ *
+ * エラーメッセージに入力値を載せない（userinfo に秘密が入っていても stderr やログに残さないため）。
+ */
+function assertLoopbackOrigin(value: string): string {
+	let url: URL;
+	try {
+		url = new URL(value);
+	} catch {
+		throw new Error(INVALID_ORIGIN_MESSAGE);
+	}
+	const isHttp = url.protocol === 'http:' || url.protocol === 'https:';
+	if (!isHttp || value !== url.origin || !LOOPBACK_HOSTNAMES.has(url.hostname)) {
+		throw new Error(INVALID_ORIGIN_MESSAGE);
+	}
+	return url.origin;
+}
+
 export interface PrivateClientOptions {
 	fetcher?: HttpFetcher;
 	timeoutMs?: number;
 	maxRetries?: number;
+	/**
+	 * 研究用の接続先（ループバックの origin のみ）。未指定なら https://api.bitbank.cc。
+	 * 配布物の中からは渡さない。渡すのは `lab/` の起動口だけ（ADR-0008）。
+	 */
+	origin?: string;
 }
 
 export class BitbankPrivateClient {
-	private static readonly BASE_URL = 'https://api.bitbank.cc';
+	private readonly origin: string;
 	private readonly fetcher: HttpFetcher;
 	private readonly timeoutMs: number;
 	private readonly maxRetries: number;
@@ -63,6 +103,8 @@ export class BitbankPrivateClient {
 	lastRateLimit: RateLimitInfo | null = null;
 
 	constructor(opts: PrivateClientOptions = {}) {
+		// 既定に戻すのは「指定なし」のときだけ。空文字や null も検査に通して落とす。
+		this.origin = opts.origin === undefined ? DEFAULT_ORIGIN : assertLoopbackOrigin(opts.origin);
 		this.fetcher = opts.fetcher ?? globalThis.fetch.bind(globalThis);
 		this.timeoutMs = opts.timeoutMs ?? 5000;
 		this.maxRetries = opts.maxRetries ?? 2;
@@ -80,7 +122,7 @@ export class BitbankPrivateClient {
 			if (qs) fullPath = `${path}?${qs}`;
 		}
 
-		const url = `${BitbankPrivateClient.BASE_URL}${fullPath}`;
+		const url = `${this.origin}${fullPath}`;
 		const headers = createGetAuthHeaders(fullPath);
 
 		return this.request<T>(url, {
@@ -103,7 +145,7 @@ export class BitbankPrivateClient {
 	 * @param body - リクエストボディ
 	 */
 	async post<T>(path: string, body: Record<string, unknown>): Promise<T> {
-		const url = `${BitbankPrivateClient.BASE_URL}${path}`;
+		const url = `${this.origin}${path}`;
 		const jsonBody = JSON.stringify(body);
 		const headers = createPostAuthHeaders(jsonBody);
 
@@ -345,4 +387,20 @@ export function getDefaultClient(): BitbankPrivateClient {
 		defaultClient = new BitbankPrivateClient();
 	}
 	return defaultClient;
+}
+
+/**
+ * 既定のクライアントを差し替える。**研究用の起動口（`lab/`）専用**で、配布物の中からは呼ばない
+ * （ガード: `tests/private-api-origin-tripwire.test.ts`。ADR-0008）。
+ *
+ * 既定のクライアントが既に作られていたら throw する。同じプロセスの中で、一部の要求は既定の
+ * 接続先へ、残りは差し替え先へ、と送り先が途中で変わるのを防ぐため。
+ */
+export function setDefaultClient(client: BitbankPrivateClient): void {
+	if (defaultClient) {
+		throw new Error(
+			'既定の private API クライアントは既に初期化されています。差し替えはサーバー起動前に 1 回だけ行えます',
+		);
+	}
+	defaultClient = client;
 }
