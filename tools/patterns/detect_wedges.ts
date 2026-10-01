@@ -883,7 +883,9 @@ function validateFormingCompletedCandidate(
 	wedgeType: 'rising_wedge' | 'falling_wedge',
 	debugCandidates: CandDebugEntry[],
 ): TouchResult | null {
-	const touches = evaluateTouchesEx(candles, upper, lower, startIdx, breakoutIdx);
+	// ブレイク足は構成タッチではない。ここを含めると、ブレイク足自身が
+	// 3つ目のタッチとして数えられ、形状不足の候補が completed を通過する。
+	const touches = evaluateTouchesEx(candles, upper, lower, startIdx, breakoutIdx - 1);
 	const reject = (reason: string, details: Record<string, unknown>) => {
 		debugCandidates.push({
 			type: wedgeType,
