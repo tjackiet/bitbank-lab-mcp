@@ -1,7 +1,7 @@
 /**
  * 研究用の起動口の本体（ADR-0008）。
  *
- * private API の接続先を、ループバックに立てたモックや委譲を制御する層（DCL）へ差し替えてから
+ * private API の接続先を、ループバックに立てたモックや中継（プロキシ）へ差し替えてから
  * MCP サーバーを起動する。**`lab/` は npm の配布物にも Docker イメージにも入らない**
  * （`package.json` の `files` と `Dockerfile` の `COPY` に無い）。配布物の側にあるのは、
  * 外から有効にできない差し込み口（`BitbankPrivateClient` の `origin` と `setDefaultClient`）だけ。
@@ -81,7 +81,7 @@ export function isBlockedProductionUrl(url: string): boolean {
  * 本番の private API へ向かう fetch を止める（実行時の遮断）。
  *
  * private API の要求はすべて既定のクライアントを通り、差し替え先へ行くはず。ここに来るのは
- * 既定のクライアントを迂回した要求だけで、本番統合確認ではそれが DCL の迂回になる。
+ * 既定のクライアントを迂回した要求だけで、それは差し替え先を迂回して本番へ直行する。
  * 静的な tripwire（`tests/private-api-origin-tripwire.test.ts`）を実行時に補う。
  */
 export function guardProductionPrivateApi(fetchImpl: typeof fetch, onBlocked: (url: string) => void): typeof fetch {

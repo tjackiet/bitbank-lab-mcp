@@ -88,7 +88,7 @@ describe('runLab: 起動しない場合', () => {
 	it.each([
 		['引数なし', []],
 		['不正な origin（遠隔）', ['--private-api-origin=https://example.com']],
-		['不正な origin（パスの接頭辞）', ['--private-api-origin=http://127.0.0.1:14000/dcl']],
+		['不正な origin（パスの接頭辞）', ['--private-api-origin=http://127.0.0.1:14000/proxy']],
 		['不正な origin（空）', ['--private-api-origin=']],
 		['不正な origin（本番）', ['--private-api-origin=https://api.bitbank.cc']],
 	])('%s → EXIT_USAGE、サーバーを読み込まず、差し替えもしない', async (_label, argv) => {
