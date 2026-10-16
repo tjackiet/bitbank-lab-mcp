@@ -13,6 +13,11 @@
 ### Security
 - `fast-uri` を 3.1.6 から 3.1.8 に更新（`@modelcontextprotocol/sdk` → `ajv` 経由の high 脆弱性）。
 - `ip-address` を 10.4.0 から 10.7.2 に更新（`@modelcontextprotocol/sdk` → `express-rate-limit` 経由）。
+- `@modelcontextprotocol/sdk` を 1.30.0 から 1.32.1 に更新（OAuth クライアントの high 脆弱性）。
+- `proxy-addr` を 2.0.7 から 2.0.8 に更新（`@modelcontextprotocol/sdk` → `express` 経由の critical 脆弱性）。
+- `hono` を 4.13.5 から 4.13.13 に更新（`@modelcontextprotocol/sdk` 経由の moderate 脆弱性）。
+- `sharp` を 0.35.4 から 0.35.5 に更新（同梱 libvips の librsvg に起因する high 脆弱性）。
+- `source-map-js` を 1.2.1 から 1.2.2 に更新（devDependency の `vite` / `@vitest/coverage-v8` 経由の high 脆弱性）。
 
 ## [0.5.0] - 2026-09-14
 
