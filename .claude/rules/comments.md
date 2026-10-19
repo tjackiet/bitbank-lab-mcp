@@ -1,5 +1,11 @@
 ---
-globs: src/**/*.ts, tools/**/*.ts, lib/**/*.ts, scripts/**/*.ts, tests/**/*.ts, ui/**/*.ts, ui/**/*.tsx
+paths:
+  - "src/**/*.ts"
+  - "tools/**/*.ts"
+  - "lib/**/*.ts"
+  - "scripts/**/*.ts"
+  - "tests/**/*.ts"
+  - "ui/**/*.{ts,tsx}"
 ---
 
 # コメントの基準
@@ -36,7 +42,12 @@ globs: src/**/*.ts, tools/**/*.ts, lib/**/*.ts, scripts/**/*.ts, tests/**/*.ts, 
 ## コメントだけを変更したときの確認
 
 1. 差分の全行がコメント行か空行であること
-2. `npx tsc --removeComments --noEmit false --outDir <dir>` の出力が変更前とバイト単位で一致すること
+2. コメントを除いたビルド出力が変更前とバイト単位で一致すること
    （出力先はリポジトリの外にし、変更前に一度出力しておく）
+   - src / tools / lib / tests: `npx tsc --removeComments --noEmit false --outDir <dir>`
+   - scripts（tsconfig.json の対象外）: `npx tsc --ignoreConfig --noCheck --removeComments --noEmit false
+     --target ES2022 --module NodeNext --moduleResolution NodeNext --outDir <dir> scripts/*.ts`
+   - ui（vite でビルド）: `npx vite build --config ui/<app>/vite.config.ts --outDir <dir>/<app> --emptyOutDir`
+     を order-confirm / cancel-confirm それぞれで実行する
 3. `npm test` が全件通ること。tests/ にはソースの文字列を読むテストがあるので
    （`grep -rl readFileSync tests` で確認）、コメント内の文字列が判定に影響しないか注意する
