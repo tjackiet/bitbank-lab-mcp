@@ -16,6 +16,7 @@ npm run typecheck           # tsc --noEmit
 - リンター（Biome / Oxlint）・pre-commit hook・banned-patterns が検出するルールに従う。
   警告やエラーが出たら無視・回避せず修正する。
 - 独自の可視化コード生成は禁止 → `.claude/rules/charting.md`
+- コメントはコードから読み取れない理由だけを 1 行で書く → `.claude/rules/comments.md`
 
 ## アーキテクチャ
 
