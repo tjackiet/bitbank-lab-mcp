@@ -1,15 +1,6 @@
-/**
- * パターン事後分析 (aftermath)
- *
- * パターン完成後のブレイクアウト確認・理論目標価格・リターン計算を行う。
- */
-
 import { avg as avgRaw, median as medianRaw } from '../../lib/math.js';
 import type { AftermathResult, CandleData, PatternEntry } from './types.js';
 
-// ---------------------------------------------------------------------------
-// ネックライン補間
-// ---------------------------------------------------------------------------
 export function necklineValue(p: PatternEntry, idx: number): number | null {
 	const nl = Array.isArray(p?.neckline) && p.neckline.length === 2 ? p.neckline : null;
 	if (!nl) return null;
@@ -28,9 +19,6 @@ export function necklineValue(p: PatternEntry, idx: number): number | null {
 	return Number.isFinite(a?.y) ? Number(a.y) : Number.isFinite(b?.y) ? Number(b.y) : null;
 }
 
-// ---------------------------------------------------------------------------
-// 事後分析
-// ---------------------------------------------------------------------------
 const BULLISH_TYPES = [
 	'double_bottom',
 	'inverse_head_and_shoulders',
@@ -40,7 +28,6 @@ const BULLISH_TYPES = [
 	'bull_pennant',
 ];
 const BEARISH_TYPES = ['double_top', 'head_and_shoulders', 'triangle_descending', 'bear_flag', 'bear_pennant'];
-// Note: legacy 'pennant' / 'flag' (poleDirection-driven) は後方互換のため動的判定で扱う。
 
 export function analyzeAftermath(
 	p: PatternEntry,
@@ -55,7 +42,7 @@ export function analyzeAftermath(
 		if (!Number.isFinite(baseClose)) return null;
 		const nlAtEnd = necklineValue(p, endIdx);
 		const pType = String(p?.type);
-		// Legacy 'pennant' / 'flag' は poleDirection で方向を決める。
+		// 後方互換のため、レガシーな 'pennant' / 'flag' は poleDirection で方向を決める。
 		const isLegacyPoleDriven = pType === 'pennant' || pType === 'flag';
 		const bullish = isLegacyPoleDriven ? p?.poleDirection === 'up' : BULLISH_TYPES.includes(pType);
 		const bearish = isLegacyPoleDriven ? p?.poleDirection === 'down' : BEARISH_TYPES.includes(pType);
@@ -94,7 +81,6 @@ export function analyzeAftermath(
 				low: Number(lo.toFixed(0)),
 			};
 		}
-		// theoretical target
 		let theoreticalTarget = NaN;
 		const nl = nlAtEnd as number;
 		const pivotPrices = Array.isArray(p?.pivots)
@@ -124,7 +110,6 @@ export function analyzeAftermath(
 				}
 			}
 		}
-		// outcome message
 		function outcomeMessage(): string {
 			if (!breakoutConfirmed) return 'ネックライン未突破（パターン不発）';
 			if (targetReached) return '成功（理論目標価格到達）';
@@ -158,9 +143,6 @@ export function analyzeAftermath(
 	}
 }
 
-// ---------------------------------------------------------------------------
-// 統計ビルド
-// ---------------------------------------------------------------------------
 export function buildStatistics(
 	patterns: PatternEntry[],
 	candles: CandleData[],

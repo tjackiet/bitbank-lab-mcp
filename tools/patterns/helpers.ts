@@ -1,10 +1,3 @@
-/**
- * パターン検出の共通ヘルパー関数
- *
- * detect_patterns.ts 内にネストされていた関数を、candles 等を明示的に受け取る
- * モジュールレベル関数に変換したもの。
- */
-
 import { dayjs } from '../../lib/datetime.js';
 import { trueRange } from '../../lib/indicators.js';
 import { statusScore } from './ranking.js';
@@ -19,32 +12,7 @@ import type {
 	WedgeParams,
 } from './types.js';
 
-// ---------------------------------------------------------------------------
-// 時間足スケーリング — 日数 → バー数の換算
-//
-// 検出器の閾値（ウィンドウサイズ・タッチギャップ・形成中ウィンドウ等）は
-// 元々日足前提のバー数で書かれていたため、他時間軸では意味がずれていた。
-// 現在の**プリミティブはバー数**で、日数は「その値がどこから来たか」を示す注記に過ぎない
-// （`patterns/bar-thresholds.ts` を参照）。ここが持つのは換算率だけで、
-// 逆方向（バー数 → 日数）の関数は置かない。
-//
-// **ただし「日数で判定する検出器はもう無い」わけではない。** 期間スコアだけが例外で、
-// `periodScoreDays`（暦日 diff でバケットを決める）を `double` の 4 経路と H&S の 4 経路が
-// まだ使っている。triple の 4 経路は #199 候補 2 で `periodScoreBars`（バー数基準）に移した。
-// 移したのが triple だけなのは、実測で `per` が triple でのみ実質定数だったため
-// （#199 Phase 1: `double` / H&S は 0.6〜0.9 の 4 値が出る）。
-// ---------------------------------------------------------------------------
-
-/**
- * 時間足ごとの「1日あたりのバー本数」を返す。
- *
- * 1day を 1 とし、intraday は >1（1hour=24, 1min=1440 等）、
- * 1week / 1month は <1（1/7, 1/30）。未知の time frame は 1day フォールバック。
- *
- * @param tf - 時間足文字列（'1min', '5min', '15min', '30min', '1hour', '4hour',
- *             '8hour', '12hour', '1day', '1week', '1month'）
- * @returns 1 日あたりのバー本数
- */
+// 換算はバー数への一方向だけにする。プリミティブはバー数で、日数は値の由来を示すだけ（bar-thresholds.ts）。
 export function barsPerDay(tf: string): number {
 	switch (tf) {
 		case '1min':
@@ -74,9 +42,6 @@ export function barsPerDay(tf: string): number {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// ATR 計算（lib/indicators.ts の trueRange に委譲）
-// ---------------------------------------------------------------------------
 export function calcATR(candles: readonly CandleData[], from: number, to: number, period: number = 14): number {
 	const start = Math.max(1, from);
 	const end = Math.max(start + 1, to);
@@ -88,7 +53,6 @@ export function calcATR(candles: readonly CandleData[], from: number, to: number
 	const closes = slice.map((c) => Number(c?.close ?? NaN));
 
 	const tr = trueRange(highs, lows, closes);
-	// tr[0] は NaN（prevClose がない）、有効値は tr[1..] — 直近 period 個を取る
 	const validTr = tr.filter((v) => Number.isFinite(v));
 	if (!validTr.length) return 0;
 	const n = Math.min(period, validTr.length);
@@ -96,9 +60,6 @@ export function calcATR(candles: readonly CandleData[], from: number, to: number
 	return tail.reduce((s, v) => s + v, 0) / tail.length;
 }
 
-// ---------------------------------------------------------------------------
-// ウェッジのブレイク検出
-// ---------------------------------------------------------------------------
 export interface WedgeBreakResult {
 	detected: boolean;
 	breakIdx: number;
@@ -116,19 +77,13 @@ export function detectWedgeBreak(
 	lastIdx: number,
 	atr: number,
 ): WedgeBreakResult {
-	// トレンドラインは endIdx までの足で推定済み。形成区間の内部を再走査すると、
-	// endIdx より後の点で引いた線を過去へ外挿して「過去のブレイク」を作る
-	// look-ahead bias になる。ブレイク候補は形成終端の次足以降に限定する。
+	// 形成区間の内側を再走査すると、後の点で引いた線を過去へ外挿した look-ahead bias になるので、次の足から探す。
 	const scanStart = endIdx + 1;
 	const scanEnd = Math.min(lastIdx, candles.length - 1);
 
 	let firstBreakIdx = -1;
 
-	// 両方向をスキャンし、最初に見つかったブレイクを返す。
-	// 方向の判定は呼び出し側（detect_wedges.ts）が breakPrice と
-	// トレンドラインの位置関係から行う。
-	// - falling_wedge: 上方ブレイク（uLine 超え）が教科書的
-	// - rising_wedge:  下方ブレイク（lLine 割れ）が教科書的
+	// 両方向を見て最初のブレイクを返す。期待方向かどうかは呼び出し側（detect_wedges.ts）が判定する。
 	for (let i = scanStart; i <= scanEnd; i++) {
 		const close = Number(candles[i]?.close ?? NaN);
 		if (!Number.isFinite(close)) continue;
@@ -154,9 +109,6 @@ export function detectWedgeBreak(
 	return { detected: false, breakIdx: -1, breakIsoTime: null, breakPrice: null };
 }
 
-// ---------------------------------------------------------------------------
-// ウィンドウ生成
-// ---------------------------------------------------------------------------
 export function generateWindows(
 	totalBars: number,
 	minSize: number,
@@ -172,9 +124,6 @@ export function generateWindows(
 	return out;
 }
 
-// ---------------------------------------------------------------------------
-// ウェッジタイプ判定
-// ---------------------------------------------------------------------------
 export function determineWedgeType(
 	slopeHigh: number,
 	slopeLow: number,
@@ -185,12 +134,10 @@ export function determineWedgeType(
 	const ratioMinFalling = params?.slopeRatioMinFalling ?? params?.slopeRatioMin ?? 1.15;
 	const minWeakerSlopeRatio = params?.minWeakerSlopeRatio ?? 0.3;
 
-	// Rising Wedge: 両ライン上向き、下側がより急
 	if (slopeHigh > minSlope && slopeLow > minSlope) {
 		if (slopeHigh < slopeLow * minWeakerSlopeRatio) return null;
 		if (Math.abs(slopeLow) >= Math.abs(slopeHigh) * ratioMinRising) return 'rising_wedge';
 	}
-	// Falling Wedge: 両ライン下向き、上側がより急
 	if (slopeHigh < -minSlope && slopeLow < -minSlope) {
 		const absHi = Math.abs(slopeHigh);
 		const absLo = Math.abs(slopeLow);
@@ -204,54 +151,25 @@ export function determineWedgeType(
 	return null;
 }
 
-// ---------------------------------------------------------------------------
-// Apex（頂点）計算 — UAlgo 方式
-// ---------------------------------------------------------------------------
-/**
- * 2本のトレンドラインの交差点（Apex）を計算する。
- *
- * UAlgo: apex_x = (y2 - y1 + m1*x1 - m2*x2) / (m1 - m2)
- * 線形回帰の場合: upper = slope_u * x + intercept_u, lower = slope_l * x + intercept_l
- * 交点: slope_u * x + intercept_u = slope_l * x + intercept_l
- *   =>  x = (intercept_l - intercept_u) / (slope_u - slope_l)
- */
 export interface ApexResult {
-	/** Apex のバーインデックス */
 	apexIdx: number;
-	/** Apex の価格 */
 	apexPrice: number;
-	/** Apex が有効か（未来にあるか） */
 	isValid: boolean;
-	/** 現在のバーからApexまでのバー数 */
 	barsToApex: number;
 }
 
 export function calcApex(upper: TrendLine, lower: TrendLine, endIdx: number): ApexResult {
 	const slopeDiff = upper.slope - lower.slope;
 	if (Math.abs(slopeDiff) < 1e-15) {
-		// 平行 — Apex は無限遠
 		return { apexIdx: Infinity, apexPrice: NaN, isValid: false, barsToApex: Infinity };
 	}
 	const apexIdx = Math.round((lower.intercept - upper.intercept) / slopeDiff);
 	const apexPrice = upper.valueAt(apexIdx);
 	const barsToApex = apexIdx - endIdx;
-	// UAlgo: Apex がウィンドウ終端より先（未来）にあること
 	const isValid = barsToApex > 0;
 	return { apexIdx, apexPrice, isValid, barsToApex };
 }
 
-// ---------------------------------------------------------------------------
-// 包含ルール（Containment） — UAlgo 方式
-// ---------------------------------------------------------------------------
-/**
- * ウェッジ形成中に終値が境界外に出ていないかチェックする。
- *
- * UAlgo: "no candle close is allowed outside the upper or lower boundary"
- * 厳格モードではハード棄却。緩和モードでは許容率を返す。
- *
- * @returns closeInsideRatio: 終値が境界内に収まっている割合 (0-1)
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function checkContainment(
 	candles: CandleData[],
 	upper: { valueAt: (x: number) => number },
@@ -280,19 +198,6 @@ export function checkContainment(
 	return { closeInsideRatio: total > 0 ? inside / total : 0, violations, total };
 }
 
-// ---------------------------------------------------------------------------
-// ウェッジ品質スコアリング関数群
-// ---------------------------------------------------------------------------
-/**
- * 収束チェック — Apexベースに移行
- *
- * 旧: gapEnd/gapStart < 0.30（非常に厳しい固定閾値）
- * 新: gapEnd > 0 かつ gapEnd < gapStart（基本収束条件）
- *     + Apex が未来にある（UAlgo 方式）
- *     + ratio を 0.70 以下に緩和（ギャップが30%以上狭まっていればOK）
- *
- * スコアは ratio と加速度で決まる。
- */
 export function checkConvergenceEx(upper: TrendLine, lower: TrendLine, startIdx: number, endIdx: number) {
 	const midIdx = Math.floor((startIdx + endIdx) / 2);
 	const gapStart = upper.valueAt(startIdx) - lower.valueAt(startIdx);
@@ -300,17 +205,14 @@ export function checkConvergenceEx(upper: TrendLine, lower: TrendLine, startIdx:
 	const gapEnd = upper.valueAt(endIdx) - lower.valueAt(endIdx);
 	const ratio = gapEnd / Math.max(1e-12, gapStart);
 
-	// 基本条件: ギャップが正で、かつ少なくとも30%収束している
 	if (!(gapEnd > 0) || !(ratio < 0.7)) return { isConverging: false, gapStart, gapEnd, ratio };
 
-	// Apex が未来にあるかチェック（スコアへのボーナス）
 	const apex = calcApex(upper, lower, endIdx);
 
 	const firstHalf = gapStart - gapMid;
 	const secondHalf = gapMid - gapEnd;
 	const isAccelerating = secondHalf > firstHalf * 1.2;
 
-	// スコア計算: 収束度 + Apexの位置 + 加速度
 	const convergenceComponent = 0.4 * (1 - ratio);
 	const apexComponent = 0.35 * (apex.isValid ? 1 : 0.3);
 	const accelComponent = 0.25 * (isAccelerating ? 1 : 0.4);
@@ -407,22 +309,7 @@ export function calculatePatternScoreEx(components: PatternScoreComponents, weig
 	);
 }
 
-// ---------------------------------------------------------------------------
-// パターン共通スコアリング
-// ---------------------------------------------------------------------------
-/**
- * 期間スコア（**暦日基準**）。`double` / H&S の 4 経路が使う。
- *
- * **triple はこの関数を使わない**（issue #199 候補 2 で {@link periodScoreBars} に移した）。
- * 時間足を見ない暦日 diff なので、intraday では構成期間が常に同じバケットに落ちる
- * ——#203 Phase 1 の実測で triple の 109 行が 1min〜4hour の全時間足で 0.6 に張り付いた。
- *
- * **`double` / H&S を移していないのは、両者ではこの軸が定数になっていないから**
- * （#199 Phase 1 実測。940 ケース延べで `double` は 0.6/0.7/0.8/0.9 の 4 値、
- * H&S も 4 値。H&S はネイティブ 1hour だけでも 0.8 が 19.0% 出る）。
- * 定数でない軸を「原則に合わないから」だけで動かすと、寄与が混ざったまま
- * confidence の分布が動く。詳細は tjackiet/bitbank-lab-mcp#199 の計測記録。
- */
+// double / H&S は暦日基準のまま。triple と違いこの軸が定数になっておらず、移すと confidence の分布が動く（#199）。
 export function periodScoreDays(startIso?: string, endIso?: string): number {
 	if (!startIso || !endIso) return 0.7;
 	const d = Math.abs(dayjs(endIso).diff(dayjs(startIso), 'day', true));
@@ -432,48 +319,10 @@ export function periodScoreDays(startIso?: string, endIso?: string): number {
 	return 0.7;
 }
 
-/** {@link periodScoreBars} のバケット境界（**バー数**。時間足に依らない）。 */
+// 時間足に依らないバー数の境界。時間足別テーブルは #198 で事故になっている。
 export const PERIOD_SCORE_BAR_BUCKETS = [12, 18, 26] as const;
 
-/**
- * 期間スコア（**バー数基準**）。現在は triple の 4 経路のみが使う（issue #199 候補 2）。
- *
- * ```
- * bars < 12 → 0.6   12 <= bars < 18 → 0.7   18 <= bars < 26 → 0.8   26 <= bars → 0.9
- * ```
- *
- * `bars` は主構成点の**外側 2 点の距離**（triple なら `c.idx − a.idx`）。
- *
- * ## 境界を実測から決めた（先例が無いため）
- *
- * #199 Phase 1 の実測（検出器層 1,056 ケース。受理 302 行 / 価格系列上の相異なる構造 32 件）で、
- * triple の `c.idx − a.idx` は 8〜42 バーに収まり、相異なる構造の四分位が
- * p25 = 12 / p50 = 18 / p75 = 23〜25 だった。境界はこの四分位に置いてある:
- *
- * | 境界 | 由来 |
- * |---:|---|
- * | 12 | p25。8〜11 バーの低い裾（相異なる構造の 15.6%）を切る。台の支持に 10 が無く、合成 fixture の教科書的トリプルはいずれも 12 以上 |
- * | 18 | p50。合成 fixture が到達する最大スパンでもある（12 / 14 / 18 の 3 値しか出ない） |
- * | 26 | p75 の直上。26 以降は 26 / 29 / 30 / 32 / 38 / 42 と疎な上側の裾になる |
- *
- * **境界は時間足に依らない**（`patterns/bar-thresholds.ts` と同じ扱い。時間足別テーブルは
- * #198 で事故になっている）。triple の構成間隔ゲートは主構成点の 2 区間に
- * `minBarsBetweenSwings` を課すので**スパンの構造的下限は `2 × minDist`**（2〜12 バー）で、
- * **最下位バケット（`< 12`）に到達できないのは `1month`（下限 12）だけ**。
- * **ゲートではなくスコアなので、仮に飽和しても検出が消えることは無い**——`bar-thresholds.ts` の
- * 閾値（下限を割ると 0 件になる）とは影響の重さが違う。
- *
- * ## 暦日版にあった非単調性（`< 30日 → 0.9` の次が `0.7`）は引き継がない
- *
- * 最長バケットだけ点が下がる段差には根拠のコメントが無い。**`periodScoreDays` は引数が
- * 欠けたときにも同じ 0.7 を返す**ので、末尾の 0.7 は「古すぎるパターンへの減点」ではなく
- * 「表の外＝中立値」が裾のバケットに漏れたもの、と読むのが自然。加えてこのスコアが測るのは
- * 構成期間の**長さ**であって**古さ**ではない（`start` が今から何日前かは見ていない）ので、
- * そもそも「古すぎる」を表現できない。鮮度は別の機構が持っている
- * （`globalDedup` / `rankPatterns` の `range.end` 比較、`requireCurrentInPattern` /
- * `currentRelevanceDays`）。由来不明の段差をバー空間に移すより、単調にして意味を
- * 「構成が長いほど substantial」の 1 つに揃えるほうが読み手を誤らせない。
- */
+// 暦日版の末尾の 0.7（表の外の中立値が裾に漏れたもの）は引き継がず、単調にする（#199）。
 export function periodScoreBars(bars: number): number {
 	if (!Number.isFinite(bars)) return 0.7;
 	const [b1, b2, b3] = PERIOD_SCORE_BAR_BUCKETS;
@@ -502,32 +351,8 @@ export function finalizeConf(base: number, type: string): number {
 	return Math.round(v * 100) / 100;
 }
 
-// ---------------------------------------------------------------------------
-// 重複パターンの排除
-// ---------------------------------------------------------------------------
-
-/**
- * 同一タイプで期間の重なり率が 50% を超えるパターンを 1 つに統合する（各検出器内で実行）。
- *
- * 勝者選択は statusScore（`patterns/ranking.ts` が単一ソース。issue #133）を最優先し、
- * 同 status 内では confidence →「`range.end` が新しいほう＝より新しい形を採る」→
- * パターン高さの順で選ぶ。**`globalDedup` と同じ順序**（issue #142）。
- *
- * `range.end` は形成中パターンでは常に最新足（lastIdx）なので、status より前に比較すると
- * 形成中が完成済み（突破確定足で終わる）を構造的に必ず押し出してしまう。これが statusScore を
- * 最優先に置く理由（#133 / PR #135）で、**`range.end` を confidence より前に置く理由ではない。**
- *
- * `range.end` を confidence より先に見ると、重なる候補の中で最も新しく終わる 1 つに絞り込んだ
- * 時点で confidence が一度も比較されない。広い窓ほど終端が新しくなりやすいので、
- * **同じ値動きに対して最も当てはまりの悪い解釈が勝つ**（#142。BTC/JPY 日足で
- * `rising_wedge` 0.95 が 0.82 に、外れ値除去の上限（#141）を外すと
- * `triangle_symmetrical` 0.91 / 0.87 が 0.82 に負けていた）。
- * confidence を先に置いても #133 の不変条件には触れない——入れ替えは statusScore の**下**なので、
- * 形成中が完成済みを押し出す経路は通らない。
- *
- * @param arr - 検出順のパターン配列。`type` / `range` を欠く要素は比較せずそのまま残す
- * @returns 重複を統合した新しい配列（入力は破壊しない）
- */
+// 勝者は statusScore → confidence → range.end の新しさ → 高さの順で選ぶ（globalDedup とそろえている）。
+// statusScore を先にしないと形成中が完成済みを押し出し（#133）、range.end を confidence より先にすると当てはまりの最も悪い解釈が勝つ（#142）。
 export function deduplicatePatterns<T extends DeduplicablePattern>(arr: T[]): T[] {
 	const result: T[] = [];
 	for (const pattern of arr) {
@@ -600,23 +425,7 @@ export function deduplicatePatterns<T extends DeduplicablePattern>(arr: T[]): T[
 	return result;
 }
 
-// ---------------------------------------------------------------------------
-// グローバル重複排除（全パターン種別横断）
-// ---------------------------------------------------------------------------
-
-/**
- * 全検出器の結果を統合した後、同一タイプ（wedge / triangle は同カテゴリ）で期間の
- * 重なり率が 70% 以上のパターンを 1 つに統合する。
- *
- * 勝者選択は `rankPatterns`（`patterns/ranking.ts`）と同じ規則:
- * statusScore（単一ソース。issue #133）→ confidence → `range.end` の新しさ。
- * status を見ずに confidence を先に比べると、形成中（完成途中の進捗から
- * 整合度 1.00 が付きやすい）が突破確定済みの完成済みを押し出し、
- * `includeCompleted: true` を明示した呼び出し側が完成済みを受け取れなくなる。
- *
- * @param patterns - 全検出器の結果を連結した配列（検出順）
- * @returns 重複を統合した新しい配列（入力は破壊しない）
- */
+// 勝者は rankPatterns と同じく statusScore → confidence → range.end の新しさで選ぶ（#133）。
 export function globalDedup(patterns: DeduplicablePattern[]): DeduplicablePattern[] {
 	function toMs(iso?: string): number {
 		try {
@@ -641,9 +450,7 @@ export function globalDedup(patterns: DeduplicablePattern[]): DeduplicablePatter
 		return ov / minD;
 	}
 
-	// 同一カテゴリとして扱うパターン群（期間重複する場合は同カテゴリ内でも dedup 対象）。
-	// flag / pennant は detect_pennants.ts 内で方向別 dedup 済みのため categoryMap に含めない
-	// （bull_flag と bear_flag を 'flag' に潰すと globalDedup が方向違いをマージしてしまう）。
+	// flag / pennant は入れない。bull と bear を 1 カテゴリに潰すと方向違いをマージしてしまう（detect_pennants.ts で方向別に dedup 済み）。
 	const categoryMap: Record<string, string> = {
 		rising_wedge: 'wedge',
 		falling_wedge: 'wedge',
