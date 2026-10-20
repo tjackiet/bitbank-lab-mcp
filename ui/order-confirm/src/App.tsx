@@ -121,7 +121,7 @@ export function App() {
 		const mcpApp = new McpApp({ name: 'bitbank-order-confirm', version: '0.1.0' });
 		appRef.current = mcpApp;
 
-		// preview_order の結果だけ取り込む。他ツールの結果で state をリセットしないよう data.preview の有無でフィルタする。
+		// 他ツールの結果で state をリセットしないよう、`ok` かつ `data.preview` を持つ結果だけを取り込む（ツール名は見ていない）。
 		const applyPreviewResult = (structured: PreviewResult | undefined, meta: unknown) => {
 			if (structured?.ok && structured.data?.preview) {
 				hasPreviewRef.current = true;
