@@ -4,7 +4,6 @@ import type { Pivot } from './swing.js';
 
 export type StructureGateSkip = 'no_prior_extreme' | 'insufficient_history';
 
-/** 構造ゲートを適用できなかった候補の未評価理由を content 用の行にする。 */
 export function formatStructureGateSkipLine(skipped: StructureGateSkip | undefined): string | null {
 	if (!skipped) return null;
 	const reason =
@@ -12,7 +11,6 @@ export function formatStructureGateSkipLine(skipped: StructureGateSkip | undefin
 	return `   - 先行値幅: ${reason}`;
 }
 
-/** triple の各山 / 谷について、終値とヒゲの位置をパターン高さ比で表示する。 */
 export function formatTriplePositionLines(type: string | undefined, pivots: Pivot[] | undefined): string[] {
 	const side = type === 'triple_top' ? 'top' : type === 'triple_bottom' ? 'bottom' : null;
 	if (!side || !Array.isArray(pivots) || (pivots.length !== 4 && pivots.length !== 5)) return [];
