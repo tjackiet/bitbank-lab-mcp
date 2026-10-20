@@ -1,4 +1,4 @@
-// 暗号資産はファットテールなので σ 閾値は株式より広めにし、出来高ゼロは「取引がなかった」として正常扱いにする（Vol.01）。
+// 暗号資産はファットテールなので σ 閾値は株式より広めにする（Vol.01）。
 
 import { dayjs } from './datetime.js';
 import { avg, stddev } from './math.js';

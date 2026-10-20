@@ -12,7 +12,7 @@ export type FeeRole = 'maker' | 'taker';
 /** preview_order / pairs と同じ語彙。 */
 export type OrderType = 'limit' | 'market' | 'stop' | 'stop_limit';
 
-// toNum は 0 / 負値を保持し、欠損だけを null にする（lib/conversions.ts）。
+// toNum は 0 / 負値を保持し、欠損・空文字・有限数にならない値だけを null にする（lib/conversions.ts）。
 function resolveRate(raw: unknown, override?: number): number {
 	return override ?? toNum(raw) ?? DEFAULT_TAKER_FALLBACK;
 }

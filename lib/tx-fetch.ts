@@ -264,7 +264,6 @@ export async function fetchTxTimeRange(
 	const dates = completedUtcDayKeysInRange(sinceMs, untilMs, nowMs);
 	const usedLatest = untilMs >= currentUtcDayStartMs(nowMs);
 
-	// 当日分は日付指定だと直近数分が欠ける場合があるので latest も併用する。
 	const results = await Promise.all([...dates.map((ds) => fetcher(ds)), ...(usedLatest ? [fetcher()] : [])]);
 
 	const retry = options.retryFailedDates;

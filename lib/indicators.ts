@@ -423,7 +423,7 @@ export function trueRange(highs: number[], lows: number[], closes: number[]): nu
 	return result;
 }
 
-// TradingView・MT4/MT5 の既定 ATR と一致させている（Wilder の元論文準拠の RMA）。
+// TradingView の既定 ATR（RMA）と一致させている（Wilder の元論文準拠）。
 export function wilderAtr(highs: number[], lows: number[], closes: number[], period: number = 14): number[] {
 	if (!Number.isInteger(period) || period < 1) {
 		throw new Error('Wilder ATR period must be a positive integer');
