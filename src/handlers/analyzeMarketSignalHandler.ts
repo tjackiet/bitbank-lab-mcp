@@ -5,8 +5,6 @@ import analyzeMarketSignal from '../../tools/analyze_market_signal.js';
 import { AnalyzeMarketSignalInputSchema, AnalyzeMarketSignalOutputSchema } from '../schemas.js';
 import type { ToolDefinition } from '../tool-definition.js';
 
-// ── buildMarketSignalHandlerText ───────────────────────────────
-
 export type BuildMarketSignalHandlerTextInput = {
 	pair: string;
 	type: string;
@@ -72,7 +70,6 @@ export function buildMarketSignalHandlerText(input: BuildMarketSignalHandlerText
 	);
 	if (topContributors.length) lines.push(`主要因: ${topContributors.join(', ')}`);
 
-	// SMA詳細
 	if (sma) {
 		const curPx = Number.isFinite(sma.current) ? Math.round(sma.current!).toLocaleString('ja-JP') : null;
 		const v = sma.values;
@@ -90,7 +87,6 @@ export function buildMarketSignalHandlerText(input: BuildMarketSignalHandlerText
 			lines.push(`- 短期（25日）: ${s25}円（今の価格より ${fmtVs(dev.vs25)} ${dir(dev.vs25)}に位置）`);
 			lines.push(`- 中期（75日）: ${s75}円（今の価格より ${fmtVs(dev.vs75)} ${dir(dev.vs75)}に位置）`);
 			lines.push(`- 長期（200日）: ${s200}円（今の価格より ${fmtVs(dev.vs200)} ${dir(dev.vs200)}に位置）`);
-			// 配置
 			const curVal = Number.isFinite(sma.current) ? Number(sma.current) : null;
 			const v25 = Number.isFinite(v.sma25) ? Number(v.sma25) : null;
 			const v75 = Number.isFinite(v.sma75) ? Number(v.sma75) : null;
@@ -112,7 +108,6 @@ export function buildMarketSignalHandlerText(input: BuildMarketSignalHandlerText
 				const arrLabel = arr === 'bullish' ? '上昇順' : arr === 'bearish' ? '下降順' : '混在';
 				lines.push(`配置: ${arrLabel}`);
 			}
-			// 直近クロス
 			if (sma.recentCross?.pair === '25/75') {
 				const crossJp = sma.recentCross.type === 'golden_cross' ? 'ゴールデンクロス' : 'デッドクロス';
 				const ago = Number(sma.recentCross.barsAgo ?? 0);
@@ -124,7 +119,6 @@ export function buildMarketSignalHandlerText(input: BuildMarketSignalHandlerText
 		}
 	}
 
-	// 補足指標
 	const { rsi: rsiVal, ichimokuSpanA: spanA, ichimokuSpanB: spanB, macdHist } = supplementary;
 	const hasSupplementary = rsiVal != null || (spanA != null && spanB != null) || macdHist != null;
 	if (hasSupplementary) {
@@ -161,7 +155,6 @@ export function buildMarketSignalHandlerText(input: BuildMarketSignalHandlerText
 		}
 	}
 
-	// 内訳
 	if (breakdownArray.length) {
 		lines.push('');
 		lines.push('【内訳（raw×weight=寄与）】');
@@ -182,7 +175,6 @@ export function buildMarketSignalHandlerText(input: BuildMarketSignalHandlerText
 		}
 	}
 
-	// 次の確認候補
 	if (nextActions.length) {
 		lines.push('');
 		lines.push('【次の確認候補】');
@@ -195,8 +187,6 @@ export function buildMarketSignalHandlerText(input: BuildMarketSignalHandlerText
 
 	return lines.join('\n');
 }
-
-// ── toolDef ────────────────────────────────────────────────────
 
 export const toolDef: ToolDefinition = {
 	name: 'analyze_market_signal',
@@ -240,9 +230,7 @@ export const toolDef: ToolDefinition = {
 				};
 			};
 			const refs = d?.refs?.indicators?.latest || {};
-			// 🚨 「今日の雲」は ichi_series.spanA/B の末尾 ICHIMOKU_SHIFT(26) 本前を参照する。
-			// refs.ICHIMOKU_spanA/B は「今日計算された先行スパン」＝ 26 本後の雲なので、
-			// 価格と比較する「今日の雲」判定には使えない（26 本ズレる）。
+			// 今日の雲は ichi_series の末尾 26 本前を見る。refs.ICHIMOKU_spanA/B は 26 本後の雲なので使えない。
 			const ichiSeries = refs?.ichi_series;
 			const ichiSpanASeries = Array.isArray(ichiSeries?.spanA) ? ichiSeries.spanA : null;
 			const ichiSpanBSeries = Array.isArray(ichiSeries?.spanB) ? ichiSeries.spanB : null;
@@ -278,9 +266,6 @@ export const toolDef: ToolDefinition = {
 				weights: d?.weights || null,
 				nextActions: Array.isArray(d?.nextActions) ? d.nextActions : [],
 			});
-			// 上流 warning（取得層）/ warnings（計算層）を content 先頭に再連結する。
-			// LLM は structuredContent.meta を参照できないため、tool 層の summary 先頭と
-			// 同じフォーマットで handler 側でも text 先頭に警告を出す（§9.3）。
 			const text = prependWarnings(baseText, extractUpstreamWarning((res as { meta?: unknown }).meta), {
 				separator: '\n',
 			});

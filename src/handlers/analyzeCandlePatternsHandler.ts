@@ -1,14 +1,7 @@
-/**
- * analyzeCandlePatterns のビュー（表示）ロジック
- * generateSummary / generateContent + 共有型定義
- */
-
 import type { z } from 'zod';
 import { calendarDateFromIso, formatDateWithDayOfWeek } from '../../lib/datetime.js';
 import { formatPrice as fmtPrice } from '../../lib/formatter.js';
 import type { CandlePatternTypeEnum } from '../schemas.js';
-
-// ── 共有型定義 ──
 
 export type CandlePatternType = z.infer<typeof CandlePatternTypeEnum>;
 
@@ -51,8 +44,6 @@ export interface DetectedCandlePattern {
 	history_stats: HistoryStats | null;
 }
 
-// ── Lookup Maps ──
-
 const TREND_LABELS: Record<string, string> = { down: '下落傾向', up: '上昇傾向' };
 const DIRECTION_LABELS: Record<string, string> = {
 	bullish: '上昇転換のサイン',
@@ -64,13 +55,9 @@ const DIRECTION_DETAIL_LABELS: Record<string, string> = {
 };
 const TREND_SHORT_LABELS: Record<string, string> = { up: '上昇', down: '下落' };
 
-// ── ヘルパー ──
-
 function formatPrice(price: number): string {
 	return fmtPrice(Math.round(price));
 }
-
-// ── サマリー生成 ──
 
 export function generateSummary(patterns: DetectedCandlePattern[], windowCandles: WindowCandle[]): string {
 	if (patterns.length === 0) {
@@ -108,9 +95,6 @@ export function generateSummary(patterns: DetectedCandlePattern[], windowCandles
 	return parts.join(' ');
 }
 
-// ── コンテント生成 ──
-
-/** 1本足パターンの詳細行 */
 function format1CandleDetail(p: DetectedCandlePattern, c: WindowCandle, dateStr: string, statusMark: string): string[] {
 	const lines: string[] = [];
 	const body = c.close - c.open;
@@ -145,7 +129,6 @@ function format1CandleDetail(p: DetectedCandlePattern, c: WindowCandle, dateStr:
 	return lines;
 }
 
-/** 2本足パターンの詳細行 */
 function format2CandleDetail(
 	p: DetectedCandlePattern,
 	c1: WindowCandle,
@@ -203,7 +186,6 @@ function format2CandleDetail(
 	return lines;
 }
 
-/** 3本足パターンの詳細行 */
 function format3CandleDetail(
 	p: DetectedCandlePattern,
 	c1: WindowCandle,
@@ -244,7 +226,6 @@ function format3CandleDetail(
 	return lines;
 }
 
-/** 過去統計セクション */
 function formatHistoryStats(p: DetectedCandlePattern): string[] {
 	const lines: string[] = [];
 	if (p.history_stats) {
@@ -267,7 +248,6 @@ function formatHistoryStats(p: DetectedCandlePattern): string[] {
 	return lines;
 }
 
-/** パターンの読み方（固定テキスト） */
 const PATTERN_GUIDE = [
 	'【パターンの読み方】',
 	'〈1本足〉',
@@ -304,7 +284,6 @@ export function generateContent(
 	);
 	lines.push('');
 
-	// === 1. ローソク足データ ===
 	lines.push(`=== ${windowCandles.length}日間のローソク足 ===`);
 	for (const c of windowCandles) {
 		const dateStr = formatDateWithDayOfWeek(c.timestamp);
@@ -318,7 +297,6 @@ export function generateContent(
 	}
 	lines.push('');
 
-	// === 2. パターン検出結果 ===
 	if (patterns.length === 0) {
 		lines.push('=== 検出パターン ===');
 		lines.push('なし');
@@ -335,7 +313,6 @@ export function generateContent(
 			lines.push(`  直前トレンド: ${TREND_SHORT_LABELS[p.local_context.trend_before] ?? '中立'}`);
 			lines.push('');
 
-			// === 3. パターン該当箇所の詳細 ===
 			const [idxStart, idxEnd] = p.candle_range_index;
 			const spanSize = idxEnd - idxStart + 1;
 
@@ -367,7 +344,6 @@ export function generateContent(
 				}
 			}
 
-			// === 4. 過去統計 ===
 			lines.push(...formatHistoryStats(p));
 
 			if (p.uses_partial_candle) {

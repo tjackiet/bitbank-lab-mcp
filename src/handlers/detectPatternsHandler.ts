@@ -20,16 +20,7 @@ import {
 type DetectPatternsInput = z.infer<typeof DetectPatternsInputSchema>;
 type DetectPatternsOutput = z.infer<typeof DetectPatternsOutputSchema>;
 
-/**
- * warning 行を view formatter が返す content[0].text の先頭に連結する。
- * 各 view（debug / summary / full / detailed）で warning 行が消えないように handler 側で統一して付与する。
- *
- * 対象は上流 warning（取得層 = `meta.warning` / 計算層 = `meta.warnings`）に加えて、
- * 本ツール自身の検出層 warning のうち content に出す必要があるもの
- * （スキャン窓不足 = `data.warnings[].type === 'limit_too_small_for_timeframe'`）。
- * `data.warnings` は structuredContent 側にしか無く LLM からは見えないため、
- * ここで content に出さないと「0 件検出」としか伝わらない。
- */
+// data.warnings は structuredContent にしか無いので、スキャン窓不足を content に出さないと「0 件検出」としか伝わらない。
 function prependWarningToResponse(
 	response: McpResponse,
 	meta: { warning?: string; warnings?: string[] } | undefined,
@@ -105,12 +96,8 @@ export const toolDef: ToolDefinition = {
 		const tfLabel = timeframeLabel(String(type));
 		const anchorSuffix = date ? `（終端 date=${date} 指定）` : '';
 		const hdr = `${String(pair).toUpperCase()} ${tfLabel}（${String(type)}） ${limit ?? count}本から${pats.length}件を検出${anchorSuffix}`;
-		// 実効パラメータ行（#184 欠陥 C）。**4 つの view すべてに同じ文字列を通す。**
-		// `hdr` は各 view で `${hdr}（${typeSummary}…）` と構文的に包まれるため末尾に足せず、
-		// また `summary` に出さないと上位集合規約（`.claude/rules/tools.md` §3）違反になる。
-		// ここで 1 回だけ組むことで、view 間で文言がずれない（= 上位集合テストが意味を持つ）。
+		// 4 つの view すべてに同じ文字列を通す。hdr の末尾には足せず、summary に出さないと上位集合規約に反する（#184）。
 		const effectiveParamsLine = buildEffectiveParamsLine(meta, String(type));
-		// 上流 warning ＋ 検出層 warning（スキャン窓不足）を content 先頭にまとめて出す。
 		const contentWarnings = {
 			warning: meta.warning,
 			warnings: [...(meta.warnings ?? []), ...extractScanWindowWarnings(res.data.warnings)],
@@ -123,8 +110,7 @@ export const toolDef: ToolDefinition = {
 			);
 		}
 
-		// スキャン範囲（meta.scan = 検出器に渡した足）＋ 検出パターン分布期間の 2 行。
-		// ヘッダの `{limit}本から` は要求本数であってスキャン本数ではないので、両者が食い違うことがある。
+		// ヘッダの {limit}本から は要求本数でスキャン本数ではないので、両者が食い違うことがある。
 		const periodBlock = buildPeriodBlock(meta.scan, String(type), pats, effectiveTz);
 		const typeSummary = buildTypeSummary(pats, effectiveTz);
 
@@ -150,7 +136,6 @@ export const toolDef: ToolDefinition = {
 				contentWarnings,
 			);
 		}
-		// detailed (default)
 		return prependWarningToResponse(
 			formatDetailedView(
 				hdr,

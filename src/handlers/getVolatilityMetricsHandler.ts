@@ -17,15 +17,8 @@ import getVolatilityMetrics, {
 import { GetVolMetricsInputSchema } from '../schemas.js';
 import type { ToolDefinition } from '../tool-definition.js';
 
-/**
- * meta.warning（取得層: 上流 get_candles の fetchWarning + 不正OHLCスキップ件数 + isoTime欠損件数）と
- * meta.warnings（計算層）を body の先頭に別行で連結する。
- * LLM がデータの不完全性を見落とさないようにするため。
- */
 export function prependVolWarning(body: string, meta: unknown): string {
-	// warning（取得層）/ warnings（計算層）の両系統を prependWarnings に委譲する。
-	// 現状 get_volatility_metrics は warning のみ出すが、将来 warnings[] を足しても無言で落とさない。
-	// meta は unknown で受け、extractUpstreamWarning で型検証してから渡す（不正な meta 形でも throw しない）。
+	// 今は warning しか出さないが、将来 warnings[] を足しても落とさないよう両系統を委譲する。
 	return prependWarnings(body, extractUpstreamWarning(meta), { separator: '\n\n' });
 }
 
@@ -54,7 +47,6 @@ export interface VolViewInput {
 	}>;
 }
 
-/** beginner ビューのテキスト組み立て */
 export function buildVolatilityBeginnerText(input: VolViewInput): string {
 	const { pair, type, lastClose, atrAbs, atrPct, rvAnn, tagsAll } = input;
 	const rvPct = formatPercent(rvAnn, { multiply: true, digits: 0 });
@@ -71,15 +63,7 @@ export function buildVolatilityBeginnerText(input: VolViewInput): string {
 		.join('\n');
 }
 
-/**
- * 一行要約のテキスト組み立て。
- *
- * **本番未使用（テストからのみ参照）。PR 6（軽量 summary の opt-in 追加）の土台として残す**
- * （docs/internal/view-vocabulary-unification.md §5-3 小項目 / §2-0）。
- * `view=summary` は上流の `res.summary` をそのまま流す——`content[0].text` が LLM への唯一の
- * チャネルなので、既定 view をこの一行要約に落とすと LLM が rolling window 別 RV / ATR を
- * 受け取れなくなる。PR 6 をやらないと決めた時点で削除する。
- */
+// 本番未使用（テストからのみ参照）。PR 6（軽量 summary の opt-in）をやらないと決めた時点で削除する。
 export function buildVolatilitySummaryText(input: VolViewInput): string {
 	const { pair, type, sampleSize, rvAnn, pkAnn, gkAnn, rsAnn, atrAbs, tagsAll } = input;
 	const fp = (x: number | null) => formatPercent(x, { multiply: true });
@@ -95,14 +79,7 @@ export interface VolDetailedInput extends VolViewInput {
 	};
 }
 
-/**
- * detailed/full ビューのテキスト組み立て。
- *
- * 本文は summary（上流 `res.summary`）とは別立てで組み直すが、**4 行フッタは落とさない**
- * （docs/internal/view-vocabulary-unification.md §3-2 規約 3: 階梯上の view は下位の上位集合）。
- * `content[0].text` が LLM への唯一のチャネル（§2-0）なので、上位 view でフッタが消えるのは
- * 「表示が変わる」ではなく「LLM が『含まれないもの』『ATR の定義』『補完ツール』を失う」に等しい。
- */
+// 本文は上流 summary と別に組み直すが、4 行フッタは落とさない（上位の view は下位の上位集合）。
 export function buildVolatilityDetailedText(input: VolDetailedInput, view: 'detailed' | 'full'): string {
 	const { pair, type, lastClose, ann, annFactor, sampleSize, rvAnn, pkAnn, gkAnn, rsAnn, atrAbs, tagsAll, rolling } =
 		input;
@@ -145,8 +122,7 @@ export function buildVolatilityDetailedText(input: VolDetailedInput, view: 'deta
 		const std = retArr.length ? stddev(retArr, true) : null;
 		text += `\n\n【Series】\nTotal: ${sampleSize ?? cArr.length} candles\nFirst: ${firstIso} , Last: ${lastIso}\nClose range: ${minClose != null ? Number(minClose).toLocaleString('ja-JP') : 'n/a'} - ${maxClose != null ? Number(maxClose).toLocaleString('ja-JP') : 'n/a'} JPY\nReturns: mean=${formatPercent(mean, { multiply: true, digits: 2 })}, std=${formatPercent(std, { multiply: true, digits: 2 })}${ann ? ' (base interval)' : ''}`;
 	}
-	// summary と同じ 4 行フッタ（含まれるもの / 含まれないもの / ATR の定義 / 補完ツール）で締める。
-	// 文言は tools/get_volatility_metrics.ts の単一ソースを参照する（view 間で食い違わせない）。
+	// 文言は tools/get_volatility_metrics.ts の単一ソースを使う（view 間で食い違わせない）。
 	return `${text}\n\n${VOLATILITY_METRICS_FOOTER}`;
 }
 
@@ -165,7 +141,6 @@ export const toolDef: ToolDefinition = {
 	}: z.infer<typeof GetVolMetricsInputSchema>) => {
 		const res = await getVolatilityMetrics(pair, type, limit, windows, { useLogReturns, annualize });
 		if (!res?.ok) return res;
-		// 形成中足フラグ（meta.provisional）。warning 2 系統とは別系統の情報注記を content に出す。
 		const provisional = (res.meta as { provisional?: boolean })?.provisional === true;
 		const meta = res?.data?.meta || {};
 		const a = res?.data?.aggregates || {};
@@ -183,19 +158,7 @@ export const toolDef: ToolDefinition = {
 		const atrAbs = a.atr != null ? a.atr : null;
 		const atrPct = lastClose ? (atrAbs as number) / lastClose : null;
 
-		// tags: base + derived
-		// ─ 閾値の再ベースライン（実現ボラの標本分散 n-1 採用後）─────────────────────────
-		// 実現ボラは母集団分散(n) → 標本分散(n-1, Bessel) に変更済みだが、以下の派生タグ閾値は
-		// 据え置く。判定は全て年率値（annualize フラグ非依存）で行い、rv_std / rolling /
-		// annualized で基準を一貫させる。据え置き根拠:
-		//   - high_vol(>0.5) / low_vol(<0.2): aggregate rv_std_ann に対する判定。aggregate は
-		//     全サンプル（標準 200 本）の std で Bessel 補正は約 +0.25%（最小 20 本でも +2.74%）。
-		//     0.5 / 0.2 の境界を実質跨がない。
-		//   - expanding_vol / contracting_vol: short/long の rolling rv_std_ann の比。Bessel 係数
-		//     √(w/(w-1)) は分子分母で大半が相殺し、既定 [14,30] でも残差は約 +2%。判定の ±5%
-		//     中立バンド内に収まる。
-		//   - high_short_term_vol(>0.4): 最小窓 rolling rv_std_ann。既定 w=14 で Bessel は約 +3.78%、
-		//     ヒューリスティックなタグの許容範囲内。
+		// 派生タグの閾値は標本分散（n-1）への変更後も据え置いている。Bessel 補正の影響は各判定の境界・中立バンドの内側に収まる。
 		const tagsBase: string[] = Array.isArray(res?.data?.tags) ? [...res.data.tags] : [];
 		const tagsDerived: string[] = [];
 		// Always use annualized values for tag thresholds (consistent regardless of annualize flag)
@@ -214,7 +177,6 @@ export const toolDef: ToolDefinition = {
 				if (shortVal > 0.4) tagsDerived.push('high_short_term_vol');
 			}
 		}
-		// Use annualized RV for threshold comparison even when annualize=false
 		const rvAnnForTags = a.rv_std_ann ?? (a.rv_std != null ? a.rv_std * annFactorFull : null);
 		if (rvAnnForTags != null) {
 			if (rvAnnForTags > 0.5) tagsDerived.push('high_vol');
@@ -244,7 +206,6 @@ export const toolDef: ToolDefinition = {
 			rolling: roll,
 		};
 
-		// beginner view (plain language for non-experts)
 		if (view === 'beginner') {
 			const body = buildVolatilityBeginnerText(viewInput);
 			const text = prependVolWarning(prependProvisionalNote(body, provisional), res.meta);
@@ -254,9 +215,7 @@ export const toolDef: ToolDefinition = {
 			};
 		}
 
-		// summary view — res.summary に aggregates + rolling 行が含まれるので、
-		// ここでは buildVolatilitySummaryText の一行要約ではなく上流 summary をそのまま流す
-		// （LLM が default view で rolling window 別 RV/ATR を読めるようにするため）
+		// 上流 summary をそのまま流す。一行要約に落とすと LLM が rolling window 別の RV / ATR を受け取れない。
 		if (view === 'summary') {
 			return {
 				content: [{ type: 'text', text: res.summary }],
@@ -264,7 +223,6 @@ export const toolDef: ToolDefinition = {
 			};
 		}
 
-		// detailed/full
 		const series = res?.data?.series || {};
 		const detailedInput: VolDetailedInput = {
 			...viewInput,
