@@ -2,12 +2,8 @@ import { calendarDateFromIso, dayjs } from './datetime.js';
 
 export type MaPrefix = 'SMA' | 'EMA';
 
-/** Slope detection threshold (0.2% deadband) */
 export const SLOPE_THRESHOLD = 0.002;
-/** Lookback window for recent cross detection */
 export const CROSS_LOOKBACK = 30;
-
-// ── Shared interfaces ──
 
 export interface MaLineEntry {
 	period: number;
@@ -44,8 +40,6 @@ export interface MaExtEntry {
 	slopePctPerDay?: number | null;
 	pricePosition?: 'above' | 'below' | 'equal';
 }
-
-// ── Shared functions ──
 
 export function slopeOfSeries(series: Array<number | null>): 'rising' | 'falling' | 'flat' {
 	const n = series.length;
