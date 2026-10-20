@@ -197,7 +197,7 @@ export function calculateSummary(
 	const winRate = trades.length > 0 ? wins / trades.length : 0;
 	const avgPnl = trades.length > 0 ? trades.reduce((s, t) => s + t.pnl_pct, 0) / trades.length : 0;
 
-	// Sharpe はウォームアップを除いた評価範囲で算出する（equity_pct=0 が続く区間を含めると stdev が小さく過大評価になる）。
+	// Sharpe はウォームアップを除いた評価範囲のバーリターンで算出する（取引できない区間の 0 リターンを混ぜない）。
 	const evaluationEquityCurve = equityCurve.slice(clampedStartIdx);
 
 	return {

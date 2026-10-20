@@ -267,7 +267,7 @@ export default async function detectPatterns(
 			near: (a: number, b: number) => nearFn(a, b, tolerancePct),
 			pct: pctFn,
 			lrWithR2: linearRegressionWithR2,
-			// 構造図の日付整形専用で、検出ロジックは tz を参照しない。
+			// ctx.tz は構造図の日付整形専用で、各検出器の判定には使わない。
 			tz,
 		};
 

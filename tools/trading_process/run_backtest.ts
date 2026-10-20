@@ -128,7 +128,6 @@ export default async function runBacktest(input: RunBacktestInput): Promise<RunB
 			};
 		}
 
-		// normalizedParams を渡して二重 merge の余地を無くす。
 		const engineInput: BacktestEngineInput = {
 			pair,
 			timeframe,

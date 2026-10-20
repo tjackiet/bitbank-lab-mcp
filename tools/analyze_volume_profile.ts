@@ -40,7 +40,7 @@ type FetchResult =
 	| { ok: true; txs: Tx[]; fetchWarning?: string; limitApplication?: TxLimitApplication }
 	| { ok: false; errorType: string; summary: string };
 
-// get_transactions の 1000 件上限は MCP 応答のサイズ制限なので、集計用途では外す（キャップすると 1 UTC 日の末尾 4〜5 時間分しか集計に入らない）。
+// get_transactions の 1000 件上限は MCP 応答のサイズ制限なので、集計用途では外す（キャップすると 1 UTC 日の末尾側しか集計に入らない）。
 function internalTxFetcher(pair: string): TxFetcher {
 	// unlimited 指定時に limit は無視されるが、オプションが外れても応答上限へ縮退するよう public 上限を渡す。
 	return (date) => getTransactions(pair, PUBLIC_TX_LIMIT, date, undefined, { unlimited: true });

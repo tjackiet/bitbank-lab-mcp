@@ -180,7 +180,7 @@ const UTC_DAY_MINUTES = 24 * 60;
 
 type TxResult = Awaited<ReturnType<typeof getTransactions>>;
 
-// get_transactions の 1000 件上限は MCP 応答のサイズ制限なので、集計用途では外す（キャップすると 1 UTC 日の末尾 4〜5 時間分しか集計に入らない）。
+// get_transactions の 1000 件上限は MCP 応答のサイズ制限なので、集計用途では外す（キャップすると 1 UTC 日の末尾側しか集計に入らない）。
 function internalTxFetcher(pair: string): TxFetcher {
 	// unlimited 指定時に limit は無視されるが、オプションが外れても応答上限へ縮退するよう public 上限を渡す。
 	return (date) => getTransactions(pair, PUBLIC_TX_LIMIT, date, undefined, { unlimited: true });
@@ -260,7 +260,7 @@ export default async function getFlowMetrics(
 
 			txs = fetched.txs;
 		} else if (date) {
-			// date 指定でも limit は適用しない（1 UTC 日の全件を集計する。limit を掛けるとその日の末尾数時間ぶんしか入らない）。
+			// date 指定でも limit は適用しない（1 UTC 日の全件を集計する。limit を掛けるとその日の末尾側しか入らない）。
 			const txRes = (await txFetcher(date)) as TxResult;
 			const archivePublished = isArchiveExpectedPublished(date);
 			if (!txRes?.ok) {
