@@ -1,17 +1,4 @@
-/**
- * 注文確認 UI（MCP Apps / SEP-1865）
- *
- * preview_order の結果を受け取り、注文内容を表示する。
- *
- * サーバーが MCP Apps 実行経路を有効化している場合（`BITBANK_MCP_APPS_EXECUTE=1` +
- * ホストが MCP Apps UI を宣言）、ツール結果の `_meta` に確認トークンが載る。その場合のみ
- * 「注文を確定する」ボタンを描画し、`app.callServerTool('create_order', ...)` で発注する。
- * トークンが無ければ従来どおりプレビュー表示のみ（ボタンは出さない）。
- *
- * トークンは `_meta` からしか読まない。`content` / `structuredContent` には載っておらず、
- * それが「LLM には見えないがこの iframe には見える」という認可の根拠になっている。
- * 設計の背景は docs/adr/0007-hitl-confirmation-token-delivery.md を参照。
- */
+// トークンは `_meta` からしか読まない。`content` / `structuredContent` には載っておらず、それが「LLM には見えないがこの iframe には見える」という認可の根拠になっている（ADR-0007）。
 
 import {
 	App as McpApp,
@@ -30,15 +17,12 @@ type PositionSide = 'long' | 'short';
 
 /** 暗号資産の最大小数桁数（bitbank の表示慣行に合わせる） */
 const CRYPTO_MAX_FRACTION_DIGITS = 8;
-/** JPY の最大小数桁数（整数表示） */
 const JPY_MAX_FRACTION_DIGITS = 0;
 /** create_order 呼び出しの timeout（ms）。サーバー側のツール timeout 60s より少し短く設定 */
 const CREATE_ORDER_TIMEOUT_MS = 45_000;
-/** ui/initialize（ホスト接続）応答待ちの診断タイムアウト（ms） */
 const CONNECT_TIMEOUT_MS = 7_000;
 /** この UI が対応する MCP Apps リソース URI（get_ui_snapshot の取得キー） */
 const RESOURCE_URI = 'ui://order/confirm.html';
-/** スナップショット取得（pull 型 hydration）の timeout（ms） */
 const SNAPSHOT_TIMEOUT_MS = 10_000;
 
 interface PreviewArgs {
@@ -53,8 +37,6 @@ interface PreviewArgs {
 }
 
 interface PreviewResultData {
-	// confirmation_token / expires_at は structuredContent には載らない（サーバーが strip する）。
-	// トークンはツール結果 `_meta` から別途読み取る。
 	preview: PreviewArgs;
 }
 
@@ -129,30 +111,17 @@ export function App() {
 	const [message, setMessage] = useState<string>('');
 	const [orderId, setOrderId] = useState<number | null>(null);
 	const appRef = useRef<McpApp | null>(null);
-	// ontoolresult は useEffect([]) 内でクロージャ生成され、preview state は
-	// マウント時の値（null）に固定される（stale closure）。preview 受領済みかどうかの
-	// 判定は ref で行い、最新値を参照する。
+	// ontoolresult は useEffect([]) 内で作られ preview state がマウント時の値に固定される（stale closure）ので、受領済みかの判定は ref で行う。
 	const hasPreviewRef = useRef(false);
-	// ホスト接続・結果受信の診断用状態。無言の「待機中…」で固まらせず、
-	// どの段階（ui/initialize / tool-result 配信）で止まっているかを表示する。
+	// 無言の「待機中…」で固まらせず、どの段階（ui/initialize / tool-result 配信）で止まっているかを表示するための状態。
 	const [connState, setConnState] = useState<'connecting' | 'connected' | 'failed'>('connecting');
-	// スナップショット復元（pull 型 hydration）の段階。待ち時間・リトライ・abort の制御は
-	// src/mcp-apps-hydration.ts が持ち、ここは表示の切り替えだけを担当する。
 	const [hydrationPhase, setHydrationPhase] = useState<SnapshotHydrationPhase>('waiting');
 
 	useEffect(() => {
 		const mcpApp = new McpApp({ name: 'bitbank-order-confirm', version: '0.1.0' });
 		appRef.current = mcpApp;
 
-		// preview 応答の取り込み処理。push 通知（ontoolresult）と pull 復元
-		// （get_ui_snapshot）の両経路で共通に使う。どちらも CallToolResult 形なので
-		// structuredContent と `_meta` を同じ引数で受け取る。
-		//
-		// preview_order の結果のみ取り込む。他ツールの結果で state をリセットしないよう
-		// data.preview の存在でフィルタする。
-		//
-		// confirmation_token は `_meta` にしか載らない（structuredContent からは strip 済み）。
-		// 載っていなければボタンは描画されず、従来どおりプレビュー表示のみになる。
+		// preview_order の結果だけ取り込む。他ツールの結果で state をリセットしないよう data.preview の有無でフィルタする。
 		const applyPreviewResult = (structured: PreviewResult | undefined, meta: unknown) => {
 			if (structured?.ok && structured.data?.preview) {
 				hasPreviewRef.current = true;
@@ -163,9 +132,7 @@ export function App() {
 				setMessage('');
 				return;
 			}
-			// preview 未受領（preview == null）の iframe に ok:false が来た場合は、
-			// その summary をエラーとして描画する（「待機中…」のまま固まらせない）。
-			// 例: 最小単位違反などの validation_error で preview_order が失敗したケース。
+			// preview 未受領の iframe に ok:false が来たら、その summary をエラーとして描画する（「待機中…」のまま固まらせない）。
 			if (structured?.ok === false && !hasPreviewRef.current) {
 				setStatus('error');
 				setMessage(structured.summary ?? '注文プレビューに失敗しました。');
@@ -182,14 +149,11 @@ export function App() {
 			if (ctx.fontCss) applyHostFonts(ctx.fontCss);
 		};
 
-		// 診断タイマー: ui/initialize が応答しない / 接続後に tool-result が届かない場合に
-		// 段階別の案内へ表示を切り替える（ホスト側問題の切り分けを画面だけで可能にする）。
 		const connectTimeoutId = setTimeout(() => {
 			setConnState((s) => (s === 'connecting' ? 'failed' : s));
 		}, CONNECT_TIMEOUT_MS);
 		let stopHydration: (() => void) | undefined;
-		// connect() が pending のままアンマウントされると、この .then() は cleanup の**後**に走る。
-		// そこで hydration を始めると停止関数を誰も受け取れないので、破棄済みなら開始しない（#29）。
+		// connect() が pending のままアンマウントされると .then() は cleanup の後に走るので、破棄済みなら hydration を開始しない（#29）。
 		let disposed = false;
 
 		mcpApp
@@ -197,18 +161,12 @@ export function App() {
 			.then(() => {
 				clearTimeout(connectTimeoutId);
 				setConnState('connected');
-				// 初期テーマ・スタイル適用
 				const ctx = mcpApp.getHostContext();
 				applyDocumentTheme(ctx?.theme ?? getDocumentTheme());
 				if (ctx?.styles) applyHostStyleVariables(ctx.styles);
 				if (ctx?.fontCss) applyHostFonts(ctx.fontCss);
 				if (disposed) return;
-				// pull 型 hydration: 一部ホストは ui/notifications/tool-result を配信しない
-				// （2026-07-28 ロールアウト後の Claude Desktop で確認）。サーバー側の
-				// スナップショット（get_ui_snapshot）から直近の preview 応答を取得して復元する。
-				//
-				// 初回待ち・上限付きリトライ・abort は src/mcp-apps-hydration.ts に集約してある
-				// （#29）。ここに残るのは「何を呼ぶか」と「どの結果を取り込むか」のフィルタだけ。
+				// 一部ホストは ui/notifications/tool-result を配信しないので、get_ui_snapshot から直近の preview 応答を取得して復元する。
 				stopHydration = startSnapshotHydration({
 					fetchSnapshot: () =>
 						mcpApp.callServerTool(
@@ -217,14 +175,10 @@ export function App() {
 						),
 					isHydrated: () => hasPreviewRef.current,
 					apply: (result) => {
-						// get_ui_snapshot も同じ `_meta` 契約でトークンを返す（push 配信が
-						// 効かないホスト向け。有効化ゲートはサーバー側で再判定される）。
+						// get_ui_snapshot も同じ `_meta` 契約でトークンを返す（有効化ゲートはサーバー側で再判定される）。
 						const snapshot = result as { structuredContent?: unknown; _meta?: unknown };
 						applyPreviewResult(snapshot.structuredContent as PreviewResult | undefined, snapshot._meta);
-						// 取り込めなかった場合は**失敗として扱う**（スナップショット未保存、
-						// 別ツールの結果、structuredContent 欠損など）。resolve したまま黙って
-						// 終わるとリトライも failed 表示も起きず、「復元中」のまま固まる（#29 の要点）。
-						// 例外は startSnapshotHydration のリトライ経路に乗る。
+						// 取り込めなかったら失敗として throw する。resolve したまま終わるとリトライも failed 表示も起きず「復元中」のまま固まる（#29）。
 						if (!hasPreviewRef.current) {
 							throw new Error('snapshot did not contain a usable preview');
 						}
@@ -233,13 +187,11 @@ export function App() {
 				});
 			})
 			.catch(() => {
-				// 非対応ホスト or スタンドアロン表示。UI だけ表示する。
 				clearTimeout(connectTimeoutId);
 				setConnState('failed');
 			});
 
 		return () => {
-			// Strict Mode / HMR / アンマウント時に transport・pending request・timeout を解放する
 			disposed = true;
 			clearTimeout(connectTimeoutId);
 			stopHydration?.();
@@ -255,8 +207,7 @@ export function App() {
 
 	const handleConfirm = async () => {
 		if (!preview || !confirmation) return;
-		// クライアント側の期限チェックは UX のため（無駄な往復を省く）。
-		// 認可上の期限判定はサーバーの validateToken が行う。
+		// クライアント側の期限チェックは UX のため。認可上の期限判定はサーバーの validateToken が行う。
 		if (Date.now() > confirmation.expires_at) {
 			setStatus('expired');
 			setMessage('確認の有効期限が切れました。もう一度 preview_order を実行してください。');
@@ -279,8 +230,7 @@ export function App() {
 				confirmation_token: confirmation.confirmation_token,
 				token_expires_at: confirmation.expires_at,
 			};
-			// preview と同じパラメータで呼ぶ。1 つでも違うとサーバー側の HMAC 検証が
-			// token_invalid で落ちる（ユーザーが見ていない内容を発注させないための束縛）。
+			// preview と同じパラメータで呼ぶ。1 つでも違うとサーバー側の HMAC 検証が token_invalid で落ちる（ユーザーが見ていない内容を発注させないための束縛）。
 			if (preview.price) args.price = preview.price;
 			if (preview.trigger_price) args.trigger_price = preview.trigger_price;
 			if (preview.post_only != null) args.post_only = preview.post_only;
@@ -319,8 +269,6 @@ export function App() {
 	};
 
 	if (!preview) {
-		// preview を受け取る前に preview_order が失敗した場合は、空の「待機中…」では
-		// なくエラー内容を描画する（validation_error などで iframe が固まらないように）。
 		if (status === 'error') {
 			return (
 				<div className="app">
@@ -332,8 +280,6 @@ export function App() {
 				</div>
 			);
 		}
-		// 段階別の診断メッセージ。ホスト側の MCP Apps 実装に問題がある場合、
-		// どこで止まっているか（接続 or 結果配信）をユーザーがこの表示だけで判別できる。
 		const waitingText =
 			connState === 'failed'
 				? 'ホストとの MCP Apps 接続（ui/initialize）を確立できませんでした。このホストでは確認 UI を利用できません。プレビュー内容はチャット本文を参照してください。'
