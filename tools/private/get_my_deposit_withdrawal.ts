@@ -177,7 +177,7 @@ export default async function getMyDepositWithdrawal(args: {
 		const fetchDeposits = type === 'deposit' || type === 'all';
 		const fetchWithdrawals = type === 'withdrawal' || type === 'all';
 
-		// ユーザーが期間を指定した場合は count を尊重して単発取得し、未指定ならページネーションで全件取得する。
+		// ユーザーが期間を指定した場合は count を尊重して単発取得し、未指定ならページネーションで取得する（MAX_PAGES で打ち切ったら isComplete を false にする）。
 		const hasSinceEnd = !!since || !!end;
 
 		let allDeposits: RawDeposit[] = [];
