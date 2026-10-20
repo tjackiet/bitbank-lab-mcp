@@ -1,15 +1,3 @@
-/**
- * get_my_deposit_withdrawal — 入出金（入庫/出庫）履歴を取得する Private API ツール。
- *
- * bitbank Private API `/v1/user/deposit_history` および `/v1/user/withdrawal_history` を呼び出し、
- * LLM が分析しやすい形に整形して返す。
- *
- * - JPY 入出金: asset=jpy で取得
- * - 暗号資産入出庫: asset 省略または通貨コード指定で取得
- * - 両方を統合して返す（デフォルト動作: 全通貨 + JPY の入出金を統合取得）
- * - ページネーション対応: 100件上限を超えるデータも自動取得（最大10ページ=1000件/チャネル）
- */
-
 import { normalizeAssetCodes } from '../../lib/asset-code.js';
 import { nowIso, parseIso8601, toIsoMs } from '../../lib/datetime.js';
 import { getErrorMessage } from '../../lib/error.js';
@@ -20,9 +8,6 @@ import { GetMyDepositWithdrawalInputSchema, GetMyDepositWithdrawalOutputSchema }
 import { failPrivateToolError } from '../../src/private/tool-error.js';
 import type { ToolDefinition } from '../../src/tool-definition.js';
 
-// ── API レスポンス型 ──
-
-/** 個別 API リクエストの結果をラップ */
 type FetchResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
 async function tryGet<T>(
@@ -38,12 +23,10 @@ async function tryGet<T>(
 	}
 }
 
-/** bitbank /v1/user/deposit_history のレスポンス型 */
 interface RawDeposit {
 	uuid: string;
 	asset: string;
 	network?: string;
-	/** 入金先アドレス（暗号資産入金のみ。jpy 入金は持たないため optional） */
 	address?: string;
 	amount: string;
 	txid?: string | null;
@@ -52,7 +35,6 @@ interface RawDeposit {
 	confirmed_at: number;
 }
 
-/** bitbank /v1/user/withdrawal_history のレスポンス型 */
 interface RawWithdrawal {
 	uuid: string;
 	asset: string;
@@ -72,8 +54,6 @@ interface RawWithdrawal {
 	status: string;
 	requested_at: number;
 }
-
-// ── ページネーション（analyze_my_portfolio と同方式） ──
 
 const MAX_PAGES = 10;
 
@@ -105,9 +85,7 @@ async function paginateDeposits(
 		if (batch.length < 100) {
 			return { deposits: all, complete: true };
 		}
-		// confirmed_at は確認済の入金にのみ存在する（docs: "exists only for confirmed one"）。
-		// 末尾が未確認入金（status:'FOUND'）だと confirmed_at が欠落しカーソルが進まないため、
-		// 常在する found_at にフォールバックして早期終了を防ぐ。
+		// confirmed_at は確認済みの入金にしか無いので、末尾が未確認入金だとカーソルが進まない。常在する found_at にフォールバックして早期終了を防ぐ。
 		const last = batch[batch.length - 1];
 		const lastTs = last?.confirmed_at ?? last?.found_at;
 		if (!lastTs) break;
@@ -140,7 +118,6 @@ async function paginateWithdrawals(
 	return { withdrawals: all, complete: false };
 }
 
-/** 単発取得（count <= 100 かつ since/end 指定時） */
 async function singleFetchDeposits(
 	client: BitbankPrivateClient,
 	params: Record<string, string>,
@@ -167,8 +144,6 @@ async function singleFetchWithdrawals(
 	return { withdrawals: batch, complete: batch.length < count };
 }
 
-// ── メインハンドラ ──
-
 export default async function getMyDepositWithdrawal(args: {
 	asset?: string;
 	type?: 'deposit' | 'withdrawal' | 'all';
@@ -180,10 +155,8 @@ export default async function getMyDepositWithdrawal(args: {
 	const client = getDefaultClient();
 
 	try {
-		// クエリパラメータを組み立て
 		const baseParams: Record<string, string> = {};
 
-		// ISO8601 → unix ms 変換
 		if (since) {
 			const parsed = parseIso8601(since);
 			if (!parsed) {
@@ -204,8 +177,7 @@ export default async function getMyDepositWithdrawal(args: {
 		const fetchDeposits = type === 'deposit' || type === 'all';
 		const fetchWithdrawals = type === 'withdrawal' || type === 'all';
 
-		// since/end が指定されている場合: 単発取得（ユーザーが期間を指定した場合は count を尊重）
-		// since/end が未指定の場合: ページネーションで全件取得
+		// ユーザーが期間を指定した場合は count を尊重して単発取得し、未指定ならページネーションで全件取得する。
 		const hasSinceEnd = !!since || !!end;
 
 		let allDeposits: RawDeposit[] = [];
@@ -214,7 +186,6 @@ export default async function getMyDepositWithdrawal(args: {
 		let isComplete = true;
 
 		if (asset) {
-			// 特定通貨の場合
 			const params: Record<string, string> = { ...baseParams, asset };
 			if (hasSinceEnd) {
 				params.count = String(count);
@@ -239,9 +210,7 @@ export default async function getMyDepositWithdrawal(args: {
 			allWithdrawals = wdResult.withdrawals;
 			isComplete = depResult.complete && wdResult.complete;
 		} else {
-			// 全通貨: 暗号資産 + JPY を並列取得（ページネーション）
 			if (hasSinceEnd) {
-				// since/end 指定時: 単発取得
 				const cryptoParams = { ...baseParams, count: String(count) };
 				const jpyParams = { ...baseParams, asset: 'jpy', count: String(count) };
 
@@ -276,7 +245,6 @@ export default async function getMyDepositWithdrawal(args: {
 				isComplete =
 					cryptoDepResult.complete && jpyDepResult.complete && cryptoWdResult.complete && jpyWdResult.complete;
 			} else {
-				// since/end 未指定: ページネーションで全件取得
 				const [cryptoDepResult, jpyDepResult, cryptoWdResult, jpyWdResult] = await Promise.all([
 					fetchDeposits
 						? paginateDeposits(client, {})
@@ -310,17 +278,12 @@ export default async function getMyDepositWithdrawal(args: {
 			}
 		}
 
-		// UUID で重複排除（暗号資産クエリに JPY が含まれるケースに備える）
-		// 併せて取得境界での asset 正規化を行う。全フェッチ経路（特定通貨 / 全通貨 ×
-		// 単発 / ページネーション）がここに合流するため、この 1 箇所で前提を担保できる。
-		// 以降の JPY / 暗号資産の振り分け（`d.asset === 'jpy'`）と出力の asset は小文字前提
-		// （防御的正規化。現行 API は小文字を返す。`lib/asset-code.ts` 参照）。
+		// 全フェッチ経路がここに合流するので、UUID の重複排除（暗号資産クエリに JPY が含まれるケース）と asset 正規化をこの 1 箇所で行う。
 		allDeposits = normalizeAssetCodes(deduplicateByUuid(allDeposits));
 		allWithdrawals = normalizeAssetCodes(deduplicateByUuid(allWithdrawals));
 
 		const timestamp = nowIso();
 
-		// 入金データの整形
 		const deposits = allDeposits.map((d) => ({
 			uuid: d.uuid,
 			asset: d.asset,
@@ -332,7 +295,6 @@ export default async function getMyDepositWithdrawal(args: {
 			confirmed_at: toIsoMs(d.confirmed_at) ?? undefined,
 		}));
 
-		// 出金データの整形
 		const withdrawals = allWithdrawals.map((w) => ({
 			uuid: w.uuid,
 			asset: w.asset,
@@ -347,7 +309,6 @@ export default async function getMyDepositWithdrawal(args: {
 			requested_at: toIsoMs(w.requested_at) ?? undefined,
 		}));
 
-		// サマリー文字列の生成
 		const lines: string[] = [];
 		const assetLabel = asset ? asset.toUpperCase() : '全通貨';
 		lines.push(`入出金履歴: ${assetLabel}`);
@@ -362,7 +323,6 @@ export default async function getMyDepositWithdrawal(args: {
 		}
 		lines.push('');
 
-		// 入金サマリー
 		if (deposits.length > 0) {
 			lines.push(`入金/入庫: ${deposits.length}件`);
 			const jpyDeposits = deposits.filter((d) => d.asset === 'jpy');
@@ -392,7 +352,6 @@ export default async function getMyDepositWithdrawal(args: {
 
 		lines.push('');
 
-		// 出金サマリー
 		if (withdrawals.length > 0) {
 			lines.push(`出金/出庫: ${withdrawals.length}件`);
 			const jpyWithdrawals = withdrawals.filter((w) => w.asset === 'jpy');
@@ -420,7 +379,6 @@ export default async function getMyDepositWithdrawal(args: {
 			lines.push('出金/出庫: 0件');
 		}
 
-		// 警告（partial failure）
 		if (warnings.length > 0) {
 			lines.push('');
 			for (const w of warnings) {
@@ -449,16 +407,12 @@ export default async function getMyDepositWithdrawal(args: {
 
 		return GetMyDepositWithdrawalOutputSchema.parse(ok(summary, data, meta));
 	} catch (err) {
-		// PrivateApiError は分類済み文言を素通し、未知エラーは err.message を伏せて汎用文に置換する。
 		return GetMyDepositWithdrawalOutputSchema.parse(
 			failPrivateToolError(err, '入出金履歴取得中に予期しないエラーが発生しました'),
 		);
 	}
 }
 
-// ── ヘルパー ──
-
-/** 4チャネルの結果を集約 */
 function collectResults(
 	cryptoDepResult: PaginatedDeposits,
 	jpyDepResult: PaginatedDeposits,
@@ -484,7 +438,6 @@ function collectResults(
 	setWithdrawals([...cryptoWdResult.withdrawals, ...jpyWdResult.withdrawals]);
 }
 
-/** UUID で重複排除 */
 function deduplicateByUuid<T extends { uuid: string }>(items: T[]): T[] {
 	const seen = new Set<string>();
 	return items.filter((item) => {
@@ -494,7 +447,6 @@ function deduplicateByUuid<T extends { uuid: string }>(items: T[]): T[] {
 	});
 }
 
-// ── MCP ツール定義（tool-registry から自動収集） ──
 export const toolDef: ToolDefinition = {
 	name: 'get_my_deposit_withdrawal',
 	description:
