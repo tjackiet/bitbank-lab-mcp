@@ -1,14 +1,3 @@
-/**
- * analyze_volume_profile — 約定データから Volume Profile + VWAP + 約定サイズ分布を算出
- *
- * 内部で getTransactions を呼び出し、get_flow_metrics と同様のマージ戦略で
- * 約定データを収集。そこから3つの指標を導出する:
- *
- * 1. VWAP (出来高加重平均価格) + ±1σ/2σ バンド
- * 2. Volume Profile (価格帯別出来高分布 + POC + Value Area)
- * 3. Trade Size Distribution (約定サイズ別の分類 + 大口偏り)
- */
-
 import type { z } from 'zod';
 import { toDisplayTime, toIsoWithTz } from '../lib/datetime.js';
 import { formatPair, formatPercent, formatPrice } from '../lib/formatter.js';
@@ -51,28 +40,12 @@ type FetchResult =
 	| { ok: true; txs: Tx[]; fetchWarning?: string; limitApplication?: TxLimitApplication }
 	| { ok: false; errorType: string; summary: string };
 
-/**
- * 内部集計用の約定フェッチャ。
- *
- * `get_transactions` の応答上限（1000 件）は MCP 応答のサイズ制限であってフェッチ制限では
- * ないため、集計用途では外す（`unlimited`）。本ツールの出力は価格帯別プロファイル（bins 固定）
- * とサイズ分布なので全件を集計してもトークンは増えない一方、キャップしたままだと 1 UTC 日
- * （BTC/JPY で実測 5,609〜8,040 件）の末尾 4〜5 時間分しか VWAP / POC / Value Area に
- * 入らなかった。public ツール `get_transactions` 側の応答上限は変更していない。
- */
+// get_transactions の 1000 件上限は MCP 応答のサイズ制限なので、集計用途では外す（キャップすると 1 UTC 日の末尾 4〜5 時間分しか集計に入らない）。
 function internalTxFetcher(pair: string): TxFetcher {
-	// limit は unlimited 指定時に無視されるが、万一オプションが外れても旧挙動
-	// （応答上限 1000 件）へ縮退するよう public 上限を渡しておく。
+	// unlimited 指定時に limit は無視されるが、オプションが外れても応答上限へ縮退するよう public 上限を渡す。
 	return (date) => getTransactions(pair, PUBLIC_TX_LIMIT, date, undefined, { unlimited: true });
 }
 
-/**
- * 約定を取得する。完了済み UTC 日アーカイブの列挙 + latest 補完 + dedup マージは
- * lib/tx-fetch.ts に集約されており、本関数は失敗ハンドリングの方針
- * （全滅 fail / 過半数 fail / 部分失敗 warning）だけを持つ。
- *
- * @param resolved 時間範囲ベース取得の解決済み区間。undefined なら件数ベース取得。
- */
 async function fetchTransactions(pair: string, resolved?: TxTimeRangeResolved, limit?: number): Promise<FetchResult> {
 	const txFetcher = internalTxFetcher(pair);
 
@@ -97,15 +70,13 @@ async function fetchTransactions(pair: string, resolved?: TxTimeRangeResolved, l
 		};
 	}
 
-	// Count-based
 	const lim = limit ?? 500;
 	const latest = await fetchLatestTxs(txFetcher);
 	if (latest.txs.length === 0) {
 		const upstreamErr = extractUpstreamError([latest.result]);
 		if (upstreamErr) return { ok: false, ...upstreamErr };
 	}
-	// 取得は無制限だが limit はユーザーの明示要求なので最新側 limit 件に切る。
-	// 黙って切ると集計値が部分データ由来であることが応答から分からないため申告する。
+	// 取得は無制限だが limit はユーザーの明示要求なので最新側 limit 件に切り、切ったことを申告する。
 	if (latest.txs.length >= lim) {
 		const applied = applyTxLimit(sortTxsAsc(latest.txs), lim);
 		return {
@@ -121,9 +92,7 @@ async function fetchTransactions(pair: string, resolved?: TxTimeRangeResolved, l
 		const upstreamErr = extractUpstreamError(results);
 		if (upstreamErr) return { ok: false, ...upstreamErr };
 	}
-	// 補完は best-effort: 何かしら取得できていれば fail せず、部分失敗は警告で明示する
-	// （latest 成功 + 補完失敗を「過半数失敗」として全体 fail すると、正当に取得できた
-	// 直近データまで捨ててしまう。補完アーカイブは公開遅延等で 404 になり得る）。
+	// 補完は best-effort。取得できた直近データまで捨てないよう、補完失敗では fail せず警告で明示する（補完アーカイブは公開遅延等で 404 になりうる）。
 	const applied = applyTxLimit(sortTxsAsc(merged.txs), lim);
 	return {
 		ok: true,
@@ -139,8 +108,6 @@ async function fetchTransactions(pair: string, resolved?: TxTimeRangeResolved, l
 	};
 }
 
-// ── VWAP Calculation ──
-
 function calcVwap(txs: Tx[]) {
 	let sumPV = 0;
 	let sumV = 0;
@@ -150,7 +117,6 @@ function calcVwap(txs: Tx[]) {
 	}
 	const vwap = sumV > 0 ? sumPV / sumV : 0;
 
-	// Weighted standard deviation
 	let sumWeightedSqDiff = 0;
 	for (const t of txs) {
 		sumWeightedSqDiff += t.amount * (t.price - vwap) ** 2;
@@ -160,15 +126,7 @@ function calcVwap(txs: Tx[]) {
 	return { vwap, stdDev };
 }
 
-// ── Volume Profile Calculation ──
-
-/**
- * 約定列の価格レンジ。
- *
- * `Math.min(...prices)` はスプレッド引数が数万件になると RangeError（stack overflow）に
- * なり得る。内部取得のキャップ解除で 1 UTC 日 8,000 件超を扱うようになったため、
- * ループで求める。
- */
+// Math.min(...prices) は数万件で RangeError（stack overflow）になりうるのでループで求める。
 function priceRangeOf(txs: Tx[]): { low: number; high: number } {
 	let low = Number.POSITIVE_INFINITY;
 	let high = Number.NEGATIVE_INFINITY;
@@ -183,9 +141,7 @@ function calcVolumeProfile(txs: Tx[], bins: number, valueAreaPct: number) {
 	const { low: priceLow, high: priceHigh } = priceRangeOf(txs);
 	const range = priceHigh - priceLow;
 
-	// Guard against zero range (all trades at same price)
 	if (range === 0) {
-		// All trades at same price — single-bin profile with exact price
 		const singleBin = { low: priceLow, high: priceLow, buyVolume: 0, sellVolume: 0, totalVolume: 0 };
 		for (const t of txs) {
 			if (t.side === 'buy') singleBin.buyVolume += t.amount;
@@ -248,7 +204,6 @@ function calcVolumeProfile(txs: Tx[], bins: number, valueAreaPct: number) {
 		});
 	}
 
-	// Distribute trades into bins
 	for (const t of txs) {
 		let idx = Math.floor((t.price - adjustedLow) / step);
 		if (idx >= bins) idx = bins - 1;
@@ -260,7 +215,6 @@ function calcVolumeProfile(txs: Tx[], bins: number, valueAreaPct: number) {
 
 	const totalVolume = profileBins.reduce((s, b) => s + b.totalVolume, 0);
 
-	// POC (Point of Control): bin with highest volume
 	let pocIdx = 0;
 	let pocVol = 0;
 	for (let i = 0; i < profileBins.length; i++) {
@@ -271,7 +225,6 @@ function calcVolumeProfile(txs: Tx[], bins: number, valueAreaPct: number) {
 	}
 	const pocPrice = (profileBins[pocIdx].low + profileBins[pocIdx].high) / 2;
 
-	// Value Area: expand from POC until covering valueAreaPct of total volume
 	const targetVol = totalVolume * valueAreaPct;
 	let vaVol = profileBins[pocIdx].totalVolume;
 	let vaLow = pocIdx;
@@ -327,8 +280,6 @@ function calcVolumeProfile(txs: Tx[], bins: number, valueAreaPct: number) {
 	};
 }
 
-// ── Trade Size Distribution ──
-
 function calcTradeSizeDistribution(txs: Tx[]) {
 	const amounts = txs.map((t) => t.amount).sort((a, b) => a - b);
 	const p25 = amounts[Math.floor(amounts.length * 0.25)] ?? 0;
@@ -361,7 +312,6 @@ function calcTradeSizeDistribution(txs: Tx[]) {
 		};
 	});
 
-	// Large trade bias (大口 + 特大口)
 	const largeTxs = txs.filter((t) => t.amount > p75);
 	const largeBuyVol = largeTxs.filter((t) => t.side === 'buy').reduce((s, t) => s + t.amount, 0);
 	const largeSellVol = largeTxs.filter((t) => t.side === 'sell').reduce((s, t) => s + t.amount, 0);
@@ -389,8 +339,6 @@ function calcTradeSizeDistribution(txs: Tx[]) {
 	};
 }
 
-// ── Main ──
-
 export default async function analyzeVolumeProfile(
 	pair: string = 'btc_jpy',
 	hours?: number,
@@ -406,8 +354,6 @@ export default async function analyzeVolumeProfile(
 	try {
 		const since = range?.since;
 		const until = range?.until;
-		// 時間範囲ベース（hours = 相対窓 / since・until = 絶対区間）か件数ベースかを先に決める。
-		// 排他判定・形式検証・最大範囲チェックは lib/tx-fetch.ts に集約。
 		let resolvedRange: TxTimeRangeResolved | undefined;
 		if (since != null || until != null || (hours != null && hours > 0)) {
 			const resolved = resolveTxTimeRange({ since, until, hours });
@@ -429,7 +375,6 @@ export default async function analyzeVolumeProfile(
 		const profile = calcVolumeProfile(txs, bins, valueAreaPct);
 		const tradeSizes = calcTradeSizeDistribution(txs);
 
-		// VWAP position classification
 		const dev = currentPrice - vwap;
 		const deviationPct = vwap > 0 ? Number(((dev / vwap) * 100).toFixed(2)) : 0;
 		const position =
@@ -451,16 +396,12 @@ export default async function analyzeVolumeProfile(
 			below_2sigma: '大幅に割安（-2σ超）→ 短期反発期待',
 		};
 
-		// Time range info。
-		// 先頭〜末尾の単純差分（durationMin）だけでは、アーカイブ未公開区間などの穴を
-		// 「カバー済み」に見せてしまうため、実データがある区間の合計も併せて出す。
 		const startMs = txs[0].timestampMs;
 		const endMs = txs[txs.length - 1].timestampMs;
 		const coverage = computeTxCoverage(txs);
 		const durationMin = coverage?.spanMinutes ?? Math.round((endMs - startMs) / 60_000);
 		const requestedMin = resolvedRange?.requestedMinutes;
 		const coverageWarning = buildTxCoverageWarning(coverage, { requestedMinutes: requestedMin, tz });
-		// 取得層（部分失敗・カバレッジ欠損）と計算層（集計値がカバー区間のみ由来）は別系統。
 		const fetchWarnings = [fetchResult.fetchWarning, coverageWarning].filter(Boolean) as string[];
 		const dataWarning = fetchWarnings.length > 0 ? fetchWarnings.join('\n') : undefined;
 		const coverageIncomplete =
@@ -508,7 +449,6 @@ export default async function analyzeVolumeProfile(
 			},
 		};
 
-		// Build summary text
 		const pairDisplay = formatPair(chk.pair);
 		const fmtPx = (p: number) => formatPrice(p, chk.pair);
 		const rangeStr = `${toDisplayTime(startMs, tz) ?? '?'}〜${toDisplayTime(endMs, tz) ?? '?'}`;
@@ -523,7 +463,6 @@ export default async function analyzeVolumeProfile(
 
 		// 取得層 → 計算層の順で本文の前に出す（.claude/rules/tools.md の 2 系統ルール）
 		const summaryLines: string[] = [...(dataWarning ? [dataWarning] : []), ...calcWarnings.map((w) => `⚠️ ${w}`)];
-		// 欠損がある場合は「◯分間」ではなくスパン/実カバーを並記する（穴をカバー済みと申告しない）
 		const durationLabel =
 			coverage && coverage.gaps.length > 0
 				? `スパン${coverage.spanMinutes}分/実カバー${coverage.coveredMinutes}分`
@@ -559,14 +498,12 @@ export default async function analyzeVolumeProfile(
 		].join('\n');
 
 		const metaExtra: Record<string, unknown> = { count: txs.length };
-		// 絶対区間指定は要求区間そのものを申告する（hours の相対窓と区別できるようにする）
 		if (resolvedRange?.mode === 'absolute') {
 			metaExtra.mode = 'absolute_range';
 			metaExtra.range = { since: resolvedRange.sinceIso, until: resolvedRange.untilIso };
 		}
 		if (dataWarning) metaExtra.warning = dataWarning;
 		if (calcWarnings.length > 0) metaExtra.warnings = calcWarnings;
-		// limit による切り捨ての明示（get_flow_metrics / get_transactions と対応）
 		if (fetchResult.limitApplication) {
 			metaExtra.totalAvailable = fetchResult.limitApplication.totalAvailable;
 			metaExtra.truncated = fetchResult.limitApplication.truncated;
@@ -584,7 +521,6 @@ export default async function analyzeVolumeProfile(
 	}
 }
 
-// ── MCP ツール定義（tool-registry から自動収集） ──
 export const toolDef: ToolDefinition = {
 	name: 'analyze_volume_profile',
 	description:
@@ -601,9 +537,7 @@ export const toolDef: ToolDefinition = {
 		const parsed = AnalyzeVolumeProfileInputSchema.parse(rawInput);
 		return analyzeVolumeProfile(
 			parsed.pair,
-			// hours はスキーマ既定値（4）を持つが、**明示指定されたときだけ**相対窓として扱う
-			// （既存挙動。省略時は既定値 4 を使わず件数ベース = limit にフォールバックする）。
-			// 副次的に、since/until 指定時は hours が undefined になるため排他エラーにならない。
+			// hours は明示指定されたときだけ相対窓にする（省略時はスキーマ既定値 4 を使わず件数ベースにする。既存挙動）。
 			'hours' in rawInput ? parsed.hours : undefined,
 			parsed.limit,
 			parsed.bins,
