@@ -84,7 +84,6 @@ export function deprecatedViewNote(replacement: string): string {
 /** 値は `DEPRECATED_VIEW_REMOVAL_TARGET` と同じだが、削除の単位（enum 値 / 出力フィールド）が別なので、片方だけ期日を動かせるよう定数を分けている。 */
 export const DEPRECATED_FIELD_REMOVAL_TARGET = '0.4.0';
 
-/** 出力の別名用。旧フィールドは新フィールドと同じ値を出し続ける（入力を正規化する `deprecatedViewNote` とは別物）。 */
 export function deprecatedFieldNote(replacement: string): string {
 	return `**非推奨**（${replacement} の別名）。同じ値を返します。${DEPRECATED_FIELD_REMOVAL_TARGET} で削除予定なので ${replacement} へ移行してください`;
 }
