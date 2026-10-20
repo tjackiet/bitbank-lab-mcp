@@ -15,7 +15,6 @@ import {
 	VIEW_CONTRACT_NOTE,
 } from './base.js';
 
-// === Ticker ===
 export const TickerNormalizedSchema = z.object({
 	pair: z.string(),
 	last: z.number().nullable(),
@@ -34,10 +33,8 @@ export const GetTickerMetaSchemaOut = BaseMetaSchema;
 export const GetTickerOutputSchema = toolResultSchema(GetTickerDataSchemaOut, GetTickerMetaSchemaOut);
 export const GetTickerInputSchema = BasePairInputSchema;
 
-// === Depth (raw depth tuple, shared by /depth tool and orderbook raw mode) ===
 export const DepthLevelTupleSchema = z.tuple([z.string(), z.string()]);
 
-// === Orderbook ===
 export const OrderbookLevelSchema = z.object({ price: z.number(), size: z.number() });
 export const OrderbookLevelWithCumSchema = OrderbookLevelSchema.extend({ cumSize: z.number() });
 export const OrderbookNormalizedSchema = z.object({
@@ -54,13 +51,11 @@ export const OrderbookNormalizedSchema = z.object({
 
 const OrderbookPressureTagEnum = z.enum(['notice', 'warning', 'strong']);
 
-// mode=summary
 export const OrderbookSummaryDataSchema = z.object({
 	mode: z.literal('summary'),
 	normalized: OrderbookNormalizedSchema,
 });
 
-// mode=pressure
 export const OrderbookPressureBandSchema = z.object({
 	widthPct: z.number(),
 	baseMid: z.number().nullable(),
@@ -81,7 +76,6 @@ export const OrderbookPressureDataSchema = z.object({
 	}),
 });
 
-// mode=statistics
 export const OrderbookStatisticsDataSchema = z.object({
 	mode: z.literal('statistics'),
 	basic: z.object({
@@ -98,10 +92,7 @@ export const OrderbookStatisticsDataSchema = z.object({
 			askVolume: z.number(),
 			bidValue: z.number(),
 			askValue: z.number(),
-			// ask 板が枯れて bid だけ存在するとき ratio は算出不能（数学的には Infinity）。
-			// MCP wire format (JSON) では Infinity を表現できないため、buildStatistics 側で
-			// null に正規化している（tools/get_orderbook.ts）。
-			// 「買い優勢」の意味は interpretation / summary.overall / summary.strength で保持。
+			// ask 板が枯れると ratio は Infinity になり JSON で表せないので、tools/get_orderbook.ts が null に正規化している。
 			ratio: z.number().nullable(),
 			interpretation: z.string(),
 		}),
@@ -128,7 +119,6 @@ export const OrderbookStatisticsDataSchema = z.object({
 	}),
 });
 
-// mode=raw（bitbank /depth の生値 + 壁ゾーン推定 overlay）
 // 公式 API は asks_over などを string で返すが、テスト fixture では number リテラルを渡すため両方を許容する。
 export const OrderbookRawDataSchema = z.object({
 	mode: z.literal('raw'),
@@ -165,26 +155,19 @@ export const GetOrderbookDataSchemaOut = z.discriminatedUnion('mode', [
 export const GetOrderbookMetaSchemaOut = BaseMetaSchema.extend({
 	mode: z.enum(['summary', 'pressure', 'statistics', 'raw']),
 	topN: z.number(),
-	/** 非有限な price/size を持つ板レベルを drop した件数。0 件なら省略。 */
 	droppedRows: z.object({ bids: z.number(), asks: z.number() }).optional(),
-	/** drop が発生した場合の警告メッセージ（取得層の不完全性）。 */
 	warning: z.string().optional(),
 });
 export const GetOrderbookOutputSchema = toolResultSchema(GetOrderbookDataSchemaOut, GetOrderbookMetaSchemaOut);
 
 export const GetOrderbookInputSchema = BasePairInputSchema.extend({
 	mode: z.enum(['summary', 'pressure', 'statistics', 'raw']).optional().default('summary'),
-	/** summary mode: 上位N層 (1-200) */
 	topN: z.number().int().min(1).max(200).optional().default(10),
-	/** pressure mode: 帯域幅 (例: [0.001, 0.005, 0.01]) */
 	bandsPct: z.array(z.number().positive()).optional().default([0.001, 0.005, 0.01]),
-	/** statistics mode: 範囲% (例: [0.5, 1.0, 2.0]) */
 	ranges: z.array(z.number().positive()).optional().default([0.5, 1.0, 2.0]),
-	/** statistics mode: 価格ゾーン分割数 */
 	priceZones: z.number().int().min(2).max(50).optional().default(10),
 });
 
-// === Candles ===
 export const KeyPointSchema = z.object({
 	index: z.number(),
 	date: z.string().nullable().describe('YYYY-MM-DD（表示は tz 引数（既定 Asia/Tokyo）の暦日）'),
@@ -203,8 +186,7 @@ export const VolumeStatsSchema = z.object({
 	recent7DaysAvg: z.number(),
 	previous7DaysAvg: z.number(),
 	last30DaysAvg: z.number().nullable(),
-	// previous7DaysAvg === 0 のときは null（前週比較不可）。
-	// nonzero / 0 → Infinity（JSON wire で null 化）、0 / 0 → NaN（z.number() で reject）の両方を回避するため。
+	// previous7DaysAvg === 0 のときは null。nonzero / 0 の Infinity は JSON で null に化け、0 / 0 の NaN は z.number() が reject するので、どちらも避ける。
 	changePct: z.number().nullable(),
 	judgment: z.string(),
 });
@@ -218,9 +200,7 @@ export const GetCandlesDataSchemaOut = z.object({
 export const GetCandlesMetaSchemaOut = BaseMetaSchema.extend({
 	type: CandleTypeEnum,
 	count: z.number(),
-	/** 取得層の不完全性を示す警告（multi-year/multi-day 部分失敗時など）。指標不足の warnings[] とは別系統。 */
 	warning: z.string().optional(),
-	/** 最新足が形成中（未確定）か。realtime 取得（date 未指定）でのみ立つ情報フラグ。warning とは別系統。 */
 	provisional: z.boolean().optional(),
 });
 export const GetCandlesOutputSchema = toolResultSchema(GetCandlesDataSchemaOut, GetCandlesMetaSchemaOut);
@@ -273,7 +253,6 @@ export const GetCandlesInputSchema = z.object({
 		),
 });
 
-// === Transactions ===
 export const TransactionItemSchema = z.object({
 	// 公式 API のレスポンスでは必須。normalized では上流欠損や互換ソース対応のため optional。
 	transaction_id: z.number().int().optional(),
@@ -284,8 +263,7 @@ export const TransactionItemSchema = z.object({
 	isoTime: z.string(),
 });
 
-// raw（生レスポンス全量）は非搭載: date 指定時に全 UTC 日分（約 8,000 件超）が structuredContent に
-// 毎回同梱され limit の意義を無効化していたため削除（消費者ゼロ確認済み）。
+// raw（生レスポンス全量）は載せない。date 指定時に全 UTC 日分が structuredContent に毎回同梱され、limit の意義が無くなる。
 export const GetTransactionsDataSchemaOut = z.object({ normalized: z.array(TransactionItemSchema) });
 
 /** meta.actualRange / meta.fetchedRange の時刻範囲（Asia/Tokyo 表記） */
@@ -343,7 +321,6 @@ export const GetTransactionsInputSchema = BasePairInputSchema.extend({
 	format: z.enum(['text', 'json']).optional().default('text').describe(FORMAT_PARAM_NOTE),
 });
 
-// === Depth (raw depth for analysis/visualization) ===
 export const GetDepthDataSchemaOut = z.object({
 	asks: z.array(DepthLevelTupleSchema),
 	bids: z.array(DepthLevelTupleSchema),
@@ -366,7 +343,6 @@ export const GetDepthDataSchemaOut = z.object({
 export const GetDepthMetaSchemaOut = BaseMetaSchema;
 export const GetDepthOutputSchema = toolResultSchema(GetDepthDataSchemaOut, GetDepthMetaSchemaOut);
 
-// === Flow Metrics (derived from recent transactions) ===
 export const FlowBucketSchema = z.object({
 	timestampMs: z.number().int(),
 	isoTime: z.string(),
@@ -403,13 +379,7 @@ export const GetFlowMetricsDataSchemaOut = z.object({
 	series: z.object({ buckets: z.array(FlowBucketSchema) }),
 });
 
-/**
- * 約定の実カバー範囲。
- *
- * `durationMinutes`（先頭〜末尾のスパン）だけでは、アーカイブ未公開区間などの穴を
- * 「カバー済み」として申告してしまう。実データがある区間の合計（`coveredMinutes`）と
- * 欠損（`gapMinutes` / `gaps`）を必ず併記する。
- */
+/** `durationMinutes`（先頭〜末尾のスパン）だけでは穴をカバー済みと申告してしまうので、`coveredMinutes` と欠損（`gapMinutes` / `gaps`）を必ず併記する。 */
 export const TxCoverageRangeSchema = z.object({
 	start: z.string(),
 	end: z.string(),
@@ -466,9 +436,7 @@ export const GetFlowMetricsMetaSchemaOut = BaseMetaSchema.extend({
 		.boolean()
 		.optional()
 		.describe('limit により切り捨てが発生したか。true のとき集計値・actualRange は切り捨て後の区間のみが対象'),
-	/** 取得層の不完全性（部分失敗・アーカイブ未公開・カバレッジ欠損・limit 切り捨て） */
 	warning: z.string().optional(),
-	/** 計算層の不完全性（集計値が欠損を含む区間から算出されている 等） */
 	warnings: z.array(z.string()).optional(),
 });
 
@@ -555,7 +523,6 @@ export const GetFlowMetricsInputSchema = BasePairInputSchema.extend({
 	tz: z.string().optional().default('Asia/Tokyo'),
 });
 
-// === /tickers_jpy (public REST) ===
 export const TickerJpyItemSchema = z.object({
 	pair: z.string(),
 	sell: z.string().nullable(),
@@ -566,7 +533,6 @@ export const TickerJpyItemSchema = z.object({
 	last: z.string(),
 	vol: z.string(),
 	timestamp: z.number(),
-	// 追加: 24h変化率（%）。open/last から算出
 	change24h: z.number().nullable().optional(),
 	change24hPct: z.number().nullable().optional(),
 });
@@ -580,8 +546,6 @@ export const GetTickersJpyOutputSchema = z.union([
 	FailResultSchema,
 ]);
 
-// === get_tickers_jpy handler (NormalizedTicker shape) ===
-// handler が structuredContent に渡す正規化済みティッカー。
 // z.number() は NaN を reject するため、NaN/Infinity が混入したら parse 失敗で検出できる。
 export const NormalizedTickerSchema = z
 	.object({
@@ -608,7 +572,6 @@ export const GetTickersJpyHandlerOutputSchema = z.object({
 	meta: z.record(z.string(), z.unknown()),
 });
 
-// === Market Summary (tickers + volatility snapshot) ===
 export const MarketSummaryItemSchema = z.object({
 	pair: z.string(),
 	last: z.number().nullable(),
