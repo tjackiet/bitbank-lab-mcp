@@ -1,15 +1,4 @@
-/**
- * strategies/macd_cross.ts - MACDクロスオーバー戦略
- *
- * エントリー: MACDラインがシグナルラインを上抜け（ゴールデンクロス）
- * エグジット: MACDラインがシグナルラインを下抜け（デッドクロス）
- *
- * オプションフィルター:
- *   - sma_filter_period: SMAトレンドフィルター（例: 200）。価格がSMA上の場合のみ買い
- *   - zero_line_filter: ゼロラインフィルター（-1=ゼロ以下のみ, 0=なし, 1=ゼロ以上のみ）
- *   - rsi_filter_period: RSIフィルター期間（例: 14）。0で無効
- *   - rsi_filter_max: RSI上限（例: 70）。RSIがこの値未満の場合のみ買い
- */
+// zero_line_filter は -1 = ゼロ以下のみ、0 = なし、1 = ゼロ以上のみ。
 
 import { macd as sharedMacd } from '../../../../lib/indicators.js';
 import type { Candle } from '../../types.js';
@@ -17,9 +6,6 @@ import { calculateSMA } from '../sma.js';
 import { calculateRSI } from './rsi.js';
 import type { Overlay, ParamValidationResult, Signal, Strategy } from './types.js';
 
-/**
- * MACD戦略のデフォルトパラメータ
- */
 const DEFAULT_PARAMS: Record<string, number> = {
 	fast: 12,
 	slow: 26,
@@ -31,9 +17,6 @@ const DEFAULT_PARAMS: Record<string, number> = {
 	rsi_filter_max: 100, // RSI < この値 の場合のみ買い（100=フィルター無効）
 };
 
-/**
- * MACDを計算（lib/indicators.ts への委譲）
- */
 function calculateMACD(
 	closes: number[],
 	fastPeriod: number,
@@ -44,9 +27,6 @@ function calculateMACD(
 	return { macd: result.line, signal: result.signal, histogram: result.hist };
 }
 
-/**
- * パラメータのバリデーション
- */
 export function validateParams(params: Record<string, number>): ParamValidationResult {
 	const errors: string[] = [];
 	const normalized = { ...DEFAULT_PARAMS, ...params };
@@ -80,9 +60,6 @@ export function validateParams(params: Record<string, number>): ParamValidationR
 	};
 }
 
-/**
- * フィルター条件の説明文を生成
- */
 function describeFilters(params: Record<string, number>): string {
 	const parts: string[] = [];
 	if (params.sma_filter_period > 0) {
@@ -99,16 +76,7 @@ function describeFilters(params: Record<string, number>): string {
 	return parts.length > 0 ? ` [${parts.join(', ')}]` : '';
 }
 
-/**
- * MACDクロスオーバー戦略
- */
-/**
- * MACD Cross の必要バー数を計算。
- *   - signal 線は index >= slow + signal - 2 で有効 → クロス判定で prev/curr 必要 → i >= slow + signal - 1
- *     よって最低 slow + signal 本必要
- *   - SMA filter: index >= sma_filter_period - 1 で有効
- *   - RSI filter: index >= rsi_filter_period + 1 で有効
- */
+// signal 線は index >= slow + signal - 2 で有効で、クロス判定に prev / curr が要るので最低 slow + signal 本。
 function computeRequiredBarsImpl(params: Record<string, number>): number {
 	const p = { ...DEFAULT_PARAMS, ...params };
 	const base = p.slow + p.signal;
@@ -131,15 +99,10 @@ export const macdCrossStrategy: Strategy = {
 		const closes = candles.map((c) => c.close);
 		const { macd, signal, histogram: _histogram } = calculateMACD(closes, fast, slow, signalPeriod);
 
-		// フィルター用の指標を事前計算
 		const sma = p.sma_filter_period > 0 ? calculateSMA(closes, p.sma_filter_period) : null;
 		const rsi = p.rsi_filter_period > 0 ? calculateRSI(closes, p.rsi_filter_period) : null;
 
 		const signals: Signal[] = [];
-		// 各指標の「初の有効インデックス」基準でウォームアップを揃える
-		// - signal 線は index >= slow + signal - 2 から有効 → クロス判定可能なのは i >= slow + signal - 1
-		// - SMA filter: index >= sma_filter_period - 1 で有効
-		// - RSI filter: index >= rsi_filter_period + 1 で有効
 		const baseStartIdx = slow + signalPeriod - 1;
 		const smaFilterStart = sma ? p.sma_filter_period - 1 : 0;
 		const rsiFilterStart = rsi ? p.rsi_filter_period + 1 : 0;
@@ -161,19 +124,16 @@ export const macdCrossStrategy: Strategy = {
 				continue;
 			}
 
-			// ゴールデンクロス: MACDがシグナルを上抜け
 			if (prevMACD <= prevSignal && currMACD > currSignal) {
 				// フィルター適用（買いシグナルのみにフィルターを適用）
 				const filterReasons: string[] = [];
 				let filtered = false;
 
-				// SMAトレンドフィルター: 価格がSMA上の場合のみ
 				if (sma && !Number.isNaN(sma[i]) && closes[i] < sma[i]) {
 					filtered = true;
 					filterReasons.push(`price(${closes[i].toFixed(0)}) < SMA${p.sma_filter_period}(${sma[i].toFixed(0)})`);
 				}
 
-				// ゼロラインフィルター
 				if (p.zero_line_filter === 1 && currMACD < 0) {
 					filtered = true;
 					filterReasons.push(`MACD(${currMACD.toFixed(0)}) below zero`);
@@ -182,7 +142,6 @@ export const macdCrossStrategy: Strategy = {
 					filterReasons.push(`MACD(${currMACD.toFixed(0)}) above zero`);
 				}
 
-				// RSIフィルター
 				if (rsi && !Number.isNaN(rsi[i]) && rsi[i] >= p.rsi_filter_max) {
 					filtered = true;
 					filterReasons.push(`RSI(${rsi[i].toFixed(1)}) >= ${p.rsi_filter_max}`);
@@ -247,7 +206,6 @@ export const macdCrossStrategy: Strategy = {
 			},
 		];
 
-		// SMAフィルターが有効な場合、SMAラインを価格チャートに表示
 		if (p.sma_filter_period > 0) {
 			const sma = calculateSMA(closes, p.sma_filter_period);
 			overlays.push({
@@ -259,7 +217,6 @@ export const macdCrossStrategy: Strategy = {
 			});
 		}
 
-		// RSIフィルターが有効な場合、RSIラインをインジケータパネルに表示
 		if (p.rsi_filter_period > 0 && p.rsi_filter_max < 100) {
 			const rsi = calculateRSI(closes, p.rsi_filter_period);
 			overlays.push({

@@ -1,9 +1,3 @@
-/**
- * chart/render-depth — Depth チャート（板の深度）の SVG 描画。
- *
- * メインのローソク足チャートとは完全に独立したコードパス。
- */
-
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { formatPair } from '../../lib/formatter.js';
@@ -29,12 +23,10 @@ export async function renderDepthChart(
 		if (!depth.ok) return fail(depth.summary.replace(/^Error: /, ''), depth.meta?.errorType || 'internal');
 		const asks: Array<[string, string]> = depth.data.asks || [];
 		const bids: Array<[string, string]> = depth.data.bids || [];
-		// 価格レンジ
 		const minBid = Number(bids[bids.length - 1]?.[0] ?? bids[0]?.[0] ?? 0);
 		const maxAsk = Number(asks[asks.length - 1]?.[0] ?? asks[0]?.[0] ?? 0);
 		const xMinP = Math.min(minBid, Number(bids[0]?.[0] ?? minBid));
 		const xMaxP = Math.max(maxAsk, Number(asks[0]?.[0] ?? maxAsk));
-		// 累積量（左：bids 降順→小へ、右：asks 昇順→大へ）
 		const bidsSorted = [...bids]
 			.map(([p, s]) => [Number(p), Number(s)] as [number, number])
 			.sort((a, b) => b[0] - a[0]);
@@ -55,7 +47,6 @@ export async function renderDepthChart(
 		}
 		const maxQty = Math.max(bidSteps.at(-1)?.[1] || 0, askSteps.at(-1)?.[1] || 0) || 1;
 
-		// キャンバス
 		const w = 860,
 			h = 420;
 		const padding = { top: 36, right: 12, bottom: 32, left: 64 };
@@ -65,7 +56,6 @@ export async function renderDepthChart(
 			Number((padding.left + ((price - xMinP) * plotW) / Math.max(1, xMaxP - xMinP)).toFixed(effectivePrecision));
 		const y = (qty: number) => Number((h - padding.bottom - (qty * plotH) / maxQty).toFixed(effectivePrecision));
 
-		// ステップパス生成
 		const toStepPath = (steps: Array<[number, number]>) => {
 			if (!steps.length) return '';
 			const pts = steps.map(([p, q]) => `${x(p)},${y(q)}`);
@@ -74,7 +64,6 @@ export async function renderDepthChart(
 		const bidPath = toStepPath(bidSteps);
 		const askPath = toStepPath(askSteps);
 
-		// 塗りつぶし（ステップ下を半透明で）
 		const toFillPath = (steps: Array<[number, number]>, side: 'bid' | 'ask') => {
 			if (!steps.length) return '';
 			const head = steps[0];
