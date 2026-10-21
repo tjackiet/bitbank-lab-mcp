@@ -880,7 +880,7 @@ describe('stochastic', () => {
 		}
 	});
 
-	// 期待値は lib/indicators.ts::stochastic() の実装値を自己整合性確認後に固定したもの（%K = (close - lowestLow) / (highestHigh - lowestLow) * 100、%D = SMA(%K, 3)）。
+	// 期待値は lib/indicators.ts::stochastic() の実装値を自己整合性確認後に固定したもの（rawK = (close - lowestLow) / (highestHigh - lowestLow) * 100、kSeries = SMA(rawK, 3)、dSeries = SMA(kSeries, 3)）。
 	// fixture は close[i] = 100 + i*0.8 + sin(i*0.4)*2、high[i] = close[i] + 1.5、low[i] = close[i] - 1.5 を 4 桁丸めした 40 本。
 	const STOCH_GOLDEN_CLOSES = [
 		100, 101.5788, 103.0347, 104.2641, 105.1991, 105.8186, 106.1509, 106.27, 106.2833, 106.315, 106.4864, 106.8968,

@@ -701,7 +701,7 @@ describe('executeTradesFromSignals - precision and fee model contract', () => {
 	});
 
 	it('微小利益の連続トレードで total_pnl_pct が複利の実値を反映する', () => {
-		// 10 回の微小利益トレード（各 net_return = 1.0000004）→ total_pnl_pct ≈ (1.0000004^10 - 1) * 100 ≈ 0.0004%（各 net_return を toFixed(6) で丸めると total_pnl_pct が 0 になる）
+		// 10 回の微小利益トレード（各 net_return = 1.0000004）。calculateSummary の total_pnl_pct は小数 2 桁丸めで 0 になるので、丸め前の複利 (1.0000004^10 - 1) * 100 ≈ 0.0004% を trades から見る（net_return を toFixed(6) で丸めるとこれも 0 になる）。
 		const TRADE_COUNT = 10;
 		const candles: Candle[] = [];
 		const signals: Signal[] = [];
@@ -726,7 +726,6 @@ describe('executeTradesFromSignals - precision and fee model contract', () => {
 		const compound = trades.reduce((acc, t) => acc * t.net_return, 1);
 		const expectedCompound = 1.0000004 ** TRADE_COUNT;
 		expect(compound).toBeCloseTo(expectedCompound, 9);
-		// (1.0000004^10 - 1) * 100 ≈ 0.0004%（単体 0.00004% を 10 回複利）
 		expect((compound - 1) * 100).toBeCloseTo((expectedCompound - 1) * 100, 9);
 	});
 
