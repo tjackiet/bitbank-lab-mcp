@@ -1,11 +1,4 @@
-/**
- * 研究用の起動口（lab/main.ts。ADR-0008）。
- *
- * - 引数・キー・origin のどれかが不正なら、サーバーを読み込まずに EXIT_USAGE を返す（本番へ戻さない）
- * - 正常時は、既定のクライアントを差し替えて**から**サーバーを起動する
- * - 起動後は、既定のクライアントを迂回して本番の private API へ向かう fetch を止める
- * - 出力は stderr だけ（stdout は MCP のプロトコルが使う）
- */
+// ADR-0008: 不正な引数・キー・origin ではサーバーを読み込まず EXIT_USAGE を返し（本番へ戻さない）、正常時は既定のクライアントを差し替えてからサーバーを起動する。出力は stderr だけ。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, mockBitbankSuccess } from '../fixtures/private-api.js';
@@ -33,7 +26,6 @@ async function freshModules() {
 	return { lab, client };
 }
 
-/** runLab に渡す依存（stderr の記録・サーバー起動のスパイ）と、stdout への書き込みの監視を用意する */
 function harness(argv: string[], startServer: () => Promise<unknown> = async () => undefined) {
 	const stderr: string[] = [];
 	const stdoutSpy = vi.spyOn(process.stdout, 'write');

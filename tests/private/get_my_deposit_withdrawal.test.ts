@@ -1,9 +1,3 @@
-/**
- * get_my_deposit_withdrawal ツールのユニットテスト。
- *
- * ページネーション・UUID 重複排除・部分的失敗を検証する。
- */
-
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { assertFail, assertOk } from '../_assertResult.js';
 import {
@@ -27,13 +21,11 @@ afterEach(() => {
 	vi.resetModules();
 });
 
-/** URL パターンでルーティングする fetch モック */
 function setupFetchMock(opts: {
 	depositResponse?: unknown;
 	withdrawalResponse?: unknown;
 	depositFail?: boolean;
 	withdrawalFail?: boolean;
-	/** ページネーションテスト用: 各呼び出しに応答する関数 */
 	customHandler?: (url: string) => Response;
 }) {
 	globalThis.fetch = vi.fn().mockImplementation(async (url: string | URL | Request) => {
@@ -95,7 +87,6 @@ describe('get_my_deposit_withdrawal', () => {
 		const result = await getMyDepositWithdrawal({});
 
 		assertOk(result);
-		// 暗号資産 + JPY で 2 回取得されるが、同じ UUID なので 1 件に dedup される
 		const uuids = result.data.deposits.map((d) => d.uuid);
 		const uniqueUuids = [...new Set(uuids)];
 		expect(uuids.length).toBe(uniqueUuids.length);
@@ -141,7 +132,6 @@ describe('get_my_deposit_withdrawal', () => {
 		const result = await getMyDepositWithdrawal({ asset: 'jpy', type: 'deposit' });
 
 		assertOk(result);
-		// 100 + 50 = 150 件
 		expect(result.data.deposits.length).toBe(150);
 		expect(result.meta.isComplete).toBe(true);
 	});
@@ -166,7 +156,6 @@ describe('get_my_deposit_withdrawal', () => {
 								amount: '10000',
 								status: isLast ? 'FOUND' : 'DONE',
 								found_at: 1709900000000 + i * 1000,
-								// 末尾の未確認入金には confirmed_at を付与しない
 								...(isLast ? {} : { confirmed_at: 1709900000000 + i * 1000 + 100 }),
 							};
 						});
@@ -249,12 +238,9 @@ describe('get_my_deposit_withdrawal', () => {
 	});
 
 	it('PrivateApiError で fail を返す', async () => {
-		// 両方失敗させると PrivateApiError として catch される
 		setupFetchMock({ depositFail: true, withdrawalFail: true });
 
 		const { default: getMyDepositWithdrawal } = await import('../../tools/private/get_my_deposit_withdrawal.js');
-		// asset 指定なしで全通貨取得 → 4 チャネル全失敗でも警告付き成功になるケースがある
-		// PrivateApiError を直接トリガーするため、catch ブロックに入る状況を再現
 		const result = await getMyDepositWithdrawal({ asset: 'btc' });
 
 		// 部分的失敗は warn 付き成功になるため、assert で確認
@@ -294,7 +280,6 @@ describe('get_my_deposit_withdrawal', () => {
 	});
 
 	it('collectResults が4チャネルの部分失敗で警告を収集する', async () => {
-		// deposit_history は失敗、withdrawal_history は成功
 		setupFetchMock({ depositFail: true });
 
 		const { default: getMyDepositWithdrawal } = await import('../../tools/private/get_my_deposit_withdrawal.js');
@@ -304,16 +289,11 @@ describe('get_my_deposit_withdrawal', () => {
 		assertOk(result);
 		expect(result.meta.hasWarnings).toBe(true);
 		expect(result.meta.warnings.length).toBeGreaterThan(0);
-		// 警告メッセージがサマリーに含まれる
 		expect(result.summary).toContain('警告');
 	});
 
 	it('出金履歴の禁止フィールド（口座番号・名義等）を出力から除外する', async () => {
-		// rawWithdrawalHistoryResponse の fiat 出金レコードには
-		// 実 API が返す禁止フィールド（account_number / account_owner /
-		// branch_name / account_type / account_uuid）が含まれている。
-		// ツール出力（data.withdrawals[] と content[0].text 相当の summary）に
-		// これらが漏洩しないことを検証する。
+		// fiat 出金レコードには実 API が返す禁止フィールド（account_number / account_owner / branch_name / account_type / account_uuid）が含まれており、出力に漏れないことを検証する。
 		setupFetchMock({});
 
 		const { default: getMyDepositWithdrawal } = await import('../../tools/private/get_my_deposit_withdrawal.js');
@@ -324,36 +304,28 @@ describe('get_my_deposit_withdrawal', () => {
 		// fiat 出金レコードが実際に取得されていることを前提条件として確認
 		const jpyWithdrawal = result.data.withdrawals.find((w) => w.uuid === 'wd-001');
 		expect(jpyWithdrawal).toBeDefined();
-		// 許可フィールド（bank_name）は残る
 		expect(jpyWithdrawal?.bank_name).toBe('テスト銀行');
 
 		const forbiddenKeys = ['account_number', 'account_owner', 'branch_name', 'account_type', 'account_uuid'];
 
-		// 個別レコードに禁止フィールドが無い
 		for (const w of result.data.withdrawals) {
 			for (const key of forbiddenKeys) {
 				expect(w).not.toHaveProperty(key);
 			}
 		}
 
-		// 結果全体（data + summary を含む）を文字列化して禁止フィールドのキー・値が現れないことを確認
 		const serialized = JSON.stringify(result);
 		for (const key of forbiddenKeys) {
 			expect(serialized).not.toContain(key);
 		}
-		// 機密の値そのものも漏れていないこと
-		// （account_number の '1234567' は許可フィールドである暗号資産アドレスと
-		//   部分一致するため値検証から除外し、キー検証＋固有値検証で担保する）
+		// account_number の '1234567' は許可フィールドの暗号資産アドレスと部分一致するので、値検証から外してキー検証と固有値検証で担保する。
 		expect(serialized).not.toContain('タナカ タロウ');
 		expect(serialized).not.toContain('テスト支店');
 		expect(serialized).not.toContain('acc-uuid-001');
 	});
 
 	it('入金アドレス（暗号資産）は出力に露出しない（出力方針 Option A）', async () => {
-		// 暗号資産入金（dep-002）には実 API どおり address が存在するが、入金側は出力に address を
-		// 含めない（HIGH 分類。突合は txid を使う＝docs/internal:425/632）。出金側のみ address を出す
-		// 非対称は意図的。get_margin_status 型のドリフト（フィクスチャがコード形）防止のため、Raw 型・
-		// フィクスチャは実 API へ同期しつつ、露出だけ抑える。
+		// 入金側は address を出力しない（HIGH 分類。出金側だけ出す非対称は意図的）。フィクスチャは実 API に同期して address を持たせ、露出だけ抑える。
 		setupFetchMock({});
 
 		const { default: getMyDepositWithdrawal } = await import('../../tools/private/get_my_deposit_withdrawal.js');
@@ -367,12 +339,10 @@ describe('get_my_deposit_withdrawal', () => {
 			| undefined;
 		expect(rawBtc?.address).toBeTruthy();
 
-		// 個別レコードに address プロパティが無い
 		const btcDeposit = result.data.deposits.find((d) => d.uuid === 'dep-002');
 		expect(btcDeposit).toBeDefined();
 		expect(btcDeposit).not.toHaveProperty('address');
 
-		// 結果全体（data + summary）に生のアドレス値が現れない
 		expect(JSON.stringify(result)).not.toContain(rawBtc?.address as string);
 	});
 
@@ -452,11 +422,6 @@ describe('get_my_deposit_withdrawal — singleFetch エラーパス', () => {
 		expect(result.data.withdrawals).toHaveLength(0);
 	});
 
-	/**
-	 * API が返す asset は取得境界で小文字へ正規化する（`lib/asset-code.ts`）。
-	 * 出力の表記契約は「structuredContent は小文字 / サマリー表示は大文字」で、
-	 * 正規化を入れても現行の小文字レスポンスに対しては何も変わらない。
-	 */
 	describe('API asset の取得境界正規化', () => {
 		it('小文字レスポンスでは出力の asset 表記が変わらない', async () => {
 			setupFetchMock({});
@@ -467,7 +432,6 @@ describe('get_my_deposit_withdrawal — singleFetch エラーパス', () => {
 			assertOk(result);
 			expect(result.data.deposits.map((d) => d.asset).sort()).toEqual(['btc', 'jpy']);
 			expect(result.data.withdrawals.map((w) => w.asset).sort()).toEqual(['eth', 'jpy']);
-			// サマリー表示は従来どおり大文字
 			expect(result.summary).toContain('BTC');
 			expect(result.summary).toContain('JPY 入金');
 		});

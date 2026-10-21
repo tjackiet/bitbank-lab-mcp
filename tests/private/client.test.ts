@@ -1,10 +1,3 @@
-/**
- * BitbankPrivateClient のユニットテスト。
- *
- * コンストラクタの fetcher インジェクションを活用し、
- * リトライ・タイムアウト・エラー分類をテストする。
- */
-
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BitbankPrivateClient, PrivateApiError } from '../../src/private/client.js';
 import { createMockFetcher, jsonResponse, mockBitbankError, mockBitbankSuccess } from '../fixtures/private-api.js';
@@ -322,8 +315,7 @@ describe('BitbankPrivateClient', () => {
 
 				const promise = client.get<{ ok: boolean }>('/v1/user/assets');
 
-				// 旧実装では parseInt が NaN → setTimeout(NaN) = 0ms で即リトライされていた（回帰確認）。
-				// 999ms 時点ではまだリトライされない
+				// parseInt が NaN でも setTimeout(NaN) = 0ms の即リトライにならないこと。999ms 時点ではまだリトライされない
 				await vi.advanceTimersByTimeAsync(999);
 				expect(fetchSpy).toHaveBeenCalledTimes(1);
 				// 1000ms 経過でリトライされる
@@ -384,9 +376,7 @@ describe('BitbankPrivateClient', () => {
 	});
 
 	describe('POST 系リクエストの自動リトライ無効化', () => {
-		// 二重発注事故を防ぐため POST 系は ネットワーク / タイムアウト / 5xx の
-		// 全経路で自動リトライしない（再試行は preview から人間が再実行する想定）。
-		// GET は冪等なので従来通り maxRetries まで再試行する。
+		// POST は二重発注を防ぐため全経路で自動リトライしない。GET は冪等なので maxRetries まで再試行する。
 		it('5xx 時に POST は 1 回しか呼ばれない（maxRetries=2 設定でも）', async () => {
 			const fetcher = createMockFetcher([
 				new Response('', { status: 500 }),
@@ -481,7 +471,6 @@ describe('BitbankPrivateClient', () => {
 	describe('タイムアウト', () => {
 		it('timeoutMs 超過でエラーを投げる', async () => {
 			const fetcher = (async (_url: string, init: RequestInit) => {
-				// AbortSignal を監視して abort を待つ
 				return new Promise<Response>((_resolve, reject) => {
 					const signal = init.signal;
 					if (signal) {
