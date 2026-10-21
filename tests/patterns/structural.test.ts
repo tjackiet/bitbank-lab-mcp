@@ -106,7 +106,6 @@ describe('validateHorizontalNeckline', () => {
 });
 
 describe('validatePriorTrend', () => {
-	/** close 値の配列から最小限の candles 配列を生成 */
 	function makeCandles(closes: number[]): Array<{ close: number }> {
 		return closes.map((close) => ({ close }));
 	}
@@ -134,9 +133,6 @@ describe('validatePriorTrend', () => {
 			expect(result.classification).toBe('insufficient_data');
 		});
 
-		// patternBars が大きく lookbackBars=30 にクランプされる場合、
-		// startIdx=15 では startIdx - lookbackBars = -15 < 0 なので
-		// 旧条件（startIdx < PRIOR_TREND_LOOKBACK_MIN=10）では拾えなかった。
 		it('startIdx < lookbackBars (max クランプ後) は insufficient_data', () => {
 			// startIdx=15, patternBars=120 → lookbackBars=30, 15 < 30 で insufficient
 			const closes = Array.from({ length: 16 }, () => 100);
@@ -272,14 +268,9 @@ describe('validatePriorTrend', () => {
 		});
 	});
 
-	// ── レンジ性フィルタ（efficiency / r2） ──
 	describe('レンジ性フィルタ', () => {
 		it('レンジ内の擬似下降は sideways（priorReturn -7% でも efficiency/r2 低い）', () => {
-			// idx 5 から idx 15 まで価格がレンジ内で激しくジグザグに振動する。
-			// close[5]=100 が priorClose、close[15]=93 が startClose → priorReturn=-0.07
-			//   maxClose=120, minClose=80, range=40
-			//   efficiency= |93-100|/40 = 7/40 = 0.175  → < 0.55
-			//   ジグザグデータの線形回帰は slope ≈ 0、r2 も低く < 0.35
+			// idx 5 から idx 15 まで価格がレンジ内でジグザグに振動する（priorReturn=-0.07、range=40 で efficiency = 7/40 = 0.175 < 0.55、ジグザグの線形回帰は r2 も < 0.35）。
 			const closes = [
 				100,
 				100,
@@ -365,8 +356,7 @@ describe('validatePriorTrend', () => {
 		});
 
 		it('大きな下降はノイズが多少あっても down', () => {
-			// priorReturn=-15% 程度。中盤に多少のリバウンドがあるが、
-			// efficiency は十分高く trend として残る。
+			// priorReturn=-15% 程度。中盤に多少のリバウンドがあるが、efficiency は十分高く trend として残る。
 			const closes = [
 				100,
 				100,
@@ -389,17 +379,11 @@ describe('validatePriorTrend', () => {
 			expect(result.priorReturn).toBeCloseTo(-0.15, 10);
 			expect(result.classification).toBe('down');
 			expect(result.ok).toBe(true);
-			// 大きく下降していて efficiency が閾値以上であること
 			expect(result.efficiency!).toBeGreaterThanOrEqual(PRIOR_TREND_MIN_EFFICIENCY);
 		});
 
 		it('r2 だけが閾値以上の場合も up/down に分類される', () => {
-			// 振幅は小さいが線形にフィットするデータ。
-			// closes = 100, 100, 99, 100, 99, 98, 99, 98, 97, 98, 97 (priorClose=100, startClose=97)
-			// priorReturn = -0.03 → 既に sideways の早期 return を取るため、
-			// |priorReturn| > 0.05 の条件を満たすデータに調整する必要がある。
-			// 線形ノイズ近似: y = 100 - 1*step + small_noise。step=10 で startClose=90 → priorReturn=-0.1
-			// 振幅は noise 由来。
+			// 振幅は小さいが線形にフィットするデータ（y = 100 - 1*step + small_noise、step=10 で startClose=90 → priorReturn=-0.1）。
 			const closes = [
 				100,
 				100,
