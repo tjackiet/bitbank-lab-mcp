@@ -14,8 +14,6 @@ import { toolDef } from '../src/handlers/renderChartSvgHandler.js';
 import analyzeIndicators from '../tools/analyze_indicators.js';
 import renderChartSvg from '../tools/render_chart_svg.js';
 
-// ── ヘルパー ──
-
 function buildCandles(length: number) {
 	return Array.from({ length }, (_, i) => {
 		const base = 100 + i;
@@ -82,7 +80,6 @@ function buildSuccess(length: number, metaExtras: Record<string, unknown> = {}) 
 	};
 }
 
-/** ICHIMOKU 用に spanA/spanB のうち末尾 partialNullCount 本を null にして雲不足を再現する */
 function buildIchimokuWithPartialCloud(
 	length: number,
 	partialNullCount: number,
@@ -104,8 +101,6 @@ describe('render_chart_svg', () => {
 
 	afterEach(() => vi.clearAllMocks());
 
-	// ── スキーマ ─────────────────────────────────────────
-
 	it('inputSchema: ICHIMOKU と BB の併用を拒否', () => {
 		expect(() =>
 			toolDef.inputSchema.parse({ pair: 'btc_jpy', type: '1day', limit: 60, indicators: ['ICHIMOKU', 'BB'] }),
@@ -114,8 +109,6 @@ describe('render_chart_svg', () => {
 			toolDef.inputSchema.parse({ pair: 'btc_jpy', type: '1day', limit: 60, withIchimoku: true, withBB: true }),
 		).toThrow();
 	});
-
-	// ── 基本描画（candles-only） ─────────────────────────
 
 	it('指標なしでローソク足 SVG を返す', async () => {
 		mockedAnalyze.mockResolvedValueOnce(asMockResult(buildSuccess(60)));
@@ -132,8 +125,6 @@ describe('render_chart_svg', () => {
 		const res = await renderChartSvg({ pair: 'btc_jpy', type: '1day', limit: 60 });
 		assertFail(res);
 	});
-
-	// ── SMA ──────────────────────────────────────────────
 
 	it('indicators 配列で SMA を描画', async () => {
 		mockedAnalyze.mockResolvedValueOnce(asMockResult(buildSuccess(60)));
@@ -164,8 +155,6 @@ describe('render_chart_svg', () => {
 		expect(res.meta.indicators).toContain('SMA_200');
 	});
 
-	// ── EMA ──────────────────────────────────────────────
-
 	it('EMA を描画', async () => {
 		mockedAnalyze.mockResolvedValueOnce(asMockResult(buildSuccess(60)));
 		const res = await renderChartSvg({ pair: 'btc_jpy', type: '1day', limit: 60, indicators: ['EMA_12', 'EMA_26'] });
@@ -173,8 +162,6 @@ describe('render_chart_svg', () => {
 		expect(res.meta.indicators).toContain('EMA_12');
 		expect(res.meta.indicators).toContain('EMA_26');
 	});
-
-	// ── ボリンジャーバンド ────────────────────────────────
 
 	it('BB default モードで ±2σ のみ描画', async () => {
 		mockedAnalyze.mockResolvedValueOnce(asMockResult(buildSuccess(60)));
@@ -198,8 +185,6 @@ describe('render_chart_svg', () => {
 		expect(res.meta.bbMode).toBe('extended');
 	});
 
-	// ── 一目均衡表 ───────────────────────────────────────
-
 	it('ICHIMOKU で転換線・基準線・雲を描画', async () => {
 		mockedAnalyze.mockResolvedValueOnce(asMockResult(buildSuccess(90)));
 		const res = await renderChartSvg({ pair: 'btc_jpy', type: '1day', limit: 60, indicators: ['ICHIMOKU'] });
@@ -222,8 +207,6 @@ describe('render_chart_svg', () => {
 		expect(res.summary).toContain('自動調整');
 	});
 
-	// ── heavy chart fallback ─────────────────────────────
-
 	it('limit * layers > 500 で candles-only にフォールバック', async () => {
 		mockedAnalyze.mockResolvedValueOnce(asMockResult(buildSuccess(365)));
 		const res = await renderChartSvg({ pair: 'btc_jpy', type: '1day', limit: 365, indicators: ['ICHIMOKU_EXTENDED'] });
@@ -231,16 +214,12 @@ describe('render_chart_svg', () => {
 		expect(res.summary).toContain('fallback to candles-only');
 	});
 
-	// ── ラインチャート ───────────────────────────────────
-
 	it('style=line でライン描画', async () => {
 		mockedAnalyze.mockResolvedValueOnce(asMockResult(buildSuccess(60)));
 		const res = await renderChartSvg({ pair: 'btc_jpy', type: '1day', limit: 60, style: 'line' });
 		assertOk(res);
 		expect(res.data.svg).toContain('<path');
 	});
-
-	// ── サブパネル ───────────────────────────────────────
 
 	it('subPanels=["volume"] でボリュームパネルを描画', async () => {
 		mockedAnalyze.mockResolvedValueOnce(asMockResult(buildSuccess(60)));
@@ -262,8 +241,6 @@ describe('render_chart_svg', () => {
 		assertOk(res);
 		expect(res.data.svg).toContain('MACD');
 	});
-
-	// ── オーバーレイ ─────────────────────────────────────
 
 	it('overlays.annotations でピンとラベルを描画', async () => {
 		mockedAnalyze.mockResolvedValueOnce(asMockResult(buildSuccess(60)));
@@ -288,7 +265,6 @@ describe('render_chart_svg', () => {
 			},
 		});
 		assertOk(res);
-		// 範囲が SVG に含まれる
 		expect(res.data.svg).toContain('<svg');
 	});
 
@@ -303,8 +279,6 @@ describe('render_chart_svg', () => {
 		assertOk(res);
 		expect(res.data.svg).toContain('ゾーンA');
 	});
-
-	// ── レジェンド ───────────────────────────────────────
 
 	it('withLegend=true でレジェンドを描画', async () => {
 		mockedAnalyze.mockResolvedValueOnce(asMockResult(buildSuccess(60)));
@@ -331,8 +305,6 @@ describe('render_chart_svg', () => {
 		assertOk(res);
 		expect(res.data.legend).toBeDefined();
 	});
-
-	// ── Depth チャート ───────────────────────────────────
 
 	it('style=depth で板深度チャートを描画', async () => {
 		mockedDepth.mockResolvedValueOnce(
@@ -368,8 +340,6 @@ describe('render_chart_svg', () => {
 		assertFail(res);
 	});
 
-	// ── SVG minify / precision ───────────────────────────
-
 	it('svgMinify=false でも SVG を返す', async () => {
 		mockedAnalyze.mockResolvedValueOnce(asMockResult(buildSuccess(60)));
 		const res = await renderChartSvg({ pair: 'btc_jpy', type: '1day', limit: 60, svgMinify: false });
@@ -384,8 +354,6 @@ describe('render_chart_svg', () => {
 		expect(res.data.svg).toBeDefined();
 	});
 
-	// ── meta 構造 ────────────────────────────────────────
-
 	it('meta に range / sizeBytes / layerCount を含む', async () => {
 		mockedAnalyze.mockResolvedValueOnce(asMockResult(buildSuccess(60)));
 		const res = await renderChartSvg({ pair: 'btc_jpy', type: '1day', limit: 60 });
@@ -395,16 +363,12 @@ describe('render_chart_svg', () => {
 		expect(res.meta.layerCount).toBeDefined();
 	});
 
-	// ── viewBoxTight ─────────────────────────────────────
-
 	it('viewBoxTight=false でも描画可能', async () => {
 		mockedAnalyze.mockResolvedValueOnce(asMockResult(buildSuccess(60)));
 		const res = await renderChartSvg({ pair: 'btc_jpy', type: '1day', limit: 60, viewBoxTight: false });
 		assertOk(res);
 		expect(res.data.svg).toContain('<svg');
 	});
-
-	// ── barWidthRatio ────────────────────────────────────
 
 	it('barWidthRatio を指定可能', async () => {
 		mockedAnalyze.mockResolvedValueOnce(asMockResult(buildSuccess(60)));
@@ -413,16 +377,12 @@ describe('render_chart_svg', () => {
 		expect(res.data.svg).toBeDefined();
 	});
 
-	// ── yPaddingPct ──────────────────────────────────────
-
 	it('yPaddingPct で Y 軸パディングを調整', async () => {
 		mockedAnalyze.mockResolvedValueOnce(asMockResult(buildSuccess(60)));
 		const res = await renderChartSvg({ pair: 'btc_jpy', type: '1day', limit: 60, yPaddingPct: 0.1 });
 		assertOk(res);
 		expect(res.data.svg).toBeDefined();
 	});
-
-	// ── simplifyTolerance ────────────────────────────────
 
 	it('simplifyTolerance=0 で簡略化なし', async () => {
 		mockedAnalyze.mockResolvedValueOnce(asMockResult(buildSuccess(60)));
@@ -436,8 +396,6 @@ describe('render_chart_svg', () => {
 		assertOk(res);
 		expect(res.data.svg).toBeDefined();
 	});
-
-	// ── 上流 warning 伝播 ────────────────────────────────
 
 	it('上流 meta.warning を meta.warning と summary 先頭に伝播', async () => {
 		mockedAnalyze.mockResolvedValueOnce(
@@ -495,8 +453,6 @@ describe('render_chart_svg', () => {
 		expect(res.summary.startsWith('⚠️')).toBe(false);
 	});
 
-	// ── renderWarnings（自前レンダリング層）───────────────
-
 	it('雲不足の自前警告は meta.renderWarnings に入り meta.warnings には混入しない', async () => {
 		// spanA/spanB の末尾を null にして雲のカバー率を 80% 未満に落とす
 		mockedAnalyze.mockResolvedValueOnce(asMockResult(buildIchimokuWithPartialCloud(90, 55)));
@@ -523,8 +479,6 @@ describe('render_chart_svg', () => {
 		expect(res.meta.warnings).toEqual(['SMA_200: データ不足']);
 		expect((res.meta.renderWarnings as string[]).some((w: string) => w.includes('雲のカバー率'))).toBe(true);
 	});
-
-	// ── handler 経由での warning 伝播 ────────────────────
 
 	it('handler 経由でも content[0].text 先頭に上流 warning が含まれる', async () => {
 		mockedAnalyze.mockResolvedValueOnce(
@@ -557,11 +511,8 @@ describe('render_chart_svg', () => {
 		const svgIdx = text.indexOf('--- Chart SVG ---');
 		expect(cloudIdx).toBeGreaterThan(-1);
 		expect(svgIdx).toBeGreaterThan(-1);
-		// renderWarnings は SVG block より前に出る
 		expect(cloudIdx).toBeLessThan(svgIdx);
 	});
-
-	// ── toolDef.handler ──────────────────────────────────
 
 	it('toolDef.handler が renderChartSvg に委譲', async () => {
 		mockedAnalyze.mockResolvedValueOnce(asMockResult(buildSuccess(60)));

@@ -1,20 +1,6 @@
-/**
- * private API の接続先の差し替えを「研究用の起動口（`lab/`）だけ」に閉じ込める仕掛け（ADR-0008）。
- *
- * 配布物（npm パッケージ）に入るのは、外から有効にできない差し込み口だけ:
- *   - `BitbankPrivateClient` の `origin` オプション（ループバックの origin しか受けない）
- *   - `setDefaultClient()`（配布物の中からは呼ばない）
- * 環境変数・`.env`・設定ファイルからは接続先を変えられない。本テストはそれを崩す変更を止める。
- *
- * なぜ「既定のクライアントを通ること」まで固定するのか:
- *   起動口が差し替えるのは `getDefaultClient()` が返すクライアントだけ。配布物のどこかが自前で
- *   クライアントを作ったり認証ヘッダを組んだりすると、その要求は差し替え先ではなく本番へ直行する。
- *   モック実験なら「モックを使っているつもりで本番を叩く」、中継を挟む構成なら **中継の迂回** になる。
- *
- * これは**証明ではなく tripwire** である（`tests/http-transport-tripwire.test.ts` と同じ立場）。
- * 別名の import や文字列連結で組んだ呼び出しは検知できない。実行時には `lab/main.ts` の
- * `guardProductionPrivateApi` が、迂回した要求を止める。
- */
+// private API の接続先の差し替えを研究用の起動口（`lab/`）だけに閉じ込める（ADR-0008）。配布物に入るのは外から有効にできない差し込み口（ループバックの origin しか受けない `BitbankPrivateClient` の `origin` オプションと、配布物の中からは呼ばない `setDefaultClient()`）だけで、環境変数・`.env`・設定ファイルからは接続先を変えられない。
+// 起動口が差し替えるのは `getDefaultClient()` が返すクライアントだけなので、配布物のどこかが自前でクライアントを作ったり認証ヘッダを組んだりすると、その要求は差し替え先ではなく本番へ直行する（中継を挟む構成なら中継の迂回になる）。
+// 証明ではなく tripwire（別名の import や文字列連結で組んだ呼び出しは検知できない）。実行時には `lab/main.ts` の `guardProductionPrivateApi` が迂回した要求を止める。
 
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -50,7 +36,6 @@ const REQUIREMENT = [
 	'',
 ].join('\n');
 
-/** 配布物のディレクトリ配下のソース（.ts / .js 系。生成された .d.ts は除く）を、リポジトリ相対の / 区切りで返す */
 function listSourceFiles(dir: string): string[] {
 	const abs = path.join(PACKAGE_ROOT, dir);
 	return fs
@@ -70,7 +55,6 @@ function stripComments(source: string): string {
 
 const DISTRIBUTED_FILES = DISTRIBUTED_SOURCE_DIRS.flatMap(listSourceFiles);
 
-/** パターンに当たった配布物のファイル（重複なし・ソート済み） */
 function filesMatching(pattern: RegExp): string[] {
 	return DISTRIBUTED_FILES.filter((rel) =>
 		pattern.test(stripComments(fs.readFileSync(path.join(PACKAGE_ROOT, rel), 'utf8'))),

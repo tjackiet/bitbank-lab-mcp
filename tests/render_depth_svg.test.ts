@@ -8,8 +8,6 @@ vi.mock('../lib/get-depth.js', () => ({
 import getDepth from '../lib/get-depth.js';
 import renderDepthSvg, { toolDef } from '../tools/render_depth_svg.js';
 
-// ── ヘルパー ──
-
 function depthOk(overrides: Record<string, unknown> = {}) {
 	return {
 		ok: true,
@@ -40,13 +38,9 @@ describe('render_depth_svg', () => {
 
 	afterEach(() => vi.clearAllMocks());
 
-	// ── スキーマ ─────────────────────────────────────────
-
 	it('inputSchema: depth.levels < 10 を拒否', () => {
 		expect(() => toolDef.inputSchema.parse({ pair: 'btc_jpy', depth: { levels: 9 } })).toThrow();
 	});
-
-	// ── 正常描画（inline） ───────────────────────────────
 
 	it('正常データで SVG を inline 返却', async () => {
 		mockedGetDepth.mockResolvedValueOnce(asMockResult(depthOk()));
@@ -77,7 +71,6 @@ describe('render_depth_svg', () => {
 		assertOk(res);
 		expect(res.data.svg).toContain('板の深さ');
 		expect(res.data.svg).toContain('比率');
-		// 中央価格ラベル
 		expect(res.data.svg).toContain('¥');
 	});
 
@@ -95,8 +88,6 @@ describe('render_depth_svg', () => {
 		expect(s!.ratio).toBeGreaterThan(0);
 	});
 
-	// ── ファイル保存 ─────────────────────────────────────
-
 	it('preferFile=true でファイル保存', async () => {
 		mockedGetDepth.mockResolvedValueOnce(asMockResult(depthOk()));
 		const res = await renderDepthSvg({ pair: 'btc_jpy', preferFile: true });
@@ -113,8 +104,6 @@ describe('render_depth_svg', () => {
 		assertOk(res);
 		expect(res.data.filePath).toBeDefined();
 	});
-
-	// ── エラー系 ─────────────────────────────────────────
 
 	it('不正な pair → validation エラー', async () => {
 		const res = await renderDepthSvg({ pair: 'invalid!!!' as never });
@@ -169,8 +158,6 @@ describe('render_depth_svg', () => {
 		assertFail(res);
 	});
 
-	// ── デフォルトパラメータ ──────────────────────────────
-
 	it('引数なしでデフォルト（btc_jpy, 1day, 200レベル）が適用される', async () => {
 		mockedGetDepth.mockResolvedValueOnce(asMockResult(depthOk()));
 		const res = await renderDepthSvg();
@@ -182,7 +169,6 @@ describe('render_depth_svg', () => {
 	it('depth.levels でレベル数を指定', async () => {
 		mockedGetDepth.mockResolvedValueOnce(asMockResult(depthOk()));
 		await renderDepthSvg({ pair: 'btc_jpy', depth: { levels: 50 } });
-		// getDepth が指定レベルで呼ばれる
 		expect(mockedGetDepth).toHaveBeenCalledWith('btc_jpy', { maxLevels: 50 });
 	});
 
@@ -191,8 +177,6 @@ describe('render_depth_svg', () => {
 		await renderDepthSvg({ pair: 'btc_jpy', depth: { levels: 5 } });
 		expect(mockedGetDepth).toHaveBeenCalledWith('btc_jpy', { maxLevels: 10 });
 	});
-
-	// ── SVG 構造検証 ─────────────────────────────────────
 
 	it('SVG に Y軸目盛り（BTC）を含む', async () => {
 		mockedGetDepth.mockResolvedValueOnce(asMockResult(depthOk()));
@@ -215,8 +199,6 @@ describe('render_depth_svg', () => {
 		assertOk(res);
 		expect(res.data.svg).toContain('stroke-dasharray="4 4"');
 	});
-
-	// ── toolDef.handler ──────────────────────────────────
 
 	it('handler: inline SVG で content にチャートを含む', async () => {
 		mockedGetDepth.mockResolvedValueOnce(asMockResult(depthOk()));
