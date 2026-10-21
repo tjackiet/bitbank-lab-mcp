@@ -1,4 +1,4 @@
-// 合成 fixture では除去率が最大 14.3% にしか達せず閾値の妥当性を検証できないので、上限の値は実データ（`btc_jpy_1day_2026`）に対して固定する（#141）。
+// 合成 fixture では除去率が上限に届かず閾値の妥当性を検証できないので、上限の値は実データ（`btc_jpy_1day_2026`）に対して固定する（#141）。
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BTC_JPY_1DAY_2026_OHLC, buildBtcJpy2026Candles } from '../fixtures/btc_jpy_1day_2026.js';
 
@@ -126,7 +126,7 @@ describe('issue #141 外れ値除去の上限 — BTC/JPY 日足 実データ回
 					const d = c.details as { outlierPeaksRemoved: number; outlierValleysRemoved: number };
 					return d.outlierPeaksRemoved + d.outlierValleysRemoved;
 				});
-			// 12 は 0 にはならない。idx [24,82] の ascending が上 6/12・下 6/14 と上下ともちょうど 50% で、上限（境界は通す側）を通る。
+			// 12 は 0 にはならない。idx [24,82] の ascending は上 6/12 = 50% がちょうど上限（境界は通す側）で、下 6/14 ≈ 42.9% は上限未満なので通る。
 			expect(Math.max(...removals)).toBe(12);
 		});
 	});

@@ -1,4 +1,3 @@
-// スキャン範囲と検出パターン分布期間が別の量として出ること、intraday で時刻が落ちないことを固定する（旧ラベル「検出対象期間」がスキャン窓と誤読されたため）。
 import { describe, expect, it } from 'vitest';
 import {
 	buildPatternSpanLine,
@@ -96,7 +95,7 @@ describe('buildScanRangeLine', () => {
 		expect(buildScanRangeLine(scan, '1hour', '')).toBe(buildScanRangeLine(scan, '1hour', 'Asia/Tokyo'));
 	});
 
-	// 解決できない IANA 名で行が丸ごと消えると、LLM はスキャン窓を確認できず誤読が再発する。
+	// 解決できない IANA 名で行が丸ごと消えると、LLM はスキャン窓を確認できない。
 	it.each([
 		'Tokyo',
 		'Not/AZone',

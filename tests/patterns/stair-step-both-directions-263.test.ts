@@ -1,5 +1,5 @@
 // 指名するのは #178 の計測記録 §8 の目視判定 #14（12,851,000 → 12,617,817 → 12,495,607 の単調な切り下がり 2.77%）。
-// #263 は向きを増やしただけで `FORMING_STAIR_STEP_LIMIT` を動かしていないので、閾値の直下をすり抜ける形（§8 の #20 1.86% / #23 1.52%）はそのまま残る（意図した挙動）。
+// #263 は向きを増やしただけで `FORMING_STAIR_STEP_LIMIT` を動かしていないので、閾値の直下をすり抜ける形はそのまま残る（意図した挙動）。
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { asMockResult, assertOk } from '../_assertResult.js';
 

@@ -70,7 +70,6 @@ describe('validateMainPointsNecklineSide（issue #216 Phase 2）', () => {
 	});
 
 	it('境界: 許容幅を置いていないので 1 円の逸脱でも落ちる（ゼロ許容）', () => {
-		// #216 Phase 1 の結論 4: double / triple の逸脱量は最小がパターン高さの 2.96%（絶対額 2,147 円）でゼロから離れている＝つまみを増やさずに切れる。
 		expect(validateMainPointsNecklineSide('top', [pt(9, 99.999999)], 100).reason).toBe('peaks_below_neckline');
 		expect(validateMainPointsNecklineSide('top', [pt(9, 100.000001)], 100).reason).toBeNull();
 	});

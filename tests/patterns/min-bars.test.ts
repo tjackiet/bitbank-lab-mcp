@@ -111,7 +111,6 @@ describe('minBarsForDetector — 導出式', () => {
 		});
 
 		it('手書き daysPerBar の受理域には戻っていない（#118 問題 3 の回帰）', () => {
-			// 旧実装は patternDays = Math.round(formationBars × (1day→1 / 1week→7 / それ以外→1)) を 21〜90 日で判定しており、1week の受理域 [3, 12] は構造的下限（25 本）を下回っていた。
 			const legacyDaysPerBar = (tf: string) => (tf === '1day' ? 1 : tf === '1week' ? 7 : 1);
 			const legacyRange = (tf: string, minDays: number) => ({
 				// Math.round(x) >= minDays ⟺ x >= minDays - 0.5
@@ -120,7 +119,6 @@ describe('minBarsForDetector — 導出式', () => {
 			});
 			expect(legacyRange('1week', 21)).toEqual({ minBars: 3, maxBars: 12 });
 			expect(getHsFormingBarParams('1week').minBars).toBeGreaterThan(legacyRange('1week', 21).maxBars);
-			// 1month は旧実装が 21 バー = 21 ヶ月を要求していた。バー数統一後は構造的下限に持ち上がるので、閾値は緩むのではなく厳しくなる。
 			expect(getHsFormingBarParams('1month').minBars).toBe(structuralFloorBars('1month'));
 			expect(getHsFormingBarParams('1month').minBars).toBeGreaterThan(legacyRange('1month', 21).minBars);
 		});
@@ -144,7 +142,7 @@ describe('minBarsForDetector — 導出式', () => {
 			expect(minWindowBars, `${tf}`).toBeLessThanOrEqual(bars - 1 - 5);
 			expect(minWindowBars, `${tf}（1 本余分でない）`).toBeGreaterThan(bars - 2 - 5);
 		}
-		// minWindowBars は構造的下限（structuralFloorBars）なので時間足でスケールする。旧実装のマジックナンバー 15（全時間足で 21 本）に戻っていないことを固定する。
+		// minWindowBars は構造的下限（structuralFloorBars）なので時間足でスケールする。
 		const table = Object.fromEntries(ALL_TIMEFRAMES.map((tf) => [tf, minBarsForDetector(tf, 'triangle')]));
 		expect(table).toEqual({
 			'1min': 21,

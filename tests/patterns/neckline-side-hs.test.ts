@@ -1,4 +1,4 @@
-// 実データケースが `patterns` で種別を絞るのは、`view=debug` の候補配列が cap 200 件でトリムされるため（絞らないと 1hour の候補 2,000 件弱に押し出される）。
+// 実データケースが `patterns` で種別を絞るのは、`view=debug` の候補配列が cap 200 件でトリムされるため。
 import { describe, expect, it, vi } from 'vitest';
 import {
 	necklineSideDetailsFrom,

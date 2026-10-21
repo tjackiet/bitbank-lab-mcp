@@ -1,4 +1,4 @@
-// 走査窓に他パターンのブレイクがある実体は 94.7% あり、絞り方を緩めると静かに全件に付く方向へ戻るので、「付く」だけでなく「付かない」側も同じ数だけ固定する（#288 Phase 2）。
+// 絞り方を緩めると静かに全件に付く方向へ戻るので、「付く」だけでなく「付かない」側も同じ数だけ固定する（#288 Phase 2）。
 // 合成 fixture を使うのは、実データでは 4 条件（到達前 / 到達後 / 未到達×逆方向 / 未到達×同方向のみ）を同じ系列に揃えられないため。
 import { describe, expect, it } from 'vitest';
 import {
@@ -38,7 +38,7 @@ const oppositeInWindow = (p: Entry) => p.targetOppositeBreakoutInWindow;
 
 describe('annotateTargetBreakoutConfounders: 到達側（開区間・方向不問）', () => {
 	it('到達前に**同方向**の他ブレイクがあれば付く（同方向を見落とさない）', () => {
-		// Phase 1 の予備監査で 20 本超の到達 6 件のうち 4 件が同方向だった。逆方向だけに絞るとそれらが「自力で届いた」と読まれるので、到達側は方向を問わない。
+		// 逆方向だけに絞ると、到達前に同方向の別パターンのブレイクがあった到達が「自力で届いた」と読まれるので、到達側は方向を問わない。
 		const self = reached('triangle_ascending', 100, 'up', 20);
 		const other = reached('falling_wedge', 110, 'up', 5);
 		annotateTargetBreakoutConfounders([self, other]);

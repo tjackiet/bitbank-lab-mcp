@@ -211,7 +211,7 @@ describe('実データ D の 1hour: Phase 1.5 の「形 X」が shoulders_not_ne
 		[2, ['42-45-49-83-91', '30-39-49-83-91', '25-39-49-83-91']],
 	];
 
-	/** `detectPatterns` 経由だと `view=debug` の候補配列が cap 200 件でトリムされ、`swingDepth=2` の 1,797 件から目的の窓が押し出されるので、`detect_patterns.ts` と同じ順序で ctx を組んで H&S 検出器を直接呼ぶ。 */
+	/** `detectPatterns` 経由だと `view=debug` の候補配列が cap 200 件でトリムされ、目的の窓が押し出されるので、`detect_patterns.ts` と同じ順序で ctx を組んで H&S 検出器を直接呼ぶ。 */
 	function debugCandidatesFor(swingDepth: number): CandDebugEntry[] {
 		const candles = buildBtcJpy1hour20260905Candles() as unknown as CandleData[];
 		const resolved = resolveParams(TF, { swingDepth });

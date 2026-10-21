@@ -1,4 +1,3 @@
-// 切り出し時に定義を変えていないことを固定するテストなので、期待値は double の旧実装の式から導いてある（#199 候補 1）。
 import { describe, expect, it } from 'vitest';
 import { averageDefinedAxes, breakoutQualityScore, retracementScore } from '../../tools/patterns/scoring.js';
 import { RETRACEMENT_MAX, RETRACEMENT_MIN } from '../../tools/patterns/structural.js';
