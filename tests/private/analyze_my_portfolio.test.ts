@@ -2671,7 +2671,7 @@ describe('analyze_my_portfolio — 取得原価の決定性（出庫に押し出
 	const fixedNowMs = Date.UTC(2026, 4, 16, 3, 0, 0, 0);
 	/** 2023-04-20 12:00 JST（直近 400 日窓の外。年 chunk の追加取得が要る） */
 	const depositMs = Date.UTC(2023, 3, 20, 3, 0, 0, 0);
-	/** 2024-06-01 12:00 JST（入庫年より**新しい**＝旧実装では入庫より先に枠を取る） */
+	/** 2024-06-01 12:00 JST（入庫年より新しいので、年の新しい順に枠を取ると入庫より先に枠を取ってしまう） */
 	const withdrawalMs = Date.UTC(2024, 5, 1, 3, 0, 0, 0);
 	const DEPOSIT_DAY_OPEN = 8_000_000;
 
@@ -3334,7 +3334,7 @@ describe('analyze_my_portfolio — API pair の取得境界正規化', () => {
 		expect(btc?.cost_basis).toBe(6_000_000);
 		expect(btc?.pair).toBe('btc_jpy');
 		expect(result.data.holdings.map((h) => h.asset).sort()).toEqual(['btc', 'jpy']);
-		// PR #37 の warning 経路。BTC の価格は引けているので誤検知してはいけない
+		// BTC の価格は引けているので、未評価フローの warning を誤検知してはいけない
 		expect(result.data.daily_performance?.unpriced_flow_assets).toBeUndefined();
 		// 静的 candle では期初始値も欠損するので start_boundary / 増減率抑止の warning が加わり 4 本になる（#86）。
 		expect(result.meta.warnings).toHaveLength(4);

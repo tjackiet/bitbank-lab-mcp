@@ -1,9 +1,4 @@
-/**
- * 実データ A（`btc_jpy` `1day`）の窓先頭 relaxed H&S が、履歴不足を理由に
- * 出力から除外されることをパイプライン全体で固定する（issue #297 項目1(b)）。
- * 構造図とネックラインの値一致そのものは、合成 fixture の
- * `tests/patterns/hs-neckline-diagram-consistency.test.ts` が引き続き検証する。
- */
+// 実データ A（`btc_jpy` `1day`）の窓先頭 relaxed H&S が履歴不足で出力から除外されることをパイプライン全体で固定する（構造図とネックラインの値一致は `tests/patterns/hs-neckline-diagram-consistency.test.ts` が見る。issue #297）。
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../tools/analyze_indicators.js', () => ({ default: vi.fn() }));
@@ -14,7 +9,7 @@ import detectPatterns from '../tools/detect_patterns.js';
 import { asMockResult, assertOk } from './_assertResult.js';
 import { buildBtcJpy2026Candles } from './fixtures/btc_jpy_1day_2026.js';
 
-/** 実データ A で relaxed H&S に落ちる最小のオプション集合（#226 Phase 1 の実測）。 */
+/** 実データ A で relaxed H&S に落ちる最小のオプション集合。 */
 const RELAXED_OPTS = {
 	tolerancePct: 0.01,
 	headProminencePct: 0.001,

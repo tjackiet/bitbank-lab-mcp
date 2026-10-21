@@ -87,7 +87,6 @@ describe('buildMarketSignalHandlerText', () => {
 		expect(text).not.toContain('主要因:');
 	});
 
-	// SMA section
 	it('SMA詳細: 3本の移動平均を表示', () => {
 		const text = buildMarketSignalHandlerText(makeInput());
 		expect(text).toContain('【SMA（移動平均線）詳細】');
@@ -153,7 +152,6 @@ describe('buildMarketSignalHandlerText', () => {
 		expect(text).toContain('下');
 	});
 
-	// Recent cross
 	it('ゴールデンクロスを表示', () => {
 		const text = buildMarketSignalHandlerText(
 			makeInput({
@@ -206,7 +204,6 @@ describe('buildMarketSignalHandlerText', () => {
 		expect(text).toContain('10本前');
 	});
 
-	// Supplementary indicators
 	it('補足指標: RSI を表示', () => {
 		const text = buildMarketSignalHandlerText(makeInput());
 		expect(text).toContain('【補足指標】');
@@ -287,7 +284,6 @@ describe('buildMarketSignalHandlerText', () => {
 		expect(text).not.toContain('【補足指標】');
 	});
 
-	// Breakdown
 	it('breakdownArray ありの場合: raw×weight=寄与 形式', () => {
 		const text = buildMarketSignalHandlerText(
 			makeInput({
@@ -318,7 +314,6 @@ describe('buildMarketSignalHandlerText', () => {
 		expect(text).not.toContain('【内訳');
 	});
 
-	// Next actions
 	it('nextActions ありの場合', () => {
 		const text = buildMarketSignalHandlerText(
 			makeInput({

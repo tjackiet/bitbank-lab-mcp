@@ -74,8 +74,6 @@ describe('analyze_mtf_fibonacci', () => {
 		expect(mockedAnalyzeFibonacci).toHaveBeenCalledTimes(2);
 	});
 
-	// ── 上流 warning の伝播 ──────────────────────────────
-
 	it('失敗期間が `[Nd]` prefix 付きで meta.warning に集約される', async () => {
 		mockedAnalyzeFibonacci
 			.mockResolvedValueOnce(

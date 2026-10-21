@@ -69,14 +69,11 @@ function buildDowntrendCandles(): Candle[] {
 	];
 }
 
-/** range=0（全足同一価格）の candles */
 function buildFlatCandles(): Candle[] {
 	return Array.from({ length: 12 }, (_, i) => mc(i, 100, 100, 100, 100));
 }
 
-/** 統計計算用: 水準付近を複数回タッチする長期データ */
 function buildStatsCandles(): Candle[] {
-	// 上昇トレンド candles (10本) + 追加で水準付近を行き来する candles
 	const base = buildUptrendCandles();
 	// 162 (38.2%) 水準付近を行き来するデータを追加
 	const extra: Candle[] = [];
@@ -92,8 +89,6 @@ describe('analyze_fibonacci', () => {
 	const mockedGetCandles = vi.mocked(getCandles);
 
 	afterEach(() => vi.clearAllMocks());
-
-	// ── バリデーション・エラー系 ─────────────────────────
 
 	it('inputSchema: lookbackDays < 14 を拒否', () => {
 		expect(() => toolDef.inputSchema.parse({ pair: 'btc_jpy', lookbackDays: 13 })).toThrow();
@@ -127,8 +122,6 @@ describe('analyze_fibonacci', () => {
 		expect(res.summary).toContain('検出できません');
 	});
 
-	// ── 上昇トレンド: リトレースメント ───────────────────
-
 	it('上昇トレンドのリトレースメント水準を正しく計算', async () => {
 		mockedGetCandles.mockResolvedValueOnce(asMockResult(candlesOk(buildUptrendCandles())));
 		const res = await analyzeFibonacci({ pair: 'btc_jpy', mode: 'retracement', lookbackDays: 14 });
@@ -139,8 +132,7 @@ describe('analyze_fibonacci', () => {
 		expect(res.data.swingHigh.price).toBe(200);
 		expect(res.data.range).toBe(100);
 
-		// 上昇トレンドのリトレースメント: high - range * ratio
-		// 0%: 200, 23.6%: 176, 38.2%: 162, 50%: 150, 61.8%: 138, 78.6%: 121, 100%: 100
+		// 上昇トレンドのリトレースメントは high - range * ratio（0%: 200, 23.6%: 176, 38.2%: 162, 50%: 150, 61.8%: 138, 78.6%: 121, 100%: 100）
 		expect(res.data.levels).toHaveLength(7);
 		expect(res.data.levels[0].ratio).toBe(0);
 		expect(res.data.levels[0].price).toBe(200);
@@ -155,22 +147,17 @@ describe('analyze_fibonacci', () => {
 		expect(res.data.extensions).toHaveLength(0);
 	});
 
-	// ── 下降トレンド: リトレースメント ───────────────────
-
 	it('下降トレンドのリトレースメント水準を正しく計算', async () => {
 		mockedGetCandles.mockResolvedValueOnce(asMockResult(candlesOk(buildDowntrendCandles())));
 		const res = await analyzeFibonacci({ pair: 'btc_jpy', mode: 'retracement', lookbackDays: 14 });
 		assertOk(res);
 
 		expect(res.data.trend).toBe('down');
-		// 下降トレンド: low + range * ratio
-		// 0%: 100, 23.6%: 124, 50%: 150, 100%: 200
+		// 下降トレンドは low + range * ratio（0%: 100, 23.6%: 124, 50%: 150, 100%: 200）
 		expect(res.data.levels[0].price).toBe(100);
 		expect(res.data.levels[3].price).toBe(150);
 		expect(res.data.levels[6].price).toBe(200);
 	});
-
-	// ── エクステンション ─────────────────────────────────
 
 	it('上昇トレンドの extension は swingHigh を上抜く', async () => {
 		mockedGetCandles.mockResolvedValueOnce(asMockResult(candlesOk(buildUptrendCandles())));
@@ -193,8 +180,6 @@ describe('analyze_fibonacci', () => {
 		expect(res.data.extensions[0].price).toBe(73);
 	});
 
-	// ── mode='both' ──────────────────────────────────────
-
 	it('mode=both でリトレースメントとエクステンション両方を返す', async () => {
 		mockedGetCandles.mockResolvedValueOnce(asMockResult(candlesOk(buildUptrendCandles())));
 		const res = await analyzeFibonacci({ pair: 'btc_jpy', mode: 'both', lookbackDays: 14 });
@@ -203,8 +188,6 @@ describe('analyze_fibonacci', () => {
 		expect(res.data.levels.length).toBeGreaterThan(0);
 		expect(res.data.extensions.length).toBeGreaterThan(0);
 	});
-
-	// ── markNearest / findPosition ───────────────────────
 
 	it('isNearest が現在価格に最も近い水準にマークされる', async () => {
 		mockedGetCandles.mockResolvedValueOnce(asMockResult(candlesOk(buildUptrendCandles())));
@@ -222,8 +205,7 @@ describe('analyze_fibonacci', () => {
 		const res = await analyzeFibonacci({ pair: 'btc_jpy', mode: 'retracement', lookbackDays: 14 });
 		assertOk(res);
 
-		// currentPrice=192, levels: 100,121,138,150,162,176,200
-		// belowLevel = 176 (below 192), aboveLevel = 200 (above 192)
+		// currentPrice=192 に対し levels は 100,121,138,150,162,176,200 なので、belowLevel = 176、aboveLevel = 200
 		expect(res.data.position.belowLevel).not.toBeNull();
 		expect(res.data.position.aboveLevel).not.toBeNull();
 		expect(res.data.position.nearestLevel).not.toBeNull();
@@ -239,8 +221,6 @@ describe('analyze_fibonacci', () => {
 		// levels は空なので position は extensions から算出
 		expect(res.data.position).toBeDefined();
 	});
-
-	// ── 過去統計 (calculateLevelStats) ───────────────────
 
 	it('水準付近のタッチがあれば levelStats を算出', async () => {
 		const candles = buildStatsCandles();
@@ -273,7 +253,6 @@ describe('analyze_fibonacci', () => {
 			historyLookbackDays: 180,
 		});
 		assertOk(res);
-		// getCandles が2回呼ばれる
 		expect(mockedGetCandles).toHaveBeenCalledTimes(2);
 	});
 
@@ -299,8 +278,6 @@ describe('analyze_fibonacci', () => {
 		// levels が空なので levelStats は空配列 → data に undefined
 		expect(res.data.levelStats).toBeUndefined();
 	});
-
-	// ── content 生成 ─────────────────────────────────────
 
 	it('content にフィボナッチ分析の主要セクションを含む', async () => {
 		mockedGetCandles.mockResolvedValueOnce(asMockResult(candlesOk(buildUptrendCandles())));
@@ -353,13 +330,10 @@ describe('analyze_fibonacci', () => {
 		const res = await analyzeFibonacci({ pair: 'btc_jpy', mode: 'retracement', lookbackDays: 14 });
 		assertOk(res);
 
-		// range が小さいため水準が全て近くなりタッチが多い可能性がある
-		// content の形式検証のみ
+		// range が小さいため水準が全て近くなりタッチが多い可能性があるので、content の形式だけを検証する
 		expect(res.content).toBeDefined();
 		expect(res.content!.length).toBeGreaterThan(0);
 	});
-
-	// ── summary ──────────────────────────────────────────
 
 	it('summary にトレンドと水準情報を含む', async () => {
 		mockedGetCandles.mockResolvedValueOnce(asMockResult(candlesOk(buildUptrendCandles())));
@@ -376,8 +350,6 @@ describe('analyze_fibonacci', () => {
 		assertOk(res);
 		expect(res.summary).toContain('下降');
 	});
-
-	// ── data / meta 構造 ─────────────────────────────────
 
 	it('data に必要なフィールドを全て含む', async () => {
 		mockedGetCandles.mockResolvedValueOnce(asMockResult(candlesOk(buildUptrendCandles())));
@@ -406,8 +378,6 @@ describe('analyze_fibonacci', () => {
 		expect(res.meta?.mode).toBe('both');
 	});
 
-	// ── distancePct ──────────────────────────────────────
-
 	it('各水準の distancePct が現在価格からの乖離率を正しく表す', async () => {
 		mockedGetCandles.mockResolvedValueOnce(asMockResult(candlesOk(buildUptrendCandles())));
 		const res = await analyzeFibonacci({ pair: 'btc_jpy', mode: 'retracement', lookbackDays: 14 });
@@ -421,8 +391,6 @@ describe('analyze_fibonacci', () => {
 		const levelLast = res.data.levels[res.data.levels.length - 1]; // ratio=1.0, price=100
 		expect(levelLast.distancePct).toBeLessThan(0);
 	});
-
-	// ── 上流 warning の伝播 ──────────────────────────────
 
 	it('getCandles meta.warning を summary / content / meta に伝播する', async () => {
 		mockedGetCandles.mockResolvedValueOnce(
@@ -511,8 +479,6 @@ describe('analyze_fibonacci', () => {
 		assertOk(res);
 		expect(res.meta?.warning).toContain('履歴 0 件で部分失敗');
 	});
-
-	// ── toolDef ──────────────────────────────────────────
 
 	it('toolDef.handler が analyzeFibonacci に委譲', async () => {
 		mockedGetCandles.mockResolvedValueOnce(asMockResult(candlesOk(buildUptrendCandles())));

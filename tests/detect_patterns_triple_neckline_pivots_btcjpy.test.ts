@@ -1,8 +1,4 @@
-/**
- * PR4 / PR7 の実データ回帰。BTC/JPY 1hour / 4hour の triple 候補は、既存の
- * ネックライン側ゲートより先に先行トレンドを検証する。時間足別の横ばい閾値による方向判定と、
- * 完成済み triple の単調階段除外をそれぞれ確認する。
- */
+// BTC/JPY 1hour / 4hour の triple 候補は、既存のネックライン側ゲートより先に先行トレンドを検証する（時間足別の横ばい閾値による方向判定と、完成済み triple の単調階段除外）。
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../tools/analyze_indicators.js', () => ({ default: vi.fn() }));
@@ -20,7 +16,6 @@ function mockCandles() {
 	);
 }
 
-/** `includeForming: true` で `detect_patterns` を走らせ、ok を確認して返す。 */
 async function runForming(tf = '1hour') {
 	mockCandles();
 	const res = await detectPatterns('btc_jpy', tf, 365, { includeForming: true });
@@ -51,10 +46,7 @@ describe('detect_patterns: triple の先行トレンド方向ゲート（実デ�
 		expect(tt?.precedingTrend?.direction).toBe('up');
 	});
 
-	/**
-	 * 上の表の注記の裏取り（issue #261）。`1hour` に出ていた forming `triple_bottom`
-	 * 313-331-364 が**消えたこと**だけでは、理由が #261 のゲートなのか別の変更なのかが読めない。
-	 */
+	// 消えたことだけでは理由が読めないので、313-331-364 がどの理由コードで落ちたかを固定する。
 	it('1hour の forming triple_bottom は PR4 の先行トレンドゲートで落ちる', async () => {
 		mockCandles();
 		const res = await detectPatterns('btc_jpy', '1hour', 365, {
@@ -84,7 +76,6 @@ describe('detect_patterns: triple の先行トレンド方向ゲート（実デ�
 		expect(lengths.filter((l) => l.startsWith('double_')).every((l) => l.endsWith(':3'))).toBe(true);
 	});
 
-	/** `view=full` の content を 1 回分取る。 */
 	async function fullContent(tf: string): Promise<string> {
 		mockCandles();
 		const out = (await detectPatternsTool.handler({

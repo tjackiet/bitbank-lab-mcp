@@ -1,7 +1,3 @@
-/**
- * detectPatternsViewsHandler ブランチカバレッジテスト
- * 純粋関数群を直接テスト（mock 不要）
- */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	buildDetectionRouteLine,
@@ -23,8 +19,6 @@ afterEach(() => {
 	vi.resetAllMocks();
 });
 
-// ── helpers ──
-
 function makePattern(overrides: Partial<PatternEntry> = {}): PatternEntry {
 	return {
 		type: 'double_top',
@@ -39,8 +33,7 @@ function makePattern(overrides: Partial<PatternEntry> = {}): PatternEntry {
 	};
 }
 
-// `effective_params` は #184 で per-parameter の `{ value, source }` になった
-// （旧: `{ tolerancePct: 0.04 }`）。**入力値ではなく解決後の実効値**を持つ。
+// `effective_params` は入力値ではなく解決後の実効値を持つ。
 const emptyMeta = {
 	debug: { swings: [], candidates: [] },
 	effective_params: {
@@ -58,11 +51,6 @@ const emptyRes = {
 	meta: {},
 };
 
-// buildPeriodLine（現 buildPatternSpanLine）は tools/patterns/period.ts へ移設した。
-// テストは tests/patterns/period.test.ts を参照。
-
-// ── buildTypeSummary ──
-
 describe('buildTypeSummary', () => {
 	it('種別別カウントを返す', () => {
 		const pats = [makePattern(), makePattern({ type: 'pennant' }), makePattern()];
@@ -76,8 +64,6 @@ describe('buildTypeSummary', () => {
 		expect(buildTypeSummary(pats)).toContain('unknown×1');
 	});
 });
-
-// ── formatCandidateDetails (formatDebugView 経由で間接テスト) ──
 
 function makeDebugViewRes() {
 	return {
@@ -230,10 +216,6 @@ describe('formatDebugView / formatCandidateDetails', () => {
 		expect(text).toContain('post_filter: falling lows not rising');
 	});
 
-	// default ケース（専用フォーマッタを持たない reason）: details の実フィールドを列挙する。
-	// 以前は存在しないフィールド名（spreadStart / hiSlope 等）を決め打ちで読んでいたため、
-	// 実際の検出器の details（r2 / touches / score …）が 1 つも表示されず
-	// `spread: n/a` としか出なかった（#124）。
 	it('default ケース: details の実フィールドを列挙する', () => {
 		const meta = makeMeta([
 			{
@@ -302,8 +284,6 @@ describe('formatDebugView / formatCandidateDetails', () => {
 	});
 });
 
-// ── cap トリムの申告行（issue #180） ──
-
 describe('formatDebugView: cap トリムの申告行（#180）', () => {
 	const cands = [
 		{ type: 'triple_bottom', accepted: true },
@@ -322,19 +302,14 @@ describe('formatDebugView: cap トリムの申告行（#180）', () => {
 			},
 		};
 		const text = formatDebugView('hdr', meta, [], makeDebugViewRes()).content[0].text;
-		// candidates は accepted 優先で残すので落ちるのは棄却理由、
-		// swings は先頭から残すので落ちるのは直近側。**逆向き**であることまで出す。
+		// candidates は accepted 優先で残すので落ちるのは棄却理由、swings は先頭から残すので落ちるのは直近側。逆向きであることまで出す。
 		expect(text).toContain(
 			'【Candidates】 2 / 全 289 件（287 件省略。accepted は全件残っているため省略分はすべて棄却理由）',
 		);
 		expect(text).toContain('【Swings】 1 / 全 5 件（4 件省略。先頭から残すため省略分はすべて直近側のスイング）');
 	});
 
-	/**
-	 * トリムは `[...accepted, ...rejected]` を先頭から cap 件残すだけなので、**accepted が cap を
-	 * 超えれば accepted も押し出される**。返却分が全件 accepted のときがその状態で、
-	 * 「省略分はすべて棄却理由」と言い切ると嘘になる（本 PR が直そうとしている種類の嘘）。
-	 */
+	// トリムは `[...accepted, ...rejected]` を先頭から cap 件残すだけなので、accepted が cap を超えれば accepted も押し出される。
 	it('返却分が全件 accepted のときは「棄却理由だけ」と言い切らない', () => {
 		const meta = {
 			debug: {
@@ -372,11 +347,7 @@ describe('formatDebugView: cap トリムの申告行（#180）', () => {
 		expect(text).toContain('【Swings】 0 / 全 0 件（省略なし）');
 	});
 
-	/**
-	 * 件数が分からないときに「省略なし」と書くと、本 issue が直そうとしている嘘
-	 * （切られたのに切られたと分からない）をそのまま再導入することになる。
-	 * 申告フィールドが無い meta では**行ごと出さない**。
-	 */
+	// 件数が分からないときに「省略なし」と書くと、切られたのに切られたと分からない嘘になるので、申告フィールドが無い meta では行ごと出さない。
 	it('申告フィールドが無い meta では件数行を出さない', () => {
 		const meta = makeMeta(cands);
 		const text = formatDebugView('hdr', meta, [], makeDebugViewRes()).content[0].text;
@@ -387,13 +358,7 @@ describe('formatDebugView: cap トリムの申告行（#180）', () => {
 	});
 });
 
-// ── 棄却理由の集計ブロック（issue #191 A） ──
-
-/**
- * 集計ブロックの type 行を読み戻す。**文言ではなく数字の整合を検証するため**の parser で、
- * 「行の合計 = 上に書いた rejected 件数」が崩れていないかをここで機械的に見る
- * （LLM に手集計させたときに壊れたのがまさにこの整合。#191 の起票根拠）。
- */
+/** 文言ではなく数字の整合（行の合計 = 上に書いた rejected 件数）を検証するための parser（#191）。 */
 function parseRejectionRows(text: string): Array<{ type: string; count: number; reasons: Array<[string, number]> }> {
 	const rows: Array<{ type: string; count: number; reasons: Array<[string, number]> }> = [];
 	for (const line of text.split('\n')) {
@@ -414,11 +379,7 @@ function parseRestRow(text: string): { types: number; count: number } | null {
 	return m ? { types: Number(m[1]), count: Number(m[2]) } : null;
 }
 
-/**
- * reason 単独の横断合計行（`▼ reason 横断合計（…）` の次行）を読み戻す（#193 B-1）。
- * type 行と同じく**文言ではなく数字の整合**を見る parser。行が無ければ `null`
- * （「出していない」と「合計が 0」を呼び出し側で区別できるようにする）。
- */
+/** 行が無ければ `null` を返し、「出していない」と「合計が 0」を呼び出し側で区別できるようにする。 */
 function parseCrossTotalRow(text: string): Array<[string, number]> | null {
 	const lines = text.split('\n');
 	const i = lines.findIndex((line) => line.startsWith(REJECTION_CROSS_TOTAL_LABEL));
@@ -464,10 +425,7 @@ describe('formatDebugView: 棄却理由の集計ブロック（#191 A）', () =>
 		expect(text.indexOf('▼ 棄却理由の内訳')).toBeLessThan(text.indexOf('❌ = 候補段階の棄却'));
 	});
 
-	/**
-	 * cap 飽和時（#191 要件 2 / 3）。**「棄却理由の内訳 183 件」とだけ書くと 289 件の内訳だと誤読される。**
-	 * censored な内訳からの誤帰属は #152 → #167 / #172 で実際に起きているので、ここで文言を固定する。
-	 */
+	// 「棄却理由の内訳 183 件」とだけ書くと 289 件の内訳だと誤読されるので、cap 飽和時は集計が表示分のみであることを明記する（#191）。
 	it('cap 飽和: 集計が「表示分のみ」であることを明記し、見出しの申告値と食い違わない', () => {
 		const candidates = [
 			...Array.from({ length: 17 }, () => ({ type: 'triple_top', accepted: true })),
@@ -505,10 +463,7 @@ describe('formatDebugView: 棄却理由の集計ブロック（#191 A）', () =>
 		expect(text).not.toContain('全 289 件 = accepted');
 	});
 
-	/**
-	 * 総数の申告が無い meta（ハンドラ直呼び等）。`formatTrimNote` が見出し行ごと落とすのと同じ理由で、
-	 * 「全 N 件」と書くと本 issue が禁じている censored な内訳の誤帰属を再導入する。
-	 */
+	// 総数の申告が無いときに「全 N 件」と書くと censored な内訳の誤帰属を再導入するので、`formatTrimNote` が見出し行ごと落とすのと同じく省略の有無を断定しない。
 	it('総数の申告が無い meta では「受け取った N 件」と書き、省略の有無を断定しない', () => {
 		const text = formatDebugView('hdr', makeMeta(rejects('triple_top', 'peaks_not_equal', 3)), [], makeDebugViewRes())
 			.content[0].text;
@@ -529,10 +484,7 @@ describe('formatDebugView: 棄却理由の集計ブロック（#191 A）', () =>
 		expect(text).toContain('▼ 棄却理由の内訳: なし（rejected 0 件）');
 	});
 
-	/**
-	 * `reason` だけに畳むと `triple_bottom:valleys_missing` と `double_bottom:valleys_missing` が
-	 * 同じ行に潰れて帰属が読めなくなる（#191 要件 4）。**type で分けることを固定する。**
-	 */
+	// `reason` だけに畳むと `triple_bottom:valleys_missing` と `double_bottom:valleys_missing` が同じ行に潰れて帰属が読めなくなる（#191 要件 4）。
 	it('type が違えば同じ reason でも行を分ける', () => {
 		const meta = makeMeta([
 			...rejects('triple_bottom', 'valleys_missing', 4),
@@ -586,21 +538,7 @@ describe('formatDebugView: 棄却理由の集計ブロック（#191 A）', () =>
 	});
 });
 
-// ── reason 単独の横断合計（issue #193 B-1） ──
-
-/**
- * **起票根拠はライブ実測**（btc_jpy 1hour / `view=debug` / `patterns` 無指定 / cap 飽和 200 件）。
- * 「棄却理由を多い順に 3 つ」を問うたところ LLM が 2 回外している:
- *
- * 1. type 別の数値を横断合計として提示した（`slopes_not_same_direction 58` は falling_wedge の分だけ、
- *    `weaker_slope_ratio_low 28` は rising_wedge の分だけ）
- * 2. 続けて `no_convergence(41) > slopes_not_same_direction(66)` と、**不等号が成立しない**式を書いた
- *
- * 同じ日の `patterns=["triple_top","triple_bottom"]`（62 件。reason と type がほぼ 1 対 1）では
- * 横断集計に成功している。**失敗条件は「reason が type を跨ぐこと」**なので、跨ぎが起きうる
- * ときだけ横断合計を出す。以下のフィクスチャは (1) の実測値をそのまま使い、
- * ツールが出す横断合計が 66 / 47 / 41 になる（= LLM が外した答えの正解）ことを固定する。
- */
+// LLM が横断集計を外す条件は「reason が type を跨ぐこと」なので、跨ぎが起きうるときだけ横断合計を出す。フィクスチャはライブ実行時の候補列に寄せ、横断合計が 66 / 47 / 41 になる（LLM が外した答えの正解）ことを固定する（#193 B-1）。
 describe('formatDebugView: reason 単独の横断合計（#193 B-1）', () => {
 	/** ライブ実測（cap 飽和 200 / 全 2,058）に寄せた候補列。両ウェッジに 3 reason が跨る。 */
 	const liveLikeCandidates = [
@@ -645,11 +583,7 @@ describe('formatDebugView: reason 単独の横断合計（#193 B-1）', () => {
 		expect(text.indexOf(REJECTION_CROSS_TOTAL_LABEL)).toBeLessThan(text.indexOf('❌ = 候補段階の棄却'));
 	});
 
-	/**
-	 * cap 飽和時（#193 B-1 要件 2）。**横断合計行だけを読んだ人に「母集団の内訳」と誤読させない。**
-	 * censored な内訳からの誤帰属は #152 → #167 / #172 で実際に起きているので、
-	 * type 別行と**同じ** censored 警告を横断合計行にも付ける。
-	 */
+	// 横断合計行だけを読んだ人に「母集団の内訳」と誤読させないよう、type 別行と同じ censored 警告を横断合計行にも付ける。
 	it('cap 飽和: 横断合計行にも「**全 N 件の内訳ではない**」が付く', () => {
 		const meta = {
 			debug: {
@@ -668,10 +602,7 @@ describe('formatDebugView: reason 単独の横断合計（#193 B-1）', () => {
 		expect(parseCrossTotalRow(text)?.reduce((sum, [, n]) => sum + n, 0)).toBe(162);
 	});
 
-	/**
-	 * 跨ぎが起こりえない実行（type 1 種別）では出さない。type 行がそのまま横断合計になるので、
-	 * 出しても同じ数字を 2 度書くだけで content が太るだけ（#193 要件 4）。
-	 */
+	// 跨ぎが起こりえない実行（type 1 種別）では、type 行がそのまま横断合計になり、出しても同じ数字を 2 度書くだけなので出さない（#193 要件 4）。
 	it('type が 1 種別のときは出さない（type 行がそのまま横断合計）', () => {
 		const meta = makeMeta([
 			...rejects('triple_top', 'three_peaks_not_level', 21),
@@ -707,11 +638,7 @@ describe('formatDebugView: reason 単独の横断合計（#193 B-1）', () => {
 		expect(cross?.reduce((sum, [, n]) => sum + n, 0)).toBe(candidates.length);
 	});
 
-	/**
-	 * 横断合計は `byType` ではなく**全 rejected から独立に**数える。type 行が上限 20 で残余に
-	 * 畳まれても、横断合計の合計は rejected と一致し続けなければならない
-	 * （type 行の残余から reason を拾い直す実装にすると、ここが黙って合わなくなる）。
-	 */
+	// 横断合計は `byType` ではなく全 rejected から独立に数える（type 行の残余から reason を拾い直す実装にすると、ここが黙って合わなくなる）。
 	it('type 行が残余に畳まれても横断合計は rejected と一致する', () => {
 		// 25 種別 × 共通の reason 'r'（type 行は 20 + 残余 1 に畳まれる）
 		const candidates = Array.from({ length: 25 }, (_, i) =>
@@ -732,8 +659,6 @@ describe('formatDebugView: reason 単独の横断合計（#193 B-1）', () => {
 		]);
 	});
 });
-
-// ── 検出経路（relaxed provenance）の申告（issue #191 B / #189） ──
 
 describe('buildDetectionRouteLine', () => {
 	it('relaxed が 0 件でも行を出す（「行が無い = relaxed なし」を推論させない）', () => {
@@ -794,8 +719,7 @@ describe('検出経路行と provenance の view 別の出方（#191 B / 規約 
 			// strict 由来には印を付けない（印の無さは検出経路行の件数が裏づける）
 			expect(text).toContain('2. double_top (パターン整合度: 0.75)\n');
 		}
-		// summary は**パターン行を出さない view** なので、印は付きようがない。届くのは件数の集計だけ
-		// （§3 は下位 view に無いものを上位が足すのを許す。逆は不可）。
+		// summary はパターン行を出さない view なので、印は付きようがなく、届くのは件数の集計だけ（§3 は下位 view に無いものを上位が足すのを許す。逆は不可）。
 		const summary = formatSummaryView('hdr', relaxedPats, '', '', undefined, false, emptyRes).content[0].text;
 		expect(summary).not.toContain('[relaxed_triple_x1.25]');
 		expect(summary).not.toContain('パターン整合度');
@@ -807,8 +731,6 @@ describe('検出経路行と provenance の view 別の出方（#191 B / 規約 
 		expect(text).not.toContain('検出経路');
 	});
 });
-
-// ── formatPatternLine ──
 
 describe('formatPatternLine', () => {
 	it('double_top: full view で山1/谷/山2 ラベルを出力する', () => {
@@ -906,10 +828,7 @@ describe('formatPatternLine', () => {
 		expect(result).toContain('完成（ブレイクアウト確認済み）');
 	});
 
-	// **`invalidReason` が無いときは裸の「無効」だけ**（issue #286）。旧実装はここで
-	// 「無効（期待と逆方向にブレイク）」と書いていたが、**その文言に対応する理由コードは
-	// 検出器に 1 つも存在しなかった**。理由コードごとの文言は
-	// 「状態行: status × 理由コードの網羅」が持つ。
+	// 「期待と逆方向にブレイク」に対応する理由コードは検出器に存在しないので、`invalidReason` が無いときは裸の「無効」だけにする（issue #286）。
 	it('status: invalid は invalidReason が無ければ裸のラベルだけ', () => {
 		const p = makePattern({ status: 'invalid' });
 		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
@@ -1033,7 +952,6 @@ describe('formatPatternLine', () => {
 		expect(result).not.toContain('パターン結果:');
 	});
 
-	// pennant fields
 	it('pennant: 全フィールドあり（poleDirection/priorTrendDirection/flagpoleHeight/retracementRatio/isTrendContinuation）', () => {
 		const p = makePattern({
 			type: 'pennant',
@@ -1083,7 +1001,6 @@ describe('formatPatternLine', () => {
 		expect(result).toContain('pennant');
 	});
 
-	// structureDiagram
 	it('full view + structureDiagram.svg あり → SVG ブロックを出力する', () => {
 		const p = makePattern({
 			structureDiagram: {
@@ -1121,7 +1038,6 @@ describe('formatPatternLine', () => {
 		expect(result).not.toContain('Structure Diagram (SVG)');
 	});
 
-	// breakoutTarget
 	it('breakoutTarget あり → ターゲット価格を出力する', () => {
 		const p = makePattern({
 			breakoutTarget: 120000,
@@ -1143,11 +1059,6 @@ describe('formatPatternLine', () => {
 		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
 		expect(result).toContain('ネックライン投影');
 	});
-
-	// ── ターゲット行の 3 形（issue #288 Phase 2）───────────────────
-	//
-	// 旧実装は `ターゲット進捗: 273%（ブレイク後60本以内に到達）` のように**判定口調**で出しており、
-	// 100 超の数字（= 到達した後の超過倍率）を「進捗」として読ませていた。
 
 	it('到達: 初到達の本数と日時を出す（走査窓の判定口調にしない）', () => {
 		const p = makePattern({
@@ -1193,7 +1104,7 @@ describe('formatPatternLine', () => {
 		);
 	});
 
-	// **issue #288 の症状そのもの。** 実機で「進捗 273%（到達）」が出ていた entry を名指しで固定する。
+	// 実機で「進捗 273%（到達）」が出ていた entry を名指しで固定する（issue #288）。
 	it('targetReachedPct が 273 の到達 entry でも content に「273」が出ない', () => {
 		const p = makePattern({
 			breakoutTarget: 110000,
@@ -1270,7 +1181,6 @@ describe('formatPatternLine', () => {
 		expect(result).not.toContain('ターゲット価格');
 	});
 
-	// neckline
 	it('neckline が水平のとき（水平）を表示する', () => {
 		const p = makePattern({ neckline: [{ y: 95000 }, { y: 95000 }] });
 		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
@@ -1288,8 +1198,6 @@ describe('formatPatternLine', () => {
 		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
 		expect(result).toContain('サポートライン');
 	});
-
-	// ── 期間表示の分離（structureRange / confirmation / precedingTrend） ──
 
 	it('新フィールドが無いとき legacy「期間」行を表示する', () => {
 		const p = makePattern({ structureRange: undefined, confirmation: undefined, precedingTrend: undefined });
@@ -1391,8 +1299,6 @@ describe('formatPatternLine', () => {
 		expect(result).not.toMatch(/\n\s+- 期間: 2/);
 	});
 
-	// ── 低 confidence の警告表示（形状不十分扱い） ──
-
 	it('confidence < 0.6 → 「形状不十分」「低信頼」などの警告ラベルを表示する', () => {
 		const p = makePattern({ confidence: 0.45 });
 		const result = formatPatternLine(p, 0, 'detailed', emptyMeta);
@@ -1424,13 +1330,8 @@ describe('formatPatternLine', () => {
 		expect(result).toMatch(/形状不十分|低信頼|信頼度: 低/);
 	});
 
-	// ── forming triple_top / triple_bottom の 3 点目暫定マーカー ──
-	//
-	// forming triple は pivots に確定した主構成点が 2 点しか入らない（#224 症状 3 以降は
-	// ネックライン定義点 2 点を挟んだ 4 点）。LLM が「3 山構造」と誤読しないよう、
-	// 現在価格を 3 点目に仮置きしている旨を明示する。
-	// **判定は `status === 'forming'` で行い、`pivots.length` に依存しない**——長さで判定していた
-	// ときは、pivots の構成を変えた瞬間に注記が黙って消えた（#224 症状 3 で実際に起きた）。
+	// forming triple は pivots に確定した主構成点が 2 点しか入らないので、LLM が「3 山構造」と誤読しないよう、現在価格を 3 点目に仮置きしている旨を明示する。
+	// 判定は `status === 'forming'` で行い、`pivots.length` に依存しない（長さで判定すると、pivots の構成を変えた瞬間に注記が黙って消える）。
 
 	it('forming triple_top: 検出器の実出力どおり 4 点（H-L-H-L）でも現在価格暫定マーカーを表示する', () => {
 		const p = makePattern({
@@ -1509,8 +1410,7 @@ describe('formatPatternLine', () => {
 	});
 
 	it('価格範囲は pivots 全点の min/max（triple_top ならネックライン定義点の谷が下限に入る）', () => {
-		// #224 症状 3 で triple の pivots に谷が入ったため、価格範囲は H&S / double と同じく
-		// ネックライン定義点を含んだ幅になる（3 山だけの不自然に狭い範囲ではなくなる）。
+		// triple の pivots にはネックライン定義点が入るので、価格範囲は H&S / double と同じくネックライン定義点を含んだ幅になる。
 		const p = makePattern({
 			type: 'triple_top',
 			status: 'completed',
@@ -1526,10 +1426,7 @@ describe('formatPatternLine', () => {
 		expect(result).toContain('価格範囲: 80円 - 101円');
 	});
 
-	// **`status` を `forming` から `near_completion` に変えた（#268 案 C）。** 検出器は
-	// `double_top` に `forming` を出さなくなったので、その組み合わせを fixture にすると
-	// 実在しない状態を固定することになる。見たいのは「暫定マーカーは type が triple の
-	// ときだけ付く」ことなので、double が実際に取る status で書く。
+	// 検出器は `double_top` に `forming` を出さないので、double が実際に取る status（`near_completion`）で書く。
 	it('near_completion の double_top には triple 用の暫定マーカーを付けない', () => {
 		const p = makePattern({
 			type: 'double_top',
@@ -1545,8 +1442,6 @@ describe('formatPatternLine', () => {
 	});
 });
 
-// ── pivot 明細行（issue #234） ──
-
 describe('formatPatternLine: pivot 明細行の役割ラベル（issue #234）', () => {
 	/** idx → isoTime。`buildIdxToIso` が読むのは `meta.debug.swings` だけなので、そこだけ埋める。 */
 	function metaWithIdx(idxs: readonly number[]) {
@@ -1554,8 +1449,7 @@ describe('formatPatternLine: pivot 明細行の役割ラベル（issue #234）',
 			...emptyMeta,
 			debug: {
 				...emptyMeta.debug,
-				// idx を 2026-09-01 からの日数として置く。**時刻は 03:00Z（JST 12:00）**
-				// ——00:00Z 前後だと既定 tz（JST）で暦日が 1 日ずれ、期待値が読みにくくなる。
+				// idx を 2026-09-01 からの日数として置き、時刻は 03:00Z（JST 12:00）にする（00:00Z 前後だと既定 tz（JST）で暦日が 1 日ずれ、期待値が読みにくくなる）。
 				swings: idxs.map((idx) => ({
 					kind: 'H',
 					idx,
@@ -1566,7 +1460,6 @@ describe('formatPatternLine: pivot 明細行の役割ラベル（issue #234）',
 		};
 	}
 
-	/** `   - <ラベル>: …` 行のラベルだけを出現順に取り出す。 */
 	function pivotRoleOrder(text: string): string[] {
 		const roles: string[] = [];
 		for (const line of text.split('\n')) {
@@ -1576,7 +1469,6 @@ describe('formatPatternLine: pivot 明細行の役割ラベル（issue #234）',
 		return roles;
 	}
 
-	/** 完成済み反転系の 5 点（`kind` は type ごとに differ するので呼び出し側が渡す）。 */
 	function fivePivots(kinds: readonly ('H' | 'L')[]) {
 		return kinds.map((kind, i) => ({
 			idx: i * 10,
@@ -1587,8 +1479,6 @@ describe('formatPatternLine: pivot 明細行の役割ラベル（issue #234）',
 	}
 
 	const FIVE_IDXS = [0, 10, 20, 30, 40];
-
-	// ── triple: 完成 5 点 / 形成中 4 点 ──
 
 	it('triple_top（完成 5 点）は 山1 / 谷1 / 山2 / 谷2 / 山3 を順に出す', () => {
 		const p = makePattern({ type: 'triple_top', status: 'completed', pivots: fivePivots(['H', 'L', 'H', 'L', 'H']) });
@@ -1637,8 +1527,6 @@ describe('formatPatternLine: pivot 明細行の役割ラベル（issue #234）',
 		]);
 	});
 
-	// ── H&S: 完成 5 点 / 形成中 4 点（並びが違う） ──
-
 	it('head_and_shoulders（完成 5 点）は 左肩 / 谷1 / 頭 / 谷2 / 右肩', () => {
 		const p = makePattern({
 			type: 'head_and_shoulders',
@@ -1650,9 +1538,7 @@ describe('formatPatternLine: pivot 明細行の役割ラベル（issue #234）',
 	});
 
 	it('head_and_shoulders（形成中 4 点）は 2 番目を「頭」と出す（5 点版の「谷1」を流用しない）', () => {
-		// 早期形成パス（tools/patterns/detect_hs.ts）の 4 点は
-		// `[左肩, 頭, 谷（頭後）, 右肩]` で **kind は H, H, L, H**。
-		// 完成版 5 点の先頭 4 つ（左肩 / 谷1 / 頭 / 谷2）を流用すると頭が「谷1」になる。
+		// 早期形成パス（tools/patterns/detect_hs.ts）の 4 点は `[左肩, 頭, 谷（頭後）, 右肩]` で kind は H, H, L, H。完成版 5 点の先頭 4 つ（左肩 / 谷1 / 頭 / 谷2）を流用すると頭が「谷1」になる。
 		const p = makePattern({
 			type: 'head_and_shoulders',
 			status: 'forming',
@@ -1660,7 +1546,6 @@ describe('formatPatternLine: pivot 明細行の役割ラベル（issue #234）',
 		});
 		const text = formatPatternLine(p, 0, 'full', metaWithIdx([0, 10, 20, 30]));
 		expect(pivotRoleOrder(text)).toEqual(['左肩', '頭', '谷（頭後）', '右肩(暫定)']);
-		// 回帰の本体: 2 番目が「谷1」になっていないこと
 		expect(text).not.toContain('谷1');
 	});
 
@@ -1687,8 +1572,6 @@ describe('formatPatternLine: pivot 明細行の役割ラベル（issue #234）',
 		expect(pivotRoleOrder(formingText)).toEqual(['左肩', '頭', '山（頭後）', '右肩(暫定)']);
 		expect(formingText).not.toContain('山1');
 	});
-
-	// ── view / 既存型の据え置き ──
 
 	it('debug でも triple / H&S の pivot 明細が出る（full と同じ条件。:1045 は変えていない）', () => {
 		const p = makePattern({
@@ -1734,8 +1617,7 @@ describe('formatPatternLine: pivot 明細行の役割ラベル（issue #234）',
 	});
 
 	it('idx→isoTime が引けない点も行は落とさず日付だけ n/a にする（後続のラベルがずれない）', () => {
-		// `meta.debug.swings` に載っていない idx（= 日付が引けない点）があっても、
-		// 行ごと落とすとラベルと点の対応が 1 つずれる。日付だけ n/a にして行は出す。
+		// `meta.debug.swings` に載っていない idx（日付が引けない点）があっても、行ごと落とすとラベルと点の対応が 1 つずれるので、日付だけ n/a にして行は出す。
 		const p = makePattern({
 			type: 'triple_top',
 			status: 'completed',
@@ -1746,8 +1628,6 @@ describe('formatPatternLine: pivot 明細行の役割ラベル（issue #234）',
 		expect(text).toContain('山3: n/a');
 	});
 });
-
-// ── formatSummaryView ──
 
 describe('formatSummaryView', () => {
 	it('summary テキストを生成する', () => {
@@ -1767,8 +1647,6 @@ describe('formatSummaryView', () => {
 		expect(res.content[0].text).not.toContain('includeForming=true');
 	});
 });
-
-// ── formatFullView ──
 
 describe('formatFullView', () => {
 	it('overlays ありのとき overlay note を含む', () => {
@@ -1792,8 +1670,6 @@ describe('formatFullView', () => {
 	});
 });
 
-// ── formatDetailedView ──
-
 describe('formatDetailedView', () => {
 	it('パターンあり → body を出力する', () => {
 		const pats = [makePattern()];
@@ -1810,11 +1686,6 @@ describe('formatDetailedView', () => {
 		expect(res.content[0].text).not.toContain('緩めるなら');
 	});
 
-	// ── 0 件メッセージ（#184 欠陥 E） ──
-	// 旧実装は `（tolerancePct=${effTol}）` を自前で出しており、`effective_params` が
-	// 出力スキーマ未宣言（欠陥 D）で常に strip されていたため**生入力値**に落ちていた。
-	// 値の表示は実効パラメータ行に一本化したので、ここは値を主張しない。
-
 	it('パターン 0 件 → 実効値を基準にした緩和の助言を出す（生入力値は出さない）', () => {
 		const res = formatDetailedView('H', [], '', '', emptyMeta, ['double_top'], emptyRes);
 		const text = res.content[0].text;
@@ -1822,7 +1693,6 @@ describe('formatDetailedView', () => {
 		expect(text).toContain('double_top');
 		// 実効値（emptyMeta は 0.04）を基準に「より大きい値」を助言する。
 		expect(text).toContain('実効値 0.04 より大きい値');
-		// 旧文言（実効値と無関係な固定レンジ）は残っていない。1hour では半分が締める方向だった。
 		expect(text).not.toContain('0.03-0.06');
 		// 0 件メッセージ自体は値のラベルを持たない（実効パラメータ行に一本化した）。
 		expect(text).not.toContain('（tolerancePct=');
@@ -1838,15 +1708,13 @@ describe('formatDetailedView', () => {
 		expect(res.content[0].text).not.toContain('実効値 0.04');
 	});
 
-	// **これが #184 欠陥 E の回帰テスト。** `effective_params` を持たない meta では、
-	// 実効値を知らないのだから数値を主張してはいけない（旧実装は生入力値で埋めていた）。
+	// `effective_params` を持たない meta では、実効値を知らないのだから数値を主張してはいけない（#184 欠陥 E）。
 	it('パターン 0 件 + effective_params 無し → 数値を主張せず実効パラメータ行を参照させる', () => {
 		const metaNoTol = { debug: { swings: [], candidates: [] } };
 		const res = formatDetailedView('H', [], '', '', metaNoTol, undefined, emptyRes);
 		const text = res.content[0].text;
 		expect(text).toContain('パターンは検出されませんでした。');
 		expect(text).toContain('実効値は上の実効パラメータ行を参照');
-		// 数値を含む「実効値 X」の主張をしていない
 		expect(text).not.toMatch(/実効値 [\d.]/u);
 		expect(text).not.toContain('tolerancePct=');
 	});
@@ -1872,11 +1740,7 @@ describe('formatDetailedView', () => {
 		expect(matches.length).toBeLessThanOrEqual(5);
 	});
 
-	// ── cap トリムの申告（issue #196） ──
-	// `【検出パターン】` の見出しは 6 件以上のときだけ「N / 全 M 件（K 件省略。全件は view=full）」を、
-	// ちょうど 5 件のときは境界の曖昧さ（cap で切られたのか偶然 5 件なのか）を消すために
-	// 「省略なし」を出す。5 件未満は slice が構造的に全件を返す＝省略が起こり得ないので、
-	// 申告行自体を出さない（毎回「省略なし」を出すと明細の前が定型文で埋まる）。
+	// 見出しは 6 件以上で「N / 全 M 件（K 件省略。全件は view=full）」、ちょうど 5 件で境界の曖昧さを消すために「省略なし」を出し、5 件未満は申告行自体を出さない（issue #196）。
 
 	it('6 件以上検出時は【検出パターン】見出しにトリム件数を申告する（issue #196）', () => {
 		const pats = Array.from({ length: 7 }, () => makePattern());
@@ -1894,9 +1758,7 @@ describe('formatDetailedView', () => {
 		const pats = Array.from({ length: 3 }, () => makePattern());
 		const res = formatDetailedView('H', pats, '', '', emptyMeta, undefined, emptyRes);
 		const text = res.content[0].text;
-		// 見出し直後が改行＝申告テキストが挟まっていないことの直接確認。
-		// 「全 3 件」は検出経路行（`検出経路: 全 3 件とも strict…`）にも正当に出現するため
-		// 存在チェックには使えない——見出し行そのものを固定して確認する。
+		// 「全 3 件」は検出経路行（`検出経路: 全 3 件とも strict…`）にも正当に出現するので存在チェックには使えず、見出し行そのものを固定して確認する。
 		expect(text).toContain('【検出パターン】\n');
 		expect(text).not.toContain('省略');
 	});
@@ -1908,26 +1770,16 @@ describe('formatDetailedView', () => {
 	});
 });
 
-// ── tz 表示（PR-4: 表示日付の tz 整形） ──
-//
-// 構造化データ（range.start/end 等）は UTC ISO のまま不変。
-// 表示テキストのみ tz で整形される。
-// 検証点: tz=Asia/Tokyo（既定）/ tz=UTC / tz='' で表示日付が切り替わる。
-//
-// timezone-sensitive な timestamp として 23:30Z 系を使う:
-//   2026-10-01T23:30:00.000Z → JST: 2026-10-02 08:30、UTC: 2026-10-01
+// 構造化データ（range.start/end 等）は UTC ISO のまま不変で、表示テキストのみ tz で整形される（2026-10-01T23:30:00.000Z → JST: 2026-10-02 08:30、UTC: 2026-10-01）。
 
 describe('表示日付の tz 整形（範囲・期間）', () => {
 	const startUtcLate = '2026-10-01T23:30:00.000Z'; // UTC=10/01, JST=10/02
 	const endUtcLate = '2026-10-10T23:30:00.000Z'; // UTC=10/10, JST=10/11
 
-	// buildPatternSpanLine の tz 整形は tests/patterns/period.test.ts で検証する。
-
 	it('formatPatternLine: tz 既定で legacy 期間行が JST 暦日になる', () => {
 		const p = makePattern({ range: { start: startUtcLate, end: endUtcLate } });
 		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
 		expect(result).toContain('期間: 2026-10-02 ~ 2026-10-11');
-		// UTC 日付は出ない（tz=Asia/Tokyo 既定）
 		expect(result).not.toContain('2026-10-01');
 		expect(result).not.toContain('2026-10-10');
 	});
@@ -2090,31 +1942,9 @@ describe('表示日付の tz 整形（範囲・期間）', () => {
 	});
 });
 
-// ── 山2 / 谷2 の位置行（issue #245） ──
-
-/**
- * `content` に「山2 / 谷2 の位置」を常に出す件（issue #245 の決定コメント: 案 B + 案 C）。
- *
- * 検出器 / `structuredContent` は変えず、値は `pivots` から表示層で導出する。量の定義は
- * PR #276（tjackiet/bitbank-lab-mcp#245 の計測記録）と同じで、分母は
- * `levelSpreadMetrics([a, c], [a, b, c]).heightAbs`。
- *
- * 実データ（#245 の発端の形）での値の固定は
- * `tests/patterns/second-extreme-position-245.test.ts` が持つ。ここは分岐と定義の検算。
- */
+// 検出器 / `structuredContent` は変えず、値は `pivots` から表示層で導出する。分母は `levelSpreadMetrics([a, c], [a, b, c]).heightAbs`（issue #245）。
 describe('formatPatternLine: 山2 / 谷2 の位置行（#245）', () => {
-	/**
-	 * 山2 がヒゲだけの合成 `double_top`。
-	 *
-	 * | 点 | 終値 | 高安 |
-	 * |---|---:|---:|
-	 * | 山1 `a` | 100,000 | 101,000 |
-	 * | 谷 `b`（ネックライン） | 90,000 | 89,000 |
-	 * | 山2 `c` | 92,000 | 100,000 |
-	 *
-	 * `heightAbs` = 101,000 − 89,000 = 12,000 / `closeGap` = 2,000 / 12,000 = 16.7% /
-	 * `wickShare` = 8,000 / 12,000 = 66.7%。
-	 */
+	/** 山1 `a` 終値 100,000・高値 101,000 / 谷 `b` 終値 90,000・安値 89,000 / 山2 `c` 終値 92,000・高値 100,000 → heightAbs = 12,000、closeGap = 2,000 / 12,000 = 16.7%、wickShare = 8,000 / 12,000 = 66.7%。 */
 	const wickyTop = (): PatternEntry =>
 		makePattern({
 			type: 'double_top',
@@ -2147,9 +1977,7 @@ describe('formatPatternLine: 山2 / 谷2 の位置行（#245）', () => {
 	});
 
 	it('4 つの view すべてで出る（pivot 明細行と違い view で分岐しない）', () => {
-		// `debug` view の formatter は `formatPatternLine` を呼ばない（階梯外＝出力の置換）が、
-		// **`formatPatternLine(…, 'debug', …)` 単体は出す**——`pivotLines` と同じ扱いで、
-		// view 値そのものが行を落とさないことをここで固定する。
+		// `debug` view の formatter は `formatPatternLine` を呼ばないが、`formatPatternLine(…, 'debug', …)` 単体は出す（view 値そのものが行を落とさないことを固定する）。
 		for (const view of ['summary', 'detailed', 'full', 'debug'] as const) {
 			expect(formatPatternLine(wickyTop(), 0, view, emptyMeta), `view=${view}`).toContain('山2 の位置: ');
 			expect(formatPatternLine(wickyBottom(), 0, view, emptyMeta), `view=${view}`).toContain('谷2 の位置: ');
@@ -2316,41 +2144,18 @@ describe('formatPatternLine: 先行値幅の未評価理由', () => {
 	});
 });
 
-// ── 状態行: status × 理由コードの網羅（issue #286） ──────────────
-
-/**
- * 経路ゲートの理由コードの全件。**`Record<BreakoutPathRejectReason, …>` で受けている**ので、
- * `tools/patterns/structural.ts` の union に値を足すと typecheck（TS2739: 不足キー）が
- * ここで落ちる——列挙を手書きの配列にすると気づけない。
- */
+/** `Record<BreakoutPathRejectReason, …>` で受けているので、`tools/patterns/structural.ts` の union に値を足すと typecheck がここで落ちる（手書きの配列にすると気づけない）。 */
 const BREAKOUT_PATH_REASONS: Record<BreakoutPathRejectReason, true> = {
 	peak_after_last_pivot: true,
 	trough_after_last_pivot: true,
 };
 
-/**
- * 継続系（triangle / pennant / flag）の理由コードの全件。**`Record<ContinuationInvalidReason, …>` で
- * 受けている**ので、`tools/patterns/structural.ts` の union に値を足すと typecheck が
- * ここで落ちる（issue #291）。現状は 1 値——継続系の `invalid` は「期待と逆方向にブレイクした」
- * の 1 条件しか無いため。
- */
+/** 上と同じく `Record<ContinuationInvalidReason, …>` で受け、union に値を足したら typecheck で落とす（issue #291）。 */
 const CONTINUATION_INVALID_REASONS: Record<ContinuationInvalidReason, true> = {
 	breakout_against_expectation: true,
 };
 
-/**
- * `invalidReason` に流れる理由コードの全件。
- *
- * 経路ゲートの 2 つは型（{@link BreakoutPathRejectReason}）から、継続系の 1 つは
- * {@link ContinuationInvalidReason} から導出する。残る 2 つは
- * `tools/patterns/reversal-gate.ts`（`re_entered_trough_zone`）と
- * `tools/patterns/detect_doubles.ts`（`forming_expired`）が**リテラルで直書き**しており
- * 導出できる型が無いため手書きする。
- *
- * **検出器に新しい理由コードを足したらここにも足すこと。** 足し忘れは下の
- * 「5 つの理由コードを列挙している」が拾わない（新規コードは列挙に無いだけで落ちない）ので、
- * 表引きの未知値フォールバック（日本語なし・コードだけ）が最後の防波堤になる。
- */
+/** `re_entered_trough_zone`（`reversal-gate.ts`）と `forming_expired`（`detect_doubles.ts`）はリテラル直書きで導出できる型が無いので手書きする。検出器に新しい理由コードを足したらここにも足すこと。 */
 const ALL_INVALID_REASONS: readonly string[] = [
 	...(Object.keys(BREAKOUT_PATH_REASONS) as BreakoutPathRejectReason[]),
 	...(Object.keys(CONTINUATION_INVALID_REASONS) as ContinuationInvalidReason[]),
@@ -2358,7 +2163,6 @@ const ALL_INVALID_REASONS: readonly string[] = [
 	'forming_expired',
 ];
 
-/** 継続系の全件。`breakout_against_expectation` の状態行を種別横断で固定するのに使う。 */
 const CONTINUATION_INVALID_TYPES = [
 	'triangle_ascending',
 	'triangle_descending',
@@ -2388,8 +2192,6 @@ describe('状態行: status × 理由コードの網羅（issue #286）', () => 
 	it('schema の status 5 段すべてを列挙している', () => {
 		expect([...ALL_STATUSES].sort()).toEqual(['completed', 'expired', 'forming', 'invalid', 'near_completion']);
 	});
-
-	// ── (a) invalid / expired: 理由コードの表引き + コード併記 ──
 
 	const INVALID_CASES: ReadonlyArray<{
 		entry: Pick<PatternEntry, 'type' | 'status' | 'invalidReason'>;
@@ -2424,13 +2226,12 @@ describe('状態行: status × 理由コードの網羅（issue #286）', () => 
 			entry: { type: 'double_bottom', status: 'invalid', invalidReason: 're_entered_trough_zone' },
 			expected: '   - 状態: 無効（谷2 の確定後、突破前に谷ゾーンへ戻った: re_entered_trough_zone）',
 		},
-		// 継続系（issue #291）。**種別に関係なく同じ文言**——継続系に最終構成点の概念が無いので、
-		// 反転系の「山2 / 谷3 / 右肩」に相当する語を当てない。
+		// 継続系は種別に関係なく同じ文言（継続系に最終構成点の概念が無いので、反転系の「山2 / 谷3 / 右肩」に相当する語を当てない。issue #291）。
 		...CONTINUATION_INVALID_TYPES.map((type) => ({
 			entry: { type, status: 'invalid' as const, invalidReason: 'breakout_against_expectation' },
 			expected: '   - 状態: 無効（期待と逆方向にブレイク: breakout_against_expectation）',
 		})),
-		// `expired` は旧実装で表引きに無く、生の `expired` が content に出ていた。
+		// `expired` を表引きに入れ忘れると、生の `expired` が content に出る。
 		{
 			entry: { type: 'double_top', status: 'expired', invalidReason: 'forming_expired' },
 			expected: '   - 状態: 期限切れ（突破確認窓を過ぎてもネックラインを突破しなかった: forming_expired）',
@@ -2479,9 +2280,7 @@ describe('状態行: status × 理由コードの網羅（issue #286）', () => 
 		}
 	});
 
-	// 継続系の文言に反転系の語（山2 / 谷2 / 山3 / 谷3 / 右肩 / ネックライン）を混ぜない（issue #291）。
-	// `invalidReasonJa` は `REVERSAL_STATUS_WORDS` を引ける実装なので、分岐を足すときに
-	// 「最終構成点」相当の語を当ててしまう形を機械的に禁じる。
+	// `invalidReasonJa` は `REVERSAL_STATUS_WORDS` を引ける実装なので、継続系の文言に反転系の語（山2 / 谷2 / 山3 / 谷3 / 右肩 / ネックライン）を混ぜる形を機械的に禁じる（issue #291）。
 	it('breakout_against_expectation は反転系の構成点の語を使わない', () => {
 		for (const type of CONTINUATION_INVALID_TYPES) {
 			const line = formatStatusLine({ type, status: 'invalid', invalidReason: 'breakout_against_expectation' });
@@ -2491,8 +2290,7 @@ describe('状態行: status × 理由コードの網羅（issue #286）', () => 
 		}
 	});
 
-	// `re_entered_trough_zone` のゾーン語は実装の表と独立に side から決める——実装の表を
-	// そのまま写すと分岐漏れが両方に入って気づけない。
+	// `re_entered_trough_zone` のゾーン語は実装の表と独立に side から決める（実装の表をそのまま写すと分岐漏れが両方に入って気づけない）。
 	for (const type of TOP_SIDE_REVERSALS) {
 		it(`re_entered_trough_zone: ${type} は山ゾーン`, () => {
 			const line = formatStatusLine({ type, status: 'invalid', invalidReason: 're_entered_trough_zone' });
@@ -2521,8 +2319,6 @@ describe('状態行: status × 理由コードの網羅（issue #286）', () => 
 		expect(line).not.toContain('谷ゾーン');
 	});
 
-	// ── (b) near_completion: 種別の系統で分ける ──
-
 	for (const type of ['double_top', 'triple_bottom', 'inverse_head_and_shoulders'] as const) {
 		it(`near_completion: 反転系 ${type} は「構造成立・ネックライン未突破」`, () => {
 			expect(formatStatusLine({ type, status: 'near_completion' })).toBe(
@@ -2541,9 +2337,7 @@ describe('状態行: status × 理由コードの網羅（issue #286）', () => 
 		expect(formatStatusLine({ type: 'some_future_pattern', status: 'near_completion' })).toBe('   - 状態: ほぼ完成');
 	});
 
-	// **出力 type 全件を系統に分類できていることを機械的に固定する**（分岐漏れ検出）。
-	// 新しい type を `PatternTypeEnum` に足して系統の集合へ入れ忘れると、その type の
-	// `near_completion` が裸の「ほぼ完成」に落ちるので、ここで落ちる。
+	// 新しい type を `PatternTypeEnum` に足して系統の集合へ入れ忘れると、その type の `near_completion` が裸の「ほぼ完成」に落ちるので、出力 type 全件を系統に分類できていることを機械的に固定する。
 	it('near_completion: 出力 type 全件が反転系 / 継続系のどちらかに分類されている', () => {
 		const unclassified = PatternTypeEnum.options.filter(
 			(type) => formatStatusLine({ type, status: 'near_completion' }) === '   - 状態: ほぼ完成',
@@ -2551,16 +2345,12 @@ describe('状態行: status × 理由コードの網羅（issue #286）', () => 
 		expect(unclassified).toEqual([]);
 	});
 
-	// ── (c) completed / forming: 現行どおり ──
-
 	it('completed / forming は現行どおり（理由コードを持たない）', () => {
 		expect(formatStatusLine({ type: 'double_top', status: 'completed' })).toBe(
 			'   - 状態: 完成（ブレイクアウト確認済み）',
 		);
 		expect(formatStatusLine({ type: 'triple_top', status: 'forming' })).toBe('   - 状態: 形成中');
 	});
-
-	// ── 共通 ──
 
 	it('status 5 段すべてに日本語ラベルがある（生の status が出ない）', () => {
 		for (const status of ALL_STATUSES) {
@@ -2577,7 +2367,6 @@ describe('状態行: status × 理由コードの網羅（issue #286）', () => 
 		expect(formatStatusLine({ type: 'double_top', status: 'custom_status' })).toBe('   - 状態: custom_status');
 	});
 
-	// formatPatternLine 経由でも同じ行が出る（配線の確認）。
 	it('formatPatternLine の状態行が formatStatusLine と一致する', () => {
 		const p = makePattern({ status: 'invalid', invalidReason: 'peak_after_last_pivot' });
 		expect(formatPatternLine(p, 0, 'detailed', emptyMeta)).toContain(
