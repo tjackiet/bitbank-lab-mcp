@@ -1,4 +1,4 @@
-// 既存 fixture テストとは独立して動かすため、fixture / モックはこのファイル内で定義する。
+// 既存 fixture テストとは独立して動かすため、fixture / モックはこのファイル内で定義する（価格列は `tests/fixtures/synthetic_pattern_candles.ts` の同名関数と同じ）。
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dayjs } from '../../lib/datetime.js';
 import { asMockResult, assertOk } from '../_assertResult.js';
@@ -141,7 +141,6 @@ function buildCompletedTripleTopCandles(year = 2026): Candle[] {
 	return closes.map((close, index) => makeCandle(index, close, year));
 }
 
-/** tests/detect_patterns_fixtures.test.ts 既存 fixture と同じ価格列。 */
 function buildBullPennantSuccessCandles(year = 2026): Candle[] {
 	const closes = [
 		100, 110, 122, 136, 150, 165, 158, 162, 154, 160, 155, 159, 156, 158, 157, 157.8, 157.2, 158.1, 157.4, 170, 172,
@@ -166,7 +165,6 @@ function buildFormingSymmetricalTriangleCandles(year = 2026): Candle[] {
 	return closes.map((close, index) => makeCandle(index, close, year));
 }
 
-/** `tests/fixtures/synthetic_pattern_candles.ts` の同名関数と同じ価格列。 */
 function buildDescendingTriangleInvalidBreakoutCandles(year = 2026): Candle[] {
 	// 三角形本体は 24 本。`detect_triangles` の最小窓が時間足の構造的下限（1day = 23 本）なので、18 本では windowSizes が空になり検出されない。
 	const closes = [
