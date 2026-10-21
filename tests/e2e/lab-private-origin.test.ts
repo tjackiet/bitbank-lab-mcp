@@ -1,13 +1,5 @@
-/**
- * 研究用の起動口（lab/start.ts。ADR-0008）の stdio E2E。
- *
- * 単体テスト（tests/lab/main.test.ts）は依存を注入した runLab しか見ない。ここでは実際に
- * 子プロセスとして起動し、MCP の tools/call が差し替え先（ループバックの HTTP サーバー）に
- * 届くこと、引数が無ければサーバーを起動せずに終わることを wire レベルで確かめる。
- *
- * ⚠️ `tests/e2e/**` は `npm test` の対象外で PR では走らない（CLAUDE.md）。
- * 手動 / nightly（`npm run test:e2e`）でのみ実行される。
- */
+// 研究用の起動口（lab/start.ts。ADR-0008）を実際に子プロセスとして起動し、MCP の tools/call が差し替え先（ループバックの HTTP サーバー）に届くことと、引数が無ければサーバーを起動せずに終わることを wire レベルで確かめる（単体テスト tests/lab/main.test.ts は依存を注入した runLab しか見ない）。
+// `tests/e2e/**` は `npm test` の対象外で PR では走らない（手動 / nightly の `npm run test:e2e` でのみ実行される）。
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync } from 'node:fs';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';

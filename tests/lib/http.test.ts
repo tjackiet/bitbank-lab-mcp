@@ -217,11 +217,7 @@ describe('fetchJsonWithRateLimit', () => {
 	});
 });
 
-/**
- * 429 のリトライは `fetchFlowDatePrices` の年 chunk 取得（#81）が土台にしている挙動なので、
- * 「`Retry-After` の秒数を待ってから再試行する」ことをここで固定する。
- * 上位レイヤーは `Retry-After` を二重に解釈しない（待つのは HTTP レイヤーだけ）。
- */
+/** 429 のリトライは `fetchFlowDatePrices` の年 chunk 取得（#81）が土台にしている挙動なので、`Retry-After` の秒数を待ってから再試行することを固定する（上位レイヤーは `Retry-After` を二重に解釈しない）。 */
 describe('fetchJsonWithRateLimit — 429 と Retry-After', () => {
 	afterEach(() => {
 		vi.useRealTimers();
@@ -262,20 +258,13 @@ describe('fetchJsonWithRateLimit — 429 と Retry-After', () => {
 	});
 });
 
-/**
- * `retryAsync` — **戻り値で失敗を表す**処理（`Result` を返すツール呼び出し等）のリトライ。
- *
- * HTTP 1 本のリトライは `fetchJson` 系が担当するが、「ツール呼び出し 1 回」の単位で
- * やり直したい層（`fetchFlowDatePrices` の年 chunk 取得 = #81）は戻り値で失敗を受け取るため
- * そちらでは救えない。待機スケジュールを各所で書き起こさないための共通実装。
- */
+/** HTTP 1 本のリトライは `fetchJson` 系が担当するが、戻り値で失敗を受け取る層（`fetchFlowDatePrices` の年 chunk 取得 = #81）はそちらでは救えないので、待機スケジュールを各所で書き起こさないための共通実装。 */
 describe('retryAsync', () => {
 	afterEach(() => {
 		vi.useRealTimers();
 		vi.restoreAllMocks();
 	});
 
-	/** 保留中の retryAsync を fake timer で最後まで進める */
 	async function drain<T>(pending: Promise<T>): Promise<T> {
 		await vi.runAllTimersAsync();
 		return pending;
@@ -360,13 +349,7 @@ describe('retryBackoffMs', () => {
 	});
 });
 
-/**
- * 恒久的な HTTP 失敗（404 等）をリトライ対象から外す（#84）。
- *
- * bitbank `/candlestick` は上場前・未来の期間キーに 404 を返す。同じ URL を叩き直しても
- * 永久に 404 なので、リトライは待ち時間とレート制限枠を捨てるだけで、
- * **同時に走っている他 chunk の成功率まで下げる**。
- */
+/** bitbank `/candlestick` は上場前・未来の期間キーに 404 を返し、叩き直しても永久に 404 なので、リトライは待ち時間とレート制限枠を捨てるだけで同時に走っている他 chunk の成功率まで下げる（#84）。 */
 describe('HTTP ステータス由来のリトライ判定（#84）', () => {
 	const originalFetch = globalThis.fetch;
 

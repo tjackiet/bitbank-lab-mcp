@@ -92,7 +92,6 @@ describe('toolResultSchema', () => {
 	it('ok/fail の union スキーマを生成する', () => {
 		const schema = toolResultSchema(z.object({ value: z.number() }), z.object({ source: z.string() }));
 
-		// ok case
 		const okResult = schema.parse({
 			ok: true,
 			summary: 'success',
@@ -101,7 +100,6 @@ describe('toolResultSchema', () => {
 		});
 		expect(okResult.ok).toBe(true);
 
-		// fail case
 		const failResult = schema.parse({
 			ok: false,
 			summary: 'Error: fail',
