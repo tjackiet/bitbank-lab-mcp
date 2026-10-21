@@ -435,7 +435,7 @@ describe('detect_patterns: pivot の価格基準（#125）', () => {
 	});
 });
 
-// `debug.swings` / `debug.candidates` は cap=200 で切り詰められ、削られるのは必ず棄却理由（accepted を優先して残すため）なので、`view=debug` の目的そのものが選択的に censored される。申告値がトリムの実挙動と一致し、省略あり / なしの両方で content に出ることを固定する（#180）。
+// `debug.swings` / `debug.candidates` は cap=200 で切り詰められ、candidates は accepted を優先して残すので棄却理由から先に削られ、`view=debug` の目的そのものが選択的に censored される。申告値がトリムの実挙動と一致し、省略あり / なしの両方で content に出ることを固定する（#180）。
 describe('detect_patterns: cap トリムの申告（#180）', () => {
 	afterEach(() => {
 		vi.restoreAllMocks();

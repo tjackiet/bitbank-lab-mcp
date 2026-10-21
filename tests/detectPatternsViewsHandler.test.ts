@@ -538,9 +538,9 @@ describe('formatDebugView: 棄却理由の集計ブロック（#191 A）', () =>
 	});
 });
 
-// LLM が横断集計を外す条件は「reason が type を跨ぐこと」なので、跨ぎが起きうるときだけ横断合計を出す。フィクスチャはライブ実行時の候補列に寄せ、横断合計が 66 / 47 / 41 になる（LLM が外した答えの正解）ことを固定する（#193 B-1）。
+// LLM が横断集計を外す条件は「reason が type を跨ぐこと」なので、跨ぎが起きうるときだけ横断合計を出す（#193 B-1）。
 describe('formatDebugView: reason 単独の横断合計（#193 B-1）', () => {
-	/** ライブ実測（cap 飽和 200 / 全 2,058）に寄せた候補列。両ウェッジに 3 reason が跨る。 */
+	/** cap を埋める 200 件で、両ウェッジに 3 reason が跨る候補列。 */
 	const liveLikeCandidates = [
 		...Array.from({ length: 38 }, () => ({ type: 'rising_wedge', accepted: true })),
 		...rejects('falling_wedge', 'slopes_not_same_direction', 58),
@@ -565,7 +565,7 @@ describe('formatDebugView: reason 単独の横断合計（#193 B-1）', () => {
 		);
 
 		const cross = parseCrossTotalRow(text);
-		// 件数降順。58 でも 28 でもなく 66 / 47（LLM は type 別の数値をそのまま横断合計として出した）
+		// 件数降順。58 でも 28 でもなく 66 / 47
 		expect(cross).toEqual([
 			['slopes_not_same_direction', 66],
 			['weaker_slope_ratio_low', 47],
@@ -1104,7 +1104,6 @@ describe('formatPatternLine', () => {
 		);
 	});
 
-	// 実機で「進捗 273%（到達）」が出ていた entry を名指しで固定する（issue #288）。
 	it('targetReachedPct が 273 の到達 entry でも content に「273」が出ない', () => {
 		const p = makePattern({
 			breakoutTarget: 110000,

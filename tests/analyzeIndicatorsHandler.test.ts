@@ -488,7 +488,6 @@ describe('toolDef.handler', () => {
 
 	/** ichi_series を「今日の雲」の値（spanA[len-26]/spanB[len-26]）から構築 */
 	function buildIchiSeries(todaySpanA: number, todaySpanB: number, length = 30) {
-		// 末尾 26 本前が「今日の雲」、末尾は「26 本後の雲」（今日計算された先行スパン）なので、末尾のみ別値を入れて区別する。
 		const spanA = Array.from({ length }, () => todaySpanA);
 		const spanB = Array.from({ length }, () => todaySpanB);
 		return {
