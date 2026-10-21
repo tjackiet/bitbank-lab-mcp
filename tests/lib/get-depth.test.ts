@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import getDepth, { buildDepthText } from '../../lib/get-depth.js';
 import { assertFail, assertOk } from '../_assertResult.js';
 
-/** bitbank 板レスポンスの最小フィクスチャ */
 function depthApiResponse() {
 	return {
 		success: 1,

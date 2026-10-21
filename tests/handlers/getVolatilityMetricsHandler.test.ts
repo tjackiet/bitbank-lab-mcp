@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-// 差し替えるのはツール本体（default export）だけ。named export（WILDER_ATR_PERIOD /
-// VOLATILITY_METRICS_FOOTER）は handler が description・フッタ文言として実値を参照するため、
-// importOriginal で実物を残す（列挙式だと named export を足すたびに mock が壊れる）。
+// named export（WILDER_ATR_PERIOD / VOLATILITY_METRICS_FOOTER）は handler が description・フッタ文言として実値を参照するので、差し替えるのはツール本体（default export）だけにして importOriginal で実物を残す（列挙式だと named export を足すたびに mock が壊れる）。
 vi.mock('../../tools/get_volatility_metrics.js', async (importOriginal) => ({
 	...(await importOriginal<typeof import('../../tools/get_volatility_metrics.js')>()),
 	default: vi.fn(),
@@ -25,8 +23,6 @@ const mockedGetVolatilityMetrics = vi.mocked(getVolatilityMetrics);
 afterEach(() => {
 	vi.clearAllMocks();
 });
-
-// ─── 共通フィクスチャ ─────────────────────────────────────────────────────────
 
 function makeViewInput(overrides: Partial<VolViewInput> = {}): VolViewInput {
 	return {
@@ -51,8 +47,6 @@ function makeViewInput(overrides: Partial<VolViewInput> = {}): VolViewInput {
 		...overrides,
 	};
 }
-
-// ─── buildVolatilityBeginnerText ──────────────────────────────────────────────
 
 describe('buildVolatilityBeginnerText', () => {
 	it('ペア名と時間軸が含まれる', () => {
@@ -79,8 +73,6 @@ describe('buildVolatilityBeginnerText', () => {
 	});
 });
 
-// ─── buildVolatilitySummaryText ───────────────────────────────────────────────
-
 describe('buildVolatilitySummaryText', () => {
 	it('全メトリクス（RV/ATR/PK/GK/RS）が含まれる', () => {
 		const text = buildVolatilitySummaryText(makeViewInput());
@@ -101,8 +93,6 @@ describe('buildVolatilitySummaryText', () => {
 		expect(text).toContain('samples=200');
 	});
 });
-
-// ─── buildVolatilityDetailedText ─────────────────────────────────────────────
 
 describe('buildVolatilityDetailedText', () => {
 	function makeDetailed(overrides: Partial<VolDetailedInput> = {}): VolDetailedInput {
@@ -153,8 +143,6 @@ describe('buildVolatilityDetailedText', () => {
 		expect(text).not.toContain('(annualized)');
 	});
 });
-
-// ─── handler: タグ導出ロジック ────────────────────────────────────────────────
 
 describe('toolDef handler - タグ導出', () => {
 	function mockVolRes(opts: {
@@ -235,8 +223,7 @@ describe('toolDef handler - タグ導出', () => {
 	});
 
 	it('annualize=false でも tags は年率換算値で判定される（annFactorFull を使用）', async () => {
-		// rv_std=0.03 で baseIntervalMs=1day → annFactorFull=sqrt(365)≈19.1
-		// rv_std_ann = 0.03 * 19.1 ≈ 0.573 > 0.5 → high_vol
+		// rv_std=0.03 で baseIntervalMs=1day → annFactorFull=sqrt(365)≈19.1、rv_std_ann = 0.03 * 19.1 ≈ 0.573 > 0.5 → high_vol
 		mockedGetVolatilityMetrics.mockResolvedValueOnce(mockVolRes({ rvStd: 0.03, rvStdAnn: undefined }) as never);
 		const res = await toolDef.handler({ pair: 'btc_jpy', type: '1day', limit: 100, annualize: false, view: 'summary' });
 		const sc = asMcp<{ data: { tags: string[] } }>(res).structuredContent;
@@ -244,13 +231,9 @@ describe('toolDef handler - タグ導出', () => {
 	});
 });
 
-// ─── handler: ビュー切り替え ──────────────────────────────────────────────────
-
 describe('toolDef handler - view routing', () => {
 	function mockOkRes() {
-		// 実際の get_volatility_metrics が buildVolatilityMetricsText で生成する
-		// summary を模した文字列。view=summary 経路が res.summary をそのまま
-		// content に流すようになったため、aggregates と rolling 行を含めておく。
+		// view=summary 経路は res.summary をそのまま content に流すので、buildVolatilityMetricsText が生成する summary を模して aggregates と rolling 行を含めておく。
 		const summary = [
 			'BTC/JPY [1day] 5,000,000円 rv=0.380(ann)',
 			'',
@@ -310,7 +293,6 @@ describe('toolDef handler - view routing', () => {
 		mockedGetVolatilityMetrics.mockResolvedValueOnce(mockOkRes() as never);
 		const res = await toolDef.handler({ pair: 'btc_jpy', type: '1day', limit: 50, view: 'summary' });
 		const text = (res as { content: Array<{ text: string }> }).content[0].text;
-		// rolling window 行（複数 window）
 		expect(text).toContain('w=7 rv:');
 		expect(text).toContain('w=30 rv:');
 		// rolling 行は Parkinson を含み、ATR は含まない
@@ -339,8 +321,6 @@ describe('toolDef handler - view routing', () => {
 		expect((res as { ok: boolean }).ok).toBe(false);
 	});
 });
-
-// ─── handler: 上流 / 自前 warning の content 伝播 ─────────────────────────────
 
 describe('toolDef handler - meta.warning propagation', () => {
 	function mockResWithWarning(warning?: string) {
@@ -401,7 +381,6 @@ describe('toolDef handler - meta.warning propagation', () => {
 		const text = (res as { content: Array<{ text: string }> }).content[0].text;
 		expect(text.startsWith('⚠️')).toBe(true);
 		expect(text).toContain('2件の isoTime 欠損');
-		// 警告行のあとに本文が続く
 		const idxWarning = text.indexOf('⚠️');
 		const idxBody = text.indexOf('Volatility Metrics');
 		expect(idxWarning).toBeLessThan(idxBody);
@@ -423,8 +402,6 @@ describe('toolDef handler - meta.warning propagation', () => {
 		expect(text.startsWith('⚠️')).toBe(false);
 	});
 });
-
-// ─── handler: 形成中足（meta.provisional）注記の content 伝播 ─────────────────
 
 describe('toolDef handler - meta.provisional 注記', () => {
 	function mockResProvisional(provisional?: boolean) {
@@ -484,8 +461,6 @@ describe('toolDef handler - meta.provisional 注記', () => {
 		expect(text).not.toContain('未確定（形成中）');
 	});
 });
-
-// ─── prependVolWarning ユニットテスト ─────────────────────────────────────────
 
 describe('prependVolWarning', () => {
 	it('meta.warning を body の先頭に別行で連結する', () => {

@@ -1,27 +1,7 @@
 import { dayjs } from '../../lib/datetime.js';
 
-/**
- * BTC/JPY 日足の実データ fixture（issue #126 の回帰テスト用）。
- *
- * `detect_patterns('btc_jpy', '1day', 90)` が **実際にスキャンする窓そのもの**
- * （`analyze_indicators` の `chart.candles` を `chart.meta.pastBuffer` で slice した後の
- * 90 本）を bitbank public API から取得して凍結したもの。取得日 2026-08-26。
- *
- * この区間には issue #126 が報告した偽陽性と偽陰性が同居している:
- *
- * | idx | 日付 | 役割 |
- * |---|---|---|
- * | 42 | 2026-07-10 | 谷1(45) の先行高値。**ネックライン(53) より低い** |
- * | 45 | 2026-07-13 | 偽陽性候補の谷1 |
- * | 53 | 2026-07-21 | 偽陽性候補のネックライン。先行高値を越えている（戻り率 2.046） |
- * | 66 | 2026-08-03 | 偽陽性候補の谷2 / 正しいパターンの谷1 |
- * | 73 | 2026-08-10 | 正しいパターンのネックライン（戻り率 0.528） |
- * | 77 | 2026-08-14 | 正しいパターンの谷2（安値切り上げ: 9,955,830 > 9,752,246） |
- * | 79 | 2026-08-16 | ピボットではない（77 の安値の方が低い）。#126 が「レビューの D3 は誤診」と
- *                     している点の実データ上の裏付け |
- *
- * **数値は改変しないこと。** 閾値の妥当性はこの実データに対する挙動で担保している。
- */
+// BTC/JPY 日足の実データ（issue #126 の回帰用）。`detect_patterns('btc_jpy', '1day', 90)` が実際にスキャンする窓そのもの（90 本）なので、数値は改変しないこと。
+// idx 42 は谷1 の先行高値（ネックライン 53 より低い）、45 は偽陽性候補の谷1、53 は偽陽性候補のネックライン（戻り率 2.046）、66 は偽陽性候補の谷2・正しいパターンの谷1、73 は正しいパターンのネックライン（戻り率 0.528）、77 は正しいパターンの谷2（安値切り上げ: 9,955,830 > 9,752,246）、79 は 77 の安値の方が低いのでピボットではない。
 
 /** `[open, high, low, close]` の 90 本。先頭が 2026-05-29、末尾が 2026-08-26。 */
 export const BTC_JPY_1DAY_2026_OHLC: ReadonlyArray<readonly [number, number, number, number]> = [
@@ -117,15 +97,12 @@ export const BTC_JPY_1DAY_2026_OHLC: ReadonlyArray<readonly [number, number, num
 	[12515173, 12597021, 12386373, 12585186], // 89 2026-08-26
 ];
 
-/** fixture 先頭バーの暦日（UTC） */
 export const BTC_JPY_1DAY_2026_START = '2026-05-29';
 
-/** fixture の idx → 暦日（UTC, `YYYY-MM-DD`） */
 export function btcJpy2026Date(idx: number): string {
 	return dayjs.utc(BTC_JPY_1DAY_2026_START).add(idx, 'day').format('YYYY-MM-DD');
 }
 
-/** `CandleData` 互換の配列を組み立てる（isoTime は先頭日から 1 日刻み） */
 export function buildBtcJpy2026Candles(): Array<{
 	open: number;
 	high: number;
@@ -144,14 +121,7 @@ export function buildBtcJpy2026Candles(): Array<{
 	}));
 }
 
-/**
- * 2026-08-26〜09-30 の追補データ。
- *
- * `detect_patterns('btc_jpy', '1day', 120)` で 2026-09-30 に観測された
- * rising wedge 偽陽性（09-01〜09-21）の回帰テスト用。元の 90 本 fixture は
- * issue #126 の取得時点を固定しているため改変せず、08-26 だけ最新の確定 OHLC に
- * 差し替えた 120 本窓を別 builder で組み立てる。
- */
+/** 2026-09-30 に観測された rising wedge 偽陽性（09-01〜09-21）の回帰用の追補（2026-08-26〜09-30）。元の 90 本は #126 の取得時点を固定しているので改変せず、08-26 だけ最新の確定 OHLC に差し替えた 120 本窓を別 builder で組む。 */
 export const BTC_JPY_1DAY_2026_AUG26_SEP30_OHLC: ReadonlyArray<readonly [number, number, number, number]> = [
 	[12515173, 12608851, 12386373, 12587741], // 2026-08-26
 	[12585559, 12873620, 12521259, 12790381], // 2026-08-27
