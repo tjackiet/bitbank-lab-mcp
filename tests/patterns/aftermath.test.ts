@@ -2,9 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { analyzeAftermath, buildStatistics, necklineValue } from '../../tools/patterns/aftermath.js';
 import type { CandleData, PatternEntry } from '../../tools/patterns/types.js';
 
-// ---------------------------------------------------------------------------
-// ヘルパー
-// ---------------------------------------------------------------------------
 function makeCandles(count: number, base: number = 100, step: number = 1): CandleData[] {
 	return Array.from({ length: count }, (_, i) => ({
 		open: base + i * step,
@@ -24,9 +21,6 @@ function makeIsoIndex(candles: CandleData[]): Map<string, number> {
 	return m;
 }
 
-// ---------------------------------------------------------------------------
-// necklineValue
-// ---------------------------------------------------------------------------
 describe('necklineValue', () => {
 	it('ネックラインが2点あれば補間する', () => {
 		const p: PatternEntry = {
@@ -63,7 +57,6 @@ describe('necklineValue', () => {
 		const p: PatternEntry = {
 			neckline: [{ y: 100 }, { y: 110 }],
 		};
-		// x が未定義なので Number.isFinite(undefined) = false → フォールバック
 		const result = necklineValue(p, 5);
 		expect(result).toBe(100);
 	});
@@ -82,9 +75,6 @@ describe('necklineValue', () => {
 	});
 });
 
-// ---------------------------------------------------------------------------
-// analyzeAftermath
-// ---------------------------------------------------------------------------
 describe('analyzeAftermath', () => {
 	it('endIso が見つからない場合は null', () => {
 		const candles = makeCandles(10);
@@ -111,7 +101,6 @@ describe('analyzeAftermath', () => {
 	});
 
 	it('ブレイクアウト確認を検出する（bullish）', () => {
-		// 上昇トレンドでネックライン突破
 		const candles: CandleData[] = Array.from({ length: 30 }, (_, i) => ({
 			open: 100,
 			close: i > 10 ? 130 : 100, // endIdx後に急上昇
@@ -140,7 +129,6 @@ describe('analyzeAftermath', () => {
 	});
 
 	it('ブレイクアウト未確認の場合', () => {
-		// ネックライン付近で横ばい
 		const candles: CandleData[] = Array.from({ length: 30 }, (_, i) => ({
 			open: 100,
 			close: 100,
@@ -192,9 +180,6 @@ describe('analyzeAftermath', () => {
 	});
 });
 
-// ---------------------------------------------------------------------------
-// buildStatistics
-// ---------------------------------------------------------------------------
 describe('buildStatistics', () => {
 	it('パターンごとの統計を集計する', () => {
 		const candles = makeCandles(30);
