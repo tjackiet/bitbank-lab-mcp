@@ -1,15 +1,4 @@
-/**
- * MCP Apps（SEP-1865）ホスト向け `_meta` 経由 execute 経路のセキュリティ回帰。
- *
- * ADR-0007「テストで固定する不変条件」1〜8 に対応する。**最重要は
- * 「content / structuredContent にトークンが出ない」**（ここが破れると設計が崩壊する）。
- *
- * 設計の要点:
- *   - トークンはツール結果 `_meta` にのみ載る。LLM は `_meta` を読めない（計測済み）ため、
- *     「トークンを提示できるか」が iframe 起源と LLM 起源を分ける唯一の判定基準になる
- *   - 有効化は 2 段の AND（運用者のオプトイン AND MCP Apps UI 宣言 + MIME 型）
- *   - elicitation 対応ホストには一切載せない（優先順位の不変条件）
- */
+// ADR-0007「テストで固定する不変条件」1〜8 の回帰。最重要は content / structuredContent にトークンが出ないこと（LLM が読めない `_meta` にしか載らないことが認可の根拠）。
 
 import { isInputRequiredResult } from '@modelcontextprotocol/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -32,7 +21,6 @@ type HandlerResult = {
 	_meta?: Record<string, unknown>;
 };
 
-/** MCP Apps UI を宣言するホストの ctx（initialize 経由）。 */
 function appUiCtx(mimeTypes: unknown = [APP_RESOURCE_MIME_TYPE]): Record<string, unknown> {
 	return {
 		server: {
@@ -41,7 +29,6 @@ function appUiCtx(mimeTypes: unknown = [APP_RESOURCE_MIME_TYPE]): Record<string,
 	};
 }
 
-/** MCP Apps UI 宣言を per-request envelope で渡す ctx。 */
 function envelopeCtx(clientCapabilities: unknown, initCapabilities?: unknown): Record<string, unknown> {
 	return {
 		...(initCapabilities !== undefined ? { server: { getClientCapabilities: () => initCapabilities } } : {}),
@@ -162,7 +149,6 @@ const PREVIEW_CASES = [
 	},
 ] as const;
 
-/** `_meta` に載ったトークンを取り出す（無ければ undefined）。 */
 function metaToken(result: HandlerResult): string | undefined {
 	return (result._meta?.[META_KEY] as { confirmation_token?: string } | undefined)?.confirmation_token;
 }
@@ -178,10 +164,8 @@ describe('不変条件 1: content / structuredContent にトークンが出な�
 			const token = metaToken(result);
 			expect(token).toBeTypeOf('string');
 
-			// 本体: content / structuredContent のどこにもトークン値が現れない
 			expect(JSON.stringify(result.content)).not.toContain(token);
 			expect(JSON.stringify(result.structuredContent)).not.toContain(token);
-			// フィールド名としても露出しない
 			expect(JSON.stringify(result.structuredContent)).not.toContain('confirmation_token');
 			expect(JSON.stringify(result.content)).not.toContain('confirmation_token');
 		});
@@ -297,18 +281,14 @@ describe('不変条件 5: elicitation 対応ホストにはオプトイン on �
 				},
 			};
 			const result = await toolDef.handler(c.args as never, ctx);
-			// elicitation 経路が実際に選ばれたことを確認する。これが無いと、ハンドラが
-			// エラーで落ちた場合でも「トークンが無い」だけでテストが通ってしまう。
+			// elicitation 経路が選ばれたことを確かめる（無いとハンドラがエラーで落ちても「トークンが無い」だけで通ってしまう）。
 			expect(isInputRequiredResult(result)).toBe(true);
 			expect(metaToken(result as HandlerResult)).toBeUndefined();
 			expect(JSON.stringify(result)).not.toContain('confirmation_token');
 		});
 	}
 
-	// pull 型 hydration（get_ui_snapshot）は preview とは**別リクエスト**なので、
-	// 「elicitation 非対応と判定したあとだけ `_meta` を付ける」という preview 側の構造では
-	// 守れない。スナップショットはリクエスト A（elicitation 非宣言）で作られ、リクエスト B
-	// （elicitation 宣言）から読み出せてしまうため、取得側でも同じ条件を課す必要がある。
+	// get_ui_snapshot は preview とは別リクエストなので、「elicitation 非対応と判定したあとだけ `_meta` を付ける」preview 側の構造では守れず、取得側でも同じ条件を課す。
 	const SNAPSHOT_URI = 'ui://order/confirm.html';
 
 	async function seedTokenSnapshot() {
@@ -431,10 +411,7 @@ describe('不変条件 7: 不正・期限切れ・使用済み・別注文のト
 
 	it('改ざんされたトークンは token_invalid', async () => {
 		const payload = await mintOrderToken();
-		// 末尾 1 文字を**必ず別の文字**に差し替える。固定文字（例: 常に '0'）にすると、
-		// HMAC hex の末尾が元からその文字だったとき改ざん後が原文と一致し、正しく検証が
-		// 通ってしまう（`expiresAt` が実行ごとに変わるため約 1/16 でランダムに落ちる）。
-		// `tests/private/request-state.test.ts` の tamper と同じ書き方に揃える。
+		// 末尾 1 文字は必ず別の文字に差し替える。固定文字だと HMAC hex の末尾が元からその文字のとき改ざんにならず、約 1/16 で落ちる。
 		const token = payload.confirmation_token;
 		const tampered = `${token.slice(0, -1)}${token.endsWith('0') ? '1' : '0'}`;
 		const { toolDef } = await import('../../tools/private/create_order.js');
@@ -530,7 +507,6 @@ describe('不変条件 8: get_ui_snapshot の `_meta` はゲートと期限に�
 		const { toolDef } = await import('../../tools/get_ui_snapshot.js');
 		const result = (await toolDef.handler({ resource_uri: RESOURCE_URI }, appUiCtx())) as HandlerResult;
 		expect(metaToken(result)).toBe('tok_seed');
-		// structuredContent 側には出ない
 		expect(JSON.stringify(result.structuredContent)).not.toContain('tok_seed');
 	});
 

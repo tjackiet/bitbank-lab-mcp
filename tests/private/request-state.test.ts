@@ -1,10 +1,3 @@
-/**
- * src/private/request-state.ts のユニットテスト。
- *
- * MRTR requestState の HMAC / 期限 / bind（method・session・principal）と
- * nonce replay 防御を検証する。
- */
-
 import type { ServerContext } from '@modelcontextprotocol/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_PURGE_INTERVAL_MS } from '../../lib/bounded-expiring-set.js';
@@ -25,14 +18,7 @@ import {
 const ACTION = 'create_order';
 const ARGS = { pair: 'btc_jpy', amount: '0.01', side: 'buy', type: 'limit' } as Record<string, unknown>;
 
-/**
- * mint / verify 用の最小 ServerContext。
- *
- * bind（`bindRequestStateContext`）が読むのは `mcpReq.method` / `sessionId` /
- * `http.authInfo.clientId` だけなので、その 3 つ（と必須の `mcpReq.id`）のみを与える。
- * ServerContext の残りのメンバはダミーを置かない——スタブを足すと ServerContext 側が
- * この部分型へ代入できなくなり、キャストが TS2352（overlap 不足）になる。
- */
+/** bind が読む mcpReq.method / sessionId / http.authInfo.clientId（と必須の mcpReq.id）だけを与える。残りにダミーを置くと部分型へ代入できず TS2352 になる。 */
 function ctx(overrides: { sessionId?: string; method?: string; clientId?: string } = {}): ServerContext {
 	return {
 		sessionId: overrides.sessionId,
@@ -54,17 +40,9 @@ function ctx(overrides: { sessionId?: string; method?: string; clientId?: string
 	} as ServerContext;
 }
 
-/** 固定 epoch ms（テスト内で時刻を明示する起点） */
 const T0 = 1_786_291_200_000;
 
-/**
- * 件数上限を差し替えた request-state モジュールを読み直す。
- *
- * `usedNonces` はモジュールスコープの singleton で、上限は生成時に
- * `REPLAY_GUARD_MAX_ENTRIES` から解決される。上限テストのためだけに本番コードへ
- * テスト専用の setter を生やさず、モジュールごと作り直して検証する
- * （環境変数による上書きが nonce 側にも効いていることの検証も兼ねる）。
- */
+/** 件数上限は singleton 生成時に REPLAY_GUARD_MAX_ENTRIES から解決されるので、テスト専用 setter を生やさずモジュールごと読み直す（環境変数の上書きが nonce 側に効くことの検証も兼ねる）。 */
 async function importWithMaxEntries(maxEntries: string) {
 	vi.resetModules();
 	vi.stubEnv('REPLAY_GUARD_MAX_ENTRIES', maxEntries);

@@ -1,11 +1,4 @@
-/**
- * private API の接続先（ADR-0008）。
- *
- * - 既定の経路で送る URL が 1 文字も変わっていないこと（文字列の完全一致で固定する）
- * - `origin` はループバックの origin だけを受け、それ以外は throw して既定へ戻さないこと
- * - 差し替えても署名と再試行の挙動が変わらないこと
- * - `setDefaultClient` は既定のクライアントが作られる前に 1 回だけ使えること
- */
+// ADR-0008: 既定の URL は文字列の完全一致で固定し、origin はループバックだけを受けて既定へ戻さないこと、setDefaultClient は既定のクライアント生成前に 1 回だけ使えることを固定する。
 
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -175,7 +168,6 @@ describe('差し替え先からのリダイレクト', () => {
 		await Promise.all(servers.splice(0).map((s) => new Promise((resolve) => s.close(resolve))));
 	});
 
-	/** ループバックに HTTP サーバーを立て、受けた要求のパスを記録する */
 	async function listen(handler: (url: string) => { status: number; headers?: Record<string, string> }) {
 		const received: string[] = [];
 		const server = createServer((req, res) => {
