@@ -408,7 +408,7 @@ describe('formatDebugView: 棄却理由の集計ブロック（#191 A）', () =>
 		};
 		const text = formatDebugView('hdr', meta, [], makeDebugViewRes()).content[0].text;
 
-		// 分母は 3 つとも書く。**読み手に引き算をさせない**（#191 要件 1）
+		// 分母は 3 つとも書く。読み手に引き算をさせない（#191 要件 1）
 		expect(text).toContain('▼ 候補の内訳: 全 11 件 = accepted 1 件 + rejected 10 件（cap 省略なし＝全候補の内訳）');
 		expect(text).toContain('▼ 棄却理由の内訳（type 別 → reason 別。合計は上の rejected 10 件と一致する）');
 		expect(text).toContain('   - triple_top 8 件: peaks_not_equal 5 / valleys_missing 3');
@@ -420,7 +420,7 @@ describe('formatDebugView: 棄却理由の集計ブロック（#191 A）', () =>
 		expect(rows.reduce((sum, r) => sum + r.count, 0)).toBe(10);
 		for (const row of rows) expect(row.reasons.reduce((sum, [, n]) => sum + n, 0)).toBe(row.count);
 
-		// 集計ブロックは**列挙より前**（長いリストを読み切る前に全体像が要る）
+		// 集計ブロックは列挙より前（長いリストを読み切る前に全体像が要る）
 		expect(text.indexOf('▼ 候補の内訳')).toBeGreaterThan(text.indexOf('【Candidates】'));
 		expect(text.indexOf('▼ 棄却理由の内訳')).toBeLessThan(text.indexOf('❌ = 候補段階の棄却'));
 	});
@@ -556,7 +556,7 @@ describe('formatDebugView: reason 単独の横断合計（#193 B-1）', () => {
 		const meta = makeMeta(liveLikeCandidates);
 		const text = formatDebugView('hdr', meta, [], makeDebugViewRes()).content[0].text;
 
-		// type 別行は**残したまま**（B-1 は「足す」であって「置き換える」ではない）
+		// type 別行は残したまま（B-1 は「足す」であって「置き換える」ではない）
 		expect(text).toContain(
 			'   - falling_wedge 102 件: slopes_not_same_direction 58 / no_convergence 25 / weaker_slope_ratio_low 19',
 		);
@@ -565,7 +565,7 @@ describe('formatDebugView: reason 単独の横断合計（#193 B-1）', () => {
 		);
 
 		const cross = parseCrossTotalRow(text);
-		// 件数降順。**58 でも 28 でもなく 66 / 47**（LLM は type 別の数値をそのまま横断合計として出した）
+		// 件数降順。58 でも 28 でもなく 66 / 47（LLM は type 別の数値をそのまま横断合計として出した）
 		expect(cross).toEqual([
 			['slopes_not_same_direction', 66],
 			['weaker_slope_ratio_low', 47],
@@ -578,7 +578,7 @@ describe('formatDebugView: reason 単独の横断合計（#193 B-1）', () => {
 
 		// 帰属は type 別行で見る、を content 側に書く（同じ reason が rising / falling で意味が違うため）
 		expect(text).toContain('同じ reason でも type ごとに意味が違いうるので帰属は上の type 別行で見る');
-		// 位置は type 別行の**後**（「上の type 別行」が指す先が実際に上にある）
+		// 位置は type 別行の後（「上の type 別行」が指す先が実際に上にある）
 		expect(text.indexOf(REJECTION_CROSS_TOTAL_LABEL)).toBeGreaterThan(text.indexOf('▼ 棄却理由の内訳'));
 		expect(text.indexOf(REJECTION_CROSS_TOTAL_LABEL)).toBeLessThan(text.indexOf('❌ = 候補段階の棄却'));
 	});
@@ -1955,7 +1955,7 @@ describe('formatPatternLine: 山2 / 谷2 の位置行（#245）', () => {
 			],
 		});
 
-	/** 上の符号反転（`double_bottom`）。谷2 の終値はネックラインの 16.7% **下**。 */
+	/** 上の符号反転（`double_bottom`）。谷2 の終値はネックラインの 16.7% 下。 */
 	const wickyBottom = (): PatternEntry =>
 		makePattern({
 			type: 'double_bottom',

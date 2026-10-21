@@ -121,7 +121,7 @@ describe('detect_patterns: triple × H&S の型間排他（issue #218 Phase 2）
 		};
 		const line = res.content[0].text.split('\n').find((l) => l.startsWith('検出内訳:'));
 		expect(line).toContain('triple×H&S排他 -0');
-		// 段の並びはパイプライン順（ライフサイクル絞り込みの**後**）。
+		// 段の並びはパイプライン順（ライフサイクル絞り込みの後）。
 		expect(line).toMatch(/ライフサイクル除外 -\d+ → triple×H&S排他 -\d+(?:（[^）]+）)? → 出力/);
 	});
 
