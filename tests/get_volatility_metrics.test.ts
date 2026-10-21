@@ -361,7 +361,7 @@ describe('get_volatility_metrics', () => {
 			expect(res14.data.aggregates.atr).toBeCloseTo(res20.data.aggregates.atr, 8);
 		});
 
-		// rolling[].atr は削除済み（aggregates.atr の Wilder ATR を使う）
+		// Wilder ATR は rolling ではなく aggregates.atr で提供する。
 		it('rolling 各要素に atr フィールドが含まれない', async () => {
 			const rows = makeOhlcvRows(60);
 			mockFetchWithOhlcv(rows);
@@ -391,8 +391,6 @@ describe('get_volatility_metrics', () => {
 			expect(rvStd).toBeLessThan(0.2);
 		});
 	});
-
-	// 不正 OHLC / isoTime 欠損 / 上流 fetchWarning の伝播は get_volatility_metrics.warnings.test.ts で get_candles を mock してテストする。
 
 	describe('sampleSize の数値契約', () => {
 		it('正常時は data.meta.sampleSize === data.series.close.length（スキップ無し）', async () => {

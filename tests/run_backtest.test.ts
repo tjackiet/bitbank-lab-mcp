@@ -698,7 +698,6 @@ describe('run_backtest', () => {
 		});
 
 		const engineInput = mocks.runBacktestEngine.mock.calls[0][2];
-		// 既定の 12bp と同じ値が engine に渡るので、損益計算は変わらない
 		expect(engineInput.fee_bp).toBe(12);
 	});
 });

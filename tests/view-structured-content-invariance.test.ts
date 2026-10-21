@@ -212,7 +212,7 @@ describe('view は structuredContent を変えない（§3-2 規約 4）', () =>
 				pair: 'btc_jpy',
 				type: '1day',
 				count: 1,
-				// #184 で出力スキーマに宣言した実効パラメータ。view で削られないことが規約 2 の対象。
+				// 実効パラメータ（#184）も view で削られないことが規約 2 の対象。
 				effective_params: {
 					swingDepth: { value: 6, source: 'auto' },
 					minBarsBetweenSwings: { value: 4, source: 'auto' },

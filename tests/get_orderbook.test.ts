@@ -499,7 +499,6 @@ describe('get_orderbook', () => {
 
 			expect(() => GetOrderbookOutputSchema.parse(res)).not.toThrow();
 
-			// JSON.stringify(null) === 'null' / JSON.stringify(Infinity) === 'null' の差を踏む経路
 			const roundTripped = JSON.parse(JSON.stringify(res));
 			expect(roundTripped.data.ranges[0].ratio).toBeNull();
 			expect(() => GetOrderbookOutputSchema.parse(roundTripped)).not.toThrow();

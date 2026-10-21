@@ -29,7 +29,7 @@ function responseOf(res: unknown): { content: Array<{ type: string; text: string
 	return { content: [{ type: 'text', text: String(r.summary ?? '') }], structured: r };
 }
 
-/** bitbank `/transactions` は数値も含めて全て文字列で返るので、フィクスチャをこの型で縛って実 API と乖離したモック（例: `executed_at` を数値で書く）が入らないようにする。 */
+/** bitbank `/transactions` は `price` / `amount` / `executed_at` を数値も文字列で返すので、フィクスチャをこの型で縛って実 API と乖離したモック（例: `executed_at` を数値で書く）が入らないようにする。 */
 type BitbankTxRow = {
 	transaction_id?: number;
 	price: string;
@@ -195,7 +195,6 @@ describe('deprecated view alias の写像（§4-4）', () => {
 		});
 
 		it('default（view 未指定）は full で、旧 default の summary と一致する', async () => {
-			// default を summary → full に変えたが挙動は不変（§3-5）。
 			const legacyDefault = responseOf(await runTransactions({ view: 'summary' }));
 			const currentDefault = responseOf(await runTransactions({}));
 
