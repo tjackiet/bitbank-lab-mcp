@@ -18,7 +18,6 @@ type Candle = {
 	volume: number;
 };
 
-/** N 日前の ISO タイムスタンプ */
 function daysAgoIso(n: number): string {
 	return dayjs().subtract(n, 'day').startOf('day').toISOString();
 }
@@ -31,11 +30,7 @@ function candlesOk(normalized: Candle[]) {
 	return { ok: true, summary: 'ok', data: { normalized }, meta: { count: normalized.length } };
 }
 
-/**
- * 40 本のベースラインローソク足（close=100）に
- * 指定インデックスでスイングポイントを差し込む。
- * depth=5 のピボット検出に十分な間隔をもたせる。
- */
+/** depth=5 のピボット検出に十分な間隔をもたせる。 */
 function buildSRCandles(opts?: {
 	swingLows?: Array<{ idx: number; low: number; close?: number; volume?: number }>;
 	swingHighs?: Array<{ idx: number; high: number; close?: number; volume?: number }>;
@@ -86,8 +81,6 @@ describe('analyze_support_resistance', () => {
 
 	afterEach(() => vi.clearAllMocks());
 
-	// ── バリデーション・エラー系 ─────────────────────────────
-
 	it('inputSchema: lookbackDays < 30 を拒否', () => {
 		expect(() => toolDef.inputSchema.parse({ pair: 'btc_jpy', lookbackDays: 29 })).toThrow();
 	});
@@ -122,8 +115,6 @@ describe('analyze_support_resistance', () => {
 		expect(res.data.supports).toHaveLength(0);
 		expect(res.data.resistances).toHaveLength(0);
 	});
-
-	// ── 従来型 S/R 検出 ─────────────────────────────────────
 
 	it('content の見出しは入力 pair を使う', async () => {
 		const candles = Array.from({ length: 20 }, (_, i) => mc(30 - i, 100, 102, 98, 100));
@@ -214,8 +205,6 @@ describe('analyze_support_resistance', () => {
 		expect(res.data.supports.length).toBeLessThanOrEqual(1);
 	});
 
-	// ── 出来高ブースト ──────────────────────────────────────
-
 	it('大出来高タッチで strength が補強される', async () => {
 		// 出来高なしのベースライン
 		const base = buildSRCandles({
@@ -243,12 +232,9 @@ describe('analyze_support_resistance', () => {
 		if (resBoosted.data.supports.length > 0 && resBase.data.supports.length > 0) {
 			expect(resBoosted.data.supports[0].strength).toBeGreaterThanOrEqual(resBase.data.supports[0].strength);
 		}
-		// content に出来高関連テキストが含まれる
 		const text = resBoosted.content?.[0]?.text ?? '';
 		expect(text).toContain('出来高');
 	});
-
-	// ── 高タッチ数で strength=3 ─────────────────────────────
 
 	it('タッチ5回以上で strength=3', async () => {
 		const candles = buildSRCandles({
@@ -270,8 +256,6 @@ describe('analyze_support_resistance', () => {
 		}
 	});
 
-	// ── 直近崩壊でサポート除外 ──────────────────────────────
-
 	it('直近7日以内にブレイクしたサポートは除外', async () => {
 		// サポートは日足 10日前が最新 → ブレイクは直近5日前に発生
 		const candles = buildSRCandles({
@@ -290,16 +274,11 @@ describe('analyze_support_resistance', () => {
 		mockedGetCandles.mockResolvedValueOnce(asMockResult(candlesOk(candles)));
 		const res = await analyzeSupportResistance('btc_jpy', { lookbackDays: 90, tolerance: 0.015 });
 		assertOk(res);
-		// ブレイクしたサポートは除外されるはず
 		const tradSupports = res.data.supports;
-		// 検出されたとしても、ブレイクされたレベル付近の従来型サポートは除外
 		for (const s of tradSupports) {
-			// 88-89 付近のサポートがないことを確認
 			expect(s.price < 86 || s.price > 92).toBe(true);
 		}
 	});
-
-	// ── 偽ブレイクアウト防止（低出来高 + 翌日非確認） ────────
 
 	it('低出来高のブレイクは翌日確認なしなら無視される', async () => {
 		const candles = buildSRCandles({
@@ -309,25 +288,19 @@ describe('analyze_support_resistance', () => {
 				{ idx: 24, low: 89 },
 			],
 		});
-		// 最新付近に低出来高の「偽ブレイク」を配置
-		// avgVolume ≈ 100 に対して volume=50（< avgVolume）
-		// 翌日は close=100 で確認されない
+		// 最新付近に低出来高の「偽ブレイク」を配置する（avgVolume ≈ 100 に対して volume=50、翌日は close=100 で確認されない）
 		candles[40] = mc(5, 87, 88, 85, 86, 50); // low-vol break
 		candles[41] = mc(4, 99, 102, 98, 100, 100); // next day: no confirm
 
 		mockedGetCandles.mockResolvedValueOnce(asMockResult(candlesOk(candles)));
 		const res = await analyzeSupportResistance('btc_jpy', { lookbackDays: 90, tolerance: 0.015 });
 		assertOk(res);
-		// 偽ブレイクが無視されるので、サポートが除外されていない可能性
-		// （detectRecentBreak が undefined を返す）
+		// 偽ブレイクが無視されるので、サポートが除外されていない可能性がある（detectRecentBreak が undefined を返す）
 	});
-
-	// ── 新サポート形成 ──────────────────────────────────────
 
 	it('V字反発で新サポート形成を検出', async () => {
 		// 直近 10 日以内に prev.low > current.low < next.low の V字パターン
 		const candles: Candle[] = [];
-		// 25 本のベースライン
 		for (let i = 0; i < 25; i++) {
 			candles.push(mc(30 - i, 100, 102, 98, 100));
 		}
@@ -335,7 +308,6 @@ describe('analyze_support_resistance', () => {
 		candles.push(mc(7, 100, 102, 97, 100)); // prev: low=97
 		candles.push(mc(6, 98, 99, 91, 93)); // current: low=91, big drop
 		candles.push(mc(5, 94, 102, 94, 100)); // next: low=94 > 91, big rise
-		// 残り
 		candles.push(mc(4, 100, 102, 98, 100));
 		candles.push(mc(3, 100, 102, 99, 100));
 
@@ -364,12 +336,9 @@ describe('analyze_support_resistance', () => {
 		const res = await analyzeSupportResistance('btc_jpy', { lookbackDays: 90, topN: 5, tolerance: 0.015 });
 		assertOk(res);
 
-		// content テキストで出来高関連表示を確認
 		const text = res.content?.[0]?.text ?? '';
 		expect(text).toContain('出来高');
 	});
-
-	// ── ロールリバーサル ─────────────────────────────────────
 
 	it('崩壊したサポート → レジスタンス転換を検出', async () => {
 		// 高価格帯（108 付近）にサポートレベルを形成し、その後 100 に崩壊
@@ -393,7 +362,6 @@ describe('analyze_support_resistance', () => {
 		const res = await analyzeSupportResistance('btc_jpy', { lookbackDays: 90, topN: 5, tolerance: 0.015 });
 		assertOk(res);
 
-		// content テキストでレジスタンス転換を確認
 		const text = res.content?.[0]?.text ?? '';
 		// ロールリバーサルが検出されれば content に言及がある
 		if (res.data.resistances.length > 0) {
@@ -448,7 +416,6 @@ describe('analyze_support_resistance', () => {
 		}
 		// プルバック: high がレベル(~104)付近まで戻るが close は下（インデックス 40）
 		candles[40] = mc(50 + 9 - 40, 101, 104, 100, 101); // high=104 ≈ level, close=101 < level
-		// 残りは 100 付近
 		for (let i = 41; i < 50; i++) {
 			const daysAgo = 50 + 9 - i;
 			candles[i] = mc(daysAgo, 100, 102, 98, 100);
@@ -460,13 +427,10 @@ describe('analyze_support_resistance', () => {
 
 		// プルバック確認済みなら strength >= 2 のレジスタンスがある
 		if (res.data.resistances.length > 0) {
-			// プルバック確認でロールリバーサルが強化されているか content で確認
 			const text = res.content?.[0]?.text ?? '';
 			expect(text).toContain('レジスタンス');
 		}
 	});
-
-	// ── ソート ───────────────────────────────────────────────
 
 	it('サポートは現在価格に近い順にソートされる', async () => {
 		const candles = buildSRCandles({
@@ -489,8 +453,6 @@ describe('analyze_support_resistance', () => {
 			);
 		}
 	});
-
-	// ── meta / data 構造 ─────────────────────────────────────
 
 	it('data に currentPrice / analysisDate / detectionCriteria を含む', async () => {
 		const candles = buildSRCandles({
@@ -532,8 +494,6 @@ describe('analyze_support_resistance', () => {
 		expect(res.meta?.resistanceCount).toBeGreaterThanOrEqual(1);
 	});
 
-	// ── S/R が見つからない場合の content ──────────────────────
-
 	it('S/R 検出なしの場合、content に「検出されませんでした」を含む', async () => {
 		const candles = Array.from({ length: 20 }, (_, i) => mc(30 - i, 100, 102, 98, 100));
 		mockedGetCandles.mockResolvedValueOnce(asMockResult(candlesOk(candles)));
@@ -543,8 +503,6 @@ describe('analyze_support_resistance', () => {
 		const text = res.content?.[0]?.text ?? '';
 		expect(text).toContain('検出されませんでした');
 	});
-
-	// ── 20% 超のレベルはフィルタされる ───────────────────────
 
 	it('現在価格から 20% 以上離れたレベルは除外される', async () => {
 		const candles = buildSRCandles({
@@ -562,8 +520,6 @@ describe('analyze_support_resistance', () => {
 			expect(Math.abs(s.pctFromCurrent)).toBeLessThanOrEqual(20);
 		}
 	});
-
-	// ── toolDef handler ──────────────────────────────────────
 
 	it('toolDef.handler が analyzeSupportResistance に委譲', async () => {
 		const candles = Array.from({ length: 20 }, (_, i) => mc(30 - i, 100, 102, 98, 100));

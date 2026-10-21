@@ -53,14 +53,10 @@ describe('analyze_volume_profile', () => {
 		vi.resetAllMocks();
 	});
 
-	// ── inputSchema ──
-
 	it('inputSchema: valueAreaPct は 0.5 以上のみ許可する', () => {
 		const parse = () => toolDef.inputSchema.parse({ pair: 'btc_jpy', valueAreaPct: 0.49 });
 		expect(parse).toThrow();
 	});
-
-	// ── 正常系 ──
 
 	it('正常系: VWAP・Volume Profile・約定サイズ分布を返す', async () => {
 		mockedGetTransactions.mockResolvedValue(
@@ -119,8 +115,6 @@ describe('analyze_volume_profile', () => {
 		expect(res.data.profile.poc.price).toBe(100);
 	});
 
-	// ── Invalid pair ──
-
 	it('無効な pair を渡すと failFromValidation を返す', async () => {
 		const res = await analyzeVolumeProfile('INVALID_PAIR!!!');
 		assertFail(res);
@@ -133,8 +127,6 @@ describe('analyze_volume_profile', () => {
 		expect(res.meta?.errorType).toBe('user');
 	});
 
-	// ── txs.length < 10 ──
-
 	it('約定データが10件未満の場合は insufficient data エラー', async () => {
 		mockedGetTransactions.mockResolvedValue(
 			asMockResult(mockTxResult(buildTxs([100, 101, 102, 103, 104, 105, 106, 107, 108]))),
@@ -145,8 +137,6 @@ describe('analyze_volume_profile', () => {
 		expect(res.meta?.errorType).toBe('user');
 		expect(res.summary).toContain('不足');
 	});
-
-	// ── VWAP position branches ──
 
 	it('VWAP position: above_2sigma — 現在値が VWAP+2σ 超', async () => {
 		// 最後の価格を非常に高くして above_2sigma にする
@@ -206,8 +196,6 @@ describe('analyze_volume_profile', () => {
 		expect(res.data.vwap.position).toBe('below_2sigma');
 	});
 
-	// ── calcVolumeProfile: dominant branches ──
-
 	it('Volume Profile: dominant=buy のビンが存在する', async () => {
 		// すべてのトレードを buy にして買い優勢ビンを作る
 		const txs = Array.from({ length: 10 }, (_, i) => ({
@@ -258,12 +246,8 @@ describe('analyze_volume_profile', () => {
 		expect(hasBalanced).toBe(true);
 	});
 
-	// ── calcTradeSizeDistribution: largeTradeBias ──
-
 	it('largeTradeBias: ratio > 1.3 → 買い優勢', async () => {
-		// 大口 (amount > p75) がすべて buy になるよう設計
-		// p75 は index=7 の amount になる。amount=[1,2,...,10] → p75=8
-		// 大口(>8)は amount=9,10 の2件。両方 buy にする
+		// 大口 (amount > p75) がすべて buy になるよう設計する。amount=[1,2,...,10] → p75=8 なので、大口(>8)は amount=9,10 の2件。
 		const txs = [
 			{ price: 100, amount: 1, side: 'buy' as const, timestampMs: Date.UTC(2024, 0, 1), isoTime: '' },
 			{ price: 101, amount: 2, side: 'sell' as const, timestampMs: Date.UTC(2024, 0, 1) + 1, isoTime: '' },
@@ -344,12 +328,8 @@ describe('analyze_volume_profile', () => {
 		expect(['大口取引なし', '大口は買い売り均衡', '大口は買い一色']).toContain(bias.interpretation);
 	});
 
-	// ── fetchWarning が summary と meta に含まれる ──
-
 	it('count-based: latest 成功 + supplement 失敗 → fail せず fetchWarning 付きで部分データを返す', async () => {
-		// 補完アーカイブは公開遅延等で 404 になり得るため best-effort。
-		// latest が成功していれば「過半数失敗」で全体 fail せず、警告付きで返す
-		// （旧実装は 1/2 失敗 → upstream fail で、JST 早朝に正当なデータごと捨てていた）。
+		// 補完アーカイブは公開遅延等で 404 になり得るので best-effort。latest が成功していれば「過半数失敗」で全体 fail せず、警告付きで返す。
 		const latestTxs = buildTxs(Array.from({ length: 15 }, (_, i) => 100 + i));
 		mockedGetTransactions
 			.mockResolvedValueOnce(asMockResult(mockTxResult(latestTxs))) // latest (15件)
@@ -362,8 +342,7 @@ describe('analyze_volume_profile', () => {
 	});
 
 	it('fetchWarning が存在するとき (latestTxs < lim で supplement 1件失敗、lim > 500 で3回fetch)', async () => {
-		// lim=600 > 500 → supplement で day-1 + day-2 の2件追加 → 計3回のfetch
-		// 1回失敗 (failedCount=1, totalCount=3) → 1 < 1.5 → fetchWarning (ok=true)
+		// lim=600 > 500 → supplement で day-1 + day-2 の2件追加 → 計3回の fetch。1回失敗 (failedCount=1, totalCount=3) → 1 < 1.5 → fetchWarning (ok=true)
 		const latestTxs = buildTxs(Array.from({ length: 15 }, (_, i) => 100 + i));
 		const dayTxs = buildTxs(Array.from({ length: 10 }, (_, i) => 200 + i));
 		mockedGetTransactions
@@ -373,11 +352,8 @@ describe('analyze_volume_profile', () => {
 
 		const res = await analyzeVolumeProfile('btc_jpy', 0, 600, 5, 0.7);
 		assertOk(res);
-		// fetchWarning は summary の先頭に含まれる (meta はスキーマで warning フィールドなし)
 		expect(res.summary).toContain('⚠️');
 	});
-
-	// ── hours-based path ──
 
 	it('hours > 0: 正常系 (単日)', async () => {
 		const txs = buildTxs(Array.from({ length: 20 }, (_, i) => 100 + i));
@@ -387,8 +363,7 @@ describe('analyze_volume_profile', () => {
 			.mockResolvedValueOnce(asMockResult(mockTxResult(txs))); // latest fetch
 
 		const res = await analyzeVolumeProfile('btc_jpy', 1, 500, 5, 0.7);
-		// txs は2024年1月1日のタイムスタンプなので hours フィルタで除外される可能性がある
-		// ok/fail 両方の可能性があるが、クラッシュしないことを確認
+		// txs は2024年1月1日のタイムスタンプなので hours フィルタで除外される可能性があり、ok/fail 両方の可能性があるので、クラッシュしないことだけを確認する
 		expect(res).toBeDefined();
 		expect(typeof res.ok).toBe('boolean');
 	});
@@ -403,21 +378,18 @@ describe('analyze_volume_profile', () => {
 
 	it('hours > 0: failedCount >= totalCount/2 → upstream エラー', async () => {
 		const goodTxs = buildTxs(Array.from({ length: 5 }, (_, i) => 100 + i));
-		// 2回呼ばれる: 1回目成功, 1回目失敗 → failedCount=1, totalCount=2 → 1>=1 → upstream
+		// 2回呼ばれる: 1回目成功, 2回目失敗 → failedCount=1, totalCount=2 → 1>=1 → upstream
 		mockedGetTransactions
 			.mockResolvedValueOnce(asMockResult(mockTxResult(goodTxs)))
 			.mockResolvedValueOnce(asMockResult(mockFailResult('upstream', 'failed')));
 
 		const res = await analyzeVolumeProfile('btc_jpy', 1, 500, 5, 0.7);
-		// failedCount=1 totalCount=2 → 1 >= 1 → upstream エラー
-		// ただし mergedTxs>0 の場合は upstream エラー分岐に入らないこともある
-		// mergedTxs.length===0 の場合のみ extractUpstreamError が走るので確認
+		// mergedTxs.length===0 の場合のみ extractUpstreamError が走り、mergedTxs>0 なら upstream エラー分岐に入らないこともあるので、クラッシュしないことだけを確認する
 		expect(res).toBeDefined();
 	});
 
 	it('hours > 0: 過半数失敗 (mergedTxs > 0) → upstream エラー', async () => {
-		// 完了済み UTC 日 2 日分（20260706, 20260707）+ latest = 3 fetch になるよう固定時刻で実行
-		// （dates は完了済み UTC 暦日基準。壁時計依存だと mid-day に dates が減り majority 判定が変わる）
+		// 完了済み UTC 日 2 日分（20260706, 20260707）+ latest = 3 fetch になるよう固定時刻で実行する（壁時計依存だと mid-day に dates が減り majority 判定が変わる）
 		vi.useFakeTimers({ toFake: ['Date'] });
 		vi.setSystemTime(Date.UTC(2026, 6, 8, 1, 0, 0));
 		try {
@@ -478,15 +450,11 @@ describe('analyze_volume_profile', () => {
 			.mockResolvedValue(asMockResult(mockTxResult(txs))); // 残りはすべて成功
 
 		const res = await analyzeVolumeProfile('btc_jpy', 25, 500, 5, 0.7);
-		// 総フェッチ数 >= 3、失敗数=1 → failedCount < totalCount/2 → fetchWarning
 		expect(res).toBeDefined();
 		if (res.ok) {
-			// fetchWarning は summary の先頭に含まれる (meta はスキーマで warning フィールドなし)
 			expect(res.summary).toContain('⚠️');
 		}
 	});
-
-	// ── count-based: latestTxs.length >= lim → early return ──
 
 	it('count-based: latestTxs.length >= lim → supplement なし (early return)', async () => {
 		const txs = buildTxs(Array.from({ length: 20 }, (_, i) => 100 + i));
@@ -494,11 +462,8 @@ describe('analyze_volume_profile', () => {
 
 		const res = await analyzeVolumeProfile('btc_jpy', 0, 10, 5, 0.7);
 		assertOk(res);
-		// mockedGetTransactions は 1 回だけ呼ばれるはず
 		expect(mockedGetTransactions).toHaveBeenCalledTimes(1);
 	});
-
-	// ── count-based: lim > 500 → 2日前も fetch ──
 
 	it('count-based: lim > 500 → 2日前まで supplement fetch', async () => {
 		const latestTxs = buildTxs(Array.from({ length: 10 }, (_, i) => 100 + i));
@@ -513,8 +478,6 @@ describe('analyze_volume_profile', () => {
 		// lim=600>500 なので3回呼ばれるはず
 		expect(mockedGetTransactions).toHaveBeenCalledTimes(3);
 	});
-
-	// ── count-based: mergedTxs empty after supplement → extractUpstreamError ──
 
 	it('count-based: supplement 後も mergedTxs が空 → upstream エラー', async () => {
 		// latest が 0 件 (ok=true だが空)
@@ -534,8 +497,6 @@ describe('analyze_volume_profile', () => {
 		expect(res.meta?.errorType).toBe('network');
 	});
 
-	// ── count-based: supplement failedCount >= totalCount/2 ──
-
 	it('count-based: supplement 後に failedCount >= totalCount/2 → upstream エラー', async () => {
 		// latest 成功(0件), supplement2件とも失敗 → failedCount=2, totalCount=3 → 2>=1.5
 		const emptyResult = {
@@ -554,8 +515,6 @@ describe('analyze_volume_profile', () => {
 		expect(res.meta?.errorType).toBe('upstream');
 	});
 
-	// ── count-based: latestTxs empty かつ ok=false → extractUpstreamError (lines 111-114) ──
-
 	it('count-based: latestRes が ok=false → extractUpstreamError で即エラー返却', async () => {
 		// latestRes.ok=false → latestTxs=[] → extractUpstreamError([latestRes]) でエラー返却
 		mockedGetTransactions.mockResolvedValueOnce(asMockResult(mockFailResult('network', 'latest failed')));
@@ -563,11 +522,8 @@ describe('analyze_volume_profile', () => {
 		const res = await analyzeVolumeProfile('btc_jpy', 0, 10, 5, 0.7);
 		assertFail(res);
 		expect(res.meta?.errorType).toBe('network');
-		// supplement は呼ばれないはず
 		expect(mockedGetTransactions).toHaveBeenCalledTimes(1);
 	});
-
-	// ── largeTradeBias: 大口が buy のみ (ratio=null, largeBuyVol > 0) ──
 
 	it('largeTradeBias: 大口がすべて buy → 大口は買い一色', async () => {
 		// largeSellVol=0, largeBuyVol>0 → ratio=null → '大口は買い一色'
@@ -591,8 +547,6 @@ describe('analyze_volume_profile', () => {
 		expect(res.data.tradeSizes.largeTradeBias.interpretation).toBe('大口は買い一色');
 	});
 
-	// ── catch block ──
-
 	it('予期しない例外が発生した場合 failFromError を返す', async () => {
 		mockedGetTransactions.mockRejectedValue(new Error('unexpected error'));
 
@@ -601,8 +555,6 @@ describe('analyze_volume_profile', () => {
 		// failFromError は errorType='internal' を設定する
 		expect(res.ok).toBe(false);
 	});
-
-	// ── fetchWarning in hours-based path ──
 
 	it('hours > 0: fetchWarning が summary と meta に含まれる', async () => {
 		// 1回目のみ失敗、残りはすべて成功 → failedCount=1 < totalCount/2 → fetchWarning
@@ -620,10 +572,8 @@ describe('analyze_volume_profile', () => {
 			.mockResolvedValue(asMockResult(mockTxResult(recentTxs))); // 残りはすべて成功
 
 		const res = await analyzeVolumeProfile('btc_jpy', 25, 500, 5, 0.7);
-		// 総フェッチ数 >= 3 (2日分 + latest)、失敗数=1 → 1 < totalCount/2 → fetchWarning
 		expect(res).toBeDefined();
 		if (res.ok) {
-			// fetchWarning は summary の先頭に含まれる (meta はスキーマで warning フィールドなし)
 			expect(res.summary).toContain('⚠️');
 		}
 	});

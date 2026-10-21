@@ -11,8 +11,7 @@ import analyzeIchimokuSnapshot, { toolDef } from '../tools/analyze_ichimoku_snap
 import analyzeIndicators from '../tools/analyze_indicators.js';
 
 function buildMockIndicatorSuccess() {
-	// 型は CandleSchema 由来にする。provisional 判定は normalized.at(-1).timestamp を読むため、
-	// リテラル推論のままだと最新足に timestamp を後付けするテストが型エラーになる。
+	// 型は CandleSchema 由来にする。provisional 判定は normalized.at(-1).timestamp を読むので、リテラル推論のままだと最新足に timestamp を後付けするテストが型エラーになる。
 	const normalized: Pick<Candle, 'close' | 'timestamp'>[] = Array.from({ length: 40 }, (_, i) => ({
 		close: i === 39 ? 80 : 120 - i,
 	}));
@@ -196,10 +195,7 @@ describe('analyze_ichimoku_snapshot', () => {
 	});
 
 	it('toolDef.handler: content を組まず Result を素通しし、summary が LLM 可視テキストになる', async () => {
-		// このツールの handler は analyzeIchimokuSnapshot の Result をそのまま返す
-		// （analyze_bb_snapshot / analyze_sma_snapshot と同じ passthrough）。
-		// content[0].text は src/server.ts の respond() が summary から生成するので、
-		// LLM が受け取る情報量は summary そのもの。ここでは summary 側を検証する。
+		// handler は analyzeIchimokuSnapshot の Result をそのまま返し、content[0].text は respond() が summary から生成するので、summary 側を検証する。
 		mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(buildMockIndicatorSuccess()));
 		const res = await toolDef.handler({
 			pair: 'btc_jpy',
@@ -210,11 +206,9 @@ describe('analyze_ichimoku_snapshot', () => {
 
 		expect(res).not.toHaveProperty('content');
 		assertOk(res);
-		// summary は 1 行のラベルではなく、数値データを含む本文であること
-		// （.claude/rules/tools.md: LLM は content[0].text しか読めない）。
+		// summary は 1 行のラベルではなく、数値データを含む本文であること（LLM は content[0].text しか読めない）。
 		expect(res.summary).toContain('一目均衡表分析');
-		// 見出しだけでなく、モックの入力値がそのまま数値として本文に出ていることまで見る
-		// （見出しだけの検証だと【数値データ】が空でも通ってしまう）。
+		// 見出しだけの検証だと【数値データ】が空でも通ってしまうので、モックの入力値がそのまま数値として本文に出ていることまで見る。
 		expect(res.summary).toContain('【数値データ】');
 		expect(res.summary).toContain('転換線: 90 / 基準線: 95');
 		expect(res.summary).toContain('雲(今日): spanA=100 spanB=110');
@@ -240,8 +234,6 @@ describe('analyze_ichimoku_snapshot', () => {
 		expect(res.data.assessment.cloudSlope).toBe('unknown');
 		expect(res.data.cloud!.direction).toBeNull();
 	});
-
-	// ── 上流 warning の伝播（取得層 meta.warning / 計算層 meta.warnings） ──────
 
 	it('上流 meta.warning（取得層）が tool の meta.warning と summary 先頭に伝播する', async () => {
 		const ind = buildMockIndicatorSuccess();
@@ -307,7 +299,6 @@ describe('analyze_ichimoku_snapshot', () => {
 		expect(res.summary.startsWith('⚠️')).toBe(false);
 	});
 
-	// === 形成中足（provisional）注記 ===
 	describe('形成中足（provisional）注記', () => {
 		// buildMockIndicatorSuccess() の最新足にのみ provisional 判定用 ts を載せる。
 		function buildIndicatorsWithLatestTs(latestTsMs: number) {

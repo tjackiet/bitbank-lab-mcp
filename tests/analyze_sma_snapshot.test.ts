@@ -16,8 +16,7 @@ function makeSeries(start: number, step: number, len: number) {
 
 function buildIndicatorsOk() {
 	const len = 40;
-	// 型は CandleSchema 由来にする。provisional 判定は normalized.at(-1).timestamp を読むため、
-	// リテラル推論のままだと最新足に timestamp を後付けするテストが型エラーになる。
+	// 型は CandleSchema 由来にする。provisional 判定は normalized.at(-1).timestamp を読むので、リテラル推論のままだと最新足に timestamp を後付けするテストが型エラーになる。
 	const normalized: Pick<Candle, 'close' | 'isoTime' | 'timestamp'>[] = Array.from({ length: len }, (_, i) => ({
 		close: i === len - 1 ? 140 : 120,
 		isoTime: `2024-01-${String((i % 30) + 1).padStart(2, '0')}T00:00:00.000Z`,
@@ -264,7 +263,6 @@ describe('analyze_sma_snapshot', () => {
 
 	it('chart.candles がない場合は normalized をフォールバックとして使うべき', async () => {
 		const ind = buildIndicatorsOk();
-		// Remove chart.candles, keep normalized
 		(ind.data.chart as Record<string, unknown>).candles = undefined;
 		mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(ind));
 
@@ -283,11 +281,8 @@ describe('analyze_sma_snapshot', () => {
 		const res = await analyzeSmaSnapshot('btc_jpy', '1day', 220, [5, 20]);
 
 		assertOk(res);
-		// null pair should be excluded from crosses
 		expect(res.data.crosses.length).toBe(0);
 	});
-
-	// ── 上流 warning の伝播（取得層 meta.warning / 計算層 meta.warnings） ──────
 
 	it('上流 meta.warning（取得層）が tool の meta.warning と summary 先頭に伝播する', async () => {
 		const ind = buildIndicatorsOk();
@@ -318,7 +313,6 @@ describe('analyze_sma_snapshot', () => {
 		assertOk(res);
 		expect(res.meta.warnings).toEqual(['SMA_200: データ不足', 'Ichimoku: データ不足']);
 		expect(res.meta.warning).toBeUndefined();
-		// 計算層 warnings は summary 先頭に並ぶ
 		expect(res.summary).toContain('⚠️ SMA_200: データ不足');
 		expect(res.summary).toContain('⚠️ Ichimoku: データ不足');
 	});
@@ -335,12 +329,9 @@ describe('analyze_sma_snapshot', () => {
 		const res = await analyzeSmaSnapshot('btc_jpy', '1day', 220, [5, 20, 50]);
 
 		assertOk(res);
-		// 取得層 warning は meta.warning
 		expect(res.meta.warning).toBe('⚠️ partial fetch (multi-year)');
-		// 計算層 warnings は meta.warnings に（取得層メッセージが混入していない）
 		expect(res.meta.warnings).toEqual(['SMA_200: データ不足']);
 		expect(res.meta.warnings).not.toContain('partial fetch (multi-year)');
-		// summary 先頭の 2 行に取得層 warning と計算層 warnings がそれぞれ出る
 		const lines = res.summary.split('\n');
 		expect(lines[0]).toContain('⚠️ partial fetch (multi-year)');
 		expect(lines[1]).toContain('⚠️ SMA_200: データ不足');
@@ -357,7 +348,6 @@ describe('analyze_sma_snapshot', () => {
 		expect(res.summary.startsWith('⚠️')).toBe(false);
 	});
 
-	// === 形成中足（provisional）注記 ===
 	describe('形成中足（provisional）注記', () => {
 		// buildIndicatorsOk() の最新足にのみ provisional 判定用 ts を載せる。
 		function buildIndicatorsWithLatestTs(latestTsMs: number) {
