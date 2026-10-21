@@ -579,7 +579,7 @@ describe('detectWedges', () => {
 				const c = candles[p.idx];
 				expect(c).toBeDefined();
 				expect(p.price).toBe(p.kind === 'H' ? c.high : c.low);
-				// **極値判定に使った値と同値**——この検出器は終値を経由していない、という情報。
+				// 極値判定に使った値と同値（この検出器は終値を経由していない、という情報）。
 				expect(p.extremePrice).toBe(p.price);
 			}
 		});
@@ -605,7 +605,7 @@ describe('detectWedges', () => {
 			expect(fitL.r2).toBeGreaterThan(0.9);
 			expect(fitH.slope).toBeCloseTo(0.3, 1);
 			expect(fitL.slope).toBeCloseTo(0.5, 1);
-			// rising wedge は両ライン上向きで**下側がより急**（収束）。
+			// rising wedge は両ライン上向きで下側がより急（収束）。
 			expect(fitH.slope).toBeGreaterThan(0);
 			expect(fitL.slope).toBeGreaterThan(fitH.slope);
 			// 同じ idx で H は L より上（上限側 / 下限側の対応そのもの）。
@@ -650,7 +650,7 @@ describe('detectWedges', () => {
 				const piv = w.pivots ?? [];
 				expect(piv.length).toBeGreaterThanOrEqual(4);
 				expect(piv.filter((p) => p.idx === breakIdx)).toEqual([]);
-				// ブレイク足**以降**が線を問わず落ちること（#281 の打ち切りは `>=`）。
+				// ブレイク足以降が線を問わず落ちること（#281 の打ち切りは `>=`）。
 				expect(piv.every((p) => p.idx < breakIdx)).toBe(true);
 			}
 		});
@@ -728,7 +728,7 @@ describe('detectWedges', () => {
 		});
 
 		it('falling_wedge でも kind が上限 / 下限に対応する', () => {
-			// upper(i) = 200 − 0.5i / lower(i) = 180 − 0.25i。両ライン下向きで**上側がより急**。
+			// upper(i) = 200 − 0.5i / lower(i) = 180 − 0.25i。両ライン下向きで上側がより急。
 			const candles = buildFallingWedgeWithUpBreakout();
 			const w = formingWedge(candles, 'falling_wedge');
 			const piv = w.pivots ?? [];

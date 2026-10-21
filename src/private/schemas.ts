@@ -188,7 +188,7 @@ export type PortfolioUnresolvedDepositReason = z.infer<typeof PortfolioUnresolve
 /** 入庫日価格側の 2 値だけは `realized_pnl` も落とす（原価が欠けると移動平均法で過去の売却の実現損益まで動くため）。 */
 export const PortfolioCostBasisUnavailableReasonEnum = z.enum([
 	...PortfolioFlowUnavailableReasonEnum.options,
-	/** 復元数量が実残高と乖離しており、該当銘柄に**入庫日の始値を解決できなかった** DONE の暗号資産入庫がある（入庫日の始値で解決できた入庫は原価・数量に算入されるためこの値は立たない） */
+	/** 復元数量が実残高と乖離しており、該当銘柄に入庫日の始値を解決できなかった DONE の暗号資産入庫がある（入庫日の始値で解決できた入庫は原価・数量に算入されるためこの値は立たない） */
 	'has_crypto_deposits',
 	'history_truncated',
 	'unknown',

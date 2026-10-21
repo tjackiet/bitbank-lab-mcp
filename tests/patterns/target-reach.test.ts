@@ -121,7 +121,7 @@ describe('computeTargetReach', () => {
 		expect(r.targetReachedPrice).toBe(110);
 	});
 
-	// **`undefined` は返さない**（issue #224 症状 2）。測れない経路は全部 reason を名乗る。
+	// `undefined` は返さない（issue #224 症状 2）。測れない経路は全部 reason を名乗る。
 
 	it('breakoutPrice が NaN → invalid_breakout_price を名乗る', () => {
 		const candles = [c(102, 98, 100, 'iso-0')];
@@ -329,7 +329,7 @@ describe('computeTargetReach: 到達の事実（issue #288 Phase 2）', () => {
 		const r = measured(computeTargetReach(candles, 0, 100, 120, 'up', 20));
 		expect(r.targetFirstReachBars).toBe(1);
 		expect(r.targetFirstReachDate).toBe('iso-1');
-		// 既存の 2 フィールドは extremum の足のまま（**同じ足に寄せない**）。
+		// 既存の 2 フィールドは extremum の足のまま（同じ足に寄せない）。
 		expect(r.targetReachedDate).toBe('iso-3');
 		expect(r.targetReachedPrice).toBe(180);
 	});

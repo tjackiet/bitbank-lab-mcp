@@ -100,7 +100,7 @@ describe('#291 継続系の invalid（実データ D の同じ窓の triangle_as
 			);
 		});
 
-		// 方向の具体値は状態行が持たない。**2 行はそのまま残す**（#291 決定事項）。
+		// 方向の具体値は状態行が持たない。2 行はそのまま残す（#291 決定事項）。
 		it(`view=${view}: 「ブレイク方向」「パターン結果」の 2 行が従来どおり残る`, async () => {
 			const block = patternBlock(await liveWindowContent(view), 'triangle_ascending');
 			expect(block).toContain('   - ブレイク方向: 下方ブレイク（本来は上方ブレイクが期待されるパターン）');

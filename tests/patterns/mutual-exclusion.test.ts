@@ -75,7 +75,7 @@ describe('excludeTriplesSharingHsMainPoints', () => {
 		const res = excludeTriplesSharingHsMainPoints(input);
 		expect(res.kept).toEqual(input);
 		expect(res.excluded).toHaveLength(0);
-		// `excluded` が空なのは「比較して該当なし」ではなく「比較対象が無い」——ここで区別する。
+		// `excluded` が空なのは「比較して該当なし」ではなく「比較対象が無い」ことを、ここで区別する。
 		expect(res.hsCandidateCount).toBe(0);
 	});
 
