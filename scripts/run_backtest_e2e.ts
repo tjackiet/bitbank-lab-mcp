@@ -1,16 +1,3 @@
-/**
- * test_run_backtest.ts - 汎用バックテストのテスト
- *
- * 使用法:
- *   npx tsx scripts/run_backtest_e2e.ts [strategy_type]
- *
- * 例:
- *   npx tsx scripts/run_backtest_e2e.ts sma_cross
- *   npx tsx scripts/run_backtest_e2e.ts rsi
- *   npx tsx scripts/run_backtest_e2e.ts macd_cross
- *   npx tsx scripts/run_backtest_e2e.ts bb_breakout
- */
-
 import { writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -22,7 +9,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 async function main() {
 	const strategyType = process.argv[2] || 'sma_cross';
 
-	// 戦略ごとのデフォルトパラメータ
 	const strategyConfigs: Record<string, StrategyConfig> = {
 		sma_cross: { type: 'sma_cross', params: { short: 5, long: 20 } },
 		rsi: { type: 'rsi', params: { period: 14, overbought: 70, oversold: 30 } },
@@ -72,7 +58,6 @@ async function main() {
 
 	console.log('\n' + result.summary);
 
-	// SVGをファイルに保存
 	if (result.svg) {
 		const outputPath = join(__dirname, '..', '..', 'assets', `backtest_${strategyType}_test.svg`);
 		writeFileSync(outputPath, result.svg);

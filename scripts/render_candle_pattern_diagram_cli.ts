@@ -1,11 +1,5 @@
 #!/usr/bin/env tsx
 
-/**
- * CLI for render_candle_pattern_diagram
- *
- * Usage: tsx tools/render_candle_pattern_diagram_cli.ts [output.svg]
- */
-
 import * as fs from 'fs';
 import renderCandlePatternDiagram from '../tools/render_candle_pattern_diagram.js';
 import { parseArgs } from './cli-utils.js';
@@ -16,7 +10,6 @@ async function main() {
 
 	console.log('🎨 Rendering candle pattern diagram...\n');
 
-	// テストデータ（11/6-11/10の陽線包み線）
 	const result = await renderCandlePatternDiagram({
 		candles: [
 			{ date: '11/6(木)', open: 16047419, high: 16080000, low: 15360000, close: 15538401, type: 'bearish' },
@@ -40,7 +33,6 @@ async function main() {
 		console.log(`   Candles: ${result.meta.candleCount}`);
 		console.log(`   Pattern: ${result.meta.patternName || 'none'}`);
 
-		// ファイルに保存
 		fs.writeFileSync(outputPath, result.data.svg, 'utf-8');
 		console.log(`\n📁 Saved to: ${outputPath}`);
 		console.log('\n💡 Open the SVG file in a browser to view the diagram.');

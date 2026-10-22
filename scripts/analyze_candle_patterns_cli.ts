@@ -1,11 +1,4 @@
 #!/usr/bin/env tsx
-/**
- * CLI for analyze_candle_patterns
- * Usage:
- *   tsx tools/analyze_candle_patterns_cli.ts                    # Latest data
- *   tsx tools/analyze_candle_patterns_cli.ts 20251115           # YYYYMMDD format
- *   tsx tools/analyze_candle_patterns_cli.ts 2025-11-05         # ISO format
- */
 
 import analyzeCandlePatterns from '../tools/analyze_candle_patterns.js';
 import { parseArgs } from './cli-utils.js';
@@ -22,7 +15,6 @@ async function main() {
 	}
 	console.log('');
 
-	// as_of パラメータを使用（ISO形式とYYYYMMDD形式の両方を受け付け）
 	const result = await analyzeCandlePatterns({
 		as_of: dateArg,
 	});
