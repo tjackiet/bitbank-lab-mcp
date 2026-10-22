@@ -29,7 +29,7 @@ export function intArg(value: string | undefined, defaultValue: number): number 
 	return Number.isFinite(n) ? n : defaultValue;
 }
 
-export function runCli(fn: () => Promise<{ ok: boolean } | void>): void {
+export function runCli(fn: () => Promise<{ ok: boolean } | undefined>): void {
 	fn()
 		.then((result) => {
 			if (result == null) return; // void 戻り値
