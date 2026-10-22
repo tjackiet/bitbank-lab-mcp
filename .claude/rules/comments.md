@@ -3,6 +3,7 @@ paths:
   - "src/**/*.ts"
   - "tools/**/*.ts"
   - "lib/**/*.ts"
+  - "lab/**/*.ts"
   - "scripts/**/*.ts"
   - "tests/**/*.ts"
   - "ui/**/*.{ts,tsx}"
@@ -47,6 +48,8 @@ paths:
    - src / tools / lib / tests: `npx tsc --removeComments --noEmit false --outDir <dir>`
    - scripts（tsconfig.json の対象外）: `npx tsc --ignoreConfig --noCheck --removeComments --noEmit false
      --target ES2022 --module NodeNext --moduleResolution NodeNext --outDir <dir> scripts/*.ts`
+   - lab（tsconfig.json の対象外。`lab/main.ts` はテストからの import で上の src 等の出力にも入る）:
+     scripts と同じコマンドの `scripts/*.ts` を `lab/*.ts` に替えて実行する
    - ui（vite でビルド）: `npx vite build --config ui/<app>/vite.config.ts --outDir <dir>/<app> --emptyOutDir`
      を order-confirm / cancel-confirm それぞれで実行する
 3. `npm test` が全件通ること。tests/ にはソースの文字列を読むテストがあるので
