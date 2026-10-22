@@ -43,7 +43,7 @@ const ISSUE_146_POINTS: Array<{ idx: number; price: number; kind: 'H' | 'L'; rol
 function buildCtx(opts?: { swingDepth?: number; headProminencePct?: number }): DetectContext {
 	const candles = buildBtcJpy1hour202608Candles() as CandleData[];
 	const depth = opts?.swingDepth ?? TF_SWING_DEPTH;
-	// **本 issue の主眼**: ピボットを人手で書き写さず `detectSwingPoints` から実際に出す。
+	// 本 issue の主眼: ピボットを人手で書き写さず `detectSwingPoints` から実際に出す。
 	const pivots = detectSwingPoints(candles, { swingDepth: depth });
 	const tol = TF_TOLERANCE;
 	return {

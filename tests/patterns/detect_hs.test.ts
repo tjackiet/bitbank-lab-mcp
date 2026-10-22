@@ -446,7 +446,7 @@ describe('detectHeadAndShoulders', () => {
 		const hs = result.patterns.filter((p) => p.type === 'head_and_shoulders');
 		expect(hs.length).toBeGreaterThan(0);
 		expect(hs[0]?._fallback).toMatch(/relaxed_hs/);
-		// ここは前置一致——本テストの主題は relaxed フォールバックであって、肩がどちらの conjunct で落ちたか（#172 の接尾辞）ではない。
+		// ここは前置一致。本テストの主題は relaxed フォールバックであって、肩がどちらの conjunct で落ちたか（#172 の接尾辞）ではない。
 		const strictRejected = ctx.debugCandidates.some(
 			(d) => d.type === 'head_and_shoulders' && (d.reason ?? '').startsWith('shoulders_not_near'),
 		);
@@ -2022,7 +2022,7 @@ describe('detectHeadAndShoulders: 整合度の多軸化（issue #204）', () => 
 	});
 
 	it('relaxed のゲートは通るが strict の突出に届かない構造は headProminence が 0 点になる（#227 Phase 2）', () => {
-		// 突出率 0.238 に対し strict のゲートを 0.3 に上げる。strict では落ちるが relaxed 第 1 段（0.3 × 0.6 = 0.18）は通る——検出はされるが、突出の軸には 1 点も入らない。
+		// 突出率 0.238 に対し strict のゲートを 0.3 に上げる。strict では落ちるが relaxed 第 1 段（0.3 × 0.6 = 0.18）は通る。検出はされるが、突出の軸には 1 点も入らない。
 		const { candles, pivots } = buildHS({ leftShoulder: 100, rightShoulder: 105, head: 130 });
 		const hs = detectHeadAndShoulders(
 			buildCtx({ candles, pivots, tolerancePct: 0.04, headProminencePct: 0.3 }),

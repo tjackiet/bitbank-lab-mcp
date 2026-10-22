@@ -192,10 +192,10 @@ describe('spreadRatio の実効上界（#178 項目 4 の測定 3。PR #195 で�
 	// 上界を決めるのはサイズ検査の深さ条件で、山 2 つの極値が等しいとき `spreadRatio <= min(tolerancePct, DOUBLE_LEVEL_MAX_PCT) / depthPct`。定数を書き写すと実装が動いたときに黙って嘘になるので、`validatePatternSize` の実装から機械的に再導出する。
 	const peakLevel = 100;
 
-	/** サイズ検査を通る範囲で `spreadRatio` を最大化する。**山2 には上ヒゲを許す。** */
+	/** サイズ検査を通る範囲で `spreadRatio` を最大化する。山2 には上ヒゲを許す。 */
 	function maxAttainableRatio(tf: string): number {
 		const thresholds = getSizeThresholdsForTf(tf);
-		// 山 2 つの極値（高値）は等しく置く——分母を最小化する配置。
+		// 山 2 つの極値（高値）は等しく置く（分母を最小化する配置）。
 		const extremes = (valley: number) => [
 			{ extremePrice: peakLevel },
 			{ extremePrice: valley },
