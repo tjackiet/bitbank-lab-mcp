@@ -2,7 +2,7 @@ import type { z } from 'zod';
 import { nowIso, resolveTz, toDisplayTime } from '../../lib/datetime.js';
 import { formatDeviation, formatPercent, formatPriceJPY, formatTrendSymbol } from '../../lib/formatter.js';
 import { ICHIMOKU_SHIFT, RSI_OVERBOUGHT, RSI_OVERSOLD } from '../../lib/indicator-config.js';
-import { lastCrossover } from '../../lib/indicators.js';
+import { currentCloudSpans, lastCrossover } from '../../lib/indicators.js';
 import { EPSILON } from '../../lib/math.js';
 import { prependProvisionalNote } from '../../lib/provisional-bar.js';
 import { toStructured } from '../../lib/result.js';
@@ -506,11 +506,7 @@ export const toolDef: ToolDefinition = {
 		const ichiSeries = (
 			ind as { ichi_series?: { tenkan?: number[]; kijun?: number[]; spanA?: number[]; spanB?: number[] } }
 		).ichi_series;
-		const ichiSpanASeries = Array.isArray(ichiSeries?.spanA) ? ichiSeries.spanA : null;
-		const ichiSpanBSeries = Array.isArray(ichiSeries?.spanB) ? ichiSeries.spanB : null;
-		const ichiLen = ichiSpanASeries && ichiSpanBSeries ? Math.min(ichiSpanASeries.length, ichiSpanBSeries.length) : 0;
-		const spanA = ichiLen >= ICHIMOKU_SHIFT ? (ichiSpanASeries?.[ichiLen - ICHIMOKU_SHIFT] ?? null) : null;
-		const spanB = ichiLen >= ICHIMOKU_SHIFT ? (ichiSpanBSeries?.[ichiLen - ICHIMOKU_SHIFT] ?? null) : null;
+		const { spanA, spanB } = currentCloudSpans(ichiSeries);
 		const tenkan = ind.ICHIMOKU_conversion ?? null;
 		const kijun = ind.ICHIMOKU_base ?? null;
 		const cloudTop = spanA != null && spanB != null ? Math.max(spanA, spanB) : null;

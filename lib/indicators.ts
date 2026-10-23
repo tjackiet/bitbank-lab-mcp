@@ -1,3 +1,5 @@
+import { ICHIMOKU_SHIFT } from './indicator-config.js';
+
 const nanArray = (len: number): number[] => Array.from<number>({ length: len }).fill(NaN);
 
 // 全指標で入力は古い順、データ不足の位置は NaN。丸めは呼び出し元で行う（analyze_indicators と trading_process が共有する）。
@@ -280,6 +282,18 @@ export function ichimokuSnapshot(
 	const spanA = (conversion + base) / 2;
 	const spanB = (Math.max(...highs.slice(-52)) + Math.min(...lows.slice(-52))) / 2;
 	return { conversion, base, spanA, spanB };
+}
+
+/** 今日の雲は ichi_series の spanA / spanB の短い方の末尾から ICHIMOKU_SHIFT 本前（末尾の値は ICHIMOKU_SHIFT 本後にプロットされる雲）。 */
+export function currentCloudSpans(
+	series: { spanA?: Array<number | null>; spanB?: Array<number | null> } | null | undefined,
+): { spanA: number | null; spanB: number | null } {
+	const spanA = series?.spanA;
+	const spanB = series?.spanB;
+	if (!Array.isArray(spanA) || !Array.isArray(spanB)) return { spanA: null, spanB: null };
+	const len = Math.min(spanA.length, spanB.length);
+	if (len < ICHIMOKU_SHIFT) return { spanA: null, spanB: null };
+	return { spanA: spanA[len - ICHIMOKU_SHIFT] ?? null, spanB: spanB[len - ICHIMOKU_SHIFT] ?? null };
 }
 
 export function stochastic(

@@ -486,10 +486,11 @@ describe('toolDef.handler', () => {
 
 	afterEach(() => vi.clearAllMocks());
 
-	/** ichi_series を「今日の雲」の値（spanA[len-26]/spanB[len-26]）から構築 */
+	/** 「今日の雲」の値は spanA / spanB[len - ICHIMOKU_SHIFT] にだけ置き、他の位置は雲を 500 万円上にずらして、読む位置が 1 本でもずれたら雲との位置関係が変わるようにする。 */
 	function buildIchiSeries(todaySpanA: number, todaySpanB: number, length = 30) {
-		const spanA = Array.from({ length }, () => todaySpanA);
-		const spanB = Array.from({ length }, () => todaySpanB);
+		const todayIdx = length - ICHIMOKU_SHIFT;
+		const spanA = Array.from({ length }, (_, i) => (i === todayIdx ? todaySpanA : todaySpanA + 5_000_000));
+		const spanB = Array.from({ length }, (_, i) => (i === todayIdx ? todaySpanB : todaySpanB + 5_000_000));
 		return {
 			tenkan: Array.from({ length }, () => todaySpanA),
 			kijun: Array.from({ length }, () => todaySpanB),
