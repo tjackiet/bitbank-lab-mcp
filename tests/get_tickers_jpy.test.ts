@@ -58,12 +58,23 @@ describe('getTickersJpy', () => {
 	});
 
 	describe('getPairsMode', () => {
+		it('既定（strict）は ALLOWED_PAIRS で絞り込み、fixture の mkr_jpy は落ちる', async () => {
+			process.env.TICKERS_JPY_URL = 'file://tests/fixtures/tickers_jpy_sample.json';
+			const res = await getTickersJpy({ bypassCache: true });
+			assertOk(res);
+			expect(res.summary).toContain('mode=strict/static');
+			expect(res.summary).toContain('1/2 items after filter');
+			expect(res.data.map((it) => it.pair)).toEqual(['btc_jpy']);
+		});
+
 		it('BITBANK_STRICT_PAIRS=0 → mode off (フィルタなし)', async () => {
 			process.env.BITBANK_STRICT_PAIRS = '0';
 			process.env.TICKERS_JPY_URL = 'file://tests/fixtures/tickers_jpy_sample.json';
 			const res = await getTickersJpy({ bypassCache: true });
 			assertOk(res);
 			expect(res.summary).toContain('mode=off');
+			expect(res.summary).toContain('2/2 items after filter');
+			expect(res.data.map((it) => it.pair)).toEqual(['btc_jpy', 'mkr_jpy']);
 		});
 
 		it('BITBANK_PAIRS_MODE=auto → mode auto', async () => {
@@ -89,6 +100,8 @@ describe('getTickersJpy', () => {
 			const res = await getTickersJpy({ bypassCache: true });
 			assertOk(res);
 			expect(res.summary).toContain('mode=off');
+			expect(res.summary).toContain('2/2 items after filter');
+			expect(res.data.map((it) => it.pair)).toEqual(['btc_jpy', 'mkr_jpy']);
 		});
 	});
 
