@@ -66,7 +66,7 @@ async function fetchOfficialJpyPairs(timeoutMs: number, retries: number, retryWa
 			clearTimeout(t);
 			if (!res.ok) throw new Error(`HTTP ${res.status}`);
 			const raw = (await res.json()) as { success?: number; data?: Array<Record<string, unknown>> };
-			if (!raw || raw.success !== 1 || !Array.isArray(raw.data)) throw new Error('bad payload');
+			if (raw?.success !== 1 || !Array.isArray(raw.data)) throw new Error('bad payload');
 			const set = new Set<string>();
 			for (const it of raw.data) {
 				const p = String(it?.pair || '').toLowerCase();
@@ -90,18 +90,17 @@ async function getFilterSet(
 	if (mode === 'off') return { mode, set: null, source: 'off' };
 	if (mode === 'strict') return { mode, set: ALLOWED_PAIRS as Set<string>, source: 'static' };
 	const now = Date.now();
-	const stillFresh = dynamicPairs && now - dynamicPairsFetchedAt < PAIRS_TTL_MS;
-	if (!stillFresh) {
-		try {
-			dynamicPairs = await fetchOfficialJpyPairs(timeoutMs, retries, retryWaitMs);
-			dynamicPairsFetchedAt = now;
-		} catch {
-			if (!dynamicPairs || dynamicPairs.size === 0) {
-				return { mode, set: ALLOWED_PAIRS as Set<string>, source: 'static' };
-			}
+	if (dynamicPairs && now - dynamicPairsFetchedAt < PAIRS_TTL_MS) return { mode, set: dynamicPairs, source: 'dynamic' };
+	try {
+		dynamicPairs = await fetchOfficialJpyPairs(timeoutMs, retries, retryWaitMs);
+		dynamicPairsFetchedAt = now;
+		return { mode, set: dynamicPairs, source: 'dynamic' };
+	} catch {
+		if (!dynamicPairs || dynamicPairs.size === 0) {
+			return { mode, set: ALLOWED_PAIRS as Set<string>, source: 'static' };
 		}
+		return { mode, set: dynamicPairs, source: 'dynamic' };
 	}
-	return { mode, set: dynamicPairs!, source: 'dynamic' };
 }
 async function filterByMode(
 	items: Item[],
@@ -146,7 +145,7 @@ export default async function getTickersJpy(opts?: { bypassCache?: boolean }) {
 			const abs = path.isAbsolute(filePath) ? filePath : path.join(process.cwd(), filePath);
 			const buf = fs.readFileSync(abs, 'utf8');
 			const raw = JSON.parse(buf);
-			if (!raw || raw.success !== 1 || !Array.isArray(raw.data)) {
+			if (raw?.success !== 1 || !Array.isArray(raw.data)) {
 				return GetTickersJpyOutputSchema.parse(
 					fail('UPSTREAM_ERROR: unexpected response from bitbank API', 'upstream'),
 				);
@@ -190,7 +189,7 @@ export default async function getTickersJpy(opts?: { bypassCache?: boolean }) {
 			}
 		}
 		if (!raw) throw lastErr ?? new Error('no response');
-		if (!raw || raw.success !== 1 || !Array.isArray(raw.data)) {
+		if (raw.success !== 1 || !Array.isArray(raw.data)) {
 			return GetTickersJpyOutputSchema.parse(fail('UPSTREAM_ERROR: unexpected response from bitbank API', 'upstream'));
 		}
 		const dataRaw: Item[] = raw.data as Item[];

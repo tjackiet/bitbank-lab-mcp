@@ -27,7 +27,7 @@ function prependWarningToResponse(
 ): McpResponse {
 	if (!meta || (!meta.warning && (!meta.warnings || meta.warnings.length === 0))) return response;
 	const first = response.content?.[0];
-	if (!first || first.type !== 'text' || typeof first.text !== 'string') return response;
+	if (first?.type !== 'text' || typeof first.text !== 'string') return response;
 	const wrapped = prependWarnings(first.text, meta, { separator: '\n' });
 	return {
 		...response,

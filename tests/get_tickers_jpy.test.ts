@@ -325,4 +325,102 @@ describe('getTickersJpy', () => {
 			expect(res.summary).toContain('mode=auto');
 		});
 	});
+
+	// fixture は btc_jpy / mkr_jpy の 2 件で、ALLOWED_PAIRS（static）は btc_jpy だけを通すので、dynamic の一覧は mkr_jpy にして経路を出力で見分ける。
+	describe('auto mode: ペア一覧の取得と TTL の経路', () => {
+		const TTL_MS = 60_000;
+		const T0 = Date.UTC(2026, 9, 1);
+		const pairsResponse = (pairs: string[]) =>
+			({ ok: true, json: async () => ({ success: 1, data: pairs.map((pair) => ({ pair })) }) }) as unknown as Response;
+
+		// dynamicPairs はモジュール状態なので、毎回読み直して前のテストの一覧を持ち込まない。
+		async function loadFresh() {
+			vi.resetModules();
+			return (await import('../tools/get_tickers_jpy.js')).default;
+		}
+
+		async function run(get: Awaited<ReturnType<typeof loadFresh>>) {
+			const res = await get({ bypassCache: true });
+			assertOk(res);
+			return { summary: res.summary, pairs: res.data.map((it) => it.pair) };
+		}
+
+		beforeEach(() => {
+			process.env.BITBANK_PAIRS_MODE = 'auto';
+			process.env.BITBANK_PAIRS_TTL_MS = String(TTL_MS);
+			process.env.TICKERS_JPY_URL = 'file://tests/fixtures/tickers_jpy_sample.json';
+			process.env.TICKERS_JPY_RETRIES = '0';
+			vi.useFakeTimers({ toFake: ['Date'] });
+			vi.setSystemTime(T0);
+		});
+
+		afterEach(() => {
+			vi.useRealTimers();
+		});
+
+		it('初回の取得に成功すると、取れた一覧で絞り込む', async () => {
+			vi.spyOn(globalThis, 'fetch').mockResolvedValue(pairsResponse(['mkr_jpy']));
+			const get = await loadFresh();
+			const r = await run(get);
+			expect(r.summary).toContain('mode=auto/dynamic');
+			expect(r.pairs).toEqual(['mkr_jpy']);
+		});
+
+		it('TTL 内の 2 回目は取り直さず、前回の一覧を使う', async () => {
+			const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(pairsResponse(['mkr_jpy']));
+			const get = await loadFresh();
+			await run(get);
+			vi.setSystemTime(T0 + TTL_MS - 1_000);
+			fetchSpy.mockResolvedValue(pairsResponse(['btc_jpy']));
+			const r = await run(get);
+			expect(fetchSpy).toHaveBeenCalledTimes(1);
+			expect(r.summary).toContain('mode=auto/dynamic');
+			expect(r.pairs).toEqual(['mkr_jpy']);
+		});
+
+		it('初回の取得に失敗すると、静的な一覧で絞り込む', async () => {
+			vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('ENOTFOUND'));
+			const get = await loadFresh();
+			const r = await run(get);
+			expect(r.summary).toContain('mode=auto/static');
+			expect(r.pairs).toEqual(['btc_jpy']);
+		});
+
+		it('TTL 切れの取り直しに成功すると、新しい一覧に替える', async () => {
+			const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(pairsResponse(['mkr_jpy']));
+			const get = await loadFresh();
+			await run(get);
+			vi.setSystemTime(T0 + TTL_MS);
+			fetchSpy.mockResolvedValue(pairsResponse(['btc_jpy']));
+			const r = await run(get);
+			expect(fetchSpy).toHaveBeenCalledTimes(2);
+			expect(r.summary).toContain('mode=auto/dynamic');
+			expect(r.pairs).toEqual(['btc_jpy']);
+		});
+
+		it('TTL 切れの取り直しに失敗しても、前回の一覧があればそれを使う', async () => {
+			const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(pairsResponse(['mkr_jpy']));
+			const get = await loadFresh();
+			await run(get);
+			vi.setSystemTime(T0 + TTL_MS);
+			fetchSpy.mockRejectedValue(new Error('ENOTFOUND'));
+			const r = await run(get);
+			expect(fetchSpy).toHaveBeenCalledTimes(2);
+			expect(r.summary).toContain('mode=auto/dynamic');
+			expect(r.pairs).toEqual(['mkr_jpy']);
+		});
+
+		it('TTL 切れの取り直しに失敗し、前回の一覧が空なら静的な一覧に戻す', async () => {
+			const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(pairsResponse(['btc_usdt']));
+			const get = await loadFresh();
+			const first = await run(get);
+			expect(first.summary).toContain('mode=auto/dynamic');
+			expect(first.pairs).toEqual([]);
+			vi.setSystemTime(T0 + TTL_MS);
+			fetchSpy.mockRejectedValue(new Error('ENOTFOUND'));
+			const r = await run(get);
+			expect(r.summary).toContain('mode=auto/static');
+			expect(r.pairs).toEqual(['btc_jpy']);
+		});
+	});
 });
