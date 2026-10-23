@@ -132,6 +132,43 @@ describe('buildMarketSignalHandlerText', () => {
 		expect(text).not.toContain('【SMA（移動平均線）詳細】');
 	});
 
+	it('SMA詳細: 現在価格が null なら現在価格の行を出さず、null / NaN の移動平均は n/a', () => {
+		const text = buildMarketSignalHandlerText(
+			makeInput({
+				sma: {
+					current: null,
+					values: { sma25: 4_900_000, sma75: null, sma200: Number.NaN },
+					deviations: { vs25: null, vs75: null, vs200: null },
+					arrangement: 'mixed',
+					recentCross: null,
+				},
+			}),
+		);
+		expect(text).toContain('【SMA（移動平均線）詳細】');
+		expect(text).not.toContain('現在価格:');
+		expect(text).toContain('- 短期（25日）: 4,900,000円');
+		expect(text).toContain('- 中期（75日）: n/a円');
+		expect(text).toContain('- 長期（200日）: n/a円');
+	});
+
+	it('SMA詳細: 現在価格が NaN でも現在価格の行を出さず、短期の移動平均が null なら n/a', () => {
+		const text = buildMarketSignalHandlerText(
+			makeInput({
+				sma: {
+					current: Number.NaN,
+					values: { sma25: null, sma75: 4_800_000, sma200: 4_500_000 },
+					deviations: { vs25: null, vs75: null, vs200: null },
+					arrangement: 'bullish',
+					recentCross: null,
+				},
+			}),
+		);
+		expect(text).toContain('【SMA（移動平均線）詳細】');
+		expect(text).not.toContain('現在価格:');
+		expect(text).toContain('- 短期（25日）: n/a円');
+		expect(text).toContain('- 長期（200日）: 4,500,000円');
+	});
+
 	it('SMA deviations を表示', () => {
 		const text = buildMarketSignalHandlerText(makeInput());
 		expect(text).toContain('+2.04%');
