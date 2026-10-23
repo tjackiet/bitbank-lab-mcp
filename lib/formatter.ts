@@ -172,7 +172,7 @@ export function formatSummary(
 		}
 	}
 
-	if (keyPoints && keyPoints.today) {
+	if (keyPoints?.today) {
 		summary += '\n\n📊 期間別の価格推移:';
 
 		const fmtChange = (pct: number | null) => {
