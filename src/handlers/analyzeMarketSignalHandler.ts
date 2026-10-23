@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import { ICHIMOKU_SHIFT } from '../../lib/indicator-config.js';
+import { currentCloudSpans } from '../../lib/indicators.js';
 import { extractUpstreamWarning, prependWarnings } from '../../lib/warning-propagation.js';
 import analyzeMarketSignal from '../../tools/analyze_market_signal.js';
 import { AnalyzeMarketSignalInputSchema, AnalyzeMarketSignalOutputSchema } from '../schemas.js';
@@ -232,12 +232,7 @@ export const toolDef: ToolDefinition = {
 			};
 			const refs = d?.refs?.indicators?.latest || {};
 			// 今日の雲は ichi_series の末尾 26 本前を見る。refs.ICHIMOKU_spanA/B は 26 本後の雲なので使えない。
-			const ichiSeries = refs?.ichi_series;
-			const ichiSpanASeries = Array.isArray(ichiSeries?.spanA) ? ichiSeries.spanA : null;
-			const ichiSpanBSeries = Array.isArray(ichiSeries?.spanB) ? ichiSeries.spanB : null;
-			const ichiLen = ichiSpanASeries && ichiSpanBSeries ? Math.min(ichiSpanASeries.length, ichiSpanBSeries.length) : 0;
-			const currentSpanA = ichiLen >= ICHIMOKU_SHIFT ? (ichiSpanASeries?.[ichiLen - ICHIMOKU_SHIFT] ?? null) : null;
-			const currentSpanB = ichiLen >= ICHIMOKU_SHIFT ? (ichiSpanBSeries?.[ichiLen - ICHIMOKU_SHIFT] ?? null) : null;
+			const { spanA: currentSpanA, spanB: currentSpanB } = currentCloudSpans(refs?.ichi_series);
 			const baseText = buildMarketSignalHandlerText({
 				pair: String(pair || ''),
 				type: String(type || '1day'),

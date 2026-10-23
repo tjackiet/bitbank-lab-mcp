@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { ICHIMOKU_SHIFT } from '../../lib/indicator-config.js';
 import {
 	bollingerBands,
+	currentCloudSpans,
 	ema,
 	ichimokuSeries,
 	ichimokuSnapshot,
@@ -732,6 +734,44 @@ describe('ichimokuSnapshot', () => {
 				expect(shifted[i]).toBeNaN();
 			}
 		});
+	});
+});
+
+describe('currentCloudSpans', () => {
+	const series = (lenA: number, lenB: number) => ({
+		spanA: Array.from({ length: lenA }, (_, i) => 1000 + i),
+		spanB: Array.from({ length: lenB }, (_, i) => 500 + i),
+	});
+
+	it('短い方の末尾から ICHIMOKU_SHIFT 本前を spanA / spanB の両方に使う', () => {
+		expect(currentCloudSpans(series(40, 40))).toEqual({
+			spanA: 1000 + 40 - ICHIMOKU_SHIFT,
+			spanB: 500 + 40 - ICHIMOKU_SHIFT,
+		});
+		expect(currentCloudSpans(series(40, 30))).toEqual({
+			spanA: 1000 + 30 - ICHIMOKU_SHIFT,
+			spanB: 500 + 30 - ICHIMOKU_SHIFT,
+		});
+	});
+
+	it('ちょうど ICHIMOKU_SHIFT 本なら先頭、1 本足りなければ null', () => {
+		expect(currentCloudSpans(series(ICHIMOKU_SHIFT, ICHIMOKU_SHIFT))).toEqual({ spanA: 1000, spanB: 500 });
+		expect(currentCloudSpans(series(ICHIMOKU_SHIFT - 1, 40))).toEqual({ spanA: null, spanB: null });
+	});
+
+	it('系列が無い・配列でないときは null', () => {
+		expect(currentCloudSpans(undefined)).toEqual({ spanA: null, spanB: null });
+		expect(currentCloudSpans(null)).toEqual({ spanA: null, spanB: null });
+		expect(currentCloudSpans({ spanA: series(40, 40).spanA })).toEqual({ spanA: null, spanB: null });
+	});
+
+	it('その位置の値が null なら null、NaN は NaN のまま返す', () => {
+		const s = series(40, 40);
+		const idx = 40 - ICHIMOKU_SHIFT;
+		const withNull = { spanA: s.spanA.map((v, i): number | null => (i === idx ? null : v)), spanB: s.spanB };
+		expect(currentCloudSpans(withNull)).toEqual({ spanA: null, spanB: 500 + idx });
+		const withNaN = { spanA: s.spanA, spanB: s.spanB.map((v, i) => (i === idx ? Number.NaN : v)) };
+		expect(currentCloudSpans(withNaN).spanB).toBeNaN();
 	});
 });
 

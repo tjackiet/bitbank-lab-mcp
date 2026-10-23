@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import { currentCloudSpans } from '../lib/indicators.js';
 import { avg } from '../lib/math.js';
 import { isLatestBarProvisional, prependProvisionalNote } from '../lib/provisional-bar.js';
 import { fail, failFromError, failFromValidation, ok } from '../lib/result.js';
@@ -263,15 +264,7 @@ export default async function analyzeIchimokuSnapshot(
 		const futureSpanB = latest.ICHIMOKU_spanB ?? null; // 26日後の雲用
 
 		const series = indRes.data.indicators.ichi_series;
-		let currentSpanA: number | null = null;
-		let currentSpanB: number | null = null;
-		if (series && Array.isArray(series.spanA) && Array.isArray(series.spanB)) {
-			const len = Math.min(series.spanA.length, series.spanB.length);
-			if (len >= 26) {
-				currentSpanA = series.spanA[len - 26] ?? null;
-				currentSpanB = series.spanB[len - 26] ?? null;
-			}
-		}
+		const { spanA: currentSpanA, spanB: currentSpanB } = currentCloudSpans(series);
 
 		const chikou = Array.isArray(indRes?.data?.indicators?.ichi_series?.chikou)
 			? (indRes.data.indicators.ichi_series.chikou.at(-1) ?? null)
