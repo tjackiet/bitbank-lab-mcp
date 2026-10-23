@@ -279,12 +279,12 @@ describe('analyze_market_signal', () => {
 		mockedGetFlowMetrics.mockResolvedValueOnce(asMockResult(flowOk(0.5, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0])));
 		mockedGetVolatilityMetrics.mockResolvedValueOnce(asMockResult(volOk(0.5)));
 		const length = ICHIMOKU_SHIFT + 4;
-		// ICHIMOKU_spanA/B（末尾＝ICHIMOKU_SHIFT 本後）は 80/70 で、これを使うと close=100 が above_cloud（バグ）。今日の雲（spanA/B[len-ICHIMOKU_SHIFT]）は 130/120 で、正しくは below_cloud。
+		// 今日の雲（spanA/B[len-ICHIMOKU_SHIFT]）だけを 130/120 にし、末尾（= ICHIMOKU_SHIFT 本後の雲）を含む他の位置は 80/70 にしているので、読む位置が 1 本でもずれると close=100 が above_cloud になる。
 		const ichiSeries = {
 			tenkan: Array.from({ length }, () => 130),
 			kijun: Array.from({ length }, () => 120),
-			spanA: Array.from({ length }, (_, i) => (i === length - 1 ? 80 : 130)),
-			spanB: Array.from({ length }, (_, i) => (i === length - 1 ? 70 : 120)),
+			spanA: Array.from({ length }, (_, i) => (i === length - ICHIMOKU_SHIFT ? 130 : 80)),
+			spanB: Array.from({ length }, (_, i) => (i === length - ICHIMOKU_SHIFT ? 120 : 70)),
 			chikou: Array.from({ length }, () => 130),
 		};
 		const indRes = indicatorsOk({ close: 100, rsi: 55, sma25: 100, sma75: 100, sma200: 100 });

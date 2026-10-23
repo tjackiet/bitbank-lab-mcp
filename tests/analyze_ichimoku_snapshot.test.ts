@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dayjs } from '../lib/datetime.js';
+import { ICHIMOKU_SHIFT } from '../lib/indicator-config.js';
 import type { Candle } from '../src/schemas.js';
 import { asMockResult, assertFail, assertOk } from './_assertResult.js';
 
@@ -213,6 +214,45 @@ describe('analyze_ichimoku_snapshot', () => {
 		expect(res.summary).toContain('転換線: 90 / 基準線: 95');
 		expect(res.summary).toContain('雲(今日): spanA=100 spanB=110');
 		expect(res.summary.split('\n').length).toBeGreaterThan(1);
+	});
+
+	it('今日の雲（latest.spanA / spanB）は ichi_series の末尾から ICHIMOKU_SHIFT 本前の値', async () => {
+		const base = buildMockIndicatorSuccess();
+		const sSeries = base.data.indicators.ichi_series;
+		sSeries.spanA = Array.from({ length: 40 }, (_, i) => 1000 + i);
+		sSeries.spanB = Array.from({ length: 40 }, (_, i) => 500 + i);
+		mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(base));
+
+		const res = await analyzeIchimokuSnapshot('btc_jpy', '1day', 120, 10);
+		assertOk(res);
+		expect(res.data.latest.spanA).toBe(1000 + 40 - ICHIMOKU_SHIFT);
+		expect(res.data.latest.spanB).toBe(500 + 40 - ICHIMOKU_SHIFT);
+	});
+
+	it('spanA と spanB の長さが違うときは、短い方の末尾から ICHIMOKU_SHIFT 本前を両方に使う', async () => {
+		const base = buildMockIndicatorSuccess();
+		const sSeries = base.data.indicators.ichi_series;
+		sSeries.spanA = Array.from({ length: 40 }, (_, i) => 1000 + i);
+		sSeries.spanB = Array.from({ length: 30 }, (_, i) => 500 + i);
+		mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(base));
+
+		const res = await analyzeIchimokuSnapshot('btc_jpy', '1day', 120, 10);
+		assertOk(res);
+		expect(res.data.latest.spanA).toBe(1000 + 30 - ICHIMOKU_SHIFT);
+		expect(res.data.latest.spanB).toBe(500 + 30 - ICHIMOKU_SHIFT);
+	});
+
+	it('ichi_series が ICHIMOKU_SHIFT 本未満なら今日の雲は null', async () => {
+		const base = buildMockIndicatorSuccess();
+		const sSeries = base.data.indicators.ichi_series;
+		sSeries.spanA = Array.from({ length: ICHIMOKU_SHIFT - 1 }, (_, i) => 1000 + i);
+		sSeries.spanB = Array.from({ length: ICHIMOKU_SHIFT - 1 }, (_, i) => 500 + i);
+		mockedAnalyzeIndicators.mockResolvedValueOnce(asMockResult(base));
+
+		const res = await analyzeIchimokuSnapshot('btc_jpy', '1day', 120, 10);
+		assertOk(res);
+		expect(res.data.latest.spanA).toBeNull();
+		expect(res.data.latest.spanB).toBeNull();
 	});
 
 	it('雲データ不足時の cloud.direction は null（unknown を flat にしない）であるべき', async () => {
