@@ -317,6 +317,11 @@ export function validateMainPointsNecklineSide(
 	return { reason: side === 'top' ? 'peaks_below_neckline' : 'valleys_above_neckline', offenders };
 }
 
+// 呼び出し側では空にならないが、空配列の Math.max() は -Infinity になるので潰す。
+function maxOffenderDeviation(offenders: ReadonlyArray<MainPointNecklineSideOffender>): number | null {
+	return offenders.length ? Math.max(...offenders.map((o) => o.deviation)) : null;
+}
+
 export function necklineSideDetailsFrom(
 	necklinePrice: number,
 	offenders: ReadonlyArray<MainPointNecklineSideOffender>,
@@ -329,8 +334,7 @@ export function necklineSideDetailsFrom(
 			deviation: o.deviation,
 			deviationPct: o.deviation / Math.max(1, Math.abs(necklinePrice)),
 		})),
-		// 呼び出し側では空にならないが、空配列の Math.max() は -Infinity になるので潰す。
-		maxDeviation: offenders.length ? Math.max(...offenders.map((o) => o.deviation)) : null,
+		maxDeviation: maxOffenderDeviation(offenders),
 	};
 }
 
@@ -378,7 +382,7 @@ export function necklineSideDetailsFromAt(
 				deviationPct: o.deviation / Math.max(1, Math.abs(necklinePrice)),
 			};
 		}),
-		maxDeviation: offenders.length ? Math.max(...offenders.map((o) => o.deviation)) : null,
+		maxDeviation: maxOffenderDeviation(offenders),
 	};
 }
 
