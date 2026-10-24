@@ -95,38 +95,21 @@ export function validatePriorTrend(
 	const startClose = typeof startCloseRaw === 'number' && Number.isFinite(startCloseRaw) ? startCloseRaw : 0;
 	const priorClose = typeof priorCloseRaw === 'number' && Number.isFinite(priorCloseRaw) ? priorCloseRaw : 0;
 	const priorReturn = priorClose === 0 ? 0 : (startClose - priorClose) / priorClose;
+	const result = (
+		classification: PriorTrendClassification,
+		extra: Pick<PriorTrendResult, 'reason' | 'rangePct' | 'efficiency' | 'r2'> = {},
+	): PriorTrendResult => ({
+		ok: matchesExpected(classification),
+		priorReturn,
+		lookbackBars,
+		priorStartIdx: priorStart,
+		classification,
+		...extra,
+	});
 
-	if (startIdx < lookbackBars) {
-		return {
-			ok: matchesExpected('insufficient_data'),
-			priorReturn,
-			lookbackBars,
-			priorStartIdx: priorStart,
-			classification: 'insufficient_data',
-			reason: 'startIdx < lookbackBars',
-		};
-	}
-
-	if (priorClose === 0 || startClose === 0) {
-		return {
-			ok: matchesExpected('sideways'),
-			priorReturn,
-			lookbackBars,
-			priorStartIdx: priorStart,
-			classification: 'sideways',
-			reason: 'missing_close',
-		};
-	}
-
-	if (Math.abs(priorReturn) <= params.sidewaysPct) {
-		return {
-			ok: matchesExpected('sideways'),
-			priorReturn,
-			lookbackBars,
-			priorStartIdx: priorStart,
-			classification: 'sideways',
-		};
-	}
+	if (startIdx < lookbackBars) return result('insufficient_data', { reason: 'startIdx < lookbackBars' });
+	if (priorClose === 0 || startClose === 0) return result('sideways', { reason: 'missing_close' });
+	if (Math.abs(priorReturn) <= params.sidewaysPct) return result('sideways');
 
 	const points: Array<{ x: number; y: number }> = [];
 	let maxClose = Number.NEGATIVE_INFINITY;
@@ -144,14 +127,7 @@ export function validatePriorTrend(
 	}
 
 	if (hasMissingClose || points.length < 2 || !Number.isFinite(maxClose) || !Number.isFinite(minClose)) {
-		return {
-			ok: matchesExpected('sideways'),
-			priorReturn,
-			lookbackBars,
-			priorStartIdx: priorStart,
-			classification: 'sideways',
-			reason: 'invalid_window',
-		};
+		return result('sideways', { reason: 'invalid_window' });
 	}
 
 	const range = maxClose - minClose;
@@ -169,9 +145,7 @@ export function validatePriorTrend(
 		classification = 'down';
 	}
 
-	const ok = matchesExpected(classification);
-
-	return { ok, priorReturn, lookbackBars, priorStartIdx: priorStart, classification, rangePct, efficiency, r2 };
+	return result(classification, { rangePct, efficiency, r2 });
 }
 
 // 構造ゲートの値幅は Pivot.price ではなく extremePrice で測る。price の意味が検出器ごとに違うため（#128）。
