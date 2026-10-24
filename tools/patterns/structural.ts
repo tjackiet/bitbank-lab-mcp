@@ -397,8 +397,8 @@ export function validatePatternSize(
 	const shallow: PatternSizeRejectReason = side === 'top' ? 'valley_too_shallow' : 'peak_too_shallow';
 	for (let i = 1; i < prices.length - 1; i += 2) {
 		const flankAvg = (prices[i - 1] + prices[i + 1]) / 2;
-		const depthPct =
-			side === 'top' ? (flankAvg - prices[i]) / Math.max(1, flankAvg) : (prices[i] - flankAvg) / Math.max(1, flankAvg);
+		const depth = side === 'top' ? flankAvg - prices[i] : prices[i] - flankAvg;
+		const depthPct = depth / Math.max(1, flankAvg);
 		if (depthPct < thresholds.depthPct) return shallow;
 	}
 	return null;
