@@ -99,6 +99,8 @@ export function getHsShoulderMaxPctForTf(tf: string): number {
 	return HS_SHOULDER_MAX_PCT;
 }
 
+const HEAD_PROMINENCE_PCT = 0.04;
+
 // getDefaultToleranceForTf とは向きが逆（大きいほど厳しい）なので流用しない（#198）。
 export function getHeadProminenceForTf(tf: string): number {
 	if (tf === '1min') return 0.0011;
@@ -109,7 +111,7 @@ export function getHeadProminenceForTf(tf: string): number {
 	if (tf === '4hour') return 0.0163; // 推定（4hour の ATR は未実測。getSizeThresholdsForTf と同じ限界）
 	if (tf === '8hour') return 0.0231;
 	if (tf === '12hour') return 0.0283;
-	return 0.04;
+	return HEAD_PROMINENCE_PCT;
 }
 
 export function getConvergenceFactorForTf(tf: string): number {
