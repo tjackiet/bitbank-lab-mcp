@@ -306,15 +306,7 @@ export function validateMainPointsNecklineSide(
 	mainPoints: ReadonlyArray<Pick<Pivot, 'idx' | 'price'>>,
 	necklinePrice: number,
 ): MainPointNecklineSideResult {
-	if (!Number.isFinite(necklinePrice)) return { reason: null, offenders: [] };
-	const offenders: MainPointNecklineSideOffender[] = [];
-	for (const p of mainPoints) {
-		if (!Number.isFinite(p.price)) continue;
-		const deviation = side === 'top' ? necklinePrice - p.price : p.price - necklinePrice;
-		if (deviation >= 0) offenders.push({ idx: p.idx, price: p.price, deviation });
-	}
-	if (offenders.length === 0) return { reason: null, offenders };
-	return { reason: side === 'top' ? 'peaks_below_neckline' : 'valleys_above_neckline', offenders };
+	return validateMainPointsAgainstNecklineAt(side, mainPoints, () => necklinePrice);
 }
 
 // 呼び出し側では空にならないが、空配列の Math.max() は -Infinity になるので潰す。
