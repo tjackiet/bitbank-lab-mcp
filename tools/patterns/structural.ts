@@ -184,6 +184,9 @@ export const RETRACEMENT_MAX = 0.9;
 
 export const NECKLINE_CROSS_LOOKBACK_BARS = 60;
 
+// 先行トレンドの最小ルックバックとそろえている（どちらも足りなければ履歴不足として出力から除外される）。
+export const NECKLINE_CROSS_MIN_WINDOW_BARS = PRIOR_TREND_LOOKBACK_MIN;
+
 export const REVERSAL_HISTORY_WARMUP_BARS = Math.max(PRIOR_TREND_LOOKBACK_MAX, NECKLINE_CROSS_LOOKBACK_BARS);
 
 export const TROUGH_REENTRY_FRACTION = 0.25;
@@ -439,7 +442,7 @@ export function findNecklineCross(
 	const start = Math.max(0, fromIdx);
 	const end = Math.min(candles.length - 1, toIdx);
 	const windowBars = end - start + 1;
-	if (windowBars < PRIOR_TREND_LOOKBACK_MIN) return { conclusive: false };
+	if (windowBars < NECKLINE_CROSS_MIN_WINDOW_BARS) return { conclusive: false };
 
 	let seenBeyond = false;
 	for (let i = start; i <= end; i++) {
