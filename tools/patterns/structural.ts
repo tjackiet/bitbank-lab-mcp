@@ -95,38 +95,21 @@ export function validatePriorTrend(
 	const startClose = typeof startCloseRaw === 'number' && Number.isFinite(startCloseRaw) ? startCloseRaw : 0;
 	const priorClose = typeof priorCloseRaw === 'number' && Number.isFinite(priorCloseRaw) ? priorCloseRaw : 0;
 	const priorReturn = priorClose === 0 ? 0 : (startClose - priorClose) / priorClose;
+	const result = (
+		classification: PriorTrendClassification,
+		extra: Pick<PriorTrendResult, 'reason' | 'rangePct' | 'efficiency' | 'r2'> = {},
+	): PriorTrendResult => ({
+		ok: matchesExpected(classification),
+		priorReturn,
+		lookbackBars,
+		priorStartIdx: priorStart,
+		classification,
+		...extra,
+	});
 
-	if (startIdx < lookbackBars) {
-		return {
-			ok: matchesExpected('insufficient_data'),
-			priorReturn,
-			lookbackBars,
-			priorStartIdx: priorStart,
-			classification: 'insufficient_data',
-			reason: 'startIdx < lookbackBars',
-		};
-	}
-
-	if (priorClose === 0 || startClose === 0) {
-		return {
-			ok: matchesExpected('sideways'),
-			priorReturn,
-			lookbackBars,
-			priorStartIdx: priorStart,
-			classification: 'sideways',
-			reason: 'missing_close',
-		};
-	}
-
-	if (Math.abs(priorReturn) <= params.sidewaysPct) {
-		return {
-			ok: matchesExpected('sideways'),
-			priorReturn,
-			lookbackBars,
-			priorStartIdx: priorStart,
-			classification: 'sideways',
-		};
-	}
+	if (startIdx < lookbackBars) return result('insufficient_data', { reason: 'startIdx < lookbackBars' });
+	if (priorClose === 0 || startClose === 0) return result('sideways', { reason: 'missing_close' });
+	if (Math.abs(priorReturn) <= params.sidewaysPct) return result('sideways');
 
 	const points: Array<{ x: number; y: number }> = [];
 	let maxClose = Number.NEGATIVE_INFINITY;
@@ -144,14 +127,7 @@ export function validatePriorTrend(
 	}
 
 	if (hasMissingClose || points.length < 2 || !Number.isFinite(maxClose) || !Number.isFinite(minClose)) {
-		return {
-			ok: matchesExpected('sideways'),
-			priorReturn,
-			lookbackBars,
-			priorStartIdx: priorStart,
-			classification: 'sideways',
-			reason: 'invalid_window',
-		};
+		return result('sideways', { reason: 'invalid_window' });
 	}
 
 	const range = maxClose - minClose;
@@ -169,9 +145,7 @@ export function validatePriorTrend(
 		classification = 'down';
 	}
 
-	const ok = matchesExpected(classification);
-
-	return { ok, priorReturn, lookbackBars, priorStartIdx: priorStart, classification, rangePct, efficiency, r2 };
+	return result(classification, { rangePct, efficiency, r2 });
 }
 
 // 構造ゲートの値幅は Pivot.price ではなく extremePrice で測る。price の意味が検出器ごとに違うため（#128）。
@@ -183,6 +157,9 @@ export const RETRACEMENT_MIN = 0.2;
 export const RETRACEMENT_MAX = 0.9;
 
 export const NECKLINE_CROSS_LOOKBACK_BARS = 60;
+
+// 先行トレンドの最小ルックバックとそろえている（どちらも足りなければ履歴不足として出力から除外される）。
+export const NECKLINE_CROSS_MIN_WINDOW_BARS = PRIOR_TREND_LOOKBACK_MIN;
 
 export const REVERSAL_HISTORY_WARMUP_BARS = Math.max(PRIOR_TREND_LOOKBACK_MAX, NECKLINE_CROSS_LOOKBACK_BARS);
 
@@ -303,15 +280,12 @@ export function validateMainPointsNecklineSide(
 	mainPoints: ReadonlyArray<Pick<Pivot, 'idx' | 'price'>>,
 	necklinePrice: number,
 ): MainPointNecklineSideResult {
-	if (!Number.isFinite(necklinePrice)) return { reason: null, offenders: [] };
-	const offenders: MainPointNecklineSideOffender[] = [];
-	for (const p of mainPoints) {
-		if (!Number.isFinite(p.price)) continue;
-		const deviation = side === 'top' ? necklinePrice - p.price : p.price - necklinePrice;
-		if (deviation >= 0) offenders.push({ idx: p.idx, price: p.price, deviation });
-	}
-	if (offenders.length === 0) return { reason: null, offenders };
-	return { reason: side === 'top' ? 'peaks_below_neckline' : 'valleys_above_neckline', offenders };
+	return validateMainPointsAgainstNecklineAt(side, mainPoints, () => necklinePrice);
+}
+
+// 呼び出し側では空にならないが、空配列の Math.max() は -Infinity になるので潰す。
+function maxOffenderDeviation(offenders: ReadonlyArray<MainPointNecklineSideOffender>): number | null {
+	return offenders.length ? Math.max(...offenders.map((o) => o.deviation)) : null;
 }
 
 export function necklineSideDetailsFrom(
@@ -326,8 +300,7 @@ export function necklineSideDetailsFrom(
 			deviation: o.deviation,
 			deviationPct: o.deviation / Math.max(1, Math.abs(necklinePrice)),
 		})),
-		// 呼び出し側では空にならないが、空配列の Math.max() は -Infinity になるので潰す。
-		maxDeviation: offenders.length ? Math.max(...offenders.map((o) => o.deviation)) : null,
+		maxDeviation: maxOffenderDeviation(offenders),
 	};
 }
 
@@ -375,7 +348,7 @@ export function necklineSideDetailsFromAt(
 				deviationPct: o.deviation / Math.max(1, Math.abs(necklinePrice)),
 			};
 		}),
-		maxDeviation: offenders.length ? Math.max(...offenders.map((o) => o.deviation)) : null,
+		maxDeviation: maxOffenderDeviation(offenders),
 	};
 }
 
@@ -439,7 +412,7 @@ export function findNecklineCross(
 	const start = Math.max(0, fromIdx);
 	const end = Math.min(candles.length - 1, toIdx);
 	const windowBars = end - start + 1;
-	if (windowBars < PRIOR_TREND_LOOKBACK_MIN) return { conclusive: false };
+	if (windowBars < NECKLINE_CROSS_MIN_WINDOW_BARS) return { conclusive: false };
 
 	let seenBeyond = false;
 	for (let i = start; i <= end; i++) {
