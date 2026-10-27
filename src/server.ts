@@ -112,6 +112,8 @@ function storeSnapshotIfUiTool(
 	}
 }
 
+const TOOL_TIMEOUT_MS = 60_000;
+
 function registerToolWithLog(
 	name: string,
 	schema: { description: string; inputSchema: z.ZodTypeAny; _meta?: Record<string, unknown> },
@@ -127,7 +129,6 @@ function registerToolWithLog(
 		name,
 		toolConfig,
 		async (input: Record<string, unknown>, ctx?: Record<string, unknown>) => {
-			const TOOL_TIMEOUT_MS = 60_000;
 			const t0 = Date.now();
 			try {
 				let timeoutId: ReturnType<typeof setTimeout> | undefined;
