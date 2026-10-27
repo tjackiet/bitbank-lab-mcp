@@ -1,4 +1,5 @@
 import { dayjs, toDisplayTime } from './datetime.js';
+import { isJpyQuotedPair } from './pair-code.js';
 
 export function timeframeLabel(type: string): string {
 	const map: Record<string, string> = {
@@ -36,7 +37,7 @@ export function formatTimestampJST(ts?: number, tz: string = 'Asia/Tokyo'): stri
 export function formatPrice(value: number | null | undefined, pair?: string): string {
 	if (value == null || !Number.isFinite(Number(value))) return 'N/A';
 	const n = Number(value);
-	const jpy = !pair || (typeof pair === 'string' && pair.toLowerCase().includes('jpy'));
+	const jpy = !pair || (typeof pair === 'string' && isJpyQuotedPair(pair));
 	if (jpy) return `¥${n.toLocaleString('ja-JP')}`;
 	return n.toLocaleString('ja-JP');
 }
@@ -48,13 +49,13 @@ export function formatPriceJPY(value: number | null | undefined): string {
 
 export function formatCurrency(value: number | null | undefined, pair?: string): string {
 	if (value == null) return 'n/a';
-	const jpy = !pair || (typeof pair === 'string' && pair.toLowerCase().includes('jpy'));
+	const jpy = !pair || (typeof pair === 'string' && isJpyQuotedPair(pair));
 	return jpy ? `${Number(value).toLocaleString('ja-JP')} JPY` : `${Number(value).toFixed(2)}`;
 }
 
 export function formatCurrencyShort(value: number | null | undefined, pair?: string): string {
 	if (value == null) return 'n/a';
-	const jpy = !pair || (typeof pair === 'string' && pair.toLowerCase().includes('jpy'));
+	const jpy = !pair || (typeof pair === 'string' && isJpyQuotedPair(pair));
 	if (jpy) {
 		const n = Number(value);
 		return n >= 1000 ? `${Math.round(n / 1000)}k JPY` : `${n.toLocaleString('ja-JP')} JPY`;
@@ -155,7 +156,7 @@ export function formatSummary(
 	const { pair, timeframe, latest, totalItems, keyPoints, volumeStats, extra, priceRange } = args;
 	const p = formatPair(pair ?? '');
 	const tf = timeframe ? ` [${timeframe}]` : '';
-	const isJpy = typeof pair === 'string' && pair.toLowerCase().includes('jpy');
+	const isJpy = typeof pair === 'string' && isJpyQuotedPair(pair);
 	const currency = isJpy ? '円' : '';
 
 	let summary = p;
