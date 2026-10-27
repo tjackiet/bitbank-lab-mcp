@@ -232,7 +232,7 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 			continue;
 		}
 
-		const nlAvg = (Number(v1.price) + Number(v2.price)) / 2;
+		const nlAvg = (v1.price + v2.price) / 2;
 
 		const gate = applyReversalGate({
 			candles,
@@ -466,7 +466,7 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 			continue;
 		}
 
-		const nlAvg = (Number(p1.price) + Number(p2.price)) / 2;
+		const nlAvg = (p1.price + p2.price) / 2;
 
 		const gate = applyReversalGate({
 			candles,
@@ -700,7 +700,7 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 			continue;
 		}
 
-		const nlAvg = (Number(v1.price) + Number(v2.price)) / 2;
+		const nlAvg = (v1.price + v2.price) / 2;
 
 		const gate = applyReversalGate({
 			candles,
@@ -927,7 +927,7 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 			continue;
 		}
 
-		const nlAvg = (Number(p1.price) + Number(p2.price)) / 2;
+		const nlAvg = (p1.price + p2.price) / 2;
 
 		const gate = applyReversalGate({
 			candles,
