@@ -52,29 +52,38 @@ export function getPriorTrendParamsForTf(tf: string): PriorTrendParams {
 	};
 }
 
+const DEFAULT_PARAMS_BY_TF: Record<string, { swingDepth: number; minBarsBetweenSwings: number }> = {
+	'1min': { swingDepth: 2, minBarsBetweenSwings: 1 },
+	'5min': { swingDepth: 2, minBarsBetweenSwings: 1 },
+	'15min': { swingDepth: 3, minBarsBetweenSwings: 2 },
+	'30min': { swingDepth: 3, minBarsBetweenSwings: 2 },
+	'1hour': { swingDepth: 3, minBarsBetweenSwings: 2 },
+	'4hour': { swingDepth: 5, minBarsBetweenSwings: 3 },
+	'8hour': { swingDepth: 5, minBarsBetweenSwings: 3 },
+	'12hour': { swingDepth: 5, minBarsBetweenSwings: 3 },
+	'1day': { swingDepth: 6, minBarsBetweenSwings: 4 },
+	'1week': { swingDepth: 7, minBarsBetweenSwings: 5 },
+	'1month': { swingDepth: 8, minBarsBetweenSwings: 6 },
+};
+
 export function getDefaultParamsForTf(tf: string): { swingDepth: number; minBarsBetweenSwings: number } {
-	if (tf === '1hour') return { swingDepth: 3, minBarsBetweenSwings: 2 };
-	if (tf === '4hour') return { swingDepth: 5, minBarsBetweenSwings: 3 };
-	if (tf === '8hour') return { swingDepth: 5, minBarsBetweenSwings: 3 };
-	if (tf === '12hour') return { swingDepth: 5, minBarsBetweenSwings: 3 };
-	if (tf === '1day') return { swingDepth: 6, minBarsBetweenSwings: 4 };
-	if (tf === '1week') return { swingDepth: 7, minBarsBetweenSwings: 5 };
-	if (tf === '1month') return { swingDepth: 8, minBarsBetweenSwings: 6 };
-	if (tf === '30min') return { swingDepth: 3, minBarsBetweenSwings: 2 };
-	if (tf === '15min') return { swingDepth: 3, minBarsBetweenSwings: 2 };
-	if (tf === '5min') return { swingDepth: 2, minBarsBetweenSwings: 1 };
-	if (tf === '1min') return { swingDepth: 2, minBarsBetweenSwings: 1 };
-	return { swingDepth: 6, minBarsBetweenSwings: 4 };
+	return { ...(Object.hasOwn(DEFAULT_PARAMS_BY_TF, tf) ? DEFAULT_PARAMS_BY_TF[tf] : DEFAULT_PARAMS_BY_TF['1day']) };
 }
 
 // 短い足ほど緩いのは意図的（#244）。同水準判定の締めは getHsShoulderMaxPctForTf と MAX_LEVEL_SPREAD_RATIO が担う。
+const DEFAULT_TOLERANCE_BY_TF: Record<string, number> = {
+	'15min': 0.06,
+	'30min': 0.06,
+	'1hour': 0.05,
+	'4hour': 0.05,
+	'8hour': 0.045,
+	'12hour': 0.045,
+	'1week': 0.035,
+	'1month': 0.03,
+};
+
 export function getDefaultToleranceForTf(tf: string): number {
-	if (tf === '1hour' || tf === '4hour') return 0.05; // 5%
-	if (tf === '8hour' || tf === '12hour') return 0.045; // 4.5%
-	if (tf === '15min' || tf === '30min') return 0.06; // 6%
-	if (tf === '1week') return 0.035; // 3.5%
-	if (tf === '1month') return 0.03; // 3.0%
-	return 0.04; // 1day 他
+	return Object.hasOwn(DEFAULT_TOLERANCE_BY_TF, tf) ? DEFAULT_TOLERANCE_BY_TF[tf] : 0.04;
 }
 
 // double / triple / H&S で値を分けない（#139）。
@@ -110,15 +119,18 @@ export function getMinFitForTf(tf: string): number {
 	return 0.75;
 }
 
+const TRIANGLE_WINDOW_SIZE_BY_TF: Record<string, number> = {
+	'15min': 30,
+	'30min': 30,
+	'1hour': 40,
+	'4hour': 30,
+	'1day': 50,
+	'1week': 40,
+	'1month': 30,
+};
+
 export function getTriangleWindowSize(tf: string): number {
-	if (tf === '1month') return 30;
-	if (tf === '1week') return 40;
-	if (tf === '1day') return 50;
-	if (tf === '4hour') return 30;
-	if (tf === '1hour') return 40;
-	if (tf === '30min') return 30;
-	if (tf === '15min') return 30;
-	return 20;
+	return Object.hasOwn(TRIANGLE_WINDOW_SIZE_BY_TF, tf) ? TRIANGLE_WINDOW_SIZE_BY_TF[tf] : 20;
 }
 
 // auto は「未指定」と「スキーマ既定値の明示指定」を区別しない。.default() で届く値が同じになるため（#182）。
