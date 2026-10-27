@@ -111,17 +111,9 @@ export function computeTargetReach(
 	};
 }
 
-export function targetReachFields(reach: TargetReachResult): {
-	targetReachedPct?: number;
-	targetReached?: boolean;
-	targetReachedDate?: string;
-	targetReachedPrice?: number;
-	targetFirstReachBars?: number;
-	targetFirstReachDate?: string;
-	targetScanBars?: number;
-	targetScanComplete?: boolean;
-	targetProgressOmittedReason?: TargetReachOmissionReason;
-} {
+export function targetReachFields(
+	reach: TargetReachResult,
+): Partial<Omit<TargetReachInfo, 'kind'>> & { targetProgressOmittedReason?: TargetReachOmissionReason } {
 	if (reach.kind === 'omitted') return { targetProgressOmittedReason: reach.reason };
 	return {
 		targetReachedPct: reach.targetReachedPct,
@@ -147,6 +139,9 @@ const TARGET_PROGRESS_OMISSION_NOTE: Record<TargetReachOmissionReason, string> =
 	not_computed_by_detector:
 		'この検出器がターゲットへの到達を算出していないため。実装の未配線であり、構造の性質ではない',
 };
+
+// 4 つの形すべてで同じ前置きにする。上位集合のテストがこの語で照合する。
+const TARGET_LINE_PREFIX = '   - ターゲット: ';
 
 // 100% を超える数字（到達後の超過倍率）も価格も出さない。価格は呼び出し側が直前の行に出している（#288）。
 // 素の JSON を渡す消費者（detect_patterns.ts の SummaryPattern）があるので、新しいフィールドは無くても通るようにする。
@@ -194,9 +189,6 @@ export function formatTargetProgressLine(
 	const note = confounderNote(p.targetOppositeBreakoutInWindow, '走査窓内に逆方向のブレイクあり');
 	return `${TARGET_LINE_PREFIX}未到達（${detail}）${note}`;
 }
-
-// 4 つの形すべてで同じ前置きにする。上位集合のテストがこの語で照合する。
-const TARGET_LINE_PREFIX = '   - ターゲット: ';
 
 function formatIso(iso: string, formatDate?: (iso: string) => string): string {
 	if (!formatDate) return iso;
