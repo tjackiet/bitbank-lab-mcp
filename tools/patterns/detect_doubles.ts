@@ -117,6 +117,21 @@ function validateBottomSize(
 	return null;
 }
 
+function doublePts(
+	side: ReversalSide,
+	a: Pivot,
+	b: Pivot,
+	c: Pivot,
+): Array<{ role: string; idx: number; price: number }> {
+	const outerRole = side === 'top' ? 'peak' : 'valley';
+	const midRole = side === 'top' ? 'valley' : 'peak';
+	return [
+		{ role: `${outerRole}1`, idx: a.idx, price: a.price },
+		{ role: midRole, idx: b.idx, price: b.price },
+		{ role: `${outerRole}2`, idx: c.idx, price: c.price },
+	];
+}
+
 // _relaxed は閾値が緩む検査にだけ付ける。この検査は strict / relaxed で同じなので付けない。
 function rejectByLevelDiff(
 	side: ReversalSide,
@@ -130,18 +145,12 @@ function rejectByLevelDiff(
 	const metrics = levelSpreadMetrics([a, c], [a, b, c]);
 	const reason = validateLevelDiff(side, metrics);
 	if (!reason) return false;
-	const outerRole = side === 'top' ? 'peak' : 'valley';
-	const midRole = side === 'top' ? 'valley' : 'peak';
 	pcand({
 		type,
 		accepted: false,
 		reason,
 		idxs: [a.idx, b.idx, c.idx],
-		pts: [
-			{ role: `${outerRole}1`, idx: a.idx, price: a.price },
-			{ role: midRole, idx: b.idx, price: b.price },
-			{ role: `${outerRole}2`, idx: c.idx, price: c.price },
-		],
+		pts: doublePts(side, a, b, c),
 		details: levelSpreadDetailsFrom(metrics, levelTolerancePct),
 	});
 	return true;
@@ -159,18 +168,12 @@ function rejectByNecklineSide(
 ): boolean {
 	const { reason, offenders } = validateMainPointsNecklineSide(side, [a, c], necklinePrice);
 	if (!reason) return false;
-	const outerRole = side === 'top' ? 'peak' : 'valley';
-	const midRole = side === 'top' ? 'valley' : 'peak';
 	pcand({
 		type,
 		accepted: false,
 		reason,
 		idxs: [a.idx, b.idx, c.idx],
-		pts: [
-			{ role: `${outerRole}1`, idx: a.idx, price: a.price },
-			{ role: midRole, idx: b.idx, price: b.price },
-			{ role: `${outerRole}2`, idx: c.idx, price: c.price },
-		],
+		pts: doublePts(side, a, b, c),
 		details: necklineSideDetailsFrom(necklinePrice, offenders),
 	});
 	return true;
@@ -189,7 +192,6 @@ function applyStructuralGate(
 ): ReversalStructureResult | null {
 	const gate = validateReversalStructure({ candles, pivots, first: a, mid: b, necklinePrice, side });
 	if (gate.ok) return gate;
-	const outerRole = side === 'bottom' ? 'valley' : 'peak';
 	pcand({
 		type,
 		accepted: false,
@@ -199,9 +201,7 @@ function applyStructuralGate(
 			...(gate.priorExtreme
 				? [{ role: 'prior_extreme', idx: gate.priorExtreme.idx, price: gate.priorExtreme.extremePrice }]
 				: []),
-			{ role: `${outerRole}1`, idx: a.idx, price: a.price },
-			{ role: side === 'bottom' ? 'peak' : 'valley', idx: b.idx, price: b.price },
-			{ role: `${outerRole}2`, idx: c.idx, price: c.price },
+			...doublePts(side, a, b, c),
 		],
 	});
 	return null;
@@ -305,16 +305,13 @@ function checkBreakoutPath(opts: {
 	const res = detectPivotBeforeBreakout({ pivots, lastPivotIdx: c.idx, breakoutIdx, side });
 	if (!res.found || !res.reason) return null;
 	const outerRole = side === 'top' ? 'peak' : 'valley';
-	const midRole = side === 'top' ? 'valley' : 'peak';
 	pcand({
 		type,
 		accepted: false,
 		reason: res.reason,
 		idxs: [a.idx, b.idx, c.idx],
 		pts: [
-			{ role: `${outerRole}1`, idx: a.idx, price: a.price },
-			{ role: midRole, idx: b.idx, price: b.price },
-			{ role: `${outerRole}2`, idx: c.idx, price: c.price },
+			...doublePts(side, a, b, c),
 			...(res.pivot ? [{ role: `${outerRole}_after_last`, idx: res.pivot.idx, price: res.pivot.price }] : []),
 		],
 		details: breakoutPathDetails(c.idx, breakoutIdx, res.pivot),
@@ -780,9 +777,6 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 	const pcand: Pcand = (arg) => pushCand(ctx, arg);
 	const lastIdx = candles.length - 1;
 	const levelTolerancePct = Math.min(tolerancePct, DOUBLE_LEVEL_MAX_PCT);
-	const push = (arr: PatternEntry[], item: PatternEntry) => {
-		arr.push(item);
-	};
 	let patterns: PatternEntry[] = [];
 
 	let foundDoubleTop = false,
@@ -951,7 +945,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 				const dtPrecedingTrend = buildPrecedingTrend(candles, trend, a.idx);
 				const dtStructureGate = buildStructureGate(gate);
 				const dtUnbroken = isCompleted ? null : unbrokenStatusFields({ post, lastPivotIdx: c.idx, lastIdx });
-				push(patterns, {
+				patterns.push({
 					type: 'double_top',
 					confidence,
 					scoreComponents: dtScoreComponents,
@@ -1146,7 +1140,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 				const dbPrecedingTrend = buildPrecedingTrend(candles, trend, a.idx);
 				const dbStructureGate = buildStructureGate(gate);
 				const dbUnbroken = isCompleted ? null : unbrokenStatusFields({ post, lastPivotIdx: c.idx, lastIdx });
-				push(patterns, {
+				patterns.push({
 					type: 'double_bottom',
 					confidence,
 					scoreComponents: dbScoreComponents,
@@ -1182,44 +1176,42 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 				});
 			}
 		}
-		for (const f of [RELAXED_TOLERANCE_FACTOR]) {
-			if (!foundDoubleTop && (want.size === 0 || want.has('double_top'))) {
-				const result = findRelaxedDoubleTop(
-					pivots,
-					candles,
-					tolerancePct,
-					f,
-					minDist,
-					pcand,
-					ctx.sizeThresholds,
-					ctx.tz,
-					ctx.type,
-					includeForming,
-					ctx.priorTrendParams,
-				);
-				if (result) {
-					push(patterns, result);
-					foundDoubleTop = true;
-				}
+		if (!foundDoubleTop && (want.size === 0 || want.has('double_top'))) {
+			const result = findRelaxedDoubleTop(
+				pivots,
+				candles,
+				tolerancePct,
+				RELAXED_TOLERANCE_FACTOR,
+				minDist,
+				pcand,
+				ctx.sizeThresholds,
+				ctx.tz,
+				ctx.type,
+				includeForming,
+				ctx.priorTrendParams,
+			);
+			if (result) {
+				patterns.push(result);
+				foundDoubleTop = true;
 			}
-			if (!foundDoubleBottom && (want.size === 0 || want.has('double_bottom'))) {
-				const result = findRelaxedDoubleBottom(
-					pivots,
-					candles,
-					tolerancePct,
-					f,
-					minDist,
-					pcand,
-					ctx.sizeThresholds,
-					ctx.tz,
-					ctx.type,
-					includeForming,
-					ctx.priorTrendParams,
-				);
-				if (result) {
-					push(patterns, result);
-					foundDoubleBottom = true;
-				}
+		}
+		if (!foundDoubleBottom && (want.size === 0 || want.has('double_bottom'))) {
+			const result = findRelaxedDoubleBottom(
+				pivots,
+				candles,
+				tolerancePct,
+				RELAXED_TOLERANCE_FACTOR,
+				minDist,
+				pcand,
+				ctx.sizeThresholds,
+				ctx.tz,
+				ctx.type,
+				includeForming,
+				ctx.priorTrendParams,
+			);
+			if (result) {
+				patterns.push(result);
+				foundDoubleBottom = true;
 			}
 		}
 		patterns = deduplicatePatterns(patterns);
