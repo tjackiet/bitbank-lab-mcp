@@ -780,9 +780,6 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 	const pcand: Pcand = (arg) => pushCand(ctx, arg);
 	const lastIdx = candles.length - 1;
 	const levelTolerancePct = Math.min(tolerancePct, DOUBLE_LEVEL_MAX_PCT);
-	const push = (arr: PatternEntry[], item: PatternEntry) => {
-		arr.push(item);
-	};
 	let patterns: PatternEntry[] = [];
 
 	let foundDoubleTop = false,
@@ -951,7 +948,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 				const dtPrecedingTrend = buildPrecedingTrend(candles, trend, a.idx);
 				const dtStructureGate = buildStructureGate(gate);
 				const dtUnbroken = isCompleted ? null : unbrokenStatusFields({ post, lastPivotIdx: c.idx, lastIdx });
-				push(patterns, {
+				patterns.push({
 					type: 'double_top',
 					confidence,
 					scoreComponents: dtScoreComponents,
@@ -1146,7 +1143,7 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 				const dbPrecedingTrend = buildPrecedingTrend(candles, trend, a.idx);
 				const dbStructureGate = buildStructureGate(gate);
 				const dbUnbroken = isCompleted ? null : unbrokenStatusFields({ post, lastPivotIdx: c.idx, lastIdx });
-				push(patterns, {
+				patterns.push({
 					type: 'double_bottom',
 					confidence,
 					scoreComponents: dbScoreComponents,
@@ -1182,44 +1179,42 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 				});
 			}
 		}
-		for (const f of [RELAXED_TOLERANCE_FACTOR]) {
-			if (!foundDoubleTop && (want.size === 0 || want.has('double_top'))) {
-				const result = findRelaxedDoubleTop(
-					pivots,
-					candles,
-					tolerancePct,
-					f,
-					minDist,
-					pcand,
-					ctx.sizeThresholds,
-					ctx.tz,
-					ctx.type,
-					includeForming,
-					ctx.priorTrendParams,
-				);
-				if (result) {
-					push(patterns, result);
-					foundDoubleTop = true;
-				}
+		if (!foundDoubleTop && (want.size === 0 || want.has('double_top'))) {
+			const result = findRelaxedDoubleTop(
+				pivots,
+				candles,
+				tolerancePct,
+				RELAXED_TOLERANCE_FACTOR,
+				minDist,
+				pcand,
+				ctx.sizeThresholds,
+				ctx.tz,
+				ctx.type,
+				includeForming,
+				ctx.priorTrendParams,
+			);
+			if (result) {
+				patterns.push(result);
+				foundDoubleTop = true;
 			}
-			if (!foundDoubleBottom && (want.size === 0 || want.has('double_bottom'))) {
-				const result = findRelaxedDoubleBottom(
-					pivots,
-					candles,
-					tolerancePct,
-					f,
-					minDist,
-					pcand,
-					ctx.sizeThresholds,
-					ctx.tz,
-					ctx.type,
-					includeForming,
-					ctx.priorTrendParams,
-				);
-				if (result) {
-					push(patterns, result);
-					foundDoubleBottom = true;
-				}
+		}
+		if (!foundDoubleBottom && (want.size === 0 || want.has('double_bottom'))) {
+			const result = findRelaxedDoubleBottom(
+				pivots,
+				candles,
+				tolerancePct,
+				RELAXED_TOLERANCE_FACTOR,
+				minDist,
+				pcand,
+				ctx.sizeThresholds,
+				ctx.tz,
+				ctx.type,
+				includeForming,
+				ctx.priorTrendParams,
+			);
+			if (result) {
+				patterns.push(result);
+				foundDoubleBottom = true;
 			}
 		}
 		patterns = deduplicatePatterns(patterns);
