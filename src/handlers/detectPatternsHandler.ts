@@ -112,7 +112,7 @@ export const toolDef: ToolDefinition = {
 
 		// ヘッダの {limit}本から は要求本数でスキャン本数ではないので、両者が食い違うことがある。
 		const periodBlock = buildPeriodBlock(meta.scan, String(type), pats, effectiveTz);
-		const typeSummary = buildTypeSummary(pats, effectiveTz);
+		const typeSummary = buildTypeSummary(pats);
 
 		if ((view || 'detailed') === 'summary') {
 			return prependWarningToResponse(

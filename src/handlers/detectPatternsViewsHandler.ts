@@ -71,20 +71,6 @@ interface EffectiveParams {
 	headProminencePct?: EffectiveParam;
 }
 
-/** PatternEntry と同じ形。view からは unknown 経由のキャストで読むのでここにも持つ。 */
-interface FlagFamilyViewFields {
-	poleStartDate?: string;
-	poleEndDate?: string;
-	poleChangePct?: number;
-	poleBars?: number;
-	poleATRMult?: number;
-	flagUpperSlope?: number;
-	flagLowerSlope?: number;
-	spreadAvg?: number;
-	spreadStability?: number;
-	expectedBreakoutDirection?: 'up' | 'down';
-}
-
 interface PatternResult {
 	ok?: boolean;
 	data?: { patterns?: PatternEntry[]; overlays?: unknown };
@@ -115,8 +101,7 @@ const byKeyAsc = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const GENERIC_DETAILS_MAX_FIELDS = 16;
 const GENERIC_DETAILS_MAX_JSON = 160;
 
-/** _tz は使わないが view formatter 群と signature を揃えている。 */
-export function buildTypeSummary(pats: PatternEntry[], _tz: string = 'Asia/Tokyo'): string {
+export function buildTypeSummary(pats: PatternEntry[]): string {
 	const byType = pats.reduce(
 		(m: Record<string, number>, p: PatternEntry) => {
 			const k = String(p?.type || 'unknown');
@@ -940,29 +925,26 @@ export function formatPatternLine(
 				);
 			if (p.flagpoleHeight != null)
 				parts.push(`フラッグポール値幅: ${Math.round(Number(p.flagpoleHeight)).toLocaleString('ja-JP')}円`);
-			const pAny = p as PatternEntry & FlagFamilyViewFields;
-			if (pAny.poleStartDate && pAny.poleEndDate && pAny.poleChangePct != null) {
-				const psd = toDateOrTime(pAny.poleStartDate, tz, type);
-				const ped = toDateOrTime(pAny.poleEndDate, tz, type);
-				const sign = pAny.poleChangePct >= 0 ? '+' : '';
-				const pctStr = `${sign}${(pAny.poleChangePct * 100).toFixed(1)}%`;
-				const barsStr = pAny.poleBars ? `, ${pAny.poleBars}本` : '';
+			if (p.poleStartDate && p.poleEndDate && p.poleChangePct != null) {
+				const psd = toDateOrTime(p.poleStartDate, tz, type);
+				const ped = toDateOrTime(p.poleEndDate, tz, type);
+				const sign = p.poleChangePct >= 0 ? '+' : '';
+				const pctStr = `${sign}${(p.poleChangePct * 100).toFixed(1)}%`;
+				const barsStr = p.poleBars ? `, ${p.poleBars}本` : '';
 				parts.push(`旗竿期間: ${psd} ~ ${ped}（${pctStr}${barsStr}）`);
 			}
-			if (pAny.poleATRMult != null) {
-				parts.push(`旗竿 ATR 倍率: ${pAny.poleATRMult.toFixed(2)}x`);
+			if (p.poleATRMult != null) {
+				parts.push(`旗竿 ATR 倍率: ${p.poleATRMult.toFixed(2)}x`);
 			}
-			if (pAny.flagUpperSlope != null && pAny.flagLowerSlope != null) {
-				parts.push(
-					`チャネル傾き: 上限=${pAny.flagUpperSlope.toFixed(2)}, 下限=${pAny.flagLowerSlope.toFixed(2)}（円/本）`,
-				);
+			if (p.flagUpperSlope != null && p.flagLowerSlope != null) {
+				parts.push(`チャネル傾き: 上限=${p.flagUpperSlope.toFixed(2)}, 下限=${p.flagLowerSlope.toFixed(2)}（円/本）`);
 			}
-			if (pAny.spreadAvg != null && pAny.spreadStability != null) {
-				const stabPct = (pAny.spreadStability * 100).toFixed(0);
-				parts.push(`平均チャネル幅: ${Math.round(pAny.spreadAvg).toLocaleString('ja-JP')}円（平行度: ${stabPct}%）`);
+			if (p.spreadAvg != null && p.spreadStability != null) {
+				const stabPct = (p.spreadStability * 100).toFixed(0);
+				parts.push(`平均チャネル幅: ${Math.round(p.spreadAvg).toLocaleString('ja-JP')}円（平行度: ${stabPct}%）`);
 			}
-			if (pAny.expectedBreakoutDirection) {
-				parts.push(`期待ブレイク方向: ${pAny.expectedBreakoutDirection === 'up' ? '上方' : '下方'}`);
+			if (p.expectedBreakoutDirection) {
+				parts.push(`期待ブレイク方向: ${p.expectedBreakoutDirection === 'up' ? '上方' : '下方'}`);
 			}
 			if (p.retracementRatio != null) {
 				const pctStr = (Number(p.retracementRatio) * 100).toFixed(0);
