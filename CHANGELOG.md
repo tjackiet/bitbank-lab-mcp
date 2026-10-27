@@ -18,6 +18,8 @@
 - `hono` を 4.13.5 から 4.13.13 に更新（`@modelcontextprotocol/sdk` 経由の moderate 脆弱性）。
 - `sharp` を 0.35.4 から 0.35.5 に更新（同梱 libvips の librsvg に起因する high 脆弱性）。
 - `source-map-js` を 1.2.1 から 1.2.2 に更新（devDependency の `vite` / `@vitest/coverage-v8` 経由の high 脆弱性）。
+- `vite` を 8.1.0 から 8.3.4 に更新（devDependency。開発サーバーと同梱の `launch-editor` の high 脆弱性）。確認 UI の `ui/*/dist` は作り直していない。
+- `vitest` / `@vitest/coverage-v8` を 4.1.11 から 4.1.12 に更新（devDependency。`@vitest/mocker` の moderate 脆弱性）。
 
 ## [0.5.0] - 2026-09-14
 
