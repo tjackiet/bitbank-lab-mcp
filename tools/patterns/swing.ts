@@ -15,14 +15,14 @@ export interface Pivot {
 	extremePrice: number;
 }
 
-export interface DetectSwingePointsOptions {
+export interface DetectSwingPointsOptions {
 	swingDepth: number;
 	/** 厳格モード: 全ての前後バーより高い/低い必要がある（false: 60%投票制） */
 	strictPivots?: boolean;
 }
 
 // 窓の前後 swingDepth 本はピボットにならないので、終端の余白にある戻しは #242 の経路ゲートに見えず、limit で結果が変わりうる（#277）。
-export function detectSwingPoints(candles: Candle[], options: DetectSwingePointsOptions): Pivot[] {
+export function detectSwingPoints(candles: Candle[], options: DetectSwingPointsOptions): Pivot[] {
 	const { swingDepth, strictPivots = true } = options;
 
 	const highs = candles.map((c) => c.high);

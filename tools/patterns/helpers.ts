@@ -339,8 +339,6 @@ export function finalizeConf(base: number, type: string): number {
 			: type === 'triple_top' || type === 'triple_bottom'
 				? 1.05
 				: type.startsWith('triangle') ||
-						type === 'pennant' ||
-						type === 'flag' ||
 						type === 'bull_flag' ||
 						type === 'bear_flag' ||
 						type === 'bull_pennant' ||
