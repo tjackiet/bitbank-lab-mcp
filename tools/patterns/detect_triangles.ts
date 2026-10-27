@@ -31,6 +31,7 @@ export function getTriangleParams(tf: string) {
 type RegLine = { slope: number; intercept: number; r2: number; valueAt: (x: number) => number };
 type SwingPoint = { idx: number; price: number };
 type LrWithR2Fn = (pts: Array<{ x: number; y: number }>) => RegLine;
+type TriangleType = 'triangle_ascending' | 'triangle_descending' | 'triangle_symmetrical';
 
 function findWorstResidualIdx(current: readonly SwingPoint[], line: Pick<RegLine, 'valueAt'>): number {
 	let worstIdx = 0;
@@ -129,7 +130,7 @@ function determineTriangleStatus(
 	candles: readonly { close: number }[],
 	upperLine: RegLine,
 	lowerLine: RegLine,
-	triangleType: 'triangle_ascending' | 'triangle_descending' | 'triangle_symmetrical',
+	triangleType: TriangleType,
 	patternEndIdx: number,
 	lastIdx: number,
 	winEnd: number,
@@ -178,7 +179,7 @@ function determineTriangleStatus(
 
 interface TriangleCandidateCtx {
 	candles: readonly { open: number; close: number; high: number; low: number; isoTime?: string }[];
-	triangleType: 'triangle_ascending' | 'triangle_descending' | 'triangle_symmetrical';
+	triangleType: TriangleType;
 	upperLine: RegLine;
 	lowerLine: RegLine;
 	upperRelSlope: number;
@@ -322,6 +323,23 @@ function buildTriangleResult(c: TriangleCandidateCtx): { pattern: PatternEntry; 
 	return { pattern, debug };
 }
 
+const ANY_TRIANGLE_TYPE: Record<TriangleType, boolean> = {
+	triangle_ascending: true,
+	triangle_descending: true,
+	triangle_symmetrical: true,
+};
+
+// 上から順に試す。順序を変えると、flat と falling が同時に真のときに選ばれる型が変わる。
+export function classifyTriangle(
+	shape: { upperFlat: boolean; upperFalling: boolean; lowerFlat: boolean; lowerRising: boolean },
+	allowed: Record<TriangleType, boolean>,
+): TriangleType | null {
+	if (allowed.triangle_ascending && shape.upperFlat && shape.lowerRising) return 'triangle_ascending';
+	if (allowed.triangle_descending && shape.upperFalling && shape.lowerFlat) return 'triangle_descending';
+	if (allowed.triangle_symmetrical && shape.upperFalling && shape.lowerRising) return 'triangle_symmetrical';
+	return null;
+}
+
 export function detectTriangles(ctx: DetectContext): DetectResult {
 	const { candles, want, includeForming, debugCandidates, lrWithR2 } = ctx;
 	const type = ctx.type;
@@ -447,27 +465,17 @@ export function detectTriangles(ctx: DetectContext): DetectResult {
 			const lowerFlat = Math.abs(lowerRelSlope) < params.flatThreshold;
 			const lowerRising = lowerRelSlope > params.moveThreshold;
 
+			const shape = { upperFlat, upperFalling, lowerFlat, lowerRising };
 			// want をゲートに含むのは意図的。flat と falling が同時に真になりうるので、want を外すと選ばれる型が変わる。
-			let triangleType: 'triangle_ascending' | 'triangle_descending' | 'triangle_symmetrical' | null = null;
-
-			if (wantAsc && upperFlat && lowerRising) {
-				triangleType = 'triangle_ascending';
-			} else if (wantDesc && upperFalling && lowerFlat) {
-				triangleType = 'triangle_descending';
-			} else if (wantSym && upperFalling && lowerRising) {
-				triangleType = 'triangle_symmetrical';
-			}
+			const triangleType = classifyTriangle(shape, {
+				triangle_ascending: wantAsc,
+				triangle_descending: wantDesc,
+				triangle_symmetrical: wantSym,
+			});
 
 			if (!triangleType) {
 				// 要求外の形を classification_failed と報告しないよう、want を外した分類を別に取って type_not_requested と分ける。検出結果には使わない。
-				const unrestrictedType =
-					upperFlat && lowerRising
-						? 'triangle_ascending'
-						: upperFalling && lowerFlat
-							? 'triangle_descending'
-							: upperFalling && lowerRising
-								? 'triangle_symmetrical'
-								: null;
+				const unrestrictedType = classifyTriangle(shape, ANY_TRIANGLE_TYPE);
 
 				debugCandidates.push({
 					type: unrestrictedType ?? 'triangle',

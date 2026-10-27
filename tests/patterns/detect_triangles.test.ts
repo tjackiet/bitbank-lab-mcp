@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dayjs } from '../../lib/datetime.js';
 import { getHsShoulderMaxPctForTf, getSizeThresholdsForTf } from '../../tools/patterns/config.js';
-import { detectTriangles } from '../../tools/patterns/detect_triangles.js';
+import { classifyTriangle, detectTriangles, getTriangleParams } from '../../tools/patterns/detect_triangles.js';
 import { linearRegressionWithR2 } from '../../tools/patterns/regression.js';
 import type { Pivot } from '../../tools/patterns/swing.js';
 import type { CandleData, DetectContext } from '../../tools/patterns/types.js';
@@ -319,5 +319,37 @@ describe('detectTriangles — whipsaw boundary tests', () => {
 		expect(unreached).toBeDefined();
 		expect(unreached?.targetReachedPct).toBeLessThan(100);
 		expect(unreached?.targetReachedPrice).toBeDefined();
+	});
+});
+
+describe('classifyTriangle', () => {
+	const ALL = { triangle_ascending: true, triangle_descending: true, triangle_symmetrical: true };
+	const NONE = { triangle_ascending: false, triangle_descending: false, triangle_symmetrical: false };
+
+	it('flatThreshold が moveThreshold より大きく、その間の傾きは flat と rising / falling の両方に入る', () => {
+		const { flatThreshold, moveThreshold } = getTriangleParams('1day');
+		expect(flatThreshold).toBeGreaterThan(moveThreshold);
+	});
+
+	it('上下とも重なりの帯にあると、ascending → descending → symmetrical の順に許された型を選ぶ', () => {
+		const both = { upperFlat: true, upperFalling: true, lowerFlat: true, lowerRising: true };
+		expect(classifyTriangle(both, ALL)).toBe('triangle_ascending');
+		expect(classifyTriangle(both, { ...ALL, triangle_ascending: false })).toBe('triangle_descending');
+		expect(classifyTriangle(both, { ...NONE, triangle_symmetrical: true })).toBe('triangle_symmetrical');
+		expect(classifyTriangle(both, NONE)).toBeNull();
+	});
+
+	it('重ならない形はそれぞれ 1 つの型になり、許されていなければ null', () => {
+		const asc = { upperFlat: true, upperFalling: false, lowerFlat: false, lowerRising: true };
+		const desc = { upperFlat: false, upperFalling: true, lowerFlat: true, lowerRising: false };
+		const sym = { upperFlat: false, upperFalling: true, lowerFlat: false, lowerRising: true };
+		const flat = { upperFlat: true, upperFalling: false, lowerFlat: true, lowerRising: false };
+		expect(classifyTriangle(asc, ALL)).toBe('triangle_ascending');
+		expect(classifyTriangle(desc, ALL)).toBe('triangle_descending');
+		expect(classifyTriangle(sym, ALL)).toBe('triangle_symmetrical');
+		expect(classifyTriangle(flat, ALL)).toBeNull();
+		expect(classifyTriangle(asc, { ...ALL, triangle_ascending: false })).toBeNull();
+		expect(classifyTriangle(desc, { ...ALL, triangle_descending: false })).toBeNull();
+		expect(classifyTriangle(sym, { ...ALL, triangle_symmetrical: false })).toBeNull();
 	});
 });
