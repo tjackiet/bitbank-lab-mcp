@@ -1,6 +1,7 @@
 import { dayjs } from '../lib/datetime.js';
 import { formatPair } from '../lib/formatter.js';
 import { ICHIMOKU_MIN_BARS_FOR_CLOUD, ICHIMOKU_SHIFT } from '../lib/indicator-config.js';
+import { isJpyQuotedPair } from '../lib/pair-code.js';
 import { fail, ok } from '../lib/result.js';
 import { extractUpstreamWarning, prependWarnings } from '../lib/warning-propagation.js';
 import type { CandleType, ChartPayload, Pair, RenderChartSvgOptions, Result } from '../src/schemas.js';
@@ -179,7 +180,7 @@ export default async function renderChartSvg(
 		}
 	}
 
-	const isJpyPair = pair.toLowerCase().includes('jpy');
+	const isJpyPair = isJpyQuotedPair(pair);
 	const fmtYLabel = (val: number) => formatYLabel(val, isJpyPair);
 
 	const xs = displayItems.map((_, i) => i);
