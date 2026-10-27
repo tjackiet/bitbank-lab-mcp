@@ -4,7 +4,14 @@ import { ICHIMOKU_MIN_BARS_FOR_CLOUD, ICHIMOKU_SHIFT } from '../lib/indicator-co
 import { isJpyQuotedPair } from '../lib/pair-code.js';
 import { fail, ok } from '../lib/result.js';
 import { extractUpstreamWarning, prependWarnings } from '../lib/warning-propagation.js';
-import type { CandleType, ChartPayload, Pair, RenderChartSvgOptions, Result } from '../src/schemas.js';
+import {
+	type CandleType,
+	type ChartPayload,
+	type Pair,
+	RENDER_CHART_SVG_DEFAULT_LIMIT,
+	type RenderChartSvgOptions,
+	type Result,
+} from '../src/schemas.js';
 import analyzeIndicators from './analyze_indicators.js';
 
 const CHART_WIDTH = 860;
@@ -95,7 +102,7 @@ export default async function renderChartSvg(
 		pair = 'btc_jpy',
 		// normalize to CandleType-like values (historically 'day' was used)
 		type = '1day',
-		limit = 60,
+		limit = RENDER_CHART_SVG_DEFAULT_LIMIT,
 		withLegend = true,
 		overlays,
 		tz = 'Asia/Tokyo',

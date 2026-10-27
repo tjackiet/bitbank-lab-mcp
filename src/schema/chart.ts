@@ -259,12 +259,13 @@ export const RenderChartSvgIndicatorEnum = z.enum([
 	'ICHIMOKU_EXTENDED',
 ]);
 
+export const RENDER_CHART_SVG_DEFAULT_LIMIT = 60;
+
 export const RenderChartSvgInputSchema = z
 	.object({
 		pair: z.string().optional().default('btc_jpy'),
 		type: CandleTypeEnum.optional().default('1day'),
-		// impl default is 60; align contract to tool behavior
-		limit: z.number().int().min(5).max(365).optional().default(60),
+		limit: z.number().int().min(5).max(365).optional().default(RENDER_CHART_SVG_DEFAULT_LIMIT),
 		style: z.enum(['candles', 'line', 'depth']).optional().default('candles'),
 		depth: z.object({ levels: z.number().int().min(10).max(500).optional().default(200) }).optional(),
 		indicators: z
