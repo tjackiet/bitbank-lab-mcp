@@ -47,10 +47,8 @@ export function annotateTargetBreakoutConfounders<T extends TargetConfoundablePa
 	const refs = accepted.map(toBreakoutRef).filter((r): r is BreakoutRef => r !== null);
 	if (refs.length === 0) return patterns;
 
-	for (const p of accepted) {
-		const self = toBreakoutRef(p);
-		if (!self) continue;
-
+	for (const self of refs) {
+		const p = self.source;
 		const firstReach = Number(p.targetFirstReachBars);
 		if (Number.isInteger(firstReach)) {
 			// 到達側は方向を問わず (ブレイク, 初到達) の開区間で数える。初到達と同じ足では「先に起きた」と言えないため。
