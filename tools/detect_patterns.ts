@@ -542,7 +542,6 @@ export default async function detectPatterns(
 				if (progressLine) detail += `\n${progressLine}`;
 
 				if (
-					p.type === 'pennant' ||
 					p.type === 'bull_flag' ||
 					p.type === 'bear_flag' ||
 					p.type === 'bull_pennant' ||

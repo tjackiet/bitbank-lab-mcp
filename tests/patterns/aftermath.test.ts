@@ -154,30 +154,6 @@ describe('analyzeAftermath', () => {
 		expect(result?.breakoutConfirmed).toBe(false);
 		expect(result?.outcome).toContain('未突破');
 	});
-
-	it('pennant は poleDirection で方向を判定', () => {
-		const candles: CandleData[] = Array.from({ length: 30 }, (_, i) => ({
-			open: 100,
-			close: i > 10 ? 130 : 100,
-			high: i > 10 ? 135 : 105,
-			low: i > 10 ? 125 : 95,
-			isoTime: `2024-01-${String(i + 1).padStart(2, '0')}`,
-		}));
-		const isoToIndex = makeIsoIndex(candles);
-		const p: PatternEntry = {
-			type: 'pennant',
-			poleDirection: 'up',
-			range: { start: '2024-01-01', end: '2024-01-10' },
-			neckline: [
-				{ x: 0, y: 105 },
-				{ x: 20, y: 105 },
-			],
-			pivots: [{ idx: 5, price: 90, kind: 'L', extremePrice: 90 }],
-		};
-		const result = analyzeAftermath(p, candles, isoToIndex);
-		expect(result).not.toBeNull();
-		expect(result?.breakoutConfirmed).toBe(true);
-	});
 });
 
 describe('buildStatistics', () => {

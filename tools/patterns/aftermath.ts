@@ -42,10 +42,8 @@ export function analyzeAftermath(
 		if (!Number.isFinite(baseClose)) return null;
 		const nlAtEnd = necklineValue(p, endIdx);
 		const pType = String(p?.type);
-		// 後方互換のため、レガシーな 'pennant' / 'flag' は poleDirection で方向を決める。
-		const isLegacyPoleDriven = pType === 'pennant' || pType === 'flag';
-		const bullish = isLegacyPoleDriven ? p?.poleDirection === 'up' : BULLISH_TYPES.includes(pType);
-		const bearish = isLegacyPoleDriven ? p?.poleDirection === 'down' : BEARISH_TYPES.includes(pType);
+		const bullish = BULLISH_TYPES.includes(pType);
+		const bearish = BEARISH_TYPES.includes(pType);
 		if (!Number.isFinite(nlAtEnd as number)) return null;
 		let breakoutConfirmed = false;
 		let breakoutDate: string | undefined;
@@ -119,8 +117,7 @@ export function analyzeAftermath(
 			const arr = [r3, r7, r14].filter((v: unknown) => typeof v === 'number') as number[];
 			if (!arr.length) return '評価不可（事後データ不足）';
 			const best = arr.reduce((m, v) => (Math.abs(v) > Math.abs(m) ? v : m), 0);
-			const isBullish = isLegacyPoleDriven ? p?.poleDirection === 'up' : BULLISH_TYPES.includes(String(p?.type));
-			const expected = isBullish ? 1 : -1;
+			const expected = bullish ? 1 : -1;
 			const actual = best > 0 ? 1 : -1;
 			if (expected === actual && Math.abs(best) > 3)
 				return `部分成功（ブレイクアウト後${best > 0 ? '+' : ''}${best.toFixed(1)}%、目標未達）`;
