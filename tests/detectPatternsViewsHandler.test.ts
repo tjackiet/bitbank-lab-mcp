@@ -53,10 +53,10 @@ const emptyRes = {
 
 describe('buildTypeSummary', () => {
 	it('種別別カウントを返す', () => {
-		const pats = [makePattern(), makePattern({ type: 'pennant' }), makePattern()];
+		const pats = [makePattern(), makePattern({ type: 'bull_pennant' }), makePattern()];
 		const result = buildTypeSummary(pats);
 		expect(result).toContain('double_top×2');
-		expect(result).toContain('pennant×1');
+		expect(result).toContain('bull_pennant×1');
 	});
 
 	it('type が undefined のとき unknown にグループ化する', () => {
@@ -792,7 +792,7 @@ describe('formatPatternLine', () => {
 	});
 
 	it('other type では roleLabels なし（full view）', () => {
-		const p = makePattern({ type: 'pennant' });
+		const p = makePattern({ type: 'bull_pennant' });
 		const result = formatPatternLine(p, 0, 'full', emptyMeta);
 		expect(result).not.toContain('山1');
 	});
@@ -913,37 +913,22 @@ describe('formatPatternLine', () => {
 		expect(result).toContain('上方ブレイク（強気転換）');
 	});
 
-	it('pennant: poleDirection=up success → トレンド継続（強気）', () => {
-		const p = makePattern({
-			type: 'pennant',
-			breakoutDirection: 'up',
-			outcome: 'success',
-			poleDirection: 'up',
-		});
+	it('bull_pennant: up success → トレンド継続（強気）', () => {
+		const p = makePattern({ type: 'bull_pennant', breakoutDirection: 'up', outcome: 'success' });
 		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
 		expect(result).toContain('トレンド継続（強気）');
 	});
 
-	it('pennant: poleDirection=down failure → ダマシ（強気転換）', () => {
-		const p = makePattern({
-			type: 'pennant',
-			breakoutDirection: 'down',
-			outcome: 'failure',
-			poleDirection: 'down',
-		});
+	it('bear_pennant: up failure → ダマシ（強気転換）', () => {
+		const p = makePattern({ type: 'bear_pennant', breakoutDirection: 'up', outcome: 'failure' });
 		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
 		expect(result).toContain('ダマシ（強気転換）');
 	});
 
-	it('pennant: expectedDir なし（poleDirection undefined）→ 方向ブレイク', () => {
-		const p = makePattern({
-			type: 'pennant',
-			breakoutDirection: 'up',
-			outcome: 'success',
-			poleDirection: undefined,
-		});
+	it('意味の表に無い type → 方向ブレイク', () => {
+		const p = makePattern({ type: 'double_top', breakoutDirection: 'up', outcome: 'success' });
 		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
-		expect(result).toContain('上方ブレイク');
+		expect(result).toContain('パターン結果: 成功（上方ブレイク）');
 	});
 
 	it('breakoutDirection なしのとき outcome 行なし', () => {
@@ -952,9 +937,9 @@ describe('formatPatternLine', () => {
 		expect(result).not.toContain('パターン結果:');
 	});
 
-	it('pennant: 全フィールドあり（poleDirection/priorTrendDirection/flagpoleHeight/retracementRatio/isTrendContinuation）', () => {
+	it('bull_pennant: 全フィールドあり（poleDirection/priorTrendDirection/flagpoleHeight/retracementRatio/isTrendContinuation）', () => {
 		const p = makePattern({
-			type: 'pennant',
+			type: 'bull_pennant',
 			poleDirection: 'up',
 			priorTrendDirection: 'bullish',
 			flagpoleHeight: 20000,
@@ -970,35 +955,35 @@ describe('formatPatternLine', () => {
 		expect(result).toContain('トレンド継続: はい（成功）');
 	});
 
-	it('pennant: priorTrendDirection=bearish → 弱気（下降トレンド）', () => {
-		const p = makePattern({ type: 'pennant', priorTrendDirection: 'bearish' });
+	it('bear_pennant: priorTrendDirection=bearish → 弱気（下降トレンド）', () => {
+		const p = makePattern({ type: 'bear_pennant', priorTrendDirection: 'bearish' });
 		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
 		expect(result).toContain('弱気（下降トレンド）');
 	});
 
-	it('pennant: retracementRatio > 0.38 → 高め（トライアングル寄り）', () => {
-		const p = makePattern({ type: 'pennant', retracementRatio: 0.5 });
+	it('bull_pennant: retracementRatio > 0.38 → 高め（トライアングル寄り）', () => {
+		const p = makePattern({ type: 'bull_pennant', retracementRatio: 0.5 });
 		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
 		expect(result).toContain('高め — トライアングル寄り');
 	});
 
-	it('pennant: isTrendContinuation=false → いいえ（ダマシ）', () => {
-		const p = makePattern({ type: 'pennant', isTrendContinuation: false });
+	it('bull_pennant: isTrendContinuation=false → いいえ（ダマシ）', () => {
+		const p = makePattern({ type: 'bull_pennant', isTrendContinuation: false });
 		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
 		expect(result).toContain('いいえ（ダマシ）');
 	});
 
-	it('pennant: poleDirection=down → 下降', () => {
-		const p = makePattern({ type: 'pennant', poleDirection: 'down' });
+	it('bear_pennant: poleDirection=down → 下降', () => {
+		const p = makePattern({ type: 'bear_pennant', poleDirection: 'down' });
 		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
 		expect(result).toContain('フラッグポール方向: 下降');
 	});
 
-	it('pennant: フィールドなしのとき pennantLine なし', () => {
-		const p = makePattern({ type: 'pennant' });
+	it('bull_pennant: フィールドなしのとき pennantLine なし', () => {
+		const p = makePattern({ type: 'bull_pennant' });
 		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
 		// pennant line 自体が生成されないことを確認（crashしなければOK）
-		expect(result).toContain('pennant');
+		expect(result).toContain('bull_pennant');
 	});
 
 	it('full view + structureDiagram.svg あり → SVG ブロックを出力する', () => {
@@ -1662,10 +1647,10 @@ describe('formatFullView', () => {
 	});
 
 	it('複数パターンを出力する', () => {
-		const pats = [makePattern(), makePattern({ type: 'pennant' })];
+		const pats = [makePattern(), makePattern({ type: 'bull_pennant' })];
 		const res = formatFullView('H', pats, '期間', 'summary', emptyMeta, emptyRes);
 		expect(res.content[0].text).toContain('double_top');
-		expect(res.content[0].text).toContain('pennant');
+		expect(res.content[0].text).toContain('bull_pennant');
 	});
 });
 
@@ -2165,9 +2150,10 @@ const ALL_INVALID_REASONS: readonly string[] = [
 const CONTINUATION_INVALID_TYPES = [
 	'triangle_ascending',
 	'triangle_descending',
-	'pennant',
 	'bull_flag',
 	'bear_flag',
+	'bull_pennant',
+	'bear_pennant',
 ] as const;
 
 /** `status` の全件。schema の enum から導出する（表示層が status を取りこぼさないため）。 */

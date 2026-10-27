@@ -739,7 +739,6 @@ const REVERSAL_STATUS_WORDS: Readonly<Record<string, { last: string; zone: '山'
 	inverse_head_and_shoulders: { last: '右肩', zone: '谷' },
 };
 
-// legacy alias（pennant / flag）も含める。出力 type としては返らないが、PatternEntry.type は string なので表示層に届きうる。
 const CONTINUATION_STATUS_TYPES: ReadonlySet<string> = new Set([
 	'triangle_ascending',
 	'triangle_descending',
@@ -750,8 +749,6 @@ const CONTINUATION_STATUS_TYPES: ReadonlySet<string> = new Set([
 	'bear_flag',
 	'bull_pennant',
 	'bear_pennant',
-	'pennant',
-	'flag',
 ]);
 
 const STATUS_JA: Readonly<Record<string, string>> = {
@@ -905,7 +902,6 @@ export function formatPatternLine(
 				rising_wedge: '下方',
 				triangle_ascending: '上方',
 				triangle_descending: '下方',
-				pennant: p.poleDirection === 'up' ? '上方' : p.poleDirection === 'down' ? '下方' : undefined,
 				bull_flag: '上方',
 				bear_flag: '下方',
 				bull_pennant: '上方',
@@ -917,10 +913,6 @@ export function formatPatternLine(
 				rising_wedge: { success: '弱気転換', failure: '下方転換シナリオ無効化' },
 				triangle_ascending: { success: '上方ブレイク（強気）', failure: '下方ブレイク（弱気転換）' },
 				triangle_descending: { success: '下方ブレイク（弱気）', failure: '上方ブレイク（強気転換）' },
-				pennant: {
-					success: `トレンド継続（${p.poleDirection === 'up' ? '強気' : '弱気'}）`,
-					failure: `ダマシ（${p.poleDirection === 'up' ? '弱気転換' : '強気転換'}）`,
-				},
 				bull_flag: { success: 'トレンド継続（強気）', failure: 'ダマシ（弱気転換）' },
 				bear_flag: { success: 'トレンド継続（弱気）', failure: 'ダマシ（強気転換）' },
 				bull_pennant: { success: 'トレンド継続（強気）', failure: 'ダマシ（弱気転換）' },
@@ -938,12 +930,7 @@ export function formatPatternLine(
 	let pennantLine: string | null = null;
 	try {
 		const isFlagFamily =
-			p?.type === 'pennant' ||
-			p?.type === 'flag' ||
-			p?.type === 'bull_flag' ||
-			p?.type === 'bear_flag' ||
-			p?.type === 'bull_pennant' ||
-			p?.type === 'bear_pennant';
+			p?.type === 'bull_flag' || p?.type === 'bear_flag' || p?.type === 'bull_pennant' || p?.type === 'bear_pennant';
 		if (isFlagFamily) {
 			const parts: string[] = [];
 			if (p.poleDirection) parts.push(`フラッグポール方向: ${p.poleDirection === 'up' ? '上昇' : '下降'}`);
