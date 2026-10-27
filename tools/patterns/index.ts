@@ -25,7 +25,7 @@ export {
 } from './regression.js';
 export {
 	type Candle,
-	type DetectSwingePointsOptions,
+	type DetectSwingPointsOptions,
 	detectSwingPoints,
 	filterPeaks,
 	filterValleys,
