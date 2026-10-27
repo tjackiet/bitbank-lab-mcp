@@ -469,9 +469,11 @@ async function runWithConcurrency<T>(items: T[], limit: number, worker: (item: T
 	await Promise.all(runners);
 }
 
+const MAX_TECHNICAL_PAIRS = 5;
+
 export async function fetchTechnical(pairs: string[]): Promise<TechnicalSummary[]> {
 	const results: TechnicalSummary[] = [];
-	const targets = pairs.slice(0, 5);
+	const targets = pairs.slice(0, MAX_TECHNICAL_PAIRS);
 	const promises = targets.map(async (pair) => {
 		try {
 			const res = await analyzeIndicators(pair, '1day', 60);
