@@ -1,12 +1,6 @@
 import type { z } from 'zod';
 import { toIsoTime } from '../../lib/datetime.js';
-import {
-	formatCurrency,
-	formatCurrencyShort,
-	formatPercent,
-	formatPriceJPY,
-	formatTrendArrow,
-} from '../../lib/formatter.js';
+import { formatCurrency, formatPercent, formatPriceJPY, formatTrendArrow } from '../../lib/formatter.js';
 import { stddev } from '../../lib/math.js';
 import { prependProvisionalNote } from '../../lib/provisional-bar.js';
 import { extractUpstreamWarning, prependWarnings } from '../../lib/warning-propagation.js';
@@ -61,14 +55,6 @@ export function buildVolatilityBeginnerText(input: VolViewInput): string {
 	]
 		.filter(Boolean)
 		.join('\n');
-}
-
-// 本番未使用（テストからのみ参照）。PR 6（軽量 summary の opt-in）をやらないと決めた時点で削除する。
-export function buildVolatilitySummaryText(input: VolViewInput): string {
-	const { pair, type, sampleSize, rvAnn, pkAnn, gkAnn, rsAnn, atrAbs, tagsAll } = input;
-	const fp = (x: number | null) => formatPercent(x, { multiply: true });
-	const fmtCurrShort = (p: string, v: number | null) => formatCurrencyShort(v, p);
-	return `${String(pair).toUpperCase()} [${String(type)}] samples=${sampleSize ?? 'n/a'} RV=${fp(rvAnn)} ATR=${fmtCurrShort(pair, atrAbs)} PK=${fp(pkAnn)} GK=${fp(gkAnn)} RS=${fp(rsAnn)} Tags: ${tagsAll.join(', ')}`;
 }
 
 export interface VolDetailedInput extends VolViewInput {
