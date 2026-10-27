@@ -200,9 +200,10 @@ export const PortfolioCostBasisUnavailableReasonEnum = z.enum([
 
 export type PortfolioCostBasisUnavailableReason = z.infer<typeof PortfolioCostBasisUnavailableReasonEnum>;
 
+// unknown は公開 enum に残しているが、qtyMismatchReasonFor はもう返さない（#93）。
 export type PortfolioQtyMismatchReason = Exclude<
 	PortfolioCostBasisUnavailableReason,
-	PortfolioFlowUnavailableReason | PortfolioUnresolvedDepositReason
+	PortfolioFlowUnavailableReason | PortfolioUnresolvedDepositReason | 'unknown'
 >;
 
 export const PortfolioChangePctUnavailableReasonEnum = z.enum([
