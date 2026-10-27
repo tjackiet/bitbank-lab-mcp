@@ -986,6 +986,42 @@ describe('formatPatternLine', () => {
 		expect(result).toContain('bull_pennant');
 	});
 
+	it('bull_flag: 旗竿・チャネルの詳細行（期間・ATR 倍率・傾き・幅・期待ブレイク方向）', () => {
+		const p = makePattern({
+			type: 'bull_flag',
+			poleStartDate: '2026-01-01T00:00:00.000Z',
+			poleEndDate: '2026-01-05T00:00:00.000Z',
+			poleChangePct: 0.1234,
+			poleBars: 4,
+			poleATRMult: 3.456,
+			flagUpperSlope: -12.345,
+			flagLowerSlope: -10.5,
+			spreadAvg: 123456.7,
+			spreadStability: 0.876,
+			expectedBreakoutDirection: 'up',
+		});
+		const lines = formatPatternLine(p, 0, 'summary', emptyMeta).split('\n');
+		expect(lines).toContain('   - 旗竿期間: 2026-01-01 ~ 2026-01-05（+12.3%, 4本）');
+		expect(lines).toContain('   - 旗竿 ATR 倍率: 3.46x');
+		expect(lines).toContain('   - チャネル傾き: 上限=-12.35, 下限=-10.50（円/本）');
+		expect(lines).toContain('   - 平均チャネル幅: 123,457円（平行度: 88%）');
+		expect(lines).toContain('   - 期待ブレイク方向: 上方');
+	});
+
+	it('bear_flag: 下落の旗竿は符号なし・本数なしで、欠けた値の行は出さない', () => {
+		const p = makePattern({
+			type: 'bear_flag',
+			poleStartDate: '2026-01-01T00:00:00.000Z',
+			poleEndDate: '2026-01-05T00:00:00.000Z',
+			poleChangePct: -0.05,
+			expectedBreakoutDirection: 'down',
+		});
+		const result = formatPatternLine(p, 0, 'summary', emptyMeta);
+		expect(result.split('\n')).toContain('   - 旗竿期間: 2026-01-01 ~ 2026-01-05（-5.0%）');
+		expect(result.split('\n')).toContain('   - 期待ブレイク方向: 下方');
+		for (const label of ['旗竿 ATR 倍率', 'チャネル傾き', '平均チャネル幅']) expect(result).not.toContain(label);
+	});
+
 	it('full view + structureDiagram.svg あり → SVG ブロックを出力する', () => {
 		const p = makePattern({
 			structureDiagram: {
