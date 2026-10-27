@@ -23,22 +23,27 @@ export const SCHEMA_DEFAULTS = {
 	tolerancePct: 0.04,
 } as const;
 
-// lookback は時間足で伸ばさない。伸ばすと 1hour の標準窓でほぼ全候補が insufficient_data になる（#297）。
-// ATR 比は 1day = 1.0 で、getSizeThresholdsForTf / getHsShoulderMaxPctForTf / getHeadProminenceForTf の表も同じ比から作っている。
+// 1day を 1.0 とした ATR の比。1week / 1month は √t で伸ばすと締まる方向になるので入れず、1day の値を据え置く（#152）。
 // 実行時の ATR には連動させない。閾値が limit の関数になると、窓を広げたのに検出が減る（#154）。
-// TODO: 1hour 以外の ATR 比は √t 推定。4hour の ATR を実測したら、この比と 3 つの表の 4hour を差し替える。
+// TODO: 1hour 以外の ATR 比は √t 推定。4hour の ATR を実測したら、この表の 4hour を差し替える。
+const ATR_SCALE_BY_TF: Record<string, number> = {
+	'1min': 0.0264,
+	'5min': 0.0589,
+	'15min': 0.1021,
+	'30min': 0.1443,
+	'1hour': 0.2073,
+	'4hour': 0.4082,
+	'8hour': 0.5774,
+	'12hour': Math.SQRT1_2,
+};
+
+function atrScaled(anchor: number, tf: string): number {
+	return Object.hasOwn(ATR_SCALE_BY_TF, tf) ? Number((anchor * ATR_SCALE_BY_TF[tf]).toFixed(4)) : anchor;
+}
+
+// lookback は時間足で伸ばさない。伸ばすと 1hour の標準窓でほぼ全候補が insufficient_data になる（#297）。
 export function getPriorTrendParamsForTf(tf: string): PriorTrendParams {
-	const atrScaleByTf: Record<string, number> = {
-		'1min': 0.0264,
-		'5min': 0.0589,
-		'15min': 0.1021,
-		'30min': 0.1443,
-		'1hour': 0.2073,
-		'4hour': 0.4082,
-		'8hour': 0.5774,
-		'12hour': Math.SQRT1_2,
-	};
-	const atrScale = atrScaleByTf[tf] ?? 1;
+	const atrScale = ATR_SCALE_BY_TF[tf] ?? 1;
 	const sidewaysPct = Number((PRIOR_TREND_SIDEWAYS_PCT * atrScale).toFixed(4));
 	return {
 		sidewaysPct,
@@ -74,44 +79,19 @@ export function getDefaultToleranceForTf(tf: string): number {
 
 // double / triple / H&S で値を分けない（#139）。
 export function getSizeThresholdsForTf(tf: string): SizeThresholds {
-	if (tf === '1min') return { heightPct: 0.0008, depthPct: 0.0013 };
-	if (tf === '5min') return { heightPct: 0.0018, depthPct: 0.0029 };
-	if (tf === '15min') return { heightPct: 0.0031, depthPct: 0.0051 };
-	if (tf === '30min') return { heightPct: 0.0043, depthPct: 0.0072 };
-	if (tf === '1hour') return { heightPct: 0.0062, depthPct: 0.0104 };
-	if (tf === '4hour') return { heightPct: 0.0122, depthPct: 0.0204 }; // 推定（4hour の ATR は未実測）
-	if (tf === '8hour') return { heightPct: 0.0173, depthPct: 0.0289 };
-	if (tf === '12hour') return { heightPct: 0.0212, depthPct: 0.0354 };
-	// 1week / 1month は √t で伸ばすと締まる方向になるので、1day の値を据え置く（#152）。
-	return { heightPct: MIN_PATTERN_HEIGHT_PCT, depthPct: MIN_DEPTH_PCT };
+	return { heightPct: atrScaled(MIN_PATTERN_HEIGHT_PCT, tf), depthPct: atrScaled(MIN_DEPTH_PCT, tf) };
 }
 
 // 値が getSizeThresholdsForTf の depthPct と一致するのは偶然。測る量も極性も違うので流用しない。
 export function getHsShoulderMaxPctForTf(tf: string): number {
-	if (tf === '1min') return 0.0013;
-	if (tf === '5min') return 0.0029;
-	if (tf === '15min') return 0.0051;
-	if (tf === '30min') return 0.0072;
-	if (tf === '1hour') return 0.0104;
-	if (tf === '4hour') return 0.0204; // 推定（4hour の ATR は未実測。getSizeThresholdsForTf と同じ限界）
-	if (tf === '8hour') return 0.0289;
-	if (tf === '12hour') return 0.0354;
-	return HS_SHOULDER_MAX_PCT;
+	return atrScaled(HS_SHOULDER_MAX_PCT, tf);
 }
 
 const HEAD_PROMINENCE_PCT = 0.04;
 
 // getDefaultToleranceForTf とは向きが逆（大きいほど厳しい）なので流用しない（#198）。
 export function getHeadProminenceForTf(tf: string): number {
-	if (tf === '1min') return 0.0011;
-	if (tf === '5min') return 0.0024;
-	if (tf === '15min') return 0.0041;
-	if (tf === '30min') return 0.0058;
-	if (tf === '1hour') return 0.0083;
-	if (tf === '4hour') return 0.0163; // 推定（4hour の ATR は未実測。getSizeThresholdsForTf と同じ限界）
-	if (tf === '8hour') return 0.0231;
-	if (tf === '12hour') return 0.0283;
-	return HEAD_PROMINENCE_PCT;
+	return atrScaled(HEAD_PROMINENCE_PCT, tf);
 }
 
 export function getConvergenceFactorForTf(tf: string): number {
