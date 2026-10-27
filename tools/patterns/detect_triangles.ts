@@ -330,7 +330,7 @@ const ANY_TRIANGLE_TYPE: Record<TriangleType, boolean> = {
 };
 
 // 上から順に試す。順序を変えると、flat と falling が同時に真のときに選ばれる型が変わる。
-function classifyTriangle(
+export function classifyTriangle(
 	shape: { upperFlat: boolean; upperFalling: boolean; lowerFlat: boolean; lowerRising: boolean },
 	allowed: Record<TriangleType, boolean>,
 ): TriangleType | null {
