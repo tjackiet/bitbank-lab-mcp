@@ -111,17 +111,9 @@ export function computeTargetReach(
 	};
 }
 
-export function targetReachFields(reach: TargetReachResult): {
-	targetReachedPct?: number;
-	targetReached?: boolean;
-	targetReachedDate?: string;
-	targetReachedPrice?: number;
-	targetFirstReachBars?: number;
-	targetFirstReachDate?: string;
-	targetScanBars?: number;
-	targetScanComplete?: boolean;
-	targetProgressOmittedReason?: TargetReachOmissionReason;
-} {
+export function targetReachFields(
+	reach: TargetReachResult,
+): Partial<Omit<TargetReachInfo, 'kind'>> & { targetProgressOmittedReason?: TargetReachOmissionReason } {
 	if (reach.kind === 'omitted') return { targetProgressOmittedReason: reach.reason };
 	return {
 		targetReachedPct: reach.targetReachedPct,
