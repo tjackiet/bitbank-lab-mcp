@@ -161,26 +161,31 @@ export function resolveParams(
 	const auto = getDefaultParamsForTf(tf);
 	const tolAuto = getDefaultToleranceForTf(tf);
 	const headProminenceAuto = getHeadProminenceForTf(tf);
+	const {
+		swingDepth: swingDepthIn,
+		tolerancePct: tolerancePctIn,
+		minBarsBetweenSwings: minBarsIn,
+		headProminencePct: headProminenceIn,
+	} = opts;
 
 	const swingDepthExplicit =
-		Number.isFinite(opts.swingDepth as number) && (opts.swingDepth as number) !== SCHEMA_DEFAULTS.swingDepth;
-	const swingDepth = swingDepthExplicit ? (opts.swingDepth as number) : auto.swingDepth;
+		typeof swingDepthIn === 'number' && Number.isFinite(swingDepthIn) && swingDepthIn !== SCHEMA_DEFAULTS.swingDepth;
+	const swingDepth = swingDepthExplicit ? swingDepthIn : auto.swingDepth;
 
 	// swingDepth と述語をそろえない。Number.isFinite にすると Infinity の扱いが変わり実効値が動く。
 	const tolerancePctExplicit =
-		typeof opts.tolerancePct === 'number' &&
-		!Number.isNaN(opts.tolerancePct) &&
-		opts.tolerancePct !== SCHEMA_DEFAULTS.tolerancePct;
-	const tolerancePct = tolerancePctExplicit ? (opts.tolerancePct as number) : tolAuto;
+		typeof tolerancePctIn === 'number' &&
+		!Number.isNaN(tolerancePctIn) &&
+		tolerancePctIn !== SCHEMA_DEFAULTS.tolerancePct;
+	const tolerancePct = tolerancePctExplicit ? tolerancePctIn : tolAuto;
 
 	const minBarsExplicit =
-		Number.isFinite(opts.minBarsBetweenSwings as number) &&
-		(opts.minBarsBetweenSwings as number) !== SCHEMA_DEFAULTS.minBarsBetweenSwings;
-	const minBarsBetweenSwings = minBarsExplicit ? (opts.minBarsBetweenSwings as number) : auto.minBarsBetweenSwings;
+		typeof minBarsIn === 'number' && Number.isFinite(minBarsIn) && minBarsIn !== SCHEMA_DEFAULTS.minBarsBetweenSwings;
+	const minBarsBetweenSwings = minBarsExplicit ? minBarsIn : auto.minBarsBetweenSwings;
 
 	// headProminencePct だけはスキーマに .default() が無いので、既定値との比較をしない。
-	const headProminenceExplicit = typeof opts.headProminencePct === 'number' && !Number.isNaN(opts.headProminencePct);
-	const headProminencePct = headProminenceExplicit ? (opts.headProminencePct as number) : headProminenceAuto;
+	const headProminenceExplicit = typeof headProminenceIn === 'number' && !Number.isNaN(headProminenceIn);
+	const headProminencePct = headProminenceExplicit ? headProminenceIn : headProminenceAuto;
 
 	return {
 		swingDepth,
