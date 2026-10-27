@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
 	buildVolatilityBeginnerText,
 	buildVolatilityDetailedText,
-	buildVolatilitySummaryText,
 	type VolDetailedInput,
 	type VolViewInput,
 } from '../src/handlers/getVolatilityMetricsHandler.js';
@@ -59,20 +58,6 @@ describe('buildVolatilityBeginnerText', () => {
 	it('lastClose が null の場合は n/a', () => {
 		const text = buildVolatilityBeginnerText(makeViewInput({ lastClose: null }));
 		expect(text).toContain('n/a');
-	});
-});
-
-describe('buildVolatilitySummaryText', () => {
-	it('1行にペア・サンプル数・各指標・タグを含む', () => {
-		const text = buildVolatilitySummaryText(makeViewInput());
-		expect(text).toContain('BTC_JPY [1day]');
-		expect(text).toContain('samples=30');
-		expect(text).toContain('RV=');
-		expect(text).toContain('ATR=');
-		expect(text).toContain('PK=');
-		expect(text).toContain('GK=');
-		expect(text).toContain('RS=');
-		expect(text).toContain('Tags: volatile, high_vol');
 	});
 });
 

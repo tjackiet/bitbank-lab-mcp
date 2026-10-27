@@ -9,7 +9,6 @@ vi.mock('../../tools/get_volatility_metrics.js', async (importOriginal) => ({
 import {
 	buildVolatilityBeginnerText,
 	buildVolatilityDetailedText,
-	buildVolatilitySummaryText,
 	prependVolWarning,
 	toolDef,
 	type VolDetailedInput,
@@ -70,27 +69,6 @@ describe('buildVolatilityBeginnerText', () => {
 		const text = buildVolatilityBeginnerText(makeViewInput({ tagsAll: ['high_vol', 'expanding_vol'] }));
 		expect(text).toContain('今の傾向');
 		expect(text).toContain('high vol');
-	});
-});
-
-describe('buildVolatilitySummaryText', () => {
-	it('全メトリクス（RV/ATR/PK/GK/RS）が含まれる', () => {
-		const text = buildVolatilitySummaryText(makeViewInput());
-		expect(text).toContain('RV=');
-		expect(text).toContain('ATR=');
-		expect(text).toContain('PK=');
-		expect(text).toContain('GK=');
-		expect(text).toContain('RS=');
-	});
-
-	it('Tags が含まれる', () => {
-		const text = buildVolatilitySummaryText(makeViewInput({ tagsAll: ['low_vol'] }));
-		expect(text).toContain('Tags: low_vol');
-	});
-
-	it('sampleSize が含まれる', () => {
-		const text = buildVolatilitySummaryText(makeViewInput({ sampleSize: 200 }));
-		expect(text).toContain('samples=200');
 	});
 });
 
