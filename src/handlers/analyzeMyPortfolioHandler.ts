@@ -210,9 +210,7 @@ function changeJpyGuidanceWarning(reason: PortfolioChangePctUnavailableReason, d
 const QTY_MISMATCH_CAUSE: Record<PortfolioQtyMismatchReason, string> = {
 	has_crypto_deposits: '入庫日の価格を解決できない暗号資産の入庫あり',
 	history_truncated: '約定履歴の打ち切り',
-	unknown: '原因不明',
 	reconstructed_qty_negative: '復元数量が負（API に現れない取得あり）',
-	// unknown はもう qtyMismatchReasonFor から返らないが、Record が enum 全体の網羅を要求するので残す（#93）。
 	untracked_trade_suspected: '販売所取引など API に現れない取引の可能性',
 };
 
