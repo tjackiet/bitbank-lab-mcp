@@ -20,7 +20,7 @@
 - `source-map-js` を 1.2.1 から 1.2.2 に更新（devDependency の `vite` / `@vitest/coverage-v8` 経由の high 脆弱性）。
 - `vite` を 8.1.0 から 8.3.4 に更新（devDependency。開発サーバーと同梱の `launch-editor` の high 脆弱性）。確認 UI の `ui/*/dist` は作り直していない。
 - `vitest` / `@vitest/coverage-v8` を 4.1.11 から 4.1.12 に更新（devDependency。`@vitest/mocker` の moderate 脆弱性）。
-- `zod` を 4.4.3 から 4.6.7 に更新（大きすぎる配列などを検証するときのメモリ枯渇の high 脆弱性）。配列の件数の上限を要素より先に確かめるようになり、上限を超えた配列を弾くときは要素ごとのエラーを出さなくなった（受け付ける入力・弾く入力は変わらない）。`render_candle_pattern_diagram` の `involvedIndices`（2 要素のタプル）は、ツール定義の JSON Schema に `items: false` / `minItems: 2` / `maxItems: 2` が付く。
+- `zod` を 4.4.3 から 4.6.7 に更新（大きすぎる配列などを検証するときのメモリ枯渇の high 脆弱性）。配列の件数の上限を要素より先に確かめるようになり、上限を超えた配列を弾くときは要素ごとのエラーを出さなくなった（変更前後で全ツールの入力 974 通りを比べた範囲では、受け付ける入力・弾く入力は変わらなかった）。`render_candle_pattern_diagram` の `involvedIndices`（2 要素のタプル）は、ツール定義の JSON Schema に `items: false` / `minItems: 2` / `maxItems: 2` が付く。
 
 ## [0.5.0] - 2026-09-14
 
