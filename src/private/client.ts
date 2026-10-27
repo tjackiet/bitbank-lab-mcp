@@ -26,6 +26,7 @@ export class PrivateApiError extends Error {
 const AUTH_ERROR_CODES = new Set([20001, 20002, 20003, 20004, 20005]);
 const RATE_LIMIT_CODES = new Set([10009]);
 const MAINTENANCE_CODES = new Set([10007, 10008]);
+const NOT_FOUND_CODES = new Set([50009]);
 
 const DEFAULT_ORIGIN = 'https://api.bitbank.cc';
 
@@ -262,8 +263,6 @@ export class BitbankPrivateClient {
 			);
 		}
 
-		const NOT_FOUND_CODES = new Set([50009]);
-		// パラメータ系（30000番台=必須不足 / 40000番台=不正）
 		if (errorCode != null) {
 			const libMessage = getBitbankErrorMessage(errorCode);
 			if (NOT_FOUND_CODES.has(errorCode)) {
@@ -274,6 +273,7 @@ export class BitbankPrivateClient {
 					errorCode,
 				);
 			}
+			// パラメータ系（30000番台=必須不足 / 40000番台=不正）
 			if (errorCode >= 30000 && errorCode < 50000) {
 				return new PrivateApiError(
 					libMessage ?? 'リクエストパラメータが不正です',
@@ -282,10 +282,6 @@ export class BitbankPrivateClient {
 					errorCode,
 				);
 			}
-		}
-
-		if (errorCode != null) {
-			const libMessage = getBitbankErrorMessage(errorCode);
 			if (libMessage) {
 				return new PrivateApiError(libMessage, 'upstream_error', httpStatus, errorCode);
 			}
