@@ -101,6 +101,9 @@ function stairStepDirection(main1: number, main2: number, main3: number): StairS
 const BREAKOUT_BUFFER_PCT = 0.015;
 const MAX_BARS_FROM_EXTREMUM = 20;
 
+const RELAXED_TOLERANCE_FACTORS = [1.25, 2.0];
+const RELAXED_CONFIDENCE_PENALTY = 0.95;
+
 export function getTripleFormingBarParams(tf: string): { minBars: number; maxBars: number } {
 	return patternBarRange(tf, FORMING_MIN_DAYS, FORMING_MAX_DAYS);
 }
@@ -229,7 +232,7 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 			continue;
 		}
 
-		const nlAvg = (Number(v1.price) + Number(v2.price)) / 2;
+		const nlAvg = (v1.price + v2.price) / 2;
 
 		const gate = applyReversalGate({
 			candles,
@@ -463,7 +466,7 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 			continue;
 		}
 
-		const nlAvg = (Number(p1.price) + Number(p2.price)) / 2;
+		const nlAvg = (p1.price + p2.price) / 2;
 
 		const gate = applyReversalGate({
 			candles,
@@ -697,7 +700,7 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 			continue;
 		}
 
-		const nlAvg = (Number(v1.price) + Number(v2.price)) / 2;
+		const nlAvg = (v1.price + v2.price) / 2;
 
 		const gate = applyReversalGate({
 			candles,
@@ -757,7 +760,7 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 			retracementRatio: gate.retracementRatio,
 			durationScore: per,
 		});
-		const confidence = finalizeConf(base * 0.95, 'triple_top');
+		const confidence = finalizeConf(base * RELAXED_CONFIDENCE_PENALTY, 'triple_top');
 		if (confidence < (MIN_CONFIDENCE.triple_top ?? 0)) {
 			pcand({
 				type: 'triple_top',
@@ -924,7 +927,7 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 			continue;
 		}
 
-		const nlAvg = (Number(p1.price) + Number(p2.price)) / 2;
+		const nlAvg = (p1.price + p2.price) / 2;
 
 		const gate = applyReversalGate({
 			candles,
@@ -982,7 +985,7 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 			retracementRatio: gate.retracementRatio,
 			durationScore: per,
 		});
-		const confidence = finalizeConf(base * 0.95, 'triple_bottom');
+		const confidence = finalizeConf(base * RELAXED_CONFIDENCE_PENALTY, 'triple_bottom');
 		if (confidence < (MIN_CONFIDENCE.triple_bottom ?? 0)) {
 			pcand({
 				type: 'triple_bottom',
@@ -1603,7 +1606,7 @@ export function detectTriples(ctx: DetectContext): DetectResult {
 		if (wantTripleTop) patterns.push(...findStrictTripleTop(ctx));
 		if (wantTripleBottom) patterns.push(...findStrictTripleBottom(ctx));
 
-		for (const f of [1.25, 2.0]) {
+		for (const f of RELAXED_TOLERANCE_FACTORS) {
 			if (wantTripleTop && !patterns.some((p) => p.type === 'triple_top')) {
 				const relaxed = findRelaxedTripleTop(ctx, f);
 				if (relaxed) patterns.push(relaxed);
