@@ -97,7 +97,7 @@ if (isPrivateApiEnabled()) {
 	const { toolDef: getMarginStatus } = await import('../tools/private/get_margin_status.js');
 	const { toolDef: getMarginPositions } = await import('../tools/private/get_margin_positions.js');
 	const { toolDef: getMarginTradeHistory } = await import('../tools/private/get_margin_trade_history.js');
-	allToolDefs.push(
+	const privateToolDefs = [
 		getMyAssets,
 		getMyTradeHistory,
 		getMyOrders,
@@ -114,31 +114,15 @@ if (isPrivateApiEnabled()) {
 		getMarginStatus,
 		getMarginPositions,
 		getMarginTradeHistory,
-	);
+	];
+	allToolDefs.push(...privateToolDefs);
 	// 使用済み確認トークン / nonce は Private ツールでしか記録されないので、定期 purge は有効化と同じ場所で起動する。
 	startCleanupTimer();
 	startNonceCleanupTimer();
 	log('info', {
 		type: 'private_api',
 		message: 'Private API tools enabled',
-		tools: [
-			'get_my_assets',
-			'get_my_trade_history',
-			'get_my_orders',
-			'analyze_my_portfolio',
-			'get_my_deposit_withdrawal',
-			'preview_order',
-			'create_order',
-			'preview_cancel_order',
-			'cancel_order',
-			'preview_cancel_orders',
-			'cancel_orders',
-			'get_order',
-			'get_orders_info',
-			'get_margin_status',
-			'get_margin_positions',
-			'get_margin_trade_history',
-		],
+		tools: privateToolDefs.map((t) => t.name),
 	});
 } else {
 	log('info', { type: 'private_api', message: 'Private API tools disabled (no API key configured)' });
