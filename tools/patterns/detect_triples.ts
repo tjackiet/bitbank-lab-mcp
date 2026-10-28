@@ -6,6 +6,8 @@ import { clamp01, relDev } from './regression.js';
 import { applyPostBreakoutGates, applyReversalGate, buildStructureGate } from './reversal-gate.js';
 import { averageDefinedAxes, breakoutQualityScore, retracementScore } from './scoring.js';
 import {
+	buildPrecedingTrend,
+	findBreakoutIdx,
 	formingNecklineSideReason,
 	levelSpreadDetailsFrom,
 	levelSpreadMetrics,
@@ -28,23 +30,6 @@ import type {
 	PatternScoreBreakdown,
 } from './types.js';
 import { pushCand } from './types.js';
-
-function buildPrecedingTrend(
-	candles: CandleData[],
-	trend: PriorTrendResult,
-	startIdx: number,
-): PatternPrecedingTrend | undefined {
-	const startIso = candles[trend.priorStartIdx]?.isoTime;
-	const endIso = candles[startIdx]?.isoTime;
-	if (!startIso || !endIso) return undefined;
-	return {
-		start: startIso,
-		end: endIso,
-		direction: trend.classification,
-		returnPct: Number((trend.priorReturn * 100).toFixed(2)),
-		lookbackBars: trend.lookbackBars,
-	};
-}
 
 function validateTriplePriorTrend(
 	candles: CandleData[],
@@ -97,10 +82,6 @@ function stairStepDirection(main1: number, main2: number, main3: number): StairS
 	if (main1 > main2 && main2 > main3) return 'down';
 	return null;
 }
-// ネックラインブレイク判定（detect_doubles と同じ値）
-const BREAKOUT_BUFFER_PCT = 0.015;
-const MAX_BARS_FROM_EXTREMUM = 20;
-
 const RELAXED_TOLERANCE_FACTORS = [1.25, 2.0];
 const RELAXED_CONFIDENCE_PENALTY = 0.95;
 
@@ -116,22 +97,6 @@ function levelSpreadDetails(
 	levelTolerancePct: number,
 ): Record<string, unknown> {
 	return levelSpreadDetailsFrom(levelSpreadMetrics(mainPoints, allPoints), levelTolerancePct);
-}
-
-function findBreakoutIdx(
-	candles: CandleData[],
-	afterIdx: number,
-	necklinePrice: number,
-	direction: 'below' | 'above',
-): number {
-	const end = Math.min(afterIdx + MAX_BARS_FROM_EXTREMUM + 1, candles.length);
-	for (let k = afterIdx + 1; k < end; k++) {
-		const closeK = Number(candles[k]?.close ?? NaN);
-		if (!Number.isFinite(closeK)) continue;
-		if (direction === 'below' && closeK < necklinePrice * (1 - BREAKOUT_BUFFER_PCT)) return k;
-		if (direction === 'above' && closeK > necklinePrice * (1 + BREAKOUT_BUFFER_PCT)) return k;
-	}
-	return -1;
 }
 
 // double と違い symmetry ではなく levelMargin を残す。triple の symmetry はほぼ定数で情報が無い（#199）。

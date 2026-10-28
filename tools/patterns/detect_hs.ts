@@ -5,11 +5,12 @@ import { clamp01, relDev } from './regression.js';
 import { applyPostBreakoutGates, applyReversalGate, buildStructureGate } from './reversal-gate.js';
 import { averageDefinedAxes, breakoutQualityScore, retracementScore } from './scoring.js';
 import {
+	BREAKOUT_BUFFER_PCT,
+	buildPrecedingTrend,
 	HS_NECKLINE_MAX_PCT,
 	HS_SHOULDER_MAX_PCT,
 	isSameLevel,
 	necklineSideDetailsFromAt,
-	type PriorTrendResult,
 	type ReversalSide,
 	validateHorizontalNeckline,
 	validateMainPointsAgainstNecklineAt,
@@ -24,26 +25,8 @@ import type {
 	DetectContext,
 	DetectResult,
 	PatternConfirmation,
-	PatternPrecedingTrend,
 	PatternScoreBreakdown,
 } from './types.js';
-
-function buildPrecedingTrend(
-	candles: CandleData[],
-	trend: PriorTrendResult,
-	startIdx: number,
-): PatternPrecedingTrend | undefined {
-	const startIso = candles[trend.priorStartIdx]?.isoTime;
-	const endIso = candles[startIdx]?.isoTime;
-	if (!startIso || !endIso) return undefined;
-	return {
-		start: startIso,
-		end: endIso,
-		direction: trend.classification,
-		returnPct: Number((trend.priorReturn * 100).toFixed(2)),
-		lookbackBars: trend.lookbackBars,
-	};
-}
 
 const RELAXED_FACTORS = [
 	{ shoulder: 1.6, head: 0.6, tag: 'x1.6_0.6' },
@@ -127,8 +110,6 @@ function headIsExtremeInSpan(
 	);
 }
 
-// detect_doubles / detect_triples と同じ値にそろえている。
-const HS_BREAKOUT_BUFFER_PCT = 0.015;
 // aftermath.ts と同じ値。時間足別にしないことは #249 で確認済み。
 const HS_BREAKOUT_MAX_BARS = 30;
 
@@ -261,8 +242,8 @@ function findHsBreakoutIdx(
 		if (!Number.isFinite(closeK)) continue;
 		const nlPrice = necklineAt(neckline, k);
 		if (!Number.isFinite(nlPrice)) continue;
-		if (direction === 'below' && closeK < nlPrice * (1 - HS_BREAKOUT_BUFFER_PCT)) return k;
-		if (direction === 'above' && closeK > nlPrice * (1 + HS_BREAKOUT_BUFFER_PCT)) return k;
+		if (direction === 'below' && closeK < nlPrice * (1 - BREAKOUT_BUFFER_PCT)) return k;
+		if (direction === 'above' && closeK > nlPrice * (1 + BREAKOUT_BUFFER_PCT)) return k;
 	}
 	return -1;
 }
