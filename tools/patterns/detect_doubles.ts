@@ -299,19 +299,9 @@ function breakoutPathDetails(
 	};
 }
 
-function findRelaxedDoubleTop(
-	pivots: Pivot[],
-	candles: CandleData[],
-	tolerancePct: number,
-	factor: number,
-	minDist: number,
-	pcand: Pcand,
-	sizeThresholds: SizeThresholds,
-	tz: string | undefined,
-	type: string,
-	includeForming: boolean,
-	priorTrendParams: DetectContext['priorTrendParams'],
-): PatternEntry | null {
+function findRelaxedDoubleTop(ctx: DetectContext, factor: number): PatternEntry | null {
+	const { candles, pivots, tolerancePct, minDist, sizeThresholds, tz, type, includeForming, priorTrendParams } = ctx;
+	const pcand: Pcand = (arg) => pushCand(ctx, arg);
 	const tolRelax = tolerancePct * factor;
 	const lastIdx = candles.length - 1;
 	const nearRelaxed = (x: number, y: number) => Math.abs(x - y) <= Math.max(x, y) * tolRelax;
@@ -520,19 +510,9 @@ function findRelaxedDoubleTop(
 	return nonCompletedFallback;
 }
 
-function findRelaxedDoubleBottom(
-	pivots: Pivot[],
-	candles: CandleData[],
-	tolerancePct: number,
-	factor: number,
-	minDist: number,
-	pcand: Pcand,
-	sizeThresholds: SizeThresholds,
-	tz: string | undefined,
-	type: string,
-	includeForming: boolean,
-	priorTrendParams: DetectContext['priorTrendParams'],
-): PatternEntry | null {
+function findRelaxedDoubleBottom(ctx: DetectContext, factor: number): PatternEntry | null {
+	const { candles, pivots, tolerancePct, minDist, sizeThresholds, tz, type, includeForming, priorTrendParams } = ctx;
+	const pcand: Pcand = (arg) => pushCand(ctx, arg);
 	const tolRelax = tolerancePct * factor;
 	const lastIdx = candles.length - 1;
 	const nearRelaxed = (x: number, y: number) => Math.abs(x - y) <= Math.max(x, y) * tolRelax;
@@ -1143,38 +1123,14 @@ export function detectDoubles(ctx: DetectContext): DetectResult {
 			}
 		}
 		if (!foundDoubleTop && (want.size === 0 || want.has('double_top'))) {
-			const result = findRelaxedDoubleTop(
-				pivots,
-				candles,
-				tolerancePct,
-				RELAXED_TOLERANCE_FACTOR,
-				minDist,
-				pcand,
-				ctx.sizeThresholds,
-				ctx.tz,
-				ctx.type,
-				includeForming,
-				ctx.priorTrendParams,
-			);
+			const result = findRelaxedDoubleTop(ctx, RELAXED_TOLERANCE_FACTOR);
 			if (result) {
 				patterns.push(result);
 				foundDoubleTop = true;
 			}
 		}
 		if (!foundDoubleBottom && (want.size === 0 || want.has('double_bottom'))) {
-			const result = findRelaxedDoubleBottom(
-				pivots,
-				candles,
-				tolerancePct,
-				RELAXED_TOLERANCE_FACTOR,
-				minDist,
-				pcand,
-				ctx.sizeThresholds,
-				ctx.tz,
-				ctx.type,
-				includeForming,
-				ctx.priorTrendParams,
-			);
+			const result = findRelaxedDoubleBottom(ctx, RELAXED_TOLERANCE_FACTOR);
 			if (result) {
 				patterns.push(result);
 				foundDoubleBottom = true;

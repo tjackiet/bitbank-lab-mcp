@@ -32,14 +32,12 @@ import type {
 import { pushCand } from './types.js';
 
 function validateTriplePriorTrend(
-	candles: CandleData[],
-	startIdx: number,
-	endIdx: number,
+	ctx: DetectContext,
 	type: 'triple_top' | 'triple_bottom',
-	debugCandidates: DetectContext['debugCandidates'],
-	indices: number[],
-	priorTrendParams: DetectContext['priorTrendParams'],
+	indices: [number, number, number],
 ): { trend: PriorTrendResult; precedingTrend?: PatternPrecedingTrend } | null {
+	const { candles, debugCandidates, priorTrendParams } = ctx;
+	const [startIdx, , endIdx] = indices;
 	const expected = type === 'triple_top' ? 'up' : 'down';
 	const trend = validatePriorTrend(candles, startIdx, endIdx - startIdx, expected, priorTrendParams);
 	if (!trend.ok) {
@@ -216,15 +214,7 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 			});
 			continue;
 		}
-		const priorTrend = validateTriplePriorTrend(
-			candles,
-			a.idx,
-			c.idx,
-			'triple_top',
-			ctx.debugCandidates,
-			[a.idx, b.idx, c.idx],
-			ctx.priorTrendParams,
-		);
+		const priorTrend = validateTriplePriorTrend(ctx, 'triple_top', [a.idx, b.idx, c.idx]);
 		if (!priorTrend) continue;
 		if (rejectCompletedStairStep('triple_top', a, b, c, pcand)) continue;
 
@@ -435,15 +425,7 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 			});
 			continue;
 		}
-		const priorTrend = validateTriplePriorTrend(
-			candles,
-			a.idx,
-			c.idx,
-			'triple_bottom',
-			ctx.debugCandidates,
-			[a.idx, b.idx, c.idx],
-			ctx.priorTrendParams,
-		);
+		const priorTrend = validateTriplePriorTrend(ctx, 'triple_bottom', [a.idx, b.idx, c.idx]);
 		if (!priorTrend) continue;
 		if (rejectCompletedStairStep('triple_bottom', a, b, c, pcand)) continue;
 
@@ -657,15 +639,7 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 			});
 			continue;
 		}
-		const priorTrend = validateTriplePriorTrend(
-			candles,
-			a.idx,
-			c.idx,
-			'triple_top',
-			ctx.debugCandidates,
-			[a.idx, b.idx, c.idx],
-			ctx.priorTrendParams,
-		);
+		const priorTrend = validateTriplePriorTrend(ctx, 'triple_top', [a.idx, b.idx, c.idx]);
 		if (!priorTrend) continue;
 		if (rejectCompletedStairStep('triple_top', a, b, c, pcand)) continue;
 		const sizeReason = validatePatternSize('top', [a, v1, b, v2, c], ctx.sizeThresholds);
@@ -871,15 +845,7 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 			});
 			continue;
 		}
-		const priorTrend = validateTriplePriorTrend(
-			candles,
-			a.idx,
-			c.idx,
-			'triple_bottom',
-			ctx.debugCandidates,
-			[a.idx, b.idx, c.idx],
-			ctx.priorTrendParams,
-		);
+		const priorTrend = validateTriplePriorTrend(ctx, 'triple_bottom', [a.idx, b.idx, c.idx]);
 		if (!priorTrend) continue;
 		if (rejectCompletedStairStep('triple_bottom', a, b, c, pcand)) continue;
 		const sizeReason = validatePatternSize('bottom', [a, p1, b, p2, c], ctx.sizeThresholds);
@@ -1171,15 +1137,7 @@ function tryFormingTripleTop(ctx: DetectContext): DeduplicablePattern | null {
 			});
 			continue;
 		}
-		const priorTrend = validateTriplePriorTrend(
-			candles,
-			peak1.idx,
-			lastIdx,
-			'triple_top',
-			ctx.debugCandidates,
-			[peak1.idx, peak2.idx, lastIdx],
-			ctx.priorTrendParams,
-		);
+		const priorTrend = validateTriplePriorTrend(ctx, 'triple_top', [peak1.idx, peak2.idx, lastIdx]);
 		if (!priorTrend) continue;
 
 		// 谷は区間ごとに要求する。合計数だけ見ると、2 谷とも peak1-peak2 間にある H-L-L-H が通ってしまう。
@@ -1419,15 +1377,7 @@ function tryFormingTripleBottom(ctx: DetectContext): DeduplicablePattern | null 
 			});
 			continue;
 		}
-		const priorTrend = validateTriplePriorTrend(
-			candles,
-			valley1.idx,
-			lastIdx,
-			'triple_bottom',
-			ctx.debugCandidates,
-			[valley1.idx, valley2.idx, lastIdx],
-			ctx.priorTrendParams,
-		);
+		const priorTrend = validateTriplePriorTrend(ctx, 'triple_bottom', [valley1.idx, valley2.idx, lastIdx]);
 		if (!priorTrend) continue;
 
 		const progress = (currentPrice - avgValleyPrice) / Math.max(1e-12, avgPeakPrice - avgValleyPrice);
