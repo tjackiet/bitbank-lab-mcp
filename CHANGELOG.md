@@ -11,6 +11,10 @@
 - `.claude-plugin/marketplace.json` の plugin `source` を fork 固定の `{ "source": "github", "repo": "tjackiet/bitbank-lab-mcp" }` から相対パス `"./"` に変更。`bitbankinc/bitbank-lab-mcp` を marketplace として登録した場合も、plugin が fork ではなく登録元リポジトリ自身から解決されるようになった。あわせて同エントリと Claude Code / Cursor / Codex 向け plugin manifest の `homepage` / `repository`（Codex は `interface.websiteURL` も）を、README と npm（`package.json`）が案内する `bitbankinc/bitbank-lab-mcp` に揃えた。
 
 ### Security
+- `@modelcontextprotocol/server` を 2.0.0 から 2.4.0 に更新（HTTP トランスポートの high 脆弱性。本サーバーは stdio だけなので該当しないが、依存の監査を通すために上げる）。依存する `@modelcontextprotocol/core` も 2.4.0 になる。ツール・プロンプト・リソースの一覧とサーバーの capabilities は変わらない。
+- `body-parser` を 2.3.0 から 2.4.0 に更新（`@modelcontextprotocol/sdk` → `express` 経由の high 脆弱性。HTTP 経路だけ）。
+- `@hono/node-server` を 2.0.12 から 2.1.5 に更新（`@modelcontextprotocol/sdk` 経由の moderate 脆弱性。HTTP 経路だけ）。
+- `qs` を 6.16.0 から 6.16.1 に更新（`@modelcontextprotocol/sdk` → `express` 経由の moderate 脆弱性。HTTP 経路だけ）。
 - `fast-uri` を 3.1.6 から 3.1.9 に更新（`@modelcontextprotocol/sdk` → `ajv` 経由の high / moderate 脆弱性）。
 - `ip-address` を 10.4.0 から 10.7.4 に更新（`@modelcontextprotocol/sdk` → `express-rate-limit` 経由）。
 - `@modelcontextprotocol/sdk` を 1.30.0 から 1.32.1 に更新（OAuth クライアントの high 脆弱性）。
