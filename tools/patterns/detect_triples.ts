@@ -131,6 +131,43 @@ function buildTripleScore(opts: {
 	return { components, base };
 }
 
+function tripleCompletionFields(opts: {
+	isCompleted: boolean;
+	candles: CandleData[];
+	breakoutIdx: number;
+	breakoutPrice: number;
+	rangeEnd: string;
+	target: number;
+	direction: 'up' | 'down';
+	patternHeight: number;
+}) {
+	const { isCompleted, candles, breakoutIdx, breakoutPrice, rangeEnd, target, direction, patternHeight } = opts;
+	if (!isCompleted) {
+		return {
+			status: 'near_completion' as const,
+			confirmation: { type: 'not_confirmed' as const },
+			// 測れない理由を名乗る。breakoutTarget だけを出すと LLM が「進捗 0%」と読み違える（#224）。
+			...targetReachFields(omittedTargetReach('not_broken_out')),
+		};
+	}
+	return {
+		status: 'completed' as const,
+		confirmation: {
+			type: 'neckline_breakout' as const,
+			date: rangeEnd,
+			idx: breakoutIdx,
+			price: breakoutPrice,
+		},
+		breakout: { idx: breakoutIdx, price: breakoutPrice },
+		breakoutBarIndex: breakoutIdx,
+		// 入力不正は computeTargetReach が理由コードで名乗るので、ここで Number.isFinite を重ねない。
+		...targetReachFields(computeTargetReach(candles, breakoutIdx, breakoutPrice, target, direction, patternHeight)),
+		breakoutDate: rangeEnd,
+		breakoutDirection: direction,
+		outcome: 'success' as const,
+	};
+}
+
 function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 	const { candles, pivots, allValleys, tolerancePct, minDist, near } = ctx;
 	const pcand: Pcand = (arg) => pushCand(ctx, arg);
@@ -303,31 +340,16 @@ function findStrictTripleTop(ctx: DetectContext): DeduplicablePattern[] {
 		);
 		const ttAvgPeak = (a.price + b.price + c.price) / 3;
 		const ttTarget = Math.round(nlAvg - (ttAvgPeak - nlAvg));
-		const completionFields = isCompleted
-			? {
-					status: 'completed' as const,
-					confirmation: {
-						type: 'neckline_breakout' as const,
-						date: rangeEnd,
-						idx: breakoutIdx,
-						price: breakoutPrice,
-					},
-					breakout: { idx: breakoutIdx, price: breakoutPrice },
-					breakoutBarIndex: breakoutIdx,
-					// 入力不正は computeTargetReach が理由コードで名乗るので、ここで Number.isFinite を重ねない。
-					...targetReachFields(
-						computeTargetReach(candles, breakoutIdx, breakoutPrice, ttTarget, 'down', ttAvgPeak - nlAvg),
-					),
-					breakoutDate: rangeEnd,
-					breakoutDirection: 'down' as const,
-					outcome: 'success' as const,
-				}
-			: {
-					status: 'near_completion' as const,
-					confirmation: { type: 'not_confirmed' as const },
-					// 測れない理由を名乗る。breakoutTarget だけを出すと LLM が「進捗 0%」と読み違える（#224）。
-					...targetReachFields(omittedTargetReach('not_broken_out')),
-				};
+		const completionFields = tripleCompletionFields({
+			isCompleted,
+			candles,
+			breakoutIdx,
+			breakoutPrice,
+			rangeEnd,
+			target: ttTarget,
+			direction: 'down',
+			patternHeight: ttAvgPeak - nlAvg,
+		});
 
 		patterns.push({
 			type: 'triple_top',
@@ -535,29 +557,16 @@ function findStrictTripleBottom(ctx: DetectContext): DeduplicablePattern[] {
 		);
 		const tbAvgValley = (a.price + b.price + c.price) / 3;
 		const tbTarget = Math.round(nlAvg + (nlAvg - tbAvgValley));
-		const completionFields = isCompleted
-			? {
-					status: 'completed' as const,
-					confirmation: {
-						type: 'neckline_breakout' as const,
-						date: rangeEnd,
-						idx: breakoutIdx,
-						price: breakoutPrice,
-					},
-					breakout: { idx: breakoutIdx, price: breakoutPrice },
-					breakoutBarIndex: breakoutIdx,
-					...targetReachFields(
-						computeTargetReach(candles, breakoutIdx, breakoutPrice, tbTarget, 'up', nlAvg - tbAvgValley),
-					),
-					breakoutDate: rangeEnd,
-					breakoutDirection: 'up' as const,
-					outcome: 'success' as const,
-				}
-			: {
-					status: 'near_completion' as const,
-					confirmation: { type: 'not_confirmed' as const },
-					...targetReachFields(omittedTargetReach('not_broken_out')),
-				};
+		const completionFields = tripleCompletionFields({
+			isCompleted,
+			candles,
+			breakoutIdx,
+			breakoutPrice,
+			rangeEnd,
+			target: tbTarget,
+			direction: 'up',
+			patternHeight: nlAvg - tbAvgValley,
+		});
 
 		patterns.push({
 			type: 'triple_bottom',
@@ -771,29 +780,16 @@ function findRelaxedTripleTop(ctx: DetectContext, factor: number): DeduplicableP
 		);
 		const ttRelAvgPeak = (a.price + b.price + c.price) / 3;
 		const ttRelTarget = Math.round(nlAvg - (ttRelAvgPeak - nlAvg));
-		const completionFields = isCompleted
-			? {
-					status: 'completed' as const,
-					confirmation: {
-						type: 'neckline_breakout' as const,
-						date: rangeEnd,
-						idx: breakoutIdx,
-						price: breakoutPrice,
-					},
-					breakout: { idx: breakoutIdx, price: breakoutPrice },
-					breakoutBarIndex: breakoutIdx,
-					...targetReachFields(
-						computeTargetReach(candles, breakoutIdx, breakoutPrice, ttRelTarget, 'down', ttRelAvgPeak - nlAvg),
-					),
-					breakoutDate: rangeEnd,
-					breakoutDirection: 'down' as const,
-					outcome: 'success' as const,
-				}
-			: {
-					status: 'near_completion' as const,
-					confirmation: { type: 'not_confirmed' as const },
-					...targetReachFields(omittedTargetReach('not_broken_out')),
-				};
+		const completionFields = tripleCompletionFields({
+			isCompleted,
+			candles,
+			breakoutIdx,
+			breakoutPrice,
+			rangeEnd,
+			target: ttRelTarget,
+			direction: 'down',
+			patternHeight: ttRelAvgPeak - nlAvg,
+		});
 		const entry: DeduplicablePattern = {
 			type: 'triple_top',
 			confidence,
@@ -996,29 +992,16 @@ function findRelaxedTripleBottom(ctx: DetectContext, factor: number): Deduplicab
 		);
 		const tbRelAvgValley = (a.price + b.price + c.price) / 3;
 		const tbRelTarget = Math.round(nlAvg + (nlAvg - tbRelAvgValley));
-		const completionFields = isCompleted
-			? {
-					status: 'completed' as const,
-					confirmation: {
-						type: 'neckline_breakout' as const,
-						date: rangeEnd,
-						idx: breakoutIdx,
-						price: breakoutPrice,
-					},
-					breakout: { idx: breakoutIdx, price: breakoutPrice },
-					breakoutBarIndex: breakoutIdx,
-					...targetReachFields(
-						computeTargetReach(candles, breakoutIdx, breakoutPrice, tbRelTarget, 'up', nlAvg - tbRelAvgValley),
-					),
-					breakoutDate: rangeEnd,
-					breakoutDirection: 'up' as const,
-					outcome: 'success' as const,
-				}
-			: {
-					status: 'near_completion' as const,
-					confirmation: { type: 'not_confirmed' as const },
-					...targetReachFields(omittedTargetReach('not_broken_out')),
-				};
+		const completionFields = tripleCompletionFields({
+			isCompleted,
+			candles,
+			breakoutIdx,
+			breakoutPrice,
+			rangeEnd,
+			target: tbRelTarget,
+			direction: 'up',
+			patternHeight: nlAvg - tbRelAvgValley,
+		});
 		const entry: DeduplicablePattern = {
 			type: 'triple_bottom',
 			confidence,
