@@ -1,5 +1,6 @@
 import { linearRegressionWithR2 } from './regression.js';
 import type { Pivot } from './swing.js';
+import type { CandleData, PatternPrecedingTrend } from './types.js';
 
 // 変えると validateLevelDiff に届く spreadRatio の上限（min(tolerancePct, 本定数) / depthPct）も動く。
 export const DOUBLE_LEVEL_MAX_PCT = 0.03;
@@ -146,6 +147,23 @@ export function validatePriorTrend(
 	}
 
 	return result(classification, { rangePct, efficiency, r2 });
+}
+
+export function buildPrecedingTrend(
+	candles: CandleData[],
+	trend: PriorTrendResult,
+	startIdx: number,
+): PatternPrecedingTrend | undefined {
+	const startIso = candles[trend.priorStartIdx]?.isoTime;
+	const endIso = candles[startIdx]?.isoTime;
+	if (!startIso || !endIso) return undefined;
+	return {
+		start: startIso,
+		end: endIso,
+		direction: trend.classification,
+		returnPct: Number((trend.priorReturn * 100).toFixed(2)),
+		lookbackBars: trend.lookbackBars,
+	};
 }
 
 // 構造ゲートの値幅は Pivot.price ではなく extremePrice で測る。price の意味が検出器ごとに違うため（#128）。
@@ -394,6 +412,25 @@ export function findPriorExtreme(pivots: ReadonlyArray<Pivot>, beforeIdx: number
 		if (p.kind === kind) found = p;
 	}
 	return found;
+}
+
+export const BREAKOUT_BUFFER_PCT = 0.015;
+export const MAX_BARS_FROM_EXTREMUM = 20;
+
+export function findBreakoutIdx(
+	candles: CandleData[],
+	afterIdx: number,
+	necklinePrice: number,
+	direction: 'below' | 'above',
+): number {
+	const end = Math.min(afterIdx + MAX_BARS_FROM_EXTREMUM + 1, candles.length);
+	for (let k = afterIdx + 1; k < end; k++) {
+		const closeK = Number(candles[k]?.close ?? NaN);
+		if (!Number.isFinite(closeK)) continue;
+		if (direction === 'below' && closeK < necklinePrice * (1 - BREAKOUT_BUFFER_PCT)) return k;
+		if (direction === 'above' && closeK > necklinePrice * (1 + BREAKOUT_BUFFER_PCT)) return k;
+	}
+	return -1;
 }
 
 export interface NecklineCrossResult {

@@ -4,15 +4,17 @@ import { clamp01, relDev } from './regression.js';
 import { averageDefinedAxes, breakoutQualityScore, retracementScore } from './scoring.js';
 import {
 	type BreakoutPathRejectReason,
+	buildPrecedingTrend,
 	DOUBLE_LEVEL_MAX_PCT,
 	detectPivotBeforeBreakout,
 	detectTroughZoneReentry,
+	findBreakoutIdx,
 	isSameLevel,
 	levelSpreadDetailsFrom,
 	levelSpreadMetrics,
+	MAX_BARS_FROM_EXTREMUM,
 	necklineSideDetailsFrom,
 	type PatternSizeRejectReason,
-	type PriorTrendResult,
 	type ReversalSide,
 	type ReversalStructureResult,
 	type SizeThresholds,
@@ -29,53 +31,17 @@ import {
 	type DetectResult,
 	type PatternConfirmation,
 	type PatternEntry,
-	type PatternPrecedingTrend,
 	type PatternScoreBreakdown,
 	type PatternStructureGate,
 	pushCand,
 } from './types.js';
 
-const BREAKOUT_BUFFER_PCT = 0.015;
-const MAX_BARS_FROM_EXTREMUM = 20;
 const RELAXED_TOLERANCE_FACTOR = 1.3;
 const RELAXED_CONFIDENCE_PENALTY = 0.85;
 // findBreakoutIdx が突破を探す窓と同じ長さにする。過ぎた候補は以後 completed にならないため（#126）。
 const FORMING_EXPIRY_BARS = MAX_BARS_FROM_EXTREMUM;
 
 type Pcand = (arg: Parameters<typeof pushCand>[1]) => void;
-
-function findBreakoutIdx(
-	candles: CandleData[],
-	afterIdx: number,
-	necklinePrice: number,
-	direction: 'below' | 'above',
-): number {
-	const end = Math.min(afterIdx + MAX_BARS_FROM_EXTREMUM + 1, candles.length);
-	for (let k = afterIdx + 1; k < end; k++) {
-		const closeK = Number(candles[k]?.close ?? NaN);
-		if (!Number.isFinite(closeK)) continue;
-		if (direction === 'below' && closeK < necklinePrice * (1 - BREAKOUT_BUFFER_PCT)) return k;
-		if (direction === 'above' && closeK > necklinePrice * (1 + BREAKOUT_BUFFER_PCT)) return k;
-	}
-	return -1;
-}
-
-function buildPrecedingTrend(
-	candles: CandleData[],
-	trend: PriorTrendResult,
-	startIdx: number,
-): PatternPrecedingTrend | undefined {
-	const startIso = candles[trend.priorStartIdx]?.isoTime;
-	const endIso = candles[startIdx]?.isoTime;
-	if (!startIso || !endIso) return undefined;
-	return {
-		start: startIso,
-		end: endIso,
-		direction: trend.classification,
-		returnPct: Number((trend.priorReturn * 100).toFixed(2)),
-		lookbackBars: trend.lookbackBars,
-	};
-}
 
 function buildNecklineConfirmation(candles: CandleData[], breakoutIdx: number): PatternConfirmation | undefined {
 	const date = candles[breakoutIdx]?.isoTime;
