@@ -185,6 +185,7 @@ export interface DepositWithdrawalSummary {
 	staking_reward_count?: number;
 	staking_reward_estimated_jpy?: number;
 	staking_reward_valuation?: FlowValuationBreakdown;
+	unpriced_flow_assets?: string[];
 }
 
 export interface PeriodDWSummary {
@@ -199,6 +200,9 @@ export interface PeriodDWSummary {
 	period_end: string;
 	crypto_deposit_valuation?: FlowValuationBreakdown;
 	crypto_withdrawal_valuation?: FlowValuationBreakdown;
+	staking_reward_count?: number;
+	staking_reward_estimated_jpy?: number;
+	staking_reward_valuation?: FlowValuationBreakdown;
 }
 
 export interface PeriodPerformance {
@@ -228,6 +232,7 @@ export interface PeriodPerformance {
 	change_jpy_overstated?: boolean;
 	/** change_jpy_overstated と同時に true にはならない（両端から落ちる構成では向きが確定しないので立てない）。 */
 	change_jpy_understated?: boolean;
+	negative_start_assets?: string[];
 }
 
 export interface CandlePriceData {

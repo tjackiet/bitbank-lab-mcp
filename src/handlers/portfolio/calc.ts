@@ -110,6 +110,16 @@ function parseTradeForReplay(t: RawTrade): ParsedTrade | null {
 	return { qty, price, feeQuote: Number(t.fee_amount_quote) || 0, feeBase: Number(t.fee_amount_base) || 0 };
 }
 
+// 同時刻なら入庫を約定より先に処理する。後にすると入庫と同時刻の売りが原価ゼロの売りになる（issue 448）。
+const REPLAY_EVENT_ORDER = { deposit: 0, trade: 1, withdrawal: 2 } as const;
+
+function compareReplayEvents(
+	a: { ts: number; type: keyof typeof REPLAY_EVENT_ORDER },
+	b: { ts: number; type: keyof typeof REPLAY_EVENT_ORDER },
+): number {
+	return a.ts - b.ts || REPLAY_EVENT_ORDER[a.type] - REPLAY_EVENT_ORDER[b.type];
+}
+
 function applyDeposit(h: CostBasis, qty: number, cost: number): void {
 	h.cost += cost;
 	h.costQty += qty;
@@ -199,7 +209,7 @@ export function calcPnl(
 				amount: Number(w.amount) + (Number(w.fee) || 0), // 出庫量 + 出庫手数料 = 口座から減った総量
 			}),
 		),
-	].sort((a, b) => a.ts - b.ts);
+	].sort(compareReplayEvents);
 
 	// costQty はゼロ床でクランプし、netQty はしない（#89）。costQty を代数和にすると次の買いで平均単価の分母が縮み、実現損益と原価が動く。
 	// netQty の負値は取得漏れの証拠なので握り潰さない（#89）。
@@ -354,7 +364,7 @@ export function calcPeriodRealizedPnl(
 		if (!Number.isFinite(wdQty) || wdQty <= 0) continue;
 		events.push({ type: 'withdrawal', ts: w.requested_at, asset: w.asset, amount: wdQty });
 	}
-	events.sort((a, b) => a.ts - b.ts);
+	events.sort(compareReplayEvents);
 
 	// costQty は calcPnl と同じくゼロ床でクランプする。復元数量は出す先が無いので netQty は持たない（クランプの発火だけは申告する。#89）。
 	const holdings = new Map<string, CostBasis>();
@@ -610,11 +620,16 @@ export function calcDepositWithdrawalSummary(
 	let stakingEstimatedJpy = 0;
 	let hasStakingEstimate = false;
 	const stakingValuation = new FlowValuationCounter();
+	// ステーキング報酬は入庫からも報酬からも同じく落ちて純投入額はずれないので、元本の入出庫だけを数える。
+	const unpricedFlowAssets = new Set<string>();
 	for (const d of cryptoDeposits) {
 		const amount = Number(d.amount);
 		if (!Number.isFinite(amount) || amount <= 0) continue;
 		const resolved = resolveFlowPrice(pricing, d.asset, d.confirmed_at);
-		if (!resolved) continue;
+		if (!resolved) {
+			if (!isStakingReward(d)) unpricedFlowAssets.add(d.asset);
+			continue;
+		}
 		cryptoDepositEstimatedJpy += amount * resolved.price;
 		depositValuation.count(resolved.basis);
 		hasEstimate = true;
@@ -633,7 +648,10 @@ export function calcDepositWithdrawalSummary(
 		const amount = Number(w.amount);
 		if (!Number.isFinite(amount) || amount <= 0) continue;
 		const resolved = resolveFlowPrice(pricing, w.asset, w.requested_at);
-		if (!resolved) continue;
+		if (!resolved) {
+			unpricedFlowAssets.add(w.asset);
+			continue;
+		}
 		cryptoWithdrawalEstimatedJpy += amount * resolved.price;
 		withdrawalValuation.count(resolved.basis);
 		hasWithdrawalEstimate = true;
@@ -647,7 +665,8 @@ export function calcDepositWithdrawalSummary(
 
 	let accountReturnPct: number | undefined;
 	let accountReturnJpy: number | undefined;
-	if (netJpyInvested > 0) {
+	// 換算できない入出庫を落とした純投入額では、リターンがその額だけずれる。
+	if (netJpyInvested > 0 && unpricedFlowAssets.size === 0) {
 		accountReturnJpy = Math.round(totalJpyValue - netJpyInvested);
 		accountReturnPct = Math.round(((totalJpyValue - netJpyInvested) / netJpyInvested) * 10000) / 100;
 	}
@@ -666,6 +685,7 @@ export function calcDepositWithdrawalSummary(
 		analysis_basis: 'deposit_withdrawal',
 	};
 	// 該当なしのときはキーごと省き、暗号資産入出庫が無い口座の出力を従来と JSON 一致させる。
+	if (unpricedFlowAssets.size > 0) summary.unpriced_flow_assets = [...unpricedFlowAssets].sort();
 	if (stakingCount > 0) summary.staking_reward_count = stakingCount;
 	if (hasStakingEstimate) summary.staking_reward_estimated_jpy = Math.round(stakingEstimatedJpy);
 	const stakingBreakdown = stakingValuation.toBreakdown();
@@ -696,6 +716,10 @@ export function calcPeriodDWSummary(
 	let cryptoDepJpy = 0;
 	let hasDepEstimate = false;
 	const depValuation = new FlowValuationCounter();
+	const stakingCount = cryptoDep.filter(isStakingReward).length;
+	let stakingJpy = 0;
+	let hasStakingEstimate = false;
+	const stakingValuation = new FlowValuationCounter();
 	for (const d of cryptoDep) {
 		const amount = Number(d.amount);
 		if (!Number.isFinite(amount) || amount <= 0) continue;
@@ -704,6 +728,11 @@ export function calcPeriodDWSummary(
 		cryptoDepJpy += amount * resolved.price;
 		depValuation.count(resolved.basis);
 		hasDepEstimate = true;
+		if (isStakingReward(d)) {
+			stakingJpy += amount * resolved.price;
+			stakingValuation.count(resolved.basis);
+			hasStakingEstimate = true;
+		}
 	}
 
 	const cryptoWd = completedWithdrawals.filter((w) => w.asset !== 'jpy');
@@ -735,6 +764,10 @@ export function calcPeriodDWSummary(
 	if (depBreakdown) summary.crypto_deposit_valuation = depBreakdown;
 	const wdBreakdown = wdValuation.toBreakdown();
 	if (wdBreakdown) summary.crypto_withdrawal_valuation = wdBreakdown;
+	if (stakingCount > 0) summary.staking_reward_count = stakingCount;
+	if (hasStakingEstimate) summary.staking_reward_estimated_jpy = Math.round(stakingJpy);
+	const stakingBreakdown = stakingValuation.toBreakdown();
+	if (stakingBreakdown) summary.staking_reward_valuation = stakingBreakdown;
 	return summary;
 }
 
@@ -762,6 +795,19 @@ export function reconstructHoldingsAtDate(
 	sinceMs: number,
 	dw: DepositWithdrawalData | null,
 ): Map<string, number> {
+	return reconstructHoldingsWithNegatives(currentHoldings, trades, sinceMs, dw).holdings;
+}
+
+// amount_precision の最小単位（8 桁）より細かい負値は、浮動小数点の誤差として負とみなさない。
+const NEGATIVE_BALANCE_EPSILON = 1e-8;
+
+// 負の残高は履歴の欠落の証拠なので、評価からは外しつつ資産名を返す（issue 448）。
+export function reconstructHoldingsWithNegatives(
+	currentHoldings: Array<{ asset: string; amount: string }>,
+	trades: RawTrade[],
+	sinceMs: number,
+	dw: DepositWithdrawalData | null,
+): { holdings: Map<string, number>; negativeAssets: string[] } {
 	const holdings = new Map<string, number>();
 	for (const h of currentHoldings) {
 		const amount = Number(h.amount);
@@ -810,11 +856,13 @@ export function reconstructHoldingsAtDate(
 		}
 	}
 
+	const negativeAssets: string[] = [];
 	for (const [asset, amount] of holdings) {
+		if (amount < -NEGATIVE_BALANCE_EPSILON) negativeAssets.push(asset);
 		if (amount < 1e-12) holdings.delete(asset);
 	}
 
-	return holdings;
+	return { holdings, negativeAssets: negativeAssets.sort() };
 }
 
 export function calcPortfolioValue(holdings: Map<string, number>, priceMap: Map<string, number>): number {
@@ -1043,9 +1091,9 @@ export function calcPeriodNetFlow(
 	if (unpricedAssets.size > 0) result.unpriced_assets = [...unpricedAssets].sort();
 	const breakdown = valuation.toBreakdown();
 	if (breakdown) result.valuation = breakdown;
-	// 1 件でも換算できなければ額は出さない。部分集合の合計を確定値として出さない。
+	// 通常の入出庫と同じく、換算できた分の部分合計を出し、換算できない資産名を併記する（issue 448）。
 	if (unpricedStakingAssets.size > 0) result.staking_reward_unpriced_assets = [...unpricedStakingAssets].sort();
-	else if (stakingCount > 0) result.staking_reward_jpy = Math.round(stakingReward);
+	if (stakingCount > 0) result.staking_reward_jpy = Math.round(stakingReward);
 	return result;
 }
 
@@ -1170,7 +1218,12 @@ function performanceNote(reason: PortfolioChangePctUnavailableReason | undefined
 
 // 出力フィールド順・桁丸めは JSON.stringify の結果を変えないよう旧実装とそろえている。後から足したフィールドは既存キーの後ろに置く。
 export function buildPeriodPerformance(spec: PeriodSpec, ctx: PortfolioPerformanceContext): PeriodPerformance {
-	const startHoldings = reconstructHoldingsAtDate(ctx.currentHoldings, ctx.trades, spec.startMs, ctx.dwData);
+	const { holdings: startHoldings, negativeAssets } = reconstructHoldingsWithNegatives(
+		ctx.currentHoldings,
+		ctx.trades,
+		spec.startMs,
+		ctx.dwData,
+	);
 	const priceMap = new Map<string, number>();
 	for (const [asset, pp] of ctx.candlePriceData.boundaryPrices) {
 		const v = pickBoundaryPrice(spec.key, pp);
@@ -1225,5 +1278,6 @@ export function buildPeriodPerformance(spec: PeriodSpec, ctx: PortfolioPerforman
 	// 起点は率の抑止と同じ unpricedStart。別条件にすると率と増減額の申告が食い違う。
 	if (changeOverstated) performance.change_jpy_overstated = true;
 	if (changeUnderstated) performance.change_jpy_understated = true;
+	if (negativeAssets.length > 0) performance.negative_start_assets = negativeAssets;
 	return performance;
 }

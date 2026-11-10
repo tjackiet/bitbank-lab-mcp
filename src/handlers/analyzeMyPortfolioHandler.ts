@@ -31,6 +31,7 @@ import {
 	dominantUnresolvedDepositReason,
 	flowUnavailableReasonFor,
 	getJstPeriodBoundaries,
+	isStakingReward,
 	MIN_START_VALUE_RATIO,
 	type PeriodPerformanceKey,
 	type PeriodSpec,
@@ -282,6 +283,11 @@ function buildPerformanceLines(label: string, p: PeriodPerformance): string[] {
 			`  ※ 上の現在評価額は過小: ${p.unpriced_current_assets.map((a) => a.toUpperCase()).join(', ')} の現在価格を解決できず含めていません${understatedNote}`,
 		);
 	}
+	if (p.negative_start_assets && p.negative_start_assets.length > 0) {
+		lines.push(
+			`  ※ 期初の保有を巻き戻すと ${p.negative_start_assets.map((a) => a.toUpperCase()).join(', ')} の残高が負になりました（約定・入出金の履歴が欠けている可能性）。負の残高は 0 として期初評価額から外しているため、期初評価額と増減額は実態とずれている可能性があります`,
+		);
+	}
 
 	// flow_measured=false のとき 3 フィールドはすべて null。型の絞り込みも兼ねて null で分岐する。
 	if (p.net_flow_jpy == null || p.withdrawal_fee_jpy == null || p.adjusted_change_jpy == null) {
@@ -304,12 +310,11 @@ function buildPerformanceLines(label: string, p: PeriodPerformance): string[] {
 		}
 	}
 	if (p.staking_reward_jpy != null) {
+		const unpricedNote = p.staking_reward_unpriced_assets
+			? `。${p.staking_reward_unpriced_assets.map((a) => a.toUpperCase()).join(', ')} の報酬は入庫日の価格も現在価格も解決できず含めていません（保有中なら現在評価額にも含まれておらず、増減にも入っていない可能性があります）`
+			: '';
 		lines.push(
-			`  ステーキング報酬: +${formatYenAmount(p.staking_reward_jpy)}（入庫日の価格で換算し、取得できない分は現在価格で仮評価。元本ではなく成果として増減に含む）`,
-		);
-	} else if (p.staking_reward_unpriced_assets) {
-		lines.push(
-			`  ステーキング報酬: ${p.staking_reward_unpriced_assets.map((a) => a.toUpperCase()).join(', ')} の入庫日の価格も現在価格も解決できず額を出せません（保有中なら現在評価額にも含まれておらず、増減にも入っていない可能性があります）`,
+			`  ステーキング報酬: +${formatYenAmount(p.staking_reward_jpy)}（入庫日の価格で換算し、取得できない分は現在価格で仮評価。元本ではなく成果として増減に含む${unpricedNote}）`,
 		);
 	}
 	return lines;
@@ -453,6 +458,10 @@ function periodDWLine(label: '年初来' | '月初来', d: PeriodDWSummary): str
 		parts.push(
 			`暗号資産入庫 ${d.crypto_deposit_count}件${d.crypto_deposit_estimated_jpy ? `（概算 ${formatYenAmount(d.crypto_deposit_estimated_jpy)}）` : ''}`,
 		);
+	if (d.staking_reward_count != null)
+		parts.push(
+			`うちステーキング報酬 ${d.staking_reward_count}件${d.staking_reward_estimated_jpy ? `（概算 ${formatYenAmount(d.staking_reward_estimated_jpy)}、元本ではなく成果）` : ''}`,
+		);
 	if (d.crypto_withdrawal_count > 0)
 		parts.push(
 			`暗号資産出庫 ${d.crypto_withdrawal_count}件${d.crypto_withdrawal_estimated_jpy ? `（概算 ${formatYenAmount(d.crypto_withdrawal_estimated_jpy)}）` : ''}`,
@@ -521,65 +530,76 @@ function buildAccountReturnLines(dwSummary: DepositWithdrawalSummary): string[] 
 		return `  ステーキング報酬 ${count}件（暗号資産入庫の内数）: ${amount}${unvalued}。${treatment}`;
 	};
 
-	if (dwSummary.account_return_jpy != null) {
-		const sign = dwSummary.account_return_jpy >= 0 ? '+' : '';
-		const approxLabel = dwSummary.is_complete ? '' : '（概算）';
-		lines.push(
-			`口座全体リターン${approxLabel}: ${sign}${formatYenAmount(dwSummary.account_return_jpy)} (${formatPercent(dwSummary.account_return_pct, { sign: true })})`,
-		);
-		lines.push(`  JPY入金合計: ${formatYenAmount(dwSummary.total_jpy_deposited)}`);
+	const breakdownLines = (returnShown: boolean): string[] => {
+		const out: string[] = [];
+		out.push(`  JPY入金合計: ${formatYenAmount(dwSummary.total_jpy_deposited)}`);
 		if (dwSummary.total_jpy_withdrawn > 0) {
-			lines.push(`  JPY出金合計: ${formatYenAmount(dwSummary.total_jpy_withdrawn)}`);
+			out.push(`  JPY出金合計: ${formatYenAmount(dwSummary.total_jpy_withdrawn)}`);
 		}
 		const netJpyDeposit = dwSummary.total_jpy_deposited - dwSummary.total_jpy_withdrawn;
-		lines.push(`  JPY純入金: ${formatYenAmount(Math.round(netJpyDeposit))}`);
+		out.push(`  JPY純入金: ${formatYenAmount(Math.round(netJpyDeposit))}`);
 		if (dwSummary.crypto_deposit_estimated_jpy) {
-			lines.push(
+			out.push(
 				`  暗号資産入庫の評価: ${formatYenAmount(dwSummary.crypto_deposit_estimated_jpy)}（${valuedDepositCount}件、${FLOW_VALUATION_LABEL[dwSummary.crypto_deposit_valuation?.basis ?? 'current_price_fallback']}）`,
 			);
 		}
 		if (dwSummary.crypto_withdrawal_estimated_jpy) {
-			lines.push(
+			out.push(
 				`  暗号資産出庫の評価: -${formatYenAmount(dwSummary.crypto_withdrawal_estimated_jpy)}（${valuedWithdrawalCount}件、${FLOW_VALUATION_LABEL[dwSummary.crypto_withdrawal_valuation?.basis ?? 'current_price_fallback']}）`,
 			);
 		}
-		const stakingLine = stakingRewardLine(true);
-		if (stakingLine) lines.push(stakingLine);
+		const stakingLine = stakingRewardLine(returnShown);
+		if (stakingLine) out.push(stakingLine);
 		// 内訳の式は実際に載っている項だけを並べる（0 円の項を書くと読み手が総額を追えない）。
 		const netInvestedTerms = [
 			dwSummary.crypto_deposit_estimated_jpy ? '+ 暗号資産入庫の評価額' : '',
 			dwSummary.staking_reward_estimated_jpy ? '- ステーキング報酬の評価額' : '',
 			dwSummary.crypto_withdrawal_estimated_jpy ? '- 暗号資産出庫の評価額' : '',
 		].filter(Boolean);
-		lines.push(
+		out.push(
 			`  純投入額: ${formatYenAmount(dwSummary.net_jpy_invested)}${netInvestedTerms.length > 0 ? `（JPY純入金 ${netInvestedTerms.join(' ')}）` : ''}`,
 		);
 		if (!dwSummary.is_complete) {
-			lines.push('  ※ 入出金履歴が多く全件取得できなかったため、概算値です');
+			out.push('  ※ 入出金履歴が多く全件取得できなかったため、概算値です');
 		}
 		if (unvaluedDepositCount > 0) {
-			lines.push(`  ※ 暗号資産入庫 ${unvaluedDepositCount}件の価格が取得できず評価額に含まれていません`);
+			out.push(`  ※ 暗号資産入庫 ${unvaluedDepositCount}件の価格が取得できず評価額に含まれていません`);
 		}
 		const depositFallbackCount = dwSummary.crypto_deposit_valuation?.current_price_fallback_count ?? 0;
 		if (depositFallbackCount > 0) {
-			lines.push(
+			out.push(
 				`  ※ うち ${depositFallbackCount}件は入庫日の価格を取得できず現在価格で仮評価（この分だけ相場変動で評価額が動きます）`,
 			);
 		}
 		if (unvaluedWithdrawalCount > 0) {
-			lines.push(`  ※ 暗号資産出庫 ${unvaluedWithdrawalCount}件は評価額を算出できず純投入額に反映されていません`);
+			out.push(`  ※ 暗号資産出庫 ${unvaluedWithdrawalCount}件は評価額を算出できず純投入額に反映されていません`);
 		}
 		const withdrawalFallbackCount = dwSummary.crypto_withdrawal_valuation?.current_price_fallback_count ?? 0;
 		if (withdrawalFallbackCount > 0) {
-			lines.push(
+			out.push(
 				`  ※ うち ${withdrawalFallbackCount}件は出庫日の価格を取得できず現在価格で仮評価（この分だけ相場変動で評価額が動きます）`,
 			);
 		}
 		if (valuedWithdrawalCount > 0) {
-			lines.push(
+			out.push(
 				`  ※ 暗号資産出庫 ${valuedWithdrawalCount}件は JPY 出金と同じ「元本の回収」として純投入額から差し引いています（外部ウォレットへ移して保有を続けている場合でも、口座外の値動きは測定対象外です）`,
 			);
 		}
+		return out;
+	};
+
+	if (dwSummary.account_return_jpy != null) {
+		const sign = dwSummary.account_return_jpy >= 0 ? '+' : '';
+		const approxLabel = dwSummary.is_complete ? '' : '（概算）';
+		lines.push(
+			`口座全体リターン${approxLabel}: ${sign}${formatYenAmount(dwSummary.account_return_jpy)} (${formatPercent(dwSummary.account_return_pct, { sign: true })})`,
+		);
+		lines.push(...breakdownLines(true));
+	} else if (dwSummary.unpriced_flow_assets) {
+		lines.push(
+			`口座全体リターン: 算出不可（${dwSummary.unpriced_flow_assets.map((a) => a.toUpperCase()).join(', ')} の入出庫を入出庫日の価格でも現在価格でも JPY 換算できず、純投入額から漏れているため。漏れた分だけリターンがずれます）`,
+		);
+		lines.push(...breakdownLines(false));
 	} else if (dwSummary.net_jpy_invested <= 0) {
 		// 黙ってブロックごと消すと「計算されたのに表示されていない」と読まれるので、出せない理由を 1 行で出す。
 		const withdrawalCause =
@@ -658,6 +678,13 @@ function buildAccountPnlLines(input: {
 	return lines;
 }
 
+// 報酬は受取時の評価額を取得原価に入れるので、売却しても保有を続けても報酬額は損益に現れない（issue 448）。
+const STAKING_REWARD_PNL_NOTE =
+	'※ ステーキング報酬の受取時の評価額は実現損益・評価損益に含めず、staking_reward_estimated_jpy（全期間）/ staking_reward_jpy（期間別）に別建てで出しています（報酬は受取時の評価額を取得原価に入れるため、売却時の実現損益は受取時からの差額だけになります）。所得として数えるときは、報酬の評価額と実現損益を足して読んでください';
+
+const COST_METHOD_NOTE =
+	'※ 取得原価・実現損益は移動平均法で算出しています。総平均法（税務署に届出が無い場合の既定）で申告する場合、実現損益と取得原価はこの値と一致しません';
+
 function buildCostNoteLines(input: {
 	flowUnavailableReason: PortfolioFlowUnavailableReason | undefined;
 	totalUnrealizedPnl: number | undefined;
@@ -667,6 +694,8 @@ function buildCostNoteLines(input: {
 	unpricedDepositLabel: string;
 	suppressedRealizedLabel: string;
 	qtyClampLabel: string;
+	pnlIncluded: boolean;
+	hasStakingRewards: boolean;
 }): string[] {
 	const {
 		flowUnavailableReason,
@@ -677,6 +706,8 @@ function buildCostNoteLines(input: {
 		unpricedDepositLabel,
 		suppressedRealizedLabel,
 		qtyClampLabel,
+		pnlIncluded,
+		hasStakingRewards,
 	} = input;
 	const lines: string[] = [];
 	if (flowUnavailableReason != null) {
@@ -692,6 +723,12 @@ function buildCostNoteLines(input: {
 		lines.push(
 			'※ 評価損益は全履歴の約定・暗号資産入出庫から移動平均法で算出した取得原価ベース。暗号資産入庫は入庫日（confirmed_at）の始値で取得したとみなして原価に算入（真の取得原価ではなく入庫時点の相場という仮定）。入庫日の価格を取得できなかった入庫は原価に算入しないため、その分だけ取得原価は過小になります（復元数量が実残高と乖離した銘柄は取得原価を出しません）',
 		);
+	}
+	if (pnlIncluded && hasStakingRewards) {
+		lines.push(STAKING_REWARD_PNL_NOTE);
+	}
+	if (pnlIncluded) {
+		lines.push(COST_METHOD_NOTE);
 	}
 	if (qtyMismatchAssets.length > 0) {
 		lines.push(
@@ -1419,6 +1456,8 @@ export default async function analyzeMyPortfolioHandler(args: {
 				unpricedDepositLabel,
 				suppressedRealizedLabel,
 				qtyClampLabel,
+				pnlIncluded: accountPnl != null,
+				hasStakingRewards: dwData?.deposits.some((d) => d.status === 'DONE' && isStakingReward(d)) ?? false,
 			}),
 		);
 		lines.push('');

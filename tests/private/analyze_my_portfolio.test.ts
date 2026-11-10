@@ -1608,6 +1608,35 @@ describe('analyze_my_portfolio — 入出金取得の include_pnl 紐づけ', ()
 		expect(result.summary).toContain(`ステーキング報酬: +${reward.toLocaleString('ja-JP')}円`);
 		expect(result.summary).toContain('ステーキング報酬 1件（暗号資産入庫の内数）');
 		expect(result.summary).toContain('リターンに含めています');
+		// 期間の入出金サマリーにも報酬を内訳として出す（issue 448 項目 1）
+		const monthlyDw = requireDefined(result.data.monthly_dw_summary, 'result.data.monthly_dw_summary');
+		expect(monthlyDw.staking_reward_count).toBe(1);
+		expect(monthlyDw.staking_reward_estimated_jpy).toBe(reward);
+		expect(result.summary).toContain(
+			`うちステーキング報酬 1件（概算 ${reward.toLocaleString('ja-JP')}円、元本ではなく成果）`,
+		);
+		// 報酬は損益に含まれず別建てであること、移動平均法と総平均法の違いを注記する（issue 448 項目 3・7）
+		expect(result.summary).toContain('※ ステーキング報酬の受取時の評価額は実現損益・評価損益に含めず');
+		expect(result.summary).toContain(
+			'総平均法（税務署に届出が無い場合の既定）で申告する場合、実現損益と取得原価はこの値と一致しません',
+		);
+	});
+
+	it('ステーキング報酬が無い口座には報酬の注記を出さず、取得原価の評価方法の注記は出す（issue 448）', async () => {
+		setupFetchMock();
+		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
+		const result = await handler({ include_technical: false, include_pnl: true, include_deposit_withdrawal: true });
+		assertOk(result);
+		expect(result.summary).not.toContain('ステーキング報酬の受取時の評価額');
+		expect(result.summary).toContain('※ 取得原価・実現損益は移動平均法で算出しています');
+	});
+
+	it('include_pnl=false では取得原価の評価方法の注記を出さない', async () => {
+		setupFetchMock();
+		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
+		const result = await handler({ include_technical: false, include_pnl: false, include_deposit_withdrawal: false });
+		assertOk(result);
+		expect(result.summary).not.toContain('移動平均法で算出しています');
 	});
 
 	it('口座全体リターンを算出できない（純投入額が 0）ときも、ステーキング報酬の行を出す', async () => {
@@ -2655,6 +2684,13 @@ describe('analyze_my_portfolio — 入出庫日価格での評価', () => {
 			);
 			expect(result.summary).not.toContain('暗号資産出庫 2件は JPY 出金と同じ');
 			expect(result.summary).toContain('※ 暗号資産出庫 1件は評価額を算出できず純投入額に反映されていません');
+			// 換算できない出庫が純投入額から漏れるので、口座全体リターンは出さない（issue 448 項目 2）
+			expect(dw?.unpriced_flow_assets).toEqual(['mona']);
+			expect(dw?.account_return_jpy).toBeUndefined();
+			expect(dw?.account_return_pct).toBeUndefined();
+			expect(result.summary).toContain(
+				'口座全体リターン: 算出不可（MONA の入出庫を入出庫日の価格でも現在価格でも JPY 換算できず、純投入額から漏れているため',
+			);
 		});
 	});
 
@@ -2730,7 +2766,10 @@ describe('analyze_my_portfolio — 入出庫日価格での評価', () => {
 		expect(perfKeys.indexOf('note')).toBeLessThan(perfKeys.indexOf('flow_valuation'));
 		// このフィクスチャの tickers は btc_jpy しか返さないので ETH / XRP が現在評価額から落ち、unpriced_current_assets が実際に出る。
 		expect(perfKeys.indexOf('flow_valuation')).toBeLessThan(perfKeys.indexOf('unpriced_current_assets'));
-		expect(perfKeys.at(-1)).toBe('change_jpy_understated');
+		// 当日の BTC 入庫が現在の保有より多いので、巻き戻すと期初の BTC が負になり negative_start_assets が末尾に出る（issue 448）。
+		expect(perfKeys.indexOf('change_jpy_understated')).toBeLessThan(perfKeys.indexOf('negative_start_assets'));
+		expect(perfKeys.at(-1)).toBe('negative_start_assets');
+		expect(result.summary).toContain('※ 期初の保有を巻き戻すと BTC の残高が負になりました');
 
 		const periodKeys = Object.keys(result.data.yearly_dw_summary ?? {});
 		expect(periodKeys.indexOf('period_end')).toBeLessThan(periodKeys.indexOf('crypto_deposit_valuation'));

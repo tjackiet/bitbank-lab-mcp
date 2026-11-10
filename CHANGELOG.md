@@ -7,7 +7,20 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `analyze_my_portfolio`：期間別の純入出金で、ステーキング報酬に換算できない分があると報酬の額（`staking_reward_jpy`）を出していなかった。通常の入出庫（`net_flow_jpy`）と同じく、換算できた分の部分合計を出し、換算できない資産名を `staking_reward_unpriced_assets` に併記する（issue #448）。
+- `analyze_my_portfolio`：同じ時刻の約定と入出庫は、入庫 → 約定 → 出庫の順で処理する。入庫と同時刻の売りが、原価ゼロの売りとして実現損益を過大に出していた（issue #448）。
+
+### Added
+
+- `analyze_my_portfolio`：期間の入出金サマリー（`yearly_dw_summary` / `monthly_dw_summary`）に、ステーキング報酬の `staking_reward_count` / `staking_reward_estimated_jpy` / `staking_reward_valuation` を追加。期間サマリーだけを読むと報酬を元本の入庫として数えていた（issue #448）。
+- `analyze_my_portfolio`：期初の保有を巻き戻して残高が負になった資産を `*_performance.negative_start_assets` に出し、本文にも注記する。履歴の欠落の証拠なのに、黙って 0 にして期初評価額から外していた（issue #448）。
+- `analyze_my_portfolio`：ステーキング報酬の受取時の評価額は実現損益・評価損益に含めず `staking_reward_*` に別建てで出していること（所得として数えるときは足して読む）と、取得原価・実現損益は移動平均法で、総平均法（届出が無い場合の既定）で申告するとこの値と一致しないことを、本文とスキーマに注記する（issue #448）。
+
 ### Fixed
+
+- `analyze_my_portfolio`：全期間の入出金サマリーで、入出庫日の価格でも現在価格でも換算できない暗号資産の入出庫を、純投入額から黙って落としていた（JPY 入金 10 万円と換算できない入庫 1 件、評価額 30 万円で `account_return_pct` +200%）。資産名を `deposit_withdrawal_summary.unpriced_flow_assets` に出し、その場合は `account_return_pct` / `account_return_jpy` を出さない。ステーキング報酬は換算できなくても純投入額はずれないので数えない（issue #448）。
 
 - `analyze_my_portfolio`：現物の約定履歴の取得が打ち切られると（件数上限・途中の API エラー）、欠けるのは直近の約定なのに、期間成績（`yearly` / `monthly` / `daily`）は欠けた約定を巻き戻さないまま確定値を出していた。期間中の売買が無かったことになり、`start_value_jpy` / `change_jpy` / `change_pct` がずれる（期間中に 800 万円で 1 BTC を買った月が「+0 円 / 0%」になる）。打ち切り時は `change_pct_unavailable_reason=trades_truncated` を付けて率を出さず、増減額も成績として読まないよう本文とスキーマに書く。どの期間も現在で終わるので、取得済みの最後の約定が期間開始より前でも同じ扱いにする。資産推移シリーズにも同じ申告を出す（issue #447）。
 

@@ -3261,6 +3261,8 @@ describe('buildPeriodPerformance', () => {
 		const result = buildPeriodPerformance({ key: 'yearly', startMs: 1000, startIso: 's' }, ctx);
 		expect(result.unpriced_flow_assets).toEqual(['doge']);
 		expect(result.net_flow_jpy).toBe(0);
+		// 入庫した DOGE を現在保有していないので、巻き戻すと期初が負になる（履歴の欠落として申告される）
+		expect(result.negative_start_assets).toEqual(['doge']);
 		// 追加キーは末尾。既存キーの並びは変わらない
 		expect(Object.keys(result)).toEqual([
 			'start_value_jpy',
@@ -3276,6 +3278,7 @@ describe('buildPeriodPerformance', () => {
 			'note',
 			'flow_measured',
 			'unpriced_flow_assets',
+			'negative_start_assets',
 		]);
 	});
 

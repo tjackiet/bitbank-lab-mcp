@@ -265,7 +265,7 @@ const HoldingPnlSchema = z.object({
 		.number()
 		.optional()
 		.describe(
-			'取得原価合計（JPY）。全履歴の約定に加え、暗号資産入庫を入庫日（confirmed_at）の 1day 始値 × 数量で算入し、暗号資産出庫を平均単価で按分減少させた移動平均法ベース。入庫ぶんは「入庫時点の相場で取得した」という仮定であり真の取得原価ではない。入庫日の始値を解決できなかった入庫は算入しないので、unpriced_deposit_count が 0 でない銘柄では本値はその分だけ過小',
+			'取得原価合計（JPY）。全履歴の約定に加え、暗号資産入庫を入庫日（confirmed_at）の 1day 始値 × 数量で算入し、暗号資産出庫を平均単価で按分減少させた移動平均法ベース。入庫ぶんは「入庫時点の相場で取得した」という仮定であり真の取得原価ではない。入庫日の始値を解決できなかった入庫は算入しないので、unpriced_deposit_count が 0 でない銘柄では本値はその分だけ過小。ステーキング報酬も受取時の評価額で原価に入るので、報酬の評価額は実現損益・評価損益に現れない（別建ては staking_reward_*）。総平均法（税務署に届出が無い場合の既定）で申告する場合、取得原価と実現損益はこの値と一致しない',
 		),
 	unrealized_pnl: z.number().optional().describe('評価損益（JPY）'),
 	unrealized_pnl_pct: z.number().optional().describe('評価損益率（%）'),
@@ -412,6 +412,12 @@ const DepositWithdrawalSummarySchema = z
 		staking_reward_valuation: FlowValuationSchema.optional().describe(
 			'staking_reward_estimated_jpy の換算方式の内訳。ステーキング報酬が無い / 全件で価格を解決できなかった場合は undefined',
 		),
+		unpriced_flow_assets: z
+			.array(z.string())
+			.optional()
+			.describe(
+				'入出庫日の価格でも現在価格でも JPY 換算できなかった暗号資産の入出庫（ステーキング報酬を除く）の資産シンボル一覧（小文字・昇順）。該当する入出庫は crypto_*_estimated_jpy と net_jpy_invested から漏れているので、設定されているときは account_return_pct / account_return_jpy を出さない（漏れた分だけリターンがずれるため）。ステーキング報酬は入庫の換算額からも報酬の額からも同じく漏れて純投入額はずれないので数えない。資産名のみ出し金額は出さない。該当なしは undefined',
+			),
 	})
 	.optional()
 	.describe(
@@ -440,6 +446,22 @@ const PeriodDWSummarySchema = z
 		),
 		crypto_withdrawal_valuation: FlowValuationSchema.optional().describe(
 			'crypto_withdrawal_estimated_jpy の換算方式の内訳。該当なしのときは undefined',
+		),
+		staking_reward_count: z
+			.number()
+			.int()
+			.optional()
+			.describe(
+				'crypto_deposit_count のうち期間中のステーキング報酬（入金種別 STAKING）の件数。0 件のときは undefined',
+			),
+		staking_reward_estimated_jpy: z
+			.number()
+			.optional()
+			.describe(
+				'crypto_deposit_estimated_jpy のうち期間中のステーキング報酬の分（価格を解決できた報酬だけの合計）。報酬は元本ではなく成果なので、元本の入庫として読むときはこの額を除く（*_performance.staking_reward_jpy と同じ額）。ステーキング報酬が無い / 全件で価格を解決できなかった場合は undefined',
+			),
+		staking_reward_valuation: FlowValuationSchema.optional().describe(
+			'staking_reward_estimated_jpy の換算方式の内訳。該当なしのときは undefined',
 		),
 	})
 	.optional()
@@ -590,13 +612,13 @@ const PeriodPerformanceSchema = z
 			.number()
 			.optional()
 			.describe(
-				'期間中に入庫したステーキング報酬（入金種別 STAKING の DONE 入庫）の JPY 換算額。入庫日（confirmed_at）の 1day open で換算し、日次価格を解決できなかった分のみ現在価格で仮評価する。net_flow_jpy には含めず、adjusted_change_jpy の内数（報酬を受け取った後の値動きは含まない）。期間中にステーキング報酬が無い場合、純入出金が未計測の場合、1 件でも換算できなかった場合（資産名は staking_reward_unpriced_assets）は undefined。税務上の所得額の確定値ではない',
+				'期間中に入庫したステーキング報酬（入金種別 STAKING の DONE 入庫）の JPY 換算額。入庫日（confirmed_at）の 1day open で換算し、日次価格を解決できなかった分のみ現在価格で仮評価する。net_flow_jpy には含めず、adjusted_change_jpy の内数（報酬を受け取った後の値動きは含まない）。換算できなかった報酬があるときは、net_flow_jpy と同じく換算できた分だけの部分合計を出し、資産名を staking_reward_unpriced_assets に併記する（issue #448）。期間中にステーキング報酬が無い場合と純入出金が未計測の場合は undefined。報酬の受取時の評価額は実現損益・評価損益には含まれないので、所得として数えるときは実現損益と足して読む。税務上の所得額の確定値ではない',
 			),
 		staking_reward_unpriced_assets: z
 			.array(z.string())
 			.optional()
 			.describe(
-				'ステーキング報酬を入庫日価格・現在価格のいずれでも換算できなかった暗号資産シンボル一覧（小文字・昇順）。この場合 staking_reward_jpy は出さない。報酬は net_flow_jpy に入らないので純入出金はずれない。ただし現在価格も無いので、保有中なら current_value_jpy からも抜けており（unpriced_current_assets に載る）、その分 change_jpy / adjusted_change_jpy に報酬が入っていない。該当なしは undefined',
+				'ステーキング報酬を入庫日価格・現在価格のいずれでも換算できなかった暗号資産シンボル一覧（小文字・昇順）。この場合 staking_reward_jpy は換算できた分だけの部分合計になる。報酬は net_flow_jpy に入らないので純入出金はずれない。ただし現在価格も無いので、保有中なら current_value_jpy からも抜けており（unpriced_current_assets に載る）、その分 change_jpy / adjusted_change_jpy に報酬が入っていない。該当なしは undefined',
 			),
 		unpriced_start_assets: z
 			.array(z.string())
@@ -624,6 +646,12 @@ const PeriodPerformanceSchema = z
 			.optional()
 			.describe(
 				'change_jpy / adjusted_change_jpy が**過小**であることの申告（#109。change_jpy_overstated の対称形）。true になるのは change_pct_unavailable_reason=current_value_unpriced のうち、現在 ticker 価格を解決できず current_value_jpy から脱落した資産（資産名は unpriced_current_assets）が**期初評価額には正しく載っている**場合だけで、脱落した現在評価額がそのまま増減額の過小分になる。期初の始値も解決できず期初評価額からも落ちる保有があると（unpriced_start_assets）その資産の値動きが両端に入らずずれの向きが確定しないため本フラグは付かない（その構成では理由コードが start_boundary_unpriced になる）。**フラグが無いことは「増減額が正しい」の意味ではない**——unpriced_current_assets がある期間の増減額は、向きが確定するかによらず運用成績として読めない。change_jpy_overstated と同時に true になることは無い（片方が立つのは他方の欠損が無いときだけ）。値を null にせず出したうえでフラグを立てる理由は change_jpy_overstated と同じ（両端の評価額から消費者が再計算できるので、null 化は契約を壊すだけで隠蔽にならない）。該当しない場合は undefined（false は返さない）',
+			),
+		negative_start_assets: z
+			.array(z.string())
+			.optional()
+			.describe(
+				'現在の保有から期間中の約定・入出金を巻き戻したとき、残高が負になった資産のシンボル一覧（小文字・昇順。jpy を含みうる）。負の残高は履歴の欠落（取得できなかった約定・入出金、販売所の取引など）の証拠で、該当資産は 0 として期初評価額から外している。そのため start_value_jpy / change_jpy は実態とずれている可能性がある（ずれの向きは欠けた履歴による）。資産名のみ出し数量は出さない。該当なしは undefined',
 			),
 	})
 	.optional();
@@ -696,7 +724,7 @@ export const AnalyzeMyPortfolioDataSchema = z.object({
 		.number()
 		.optional()
 		.describe(
-			'合計実現損益（JPY、全履歴・全銘柄 = 現在保有中の銘柄 + 売り切り銘柄）。現物単独で、信用の決済損益・利息・手数料は含まない（それらを含む口座全体は account_pnl）。account_pnl.spot_realized_pnl と同値。0 のときは undefined。恒久的に価格を解決できない入庫（上場前・当日足の欠損）で原価に算入できなかった分がある銘柄は除外せず含めるため、該当があると本値は過大側にずれる（銘柄名と件数は meta.warnings / summary の警告行、銘柄別の件数は holdings[].unpriced_deposit_count）。一方 total_realized_pnl_unavailable_reason が載る実行では**本値は undefined**——抑止した銘柄を含めても除いても口座の実現損益にはならないため、部分和を確定値として出さない',
+			'合計実現損益（JPY、全履歴・全銘柄 = 現在保有中の銘柄 + 売り切り銘柄）。現物単独で、信用の決済損益・利息・手数料は含まない（それらを含む口座全体は account_pnl）。account_pnl.spot_realized_pnl と同値。0 のときは undefined。恒久的に価格を解決できない入庫（上場前・当日足の欠損）で原価に算入できなかった分がある銘柄は除外せず含めるため、該当があると本値は過大側にずれる（銘柄名と件数は meta.warnings / summary の警告行、銘柄別の件数は holdings[].unpriced_deposit_count）。一方 total_realized_pnl_unavailable_reason が載る実行では**本値は undefined**——抑止した銘柄を含めても除いても口座の実現損益にはならないため、部分和を確定値として出さない。移動平均法で算出しており、総平均法（税務署に届出が無い場合の既定）で申告する場合はこの値と一致しない。ステーキング報酬の受取時の評価額は含まない（staking_reward_* に別建て）',
 		),
 	closed_position_realized_pnl: z
 		.number()
