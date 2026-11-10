@@ -98,8 +98,9 @@ export default async function previewOrder(args: {
 	const warnings: string[] = [];
 	// 手数料見積りでも spec を使うため try の外に保持する（pairs を二重 fetch しない）。
 	let spec: PairSpec | undefined;
-	// 板を跨ぐかの判定用。pairs の取得・検証と並行して取りに行き、待ち時間を重ねない（fetchPairTicker は失敗時に null を返し reject しない）。
-	const tickerPromise = type === 'limit' && !post_only && price ? fetchPairTicker(pair) : null;
+	// 板を跨ぐかの判定は見積りの精度のためだけなので、再試行せず短く切り、pairs の取得と並行して取りに行く（失敗時は null で reject しない）。
+	const tickerPromise =
+		type === 'limit' && !post_only && price ? fetchPairTicker(pair, { timeoutMs: 2500, retries: 0 }) : null;
 	try {
 		const pairsMap = await fetchPairsSpec();
 		spec = pairsMap.get(pair.toLowerCase());
@@ -126,6 +127,9 @@ export default async function previewOrder(args: {
 			return PreviewOrderOutputSchema.parse(fail(triggerError, 'validation_error'));
 		}
 	}
+
+	// 確認トークンの有効期限を待ち時間で食わないよう、トークンを作る前に待ち終える。
+	const crossesBook = tickerPromise && price ? limitCrossesBook(await tickerPromise, side, Number(price)) : undefined;
 
 	const tokenParams: Record<string, unknown> = { pair, amount, side, type };
 	if (price) tokenParams.price = price;
@@ -166,7 +170,6 @@ export default async function previewOrder(args: {
 		lines.push('  Post Only: 有効');
 	}
 
-	const crossesBook = tickerPromise && price ? limitCrossesBook(await tickerPromise, side, Number(price)) : undefined;
 	// spec の取得に失敗していたら undefined のまま渡し、estimateOrderFee 側で公称 taker による概算にフォールバックさせる。
 	const feeEstimate = estimateOrderFee(spec, {
 		type,

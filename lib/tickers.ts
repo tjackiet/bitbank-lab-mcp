@@ -49,10 +49,13 @@ export interface PairTicker {
 }
 
 // 取得失敗・応答不正は null。呼び出し側は検証や見積りを「判定できない」として続行する。
-export async function fetchPairTicker(pair: string): Promise<PairTicker | null> {
+export async function fetchPairTicker(
+	pair: string,
+	options: { timeoutMs?: number; retries?: number } = {},
+): Promise<PairTicker | null> {
 	try {
 		const url = `${BITBANK_API_BASE}/${pair}/ticker`;
-		const json = (await fetchJson(url, { timeoutMs: 5000 })) as {
+		const json = (await fetchJson(url, { timeoutMs: options.timeoutMs ?? 5000, retries: options.retries })) as {
 			success?: number;
 			data?: { last?: string; sell?: string; buy?: string };
 		};

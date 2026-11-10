@@ -1127,6 +1127,34 @@ describe('preview_order', () => {
 			expect(fee?.note).toContain('maker 想定（板を跨ぐと taker）');
 		});
 
+		it('/ticker が 429（Retry-After: 30）でも待たずに maker 想定で返す（確認トークンの有効期限を食わない）', async () => {
+			const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+				const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : String(input);
+				if (url.includes('/spot/pairs')) {
+					return new Response(JSON.stringify(mockSpotPairsResponse()), { status: 200 });
+				}
+				if (url.includes('/ticker')) {
+					return new Response('rate limited', { status: 429, headers: { 'Retry-After': '30' } });
+				}
+				return new Response(JSON.stringify({ success: 1, data: {} }), { status: 200 });
+			});
+			globalThis.fetch = fetchMock as unknown as typeof fetch;
+			const { default: previewOrder } = await import('../../tools/private/preview_order.js');
+			const startedAt = Date.now();
+			const result = await previewOrder({
+				pair: 'btc_jpy',
+				amount: '0.01',
+				side: 'buy',
+				type: 'limit',
+				price: '15000000',
+			});
+			assertOk(result);
+			expect(Date.now() - startedAt).toBeLessThan(3000);
+			expect(result.data.preview.fee_estimate?.role).toBe('maker');
+			const tickerCalls = fetchMock.mock.calls.filter(([u]) => String(u).includes('/ticker'));
+			expect(tickerCalls).toHaveLength(1);
+		});
+
 		it('/ticker の取得に失敗したら従来どおり maker で見積る', async () => {
 			installTickerMock(null);
 			const { default: previewOrder } = await import('../../tools/private/preview_order.js');
