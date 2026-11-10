@@ -3,7 +3,7 @@ import type { BitbankPrivateClient } from '../../private/client.js';
 import { type RawDeposit, type RawWithdrawal, tryGet } from './types.js';
 
 export const MAX_PAGES = 10;
-// 入出金履歴は公式上限 100（POST /v1/user/{deposit,withdrawal}_history）。
+// 入出金履歴は公式上限 100（GET /v1/user/{deposit,withdrawal}_history）。
 const DW_PAGE_SIZE = 100;
 
 export interface PaginatedDeposits<T extends RawDeposit = RawDeposit> {

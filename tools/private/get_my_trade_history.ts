@@ -1,16 +1,13 @@
 import { nowIso, parseIso8601, toIsoMs } from '../../lib/datetime.js';
 import { formatPair, formatPrice, formatYenExact } from '../../lib/formatter.js';
-import { isJpyQuotedPair, normalizePairCodes } from '../../lib/pair-code.js';
+import { isJpyQuotedPair } from '../../lib/pair-code.js';
 import { fail, ok } from '../../lib/result.js';
-import { paginateTrades } from '../../src/handlers/portfolio/fetch.js';
 import type { RawTrade } from '../../src/handlers/portfolio/types.js';
 import { getDefaultClient } from '../../src/private/client.js';
 import { GetMyTradeHistoryInputSchema, GetMyTradeHistoryOutputSchema } from '../../src/private/schemas.js';
 import { failPrivateToolError } from '../../src/private/tool-error.js';
+import { fetchFilteredTradeHistory, mixedHistoryNote, scanBoundaryIso } from '../../src/private/trade-history.js';
 import type { ToolDefinition } from '../../src/tool-definition.js';
-
-// `paginateTrades` 内の `TRADE_PAGE_SIZE` と同値（bitbank API の 1 リクエスト上限）。
-const PAGE_SIZE = 1000;
 
 // 現物の手数料は売買とも quote 建て。base 建てが非ゼロのときだけ併記する。
 function spotFeeInfo(t: { pair: string; fee_amount_quote: string; fee_amount_base: string }): string {
@@ -56,26 +53,14 @@ export default async function getMyTradeHistory(args: {
 			baseParams.end = String(parsed.valueOf());
 		}
 
-		let rawTrades: RawTrade[];
-		let isComplete: boolean;
-
-		if (count <= PAGE_SIZE) {
-			const params = { ...baseParams, count: String(count), order };
-			const rawData = await client.get<{ trades: RawTrade[] }>(
-				'/v1/user/spot/trade_history',
-				Object.keys(params).length > 0 ? params : undefined,
-			);
-			// 下の JPY 判定（`t.pair.includes('jpy')`）が価格フォーマットを決めるので、単発経路でも取得境界で正規化する（ページネーション経路は paginateTrades 側で正規化済み）。
-			const rawBatch = normalizePairCodes(rawData.trades ?? []);
-			// 信用約定（position_side 付き）の混入を防御的に除外（paginateTrades と対称）。
-			rawTrades = rawBatch.filter((t) => t.position_side == null);
-			// isComplete はフィルタ前の API レスポンス件数で判定する（フィルタ後だと信用比率が高いときに全件取得済みと誤判定する）。
-			isComplete = rawBatch.length < count;
-		} else {
-			const result = await paginateTrades(client, { baseParams, order, limit: count });
-			rawTrades = result.trades;
-			isComplete = !result.truncated;
-		}
+		const fetched = await fetchFilteredTradeHistory<RawTrade>(client, {
+			baseParams,
+			order,
+			limit: count,
+			keep: (t) => t.position_side == null,
+		});
+		const rawTrades = fetched.trades;
+		const isComplete = fetched.isComplete;
 
 		const timestamp = nowIso();
 
@@ -102,6 +87,8 @@ export default async function getMyTradeHistory(args: {
 		if (!isComplete) {
 			lines.push('※ 全件ではなく一部のみ取得されています。API件数上限に達した可能性があります');
 		}
+		const mixedNote = mixedHistoryNote(fetched, { kept: '現物', excluded: '信用', order, limit: count });
+		if (mixedNote) lines.push(mixedNote);
 
 		if (trades.length > 0) {
 			lines.push('');
@@ -138,6 +125,7 @@ export default async function getMyTradeHistory(args: {
 			tradeCount: trades.length,
 			pair: pair || undefined,
 			isComplete,
+			scanBoundary: scanBoundaryIso(fetched),
 			...(client.lastRateLimit ? { rateLimit: client.lastRateLimit } : {}),
 		};
 

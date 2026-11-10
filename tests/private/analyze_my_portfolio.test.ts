@@ -26,13 +26,13 @@ function assetFixture(asset: string) {
 }
 
 /**
- * onhand を既定の約定・出庫履歴から復元される数量に揃えた assets（btc: 0.01 − fee 0.00001 − 売 0.005 = 0.00499、eth: 1.0 − fee 0.001 = 0.999）。
+ * onhand を既定の約定・出庫履歴から復元される数量に揃えた assets（btc: 買 0.01 − 売 0.005 = 0.005、eth: 買 1.0。現物の手数料は円建てなので数量は減らない）。
  * rawAssetsResponse のままだと数量不変条件で原価が抑止される。xrp は約定履歴が無く常に乖離するので含めない。
  */
 const consistentAssetsResponse = {
 	assets: [
-		{ ...assetFixture('btc'), free_amount: '0.00499', onhand_amount: '0.00499', locked_amount: '0' },
-		{ ...assetFixture('eth'), free_amount: '0.999', onhand_amount: '0.999' },
+		{ ...assetFixture('btc'), free_amount: '0.005', onhand_amount: '0.005', locked_amount: '0' },
+		{ ...assetFixture('eth'), free_amount: '1.0', onhand_amount: '1.0' },
 		assetFixture('jpy'),
 		assetFixture('doge'),
 	],
@@ -74,14 +74,28 @@ afterEach(() => {
 	delete process.env.BITBANK_API_KEY;
 	delete process.env.BITBANK_API_SECRET;
 	vi.resetModules();
+	vi.doUnmock('../../src/handlers/portfolio/fetch.js');
 });
+
+// 現物と信用は同じ一覧を取るので、片方だけの打ち切りや失敗は片方の要求だけが一時的に失敗したときに限られる。片方の取得を差し替えてその状態を作る。
+function stubTradeFetcher(
+	stub:
+		| { paginateTrades: { trades: unknown[]; truncated: boolean } }
+		| { paginateMarginTrades: { trades: unknown[]; truncated: boolean; fetchFailed: boolean } },
+) {
+	vi.doMock('../../src/handlers/portfolio/fetch.js', async (importOriginal) => {
+		const actual = await importOriginal<typeof import('../../src/handlers/portfolio/fetch.js')>();
+		const [name, result] = Object.entries(stub)[0];
+		return { ...actual, [name]: async () => result };
+	});
+}
 
 function setupFetchMock(opts?: {
 	assets?: unknown;
 	assetsFail?: boolean;
 	trades?: unknown;
-	tradesFail?: boolean;
-	marginTradesFail?: boolean;
+	/** 約定履歴 API は現物と信用で同じなので、失敗させると現物と信用の両方の取得が失敗する。 */
+	tradeHistoryFail?: boolean;
 	dwFail?: boolean;
 	/** 出庫チャネルだけを失敗させ、入庫データは残したまま dw_fetch_failed を再現する（#93）。 */
 	withdrawalsFail?: boolean;
@@ -149,21 +163,15 @@ function setupFetchMock(opts?: {
 			return new Response(JSON.stringify(mockBitbankSuccess(payload)), { status: 200 });
 		}
 
+		// 約定履歴 API は現物と信用を混ぜて返し、分けるパラメータが無いので、現物の取得も信用の取得も同じ一覧を受け取る。
 		if (urlStr.includes('trade_history')) {
-			const isMargin = urlStr.includes('type=margin');
-			if (isMargin) {
-				if (opts?.marginTradesFail) {
-					return new Response(JSON.stringify(mockBitbankError(10007)), { status: 200 });
-				}
-				const marginPayload = opts?.marginTrades ?? { trades: [] };
-				return new Response(JSON.stringify(mockBitbankSuccess(marginPayload)), { status: 200 });
-			}
-			if (opts?.tradesFail) {
+			if (opts?.tradeHistoryFail) {
 				return new Response(JSON.stringify(mockBitbankError(10007)), { status: 200 });
 			}
-			return new Response(JSON.stringify(mockBitbankSuccess(opts?.trades ?? rawTradeHistoryResponse)), {
-				status: 200,
-			});
+			const spot = ((opts?.trades ?? rawTradeHistoryResponse) as { trades: Array<{ executed_at: number }> }).trades;
+			const margin = ((opts?.marginTrades ?? { trades: [] }) as { trades: Array<{ executed_at: number }> }).trades;
+			const trades = [...spot, ...margin].sort((a, b) => a.executed_at - b.executed_at);
+			return new Response(JSON.stringify(mockBitbankSuccess({ trades })), { status: 200 });
 		}
 
 		if (urlStr.includes('deposit_history')) {
@@ -333,7 +341,7 @@ describe('analyze_my_portfolio', () => {
 	});
 
 	it('信用約定レスポンスに現物 (position_side 欠損) が混入しても margin_fee は信用のみから集計', async () => {
-		// type=margin が API に無視されて現物約定が混ざった場合の防御。現物の fee_occurred_amount_quote は margin_fee に加算されない。
+		// 約定履歴 API は現物と信用を混ぜて返す。現物の fee_occurred_amount_quote は margin_fee に加算されない。
 		const mixedMargin = {
 			trades: [
 				// 信用決済: PL=5000, interest=30, fee=155 → これらだけが集計対象
@@ -364,7 +372,7 @@ describe('analyze_my_portfolio', () => {
 					amount: '0.01',
 					price: '15000000',
 					maker_taker: 'maker',
-					fee_amount_base: '0.00001',
+					fee_amount_base: '0',
 					fee_amount_quote: '9999',
 					fee_occurred_amount_quote: '9999',
 					executed_at: 1710000000000,
@@ -393,7 +401,8 @@ describe('analyze_my_portfolio', () => {
 
 	it('信用 fetch 失敗時: ⚠️ 警告 + meta.marginFetchFailed=true + margin pnl 0 で「信用未使用」と区別できる', async () => {
 		// paginateMarginTrades が API エラーで break したとき、「信用未使用」と区別できない結果を返さないこと。
-		setupFetchMock({ marginTradesFail: true });
+		setupFetchMock();
+		stubTradeFetcher({ paginateMarginTrades: { trades: [], truncated: true, fetchFailed: true } });
 
 		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
 		const result = await handler({
@@ -493,8 +502,6 @@ describe('analyze_my_portfolio', () => {
 				return new Response(JSON.stringify(mockBitbankSuccess(rawAssetsResponse)), { status: 200 });
 			}
 			if (urlStr.includes('trade_history')) {
-				const isMargin = urlStr.includes('type=margin');
-				if (isMargin) return new Response(JSON.stringify(mockBitbankSuccess({ trades: [] })), { status: 200 });
 				return new Response(JSON.stringify(mockBitbankSuccess({ trades: fullSpotPage })), { status: 200 });
 			}
 			if (urlStr.includes('deposit_history')) {
@@ -505,6 +512,8 @@ describe('analyze_my_portfolio', () => {
 			}
 			return new Response(JSON.stringify(mockBitbankSuccess({})), { status: 200 });
 		}) as unknown as typeof fetch;
+
+		stubTradeFetcher({ paginateMarginTrades: { trades: [], truncated: false, fetchFailed: false } });
 
 		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
 		const result = await handler({
@@ -560,11 +569,7 @@ describe('analyze_my_portfolio', () => {
 				return new Response(JSON.stringify(mockBitbankSuccess(rawAssetsResponse)), { status: 200 });
 			}
 			if (urlStr.includes('trade_history')) {
-				const isMargin = urlStr.includes('type=margin');
-				if (isMargin) {
-					return new Response(JSON.stringify(mockBitbankSuccess({ trades: fullMarginPage })), { status: 200 });
-				}
-				return new Response(JSON.stringify(mockBitbankSuccess({ trades: [] })), { status: 200 });
+				return new Response(JSON.stringify(mockBitbankSuccess({ trades: fullMarginPage })), { status: 200 });
 			}
 			if (urlStr.includes('deposit_history')) {
 				return new Response(JSON.stringify(mockBitbankSuccess({ deposits: [] })), { status: 200 });
@@ -574,6 +579,8 @@ describe('analyze_my_portfolio', () => {
 			}
 			return new Response(JSON.stringify(mockBitbankSuccess({})), { status: 200 });
 		}) as unknown as typeof fetch;
+
+		stubTradeFetcher({ paginateTrades: { trades: [], truncated: false } });
 
 		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
 		const result = await handler({
@@ -632,11 +639,9 @@ describe('analyze_my_portfolio', () => {
 				return new Response(JSON.stringify(mockBitbankSuccess(rawAssetsResponse)), { status: 200 });
 			}
 			if (urlStr.includes('trade_history')) {
-				const isMargin = urlStr.includes('type=margin');
-				if (isMargin) {
-					return new Response(JSON.stringify(mockBitbankSuccess({ trades: fullMarginPage })), { status: 200 });
-				}
-				return new Response(JSON.stringify(mockBitbankSuccess({ trades: fullSpotPage })), { status: 200 });
+				return new Response(JSON.stringify(mockBitbankSuccess({ trades: [...fullSpotPage, ...fullMarginPage] })), {
+					status: 200,
+				});
 			}
 			if (urlStr.includes('deposit_history')) {
 				return new Response(JSON.stringify(mockBitbankSuccess({ deposits: [] })), { status: 200 });
@@ -662,7 +667,7 @@ describe('analyze_my_portfolio', () => {
 	});
 
 	it('警告行が summary 先頭付近に出る（タイトル前または直後）— LLM の見落とし防止', async () => {
-		setupFetchMock({ marginTradesFail: true });
+		setupFetchMock({ tradeHistoryFail: true });
 
 		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
 		const result = await handler({
@@ -957,10 +962,6 @@ describe('analyze_my_portfolio', () => {
 					return new Response(JSON.stringify(mockBitbankSuccess(consistentAssets)), { status: 200 });
 				}
 				if (urlStr.includes('trade_history')) {
-					const isMargin = urlStr.includes('type=margin');
-					if (isMargin) {
-						return new Response(JSON.stringify(mockBitbankSuccess({ trades: [] })), { status: 200 });
-					}
 					return new Response(JSON.stringify(mockBitbankSuccess(customTrades)), { status: 200 });
 				}
 				if (urlStr.includes('deposit_history')) {
@@ -1064,10 +1065,6 @@ describe('analyze_my_portfolio', () => {
 					return new Response(JSON.stringify(mockBitbankSuccess(rawAssetsResponse)), { status: 200 });
 				}
 				if (urlStr.includes('trade_history')) {
-					const isMargin = urlStr.includes('type=margin');
-					if (isMargin) {
-						return new Response(JSON.stringify(mockBitbankSuccess({ trades: [] })), { status: 200 });
-					}
 					return new Response(JSON.stringify(mockBitbankSuccess(customTrades)), { status: 200 });
 				}
 				if (urlStr.includes('deposit_history')) {
@@ -1113,8 +1110,9 @@ describe('analyze_my_portfolio', () => {
 
 		assertOk(result);
 		expect(result.summary).toContain('信用建玉:');
-		expect(result.summary).toContain('BTC/JPY ロング 0.01');
-		expect(result.summary).toContain('ETH/JPY ショート 1.0');
+		expect(result.summary).toContain('BTC/JPY ロング 0.01 (建玉金額（建値ベース）: 150,000円)');
+		expect(result.summary).toContain('ETH/JPY ショート 1.0 (建玉金額（建値ベース）: 400,000円)');
+		expect(result.summary).not.toMatch(/(ロング|ショート) [\d.]+ \(評価額/);
 		expect(result.summary).toContain('集計: ロング 1件 / ショート 1件');
 		// rawMarginStatusResponse.margin_position_profit_loss = '50000' を踏襲
 		expect(result.summary).toContain('建玉含み損益: +50,000円');
@@ -1209,7 +1207,7 @@ describe('analyze_my_portfolio', () => {
 
 	it('信用約定 / 信用口座状態 / 信用建玉が同時に失敗: warning が 1 行に集約されず別々に出る', async () => {
 		setupFetchMock({
-			marginTradesFail: true,
+			tradeHistoryFail: true,
 			marginStatusFail: true,
 			marginPositionsFail: true,
 		});
@@ -1297,7 +1295,7 @@ describe('analyze_my_portfolio — 信頼できない損益値の null 化', () 
 				return new Response(JSON.stringify(mockBitbankSuccess(rawAssetsResponse)), { status: 200 });
 			}
 			if (urlStr.includes('trade_history')) {
-				const payload = urlStr.includes('type=margin') ? { trades: [] } : rawTradeHistoryResponse;
+				const payload = rawTradeHistoryResponse;
 				return new Response(JSON.stringify(mockBitbankSuccess(payload)), { status: 200 });
 			}
 			if (urlStr.includes('deposit_history')) {
@@ -1490,17 +1488,17 @@ describe('analyze_my_portfolio — 入出金取得の include_pnl 紐づけ', ()
 	};
 
 	/**
-	 * 約定のみ: 買 0.01 @15,000,000（fee 0.00001 BTC）→ 売 0.005 @15,500,000 で残 0.00499 BTC / 原価 74,925 円。
-	 * 出庫 0.002 + 出庫手数料 0.0006 を平均単価で按分減少させると 0.00239 BTC / 原価 35,886 円（出庫が渡らないと 74,925 円のまま）。
+	 * 約定のみ: 買 0.01 @15,000,000（手数料 180 円）→ 売 0.005 @15,500,000 で残 0.005 BTC / 原価 75,090 円。
+	 * 出庫 0.002 + 出庫手数料 0.0006 を平均単価で按分減少させると 0.0024 BTC / 原価 36,043 円（出庫が渡らないと 75,090 円のまま）。
 	 */
-	const BTC_COST_BASIS_WITH_WITHDRAWAL = 35_886;
-	const BTC_COST_BASIS_WITHOUT_WITHDRAWAL = 74_925;
+	const BTC_COST_BASIS_WITH_WITHDRAWAL = 36_043;
+	const BTC_COST_BASIS_WITHOUT_WITHDRAWAL = 75_090;
 
-	/** 出庫按分後の残数量（0.00499 - 0.0026 = 0.00239 BTC）と onhand を整合させた assets */
+	/** 出庫按分後の残数量（0.005 - 0.0026 = 0.0024 BTC）と onhand を整合させた assets */
 	const assetsAfterWithdrawal = {
 		assets: [
-			{ ...assetFixture('btc'), free_amount: '0.00239', onhand_amount: '0.00239', locked_amount: '0' },
-			{ ...assetFixture('eth'), free_amount: '0.999', onhand_amount: '0.999' },
+			{ ...assetFixture('btc'), free_amount: '0.0024', onhand_amount: '0.0024', locked_amount: '0' },
+			{ ...assetFixture('eth'), free_amount: '1.0', onhand_amount: '1.0' },
 			assetFixture('jpy'),
 		],
 	};
@@ -1761,7 +1759,7 @@ describe('analyze_my_portfolio — 入出金取得の include_pnl 紐づけ', ()
 		const urls = fetchedUrls();
 		expect(urls.some((u) => u.includes('deposit_history'))).toBe(true);
 		expect(urls.some((u) => u.includes('withdrawal_history'))).toBe(true);
-		expect(urls.some((u) => u.includes('trade_history') && !u.includes('type=margin'))).toBe(false);
+		expect(urls.some((u) => u.includes('trade_history'))).toBe(false);
 		expect(result.data.deposit_withdrawal_summary).toBeDefined();
 		expect(result.meta.depositWithdrawalStatus).toBe('available');
 		expect(result.meta.dwFetchedForPnl).toBe(false);
@@ -1797,7 +1795,7 @@ describe('analyze_my_portfolio — 入出金取得の include_pnl 紐づけ', ()
 				return new Response(JSON.stringify(mockBitbankSuccess(rawAssetsResponse)), { status: 200 });
 			}
 			if (urlStr.includes('trade_history')) {
-				const payload = urlStr.includes('type=margin') ? { trades: [] } : rawTradeHistoryResponse;
+				const payload = rawTradeHistoryResponse;
 				return new Response(JSON.stringify(mockBitbankSuccess(payload)), { status: 200 });
 			}
 			if (urlStr.includes('deposit_history')) {
@@ -2480,7 +2478,7 @@ describe('analyze_my_portfolio — 入出庫日価格での評価', () => {
 				return new Response(JSON.stringify(mockBitbankSuccess(rawAssetsResponse)), { status: 200 });
 			}
 			if (urlStr.includes('trade_history')) {
-				const payload = urlStr.includes('type=margin') ? { trades: [] } : rawTradeHistoryResponse;
+				const payload = rawTradeHistoryResponse;
 				return new Response(JSON.stringify(mockBitbankSuccess(payload)), { status: 200 });
 			}
 			if (urlStr.includes('deposit_history')) {
@@ -2538,7 +2536,7 @@ describe('analyze_my_portfolio — 入出庫日価格での評価', () => {
 					return new Response(JSON.stringify(mockBitbankSuccess(rawAssetsResponse)), { status: 200 });
 				}
 				if (urlStr.includes('trade_history')) {
-					const payload = urlStr.includes('type=margin') ? { trades: [] } : rawTradeHistoryResponse;
+					const payload = rawTradeHistoryResponse;
 					return new Response(JSON.stringify(mockBitbankSuccess(payload)), { status: 200 });
 				}
 				if (urlStr.includes('deposit_history')) {
@@ -2666,7 +2664,7 @@ describe('analyze_my_portfolio — 入出庫日価格での評価', () => {
 					return new Response(JSON.stringify(mockBitbankSuccess(rawAssetsResponse)), { status: 200 });
 				}
 				if (urlStr.includes('trade_history')) {
-					const payload = urlStr.includes('type=margin') ? { trades: [] } : rawTradeHistoryResponse;
+					const payload = rawTradeHistoryResponse;
 					return new Response(JSON.stringify(mockBitbankSuccess(payload)), { status: 200 });
 				}
 				if (urlStr.includes('deposit_history')) {
@@ -2869,10 +2867,10 @@ describe('analyze_my_portfolio — 取得原価の決定性（出庫に押し出
 		'flr',
 	];
 
-	/** 入庫と同数量ぶん増やした btc 残高（0.00499 + 0.1）。入庫が原価に算入されて初めて数量が整合する */
+	/** 入庫と同数量ぶん増やした btc 残高（0.005 + 0.1）。入庫が原価に算入されて初めて数量が整合する */
 	const assetsWithDepositedBtc = {
 		assets: [
-			{ ...assetFixture('btc'), free_amount: '0.10499', onhand_amount: '0.10499', locked_amount: '0' },
+			{ ...assetFixture('btc'), free_amount: '0.105', onhand_amount: '0.105', locked_amount: '0' },
 			assetFixture('jpy'),
 		],
 	};
@@ -2950,7 +2948,7 @@ describe('analyze_my_portfolio — 取得原価の決定性（出庫に押し出
 				return new Response(JSON.stringify(mockBitbankSuccess(assetsWithDepositedBtc)), { status: 200 });
 			}
 			if (urlStr.includes('trade_history')) {
-				const payload = urlStr.includes('type=margin') ? { trades: [] } : rawTradeHistoryResponse;
+				const payload = rawTradeHistoryResponse;
 				return new Response(JSON.stringify(mockBitbankSuccess(payload)), { status: 200 });
 			}
 			if (urlStr.includes('deposit_history')) {
@@ -3027,10 +3025,10 @@ describe('analyze_my_portfolio — 取得原価の決定性（出庫に押し出
 		const withDeposit = resolvable.data.holdings.find((h) => h.asset === 'btc');
 		const withoutDeposit = unresolvable.data.holdings.find((h) => h.asset === 'btc');
 
-		// 入庫が原価に算入され、復元数量が実残高（0.10499）と整合する
+		// 入庫が原価に算入され、復元数量が実残高（0.105）と整合する
 		expect(withDeposit?.cost_basis_reliable).toBe(true);
 		expect(withDeposit?.cost_basis).toBeGreaterThan(0);
-		// 算入されないと復元数量が 0.00499 に留まり、数量不変条件で原価が抑止される
+		// 算入されないと復元数量が 0.005 に留まり、数量不変条件で原価が抑止される
 		expect(withoutDeposit?.cost_basis_reliable).toBe(false);
 		expect(withoutDeposit?.cost_basis).toBeUndefined();
 		expect(withoutDeposit?.realized_pnl).not.toBe(withDeposit?.realized_pnl);
@@ -3352,7 +3350,7 @@ describe('analyze_my_portfolio — API asset の取得境界正規化', () => {
 				return new Response(JSON.stringify(mockBitbankSuccess(assetsResponse(btc, jpy))), { status: 200 });
 			}
 			if (urlStr.includes('trade_history')) {
-				const payload = urlStr.includes('type=margin') ? { trades: [] } : rawTradeHistoryResponse;
+				const payload = rawTradeHistoryResponse;
 				return new Response(JSON.stringify(mockBitbankSuccess(payload)), { status: 200 });
 			}
 			if (urlStr.includes('deposit_history')) {
@@ -3467,9 +3465,7 @@ describe('analyze_my_portfolio — API pair の取得境界正規化', () => {
 				return new Response(JSON.stringify(mockBitbankSuccess(assetsResponse)), { status: 200 });
 			}
 			if (urlStr.includes('trade_history')) {
-				const payload = urlStr.includes('type=margin')
-					? { trades: [] }
-					: tradesResponse(uppercase ? 'BTC_JPY' : 'btc_jpy');
+				const payload = tradesResponse(uppercase ? 'BTC_JPY' : 'btc_jpy');
 				return new Response(JSON.stringify(mockBitbankSuccess(payload)), { status: 200 });
 			}
 			if (urlStr.includes('deposit_history')) {
@@ -3722,12 +3718,12 @@ describe('analyze_my_portfolio — 復元数量 vs 実残高の不変条件', ()
 		const btc = holdingOf(result.data.holdings, 'btc');
 		expect(btc.cost_basis_reliable).toBe(true);
 		expect(btc.cost_basis_unavailable_reason).toBeUndefined();
-		expect(btc.cost_basis).toBe(74_925);
+		expect(btc.cost_basis).toBe(75_090);
 		// avg_buy_price は板の刻みに縛られない加重平均なので price_digits（btc_jpy は 0）+ 2 桁で丸める。
-		expect(btc.avg_buy_price).toBe(15_015_015.02);
+		expect(btc.avg_buy_price).toBe(15_018_000);
 		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(eth.cost_basis_reliable).toBe(true);
-		expect(eth.cost_basis).toBe(380_000);
+		expect(eth.cost_basis).toBe(380_456);
 		const jpy = holdingOf(result.data.holdings, 'jpy');
 		expect(jpy.cost_basis_reliable).toBeUndefined();
 		expect(result.meta.warnings).toBeUndefined();
@@ -3840,11 +3836,11 @@ describe('analyze_my_portfolio — 復元数量 vs 実残高の不変条件', ()
 	});
 
 	it('乖離銘柄は合計から除外され、整合銘柄の合計だけが出る（銘柄名は summary に出る）', async () => {
-		// btc は既定履歴と整合、eth は onhand 5.0 で乖離（既定 eth 買 1.0 → 復元 0.999）
+		// btc は既定履歴と整合、eth は onhand 5.0 で乖離（既定 eth 買 1.0 → 復元 1.0）
 		setupFetchMock({
 			assets: {
 				assets: [
-					{ ...assetFixture('btc'), free_amount: '0.00499', onhand_amount: '0.00499', locked_amount: '0' },
+					{ ...assetFixture('btc'), free_amount: '0.005', onhand_amount: '0.005', locked_amount: '0' },
 					{ ...assetFixture('eth'), free_amount: '5.0', onhand_amount: '5.0' },
 					assetFixture('jpy'),
 				],
@@ -4529,7 +4525,7 @@ describe('analyze_my_portfolio — ゼロ建玉の表示抑制', () => {
 		expect(result.summary).not.toContain('ゼロ建玉');
 	});
 
-	it('open_amount=0 でも評価額が非ゼロなら抑制しない（ゼロと断定できる行だけ落とす）', async () => {
+	it('open_amount=0 でも product が非ゼロなら抑制しない（ゼロと断定できる行だけ落とす）', async () => {
 		setupFetchMock({
 			marginPositions: positionsResponse([
 				{ ...zeroPosition('btc_jpy', 'long'), product: '150000' },
@@ -4540,7 +4536,7 @@ describe('analyze_my_portfolio — ゼロ建玉の表示抑制', () => {
 		const result = await callHandler();
 
 		assertOk(result);
-		expect(result.summary).toContain('BTC/JPY ロング 0 (評価額: 150,000円)');
+		expect(result.summary).toContain('BTC/JPY ロング 0 (建玉金額（建値ベース）: 150,000円)');
 		expect(result.summary).toContain('集計: ロング 1件 / ショート 0件 / ゼロ建玉 1件省略');
 	});
 });

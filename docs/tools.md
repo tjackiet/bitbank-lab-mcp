@@ -157,7 +157,7 @@ API の応答をそのまま、または軽量整形して返す。指標計算�
 | ツール | 概要 |
 |--------|------|
 | `get_margin_status` | 信用取引のステータス（証拠金率・維持率等） |
-| `get_margin_positions` | 信用ポジション一覧（建玉・評価損益） |
+| `get_margin_positions` | 信用ポジション一覧（建玉・建玉金額（建値ベース）・未実現手数料 / 利息。含み損益は `get_margin_status`） |
 | `get_margin_trade_history` | 信用取引の約定履歴 |
 
 ---

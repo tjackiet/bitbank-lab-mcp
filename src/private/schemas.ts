@@ -47,7 +47,13 @@ export const GetMyAssetsOutputSchema = z.union([
 
 export const GetMyTradeHistoryInputSchema = z.object({
 	pair: z.string().optional().describe('通貨ペア（例: btc_jpy）。省略で全ペア'),
-	count: z.number().max(10000).default(100).describe('取得件数（最大10000、1000超は自動ページネーション）'),
+	count: z
+		.number()
+		.max(10000)
+		.default(100)
+		.describe(
+			'取得件数（最大10000）。約定履歴 API は信用約定も混ぜて返すので、現物に絞った件数が届くまで自動でページ送りする',
+		),
 	order: z.enum(['asc', 'desc']).default('desc').describe('ソート順（asc: 古い順, desc: 新しい順）'),
 	since: z.string().optional().describe('開始日時（ISO8601、例: 2025-01-01T00:00:00+09:00）'),
 	end: z.string().optional().describe('終了日時（ISO8601、例: 2025-12-31T23:59:59+09:00）'),
@@ -91,6 +97,12 @@ export const GetMyTradeHistoryMetaSchema = z.object({
 		.optional()
 		.describe(
 			'期間内全件を取得できたか。count 制限で打ち切られた場合や MAX_PAGES 到達時は false（取得範囲外に未取得レコードがある可能性）',
+		),
+	scanBoundary: z
+		.string()
+		.optional()
+		.describe(
+			'件数に届かずページの上限などで取得を打ち切ったとき、最後に調べた約定の時刻（ISO8601）。続きは order=desc なら end、asc なら since にこの値を指定する。全件取得できたときと、件数に届いて止めたときは無い',
 		),
 });
 
@@ -825,7 +837,7 @@ export const AnalyzeMyPortfolioMetaSchema = z.object({
 	marginFetchFailed: z
 		.boolean()
 		.describe(
-			'信用約定 API（type=margin）が途中で失敗した。true のとき margin_realized_pnl=0 が「信用未使用」ではなく「取得失敗による欠落」を意味する点に注意。期間成績も信用の決済損益を巻き戻せないので change_pct_unavailable_reason=margin_trades_incomplete になる。',
+			'信用約定の取得（約定履歴 API を信用だけに絞る）が途中で失敗した。true のとき margin_realized_pnl=0 が「信用未使用」ではなく「取得失敗による欠落」を意味する点に注意。期間成績も信用の決済損益を巻き戻せないので change_pct_unavailable_reason=margin_trades_incomplete になる。',
 		),
 	marginStatusFetchFailed: z
 		.boolean()
@@ -1054,10 +1066,10 @@ const MarginPositionSchema = z.object({
 		.describe(
 			'建玉ロック数量（アクティブな信用決済注文の remaining_amount の合計）。open_amount のうち決済注文に充てられている分。API が返さない場合は undefined',
 		),
-	product: z.string().describe('建玉評価額'),
-	average_price: z.string().describe('平均取得価格'),
-	unrealized_fee_amount: z.string().describe('未収手数料'),
-	unrealized_interest_amount: z.string().describe('未収利息'),
+	product: z.string().describe('建玉金額（建値ベース。average_price × open_amount の quote 量で、現在の時価ではない）'),
+	average_price: z.string().describe('平均約定価格（product / open_amount）'),
+	unrealized_fee_amount: z.string().describe('未実現手数料'),
+	unrealized_interest_amount: z.string().describe('未実現利息'),
 });
 
 const MarginNoticeSchema = z
@@ -1105,7 +1117,13 @@ export const GetMarginPositionsOutputSchema = z.union([
 
 export const GetMarginTradeHistoryInputSchema = z.object({
 	pair: z.string().optional().describe('通貨ペア（例: btc_jpy）。省略で全ペア'),
-	count: z.number().max(10000).default(20).describe('取得件数（最大10000、1000超は自動ページネーション）'),
+	count: z
+		.number()
+		.max(10000)
+		.default(20)
+		.describe(
+			'取得件数（最大10000）。約定履歴 API は現物約定も混ぜて返すので、信用に絞った件数が届くまで自動でページ送りする',
+		),
 	order: z.enum(['asc', 'desc']).default('desc').describe('ソート順（asc: 古い順, desc: 新しい順）'),
 	since: z.string().optional().describe('開始日時（ISO8601、例: 2025-01-01T00:00:00+09:00）'),
 	end: z.string().optional().describe('終了日時（ISO8601、例: 2025-12-31T23:59:59+09:00）'),
@@ -1150,6 +1168,12 @@ export const GetMarginTradeHistoryMetaSchema = z.object({
 		.boolean()
 		.optional()
 		.describe('期間内全件を取得できたか。count 制限で打ち切られた場合や MAX_PAGES 到達時、cursor 進捗停止時は false'),
+	scanBoundary: z
+		.string()
+		.optional()
+		.describe(
+			'件数に届かずページの上限などで取得を打ち切ったとき、最後に調べた約定の時刻（ISO8601）。続きは order=desc なら end、asc なら since にこの値を指定する。全件取得できたときと、件数に届いて止めたときは無い',
+		),
 });
 
 export const GetMarginTradeHistoryOutputSchema = z.union([
