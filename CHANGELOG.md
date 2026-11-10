@@ -15,6 +15,7 @@
 - `analyze_my_portfolio`：同じ時刻の約定と入出庫は、入庫 → 約定 → 出庫の順で処理する。入庫と同時刻の売りが、原価ゼロの売りとして実現損益を過大に出していた（issue #448）。
 - `preview_order`：指値（`post_only` なし）が現在の板を跨ぐとき（買いは best ask 以上、売りは best bid 以下）は、即時約定するので taker の率で手数料を見積る。maker が -0.02% のペアで 0.01 BTC を 1,500 万円で買うと「推定手数料 -30 円（リベート）」と出ていたが、即時約定すれば実際は taker の +180 円だった。`/ticker` を取得できないとき、該当する側の best ask / bid が無いときは従来どおり maker 想定（issue #449）。
 - `preview_order`：円建ての推定手数料は円未満を四捨五入した概算であることを備考に書く。約定履歴の手数料は円未満まで計上される（issue #449）。
+- `get_orderbook` / `prepare_depth_data` / `detect_whale_events` / `get_depth`（内部）：板の最良売りが最良買い以下（交差）のときは、中値・スプレッド（`get_orderbook` の pressure は中値を基準にした帯域、`detect_whale_events` は中値からの距離）を出さず、「板が交差しています。サーキットブレイク中など連続取引ではない可能性」という warning を本文の先頭と `meta.warning` に出す。ドキュメント（public-api.md の Depth）は、サーキットブレイク中で予想価格があるときは買いと売りの価格が交差しうるとしている。`preview_order`：ticker の `sell <= buy` のとき（Ticker のドキュメント: 連続取引以外では起こりうる）は、指値が板を跨ぐかを判定せず maker 想定で見積もり、その旨を本文に出す（issue #458 項目 5）。
 - `get_margin_trade_history` / `analyze_my_portfolio`：約定履歴の取得で、ドキュメントのパラメータ表に無い `type=margin` を送るのをやめる。`get_margin_positions`：`GET /user/margin/positions` は Parameters: None なので、`pair` を API に送るのをやめ、全建玉を取ってから絞る。どちらも従来からクライアント側で絞り直していたので結果は変わらない。API が未知のパラメータを拒否するようになったときに取得が失敗するのを防ぐ（issue #458 項目 3）。
 - `get_my_orders`：`count` を既定値（100）でも API に送る。`active_orders` の `count` の既定値はドキュメントに無い（issue #458 項目 2）。
 
