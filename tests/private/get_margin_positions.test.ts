@@ -60,7 +60,8 @@ describe('get_margin_positions', () => {
 		expect(result.summary).toContain('建玉はありません');
 	});
 
-	it('pair 指定でフィルタされる', async () => {
+	// GET /user/margin/positions は Parameters: None（issue 458 項目 3）。全建玉を取ってクライアント側で絞る。
+	it('pair 指定でフィルタされ、API には pair を送らない', async () => {
 		setupFetchMock(mockBitbankSuccess(rawMarginPositionsResponse));
 
 		const { default: getMarginPositions } = await import('../../tools/private/get_margin_positions.js');
@@ -70,6 +71,9 @@ describe('get_margin_positions', () => {
 		expect(result.data.positions).toHaveLength(1);
 		expect(result.data.positions[0].pair).toBe('btc_jpy');
 		expect(result.meta.pair).toBe('btc_jpy');
+		const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+		const calledUrl = fetchMock.mock.calls[0][0] as string;
+		expect(calledUrl).toMatch(/\/v1\/user\/margin\/positions$/);
 	});
 
 	it('pair 指定なしで「全ペア」ラベルが表示される', async () => {

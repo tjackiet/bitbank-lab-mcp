@@ -49,20 +49,14 @@ export default async function getMarginPositions(args: { pair?: string }) {
 	const client = getDefaultClient();
 
 	try {
-		const params: Record<string, string> = {};
-		if (pair) params.pair = pair;
-
-		const raw = await client.get<RawMarginPositionsResponse>(
-			'/v1/user/margin/positions',
-			Object.keys(params).length > 0 ? params : undefined,
-		);
+		const raw = await client.get<RawMarginPositionsResponse>('/v1/user/margin/positions');
 
 		const timestamp = nowIso();
 
 		// 下のフィルタの `===` 比較と JPY 判定（`p.pair.includes('jpy')`）が小文字前提なので、取得境界で揃える。
 		const allPositions = normalizePairCodes(raw.positions);
 
-		// API がペアのフィルタに対応していない場合に備えたクライアント側フィルタ。
+		// API にペアで絞るパラメータが無い（Parameters: None）ので、ここで絞る。
 		const positions = pair ? allPositions.filter((p) => p.pair === pair) : allPositions;
 
 		const hasNotice = raw.notice != null && raw.notice.what != null;

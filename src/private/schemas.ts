@@ -831,7 +831,7 @@ export const AnalyzeMyPortfolioMetaSchema = z.object({
 	marginFetchFailed: z
 		.boolean()
 		.describe(
-			'信用約定 API（type=margin）が途中で失敗した。true のとき margin_realized_pnl=0 が「信用未使用」ではなく「取得失敗による欠落」を意味する点に注意。期間成績も信用の決済損益を巻き戻せないので change_pct_unavailable_reason=margin_trades_incomplete になる。',
+			'信用約定の取得（約定履歴 API を信用だけに絞る）が途中で失敗した。true のとき margin_realized_pnl=0 が「信用未使用」ではなく「取得失敗による欠落」を意味する点に注意。期間成績も信用の決済損益を巻き戻せないので change_pct_unavailable_reason=margin_trades_incomplete になる。',
 		),
 	marginStatusFetchFailed: z
 		.boolean()

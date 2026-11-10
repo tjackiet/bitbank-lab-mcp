@@ -75,7 +75,7 @@ export default async function getMarginTradeHistory(args: {
 		}
 
 		const fetched = await fetchFilteredTradeHistory<RawMarginTrade>(client, {
-			baseParams: { ...baseParams, type: 'margin' },
+			baseParams,
 			order,
 			limit: count,
 			keep: (t) => t.position_side != null,

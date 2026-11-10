@@ -765,7 +765,7 @@ API レスポンスの受け口である本ルールと混ぜない。ただし*
 
 | 経路 | 扱い |
 |---|---|
-| `get_margin_positions` のクライアント側フィルタ（`p.pair === pair`） | 入力を `normalizePair` に通す。`ensurePair` は使わない（ALLOWED_PAIRS に無い上場廃止ペアの建玉を照会できなくなる）。形式不正は `?? args.pair` で素通しし API の判断に委ねる。**この経路は正規化後の値を API リクエストの `pair` パラメータにも使う**（bitbank は小文字を期待するため改善方向） |
+| `get_margin_positions` のクライアント側フィルタ（`p.pair === pair`） | 入力を `normalizePair` に通す。`ensurePair` は使わない（ALLOWED_PAIRS に無い上場廃止ペアの建玉を照会できなくなる）。形式不正は `?? args.pair` で素通しし、一致する建玉が無ければ 0 件になる。`GET /user/margin/positions` は Parameters: None なので、`pair` は API に送らない（fork の issue #458 項目 3） |
 | `get_order` / `get_orders_info` / `create_order` / `cancel_order` / `cancel_orders` / `preview_order` / `preview_cancel_order` の JPY 建て判定 | `lib/pair-code.ts` の `isJpyQuotedPair`（内部で `normalizePairCode` を通す）を使う。**API リクエストに送る `pair` はユーザー入力のまま**で、正規化するのは判定と応答側のみ |
 
 `isJpyQuotedPair` は「消費側に `.toLowerCase()` を撒く」ことにはあたらない。撒くのが禁物なのは

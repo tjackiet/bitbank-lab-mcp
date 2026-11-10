@@ -460,7 +460,8 @@ describe('paginateMarginTrades — ページネーション境界', () => {
 		expect(ids).toContain(1002);
 		expect(new Set(ids).size).toBe(ids.length);
 		expect(result.truncated).toBe(false);
-		expect(calls[1]).toContain('type=margin');
+		expect(calls[0]).not.toMatch(/[?&]type=/);
+		expect(calls[1]).not.toMatch(/[?&]type=/);
 		expect(calls[1]).toContain(`since=${tBoundary}`);
 	});
 

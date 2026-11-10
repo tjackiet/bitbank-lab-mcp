@@ -74,14 +74,28 @@ afterEach(() => {
 	delete process.env.BITBANK_API_KEY;
 	delete process.env.BITBANK_API_SECRET;
 	vi.resetModules();
+	vi.doUnmock('../../src/handlers/portfolio/fetch.js');
 });
+
+// 現物と信用は同じ一覧を取るので、片方だけの打ち切りや失敗は片方の要求だけが一時的に失敗したときに限られる。片方の取得を差し替えてその状態を作る。
+function stubTradeFetcher(
+	stub:
+		| { paginateTrades: { trades: unknown[]; truncated: boolean } }
+		| { paginateMarginTrades: { trades: unknown[]; truncated: boolean; fetchFailed: boolean } },
+) {
+	vi.doMock('../../src/handlers/portfolio/fetch.js', async (importOriginal) => {
+		const actual = await importOriginal<typeof import('../../src/handlers/portfolio/fetch.js')>();
+		const [name, result] = Object.entries(stub)[0];
+		return { ...actual, [name]: async () => result };
+	});
+}
 
 function setupFetchMock(opts?: {
 	assets?: unknown;
 	assetsFail?: boolean;
 	trades?: unknown;
-	tradesFail?: boolean;
-	marginTradesFail?: boolean;
+	/** 約定履歴 API は現物と信用で同じなので、失敗させると現物と信用の両方の取得が失敗する。 */
+	tradeHistoryFail?: boolean;
 	dwFail?: boolean;
 	/** 出庫チャネルだけを失敗させ、入庫データは残したまま dw_fetch_failed を再現する（#93）。 */
 	withdrawalsFail?: boolean;
@@ -149,21 +163,15 @@ function setupFetchMock(opts?: {
 			return new Response(JSON.stringify(mockBitbankSuccess(payload)), { status: 200 });
 		}
 
+		// 約定履歴 API は現物と信用を混ぜて返し、分けるパラメータが無いので、現物の取得も信用の取得も同じ一覧を受け取る。
 		if (urlStr.includes('trade_history')) {
-			const isMargin = urlStr.includes('type=margin');
-			if (isMargin) {
-				if (opts?.marginTradesFail) {
-					return new Response(JSON.stringify(mockBitbankError(10007)), { status: 200 });
-				}
-				const marginPayload = opts?.marginTrades ?? { trades: [] };
-				return new Response(JSON.stringify(mockBitbankSuccess(marginPayload)), { status: 200 });
-			}
-			if (opts?.tradesFail) {
+			if (opts?.tradeHistoryFail) {
 				return new Response(JSON.stringify(mockBitbankError(10007)), { status: 200 });
 			}
-			return new Response(JSON.stringify(mockBitbankSuccess(opts?.trades ?? rawTradeHistoryResponse)), {
-				status: 200,
-			});
+			const spot = ((opts?.trades ?? rawTradeHistoryResponse) as { trades: Array<{ executed_at: number }> }).trades;
+			const margin = ((opts?.marginTrades ?? { trades: [] }) as { trades: Array<{ executed_at: number }> }).trades;
+			const trades = [...spot, ...margin].sort((a, b) => a.executed_at - b.executed_at);
+			return new Response(JSON.stringify(mockBitbankSuccess({ trades })), { status: 200 });
 		}
 
 		if (urlStr.includes('deposit_history')) {
@@ -333,7 +341,7 @@ describe('analyze_my_portfolio', () => {
 	});
 
 	it('信用約定レスポンスに現物 (position_side 欠損) が混入しても margin_fee は信用のみから集計', async () => {
-		// type=margin が API に無視されて現物約定が混ざった場合の防御。現物の fee_occurred_amount_quote は margin_fee に加算されない。
+		// 約定履歴 API は現物と信用を混ぜて返す。現物の fee_occurred_amount_quote は margin_fee に加算されない。
 		const mixedMargin = {
 			trades: [
 				// 信用決済: PL=5000, interest=30, fee=155 → これらだけが集計対象
@@ -393,7 +401,8 @@ describe('analyze_my_portfolio', () => {
 
 	it('信用 fetch 失敗時: ⚠️ 警告 + meta.marginFetchFailed=true + margin pnl 0 で「信用未使用」と区別できる', async () => {
 		// paginateMarginTrades が API エラーで break したとき、「信用未使用」と区別できない結果を返さないこと。
-		setupFetchMock({ marginTradesFail: true });
+		setupFetchMock();
+		stubTradeFetcher({ paginateMarginTrades: { trades: [], truncated: true, fetchFailed: true } });
 
 		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
 		const result = await handler({
@@ -493,8 +502,6 @@ describe('analyze_my_portfolio', () => {
 				return new Response(JSON.stringify(mockBitbankSuccess(rawAssetsResponse)), { status: 200 });
 			}
 			if (urlStr.includes('trade_history')) {
-				const isMargin = urlStr.includes('type=margin');
-				if (isMargin) return new Response(JSON.stringify(mockBitbankSuccess({ trades: [] })), { status: 200 });
 				return new Response(JSON.stringify(mockBitbankSuccess({ trades: fullSpotPage })), { status: 200 });
 			}
 			if (urlStr.includes('deposit_history')) {
@@ -505,6 +512,8 @@ describe('analyze_my_portfolio', () => {
 			}
 			return new Response(JSON.stringify(mockBitbankSuccess({})), { status: 200 });
 		}) as unknown as typeof fetch;
+
+		stubTradeFetcher({ paginateMarginTrades: { trades: [], truncated: false, fetchFailed: false } });
 
 		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
 		const result = await handler({
@@ -560,11 +569,7 @@ describe('analyze_my_portfolio', () => {
 				return new Response(JSON.stringify(mockBitbankSuccess(rawAssetsResponse)), { status: 200 });
 			}
 			if (urlStr.includes('trade_history')) {
-				const isMargin = urlStr.includes('type=margin');
-				if (isMargin) {
-					return new Response(JSON.stringify(mockBitbankSuccess({ trades: fullMarginPage })), { status: 200 });
-				}
-				return new Response(JSON.stringify(mockBitbankSuccess({ trades: [] })), { status: 200 });
+				return new Response(JSON.stringify(mockBitbankSuccess({ trades: fullMarginPage })), { status: 200 });
 			}
 			if (urlStr.includes('deposit_history')) {
 				return new Response(JSON.stringify(mockBitbankSuccess({ deposits: [] })), { status: 200 });
@@ -574,6 +579,8 @@ describe('analyze_my_portfolio', () => {
 			}
 			return new Response(JSON.stringify(mockBitbankSuccess({})), { status: 200 });
 		}) as unknown as typeof fetch;
+
+		stubTradeFetcher({ paginateTrades: { trades: [], truncated: false } });
 
 		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
 		const result = await handler({
@@ -632,11 +639,9 @@ describe('analyze_my_portfolio', () => {
 				return new Response(JSON.stringify(mockBitbankSuccess(rawAssetsResponse)), { status: 200 });
 			}
 			if (urlStr.includes('trade_history')) {
-				const isMargin = urlStr.includes('type=margin');
-				if (isMargin) {
-					return new Response(JSON.stringify(mockBitbankSuccess({ trades: fullMarginPage })), { status: 200 });
-				}
-				return new Response(JSON.stringify(mockBitbankSuccess({ trades: fullSpotPage })), { status: 200 });
+				return new Response(JSON.stringify(mockBitbankSuccess({ trades: [...fullSpotPage, ...fullMarginPage] })), {
+					status: 200,
+				});
 			}
 			if (urlStr.includes('deposit_history')) {
 				return new Response(JSON.stringify(mockBitbankSuccess({ deposits: [] })), { status: 200 });
@@ -662,7 +667,7 @@ describe('analyze_my_portfolio', () => {
 	});
 
 	it('警告行が summary 先頭付近に出る（タイトル前または直後）— LLM の見落とし防止', async () => {
-		setupFetchMock({ marginTradesFail: true });
+		setupFetchMock({ tradeHistoryFail: true });
 
 		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
 		const result = await handler({
@@ -957,10 +962,6 @@ describe('analyze_my_portfolio', () => {
 					return new Response(JSON.stringify(mockBitbankSuccess(consistentAssets)), { status: 200 });
 				}
 				if (urlStr.includes('trade_history')) {
-					const isMargin = urlStr.includes('type=margin');
-					if (isMargin) {
-						return new Response(JSON.stringify(mockBitbankSuccess({ trades: [] })), { status: 200 });
-					}
 					return new Response(JSON.stringify(mockBitbankSuccess(customTrades)), { status: 200 });
 				}
 				if (urlStr.includes('deposit_history')) {
@@ -1064,10 +1065,6 @@ describe('analyze_my_portfolio', () => {
 					return new Response(JSON.stringify(mockBitbankSuccess(rawAssetsResponse)), { status: 200 });
 				}
 				if (urlStr.includes('trade_history')) {
-					const isMargin = urlStr.includes('type=margin');
-					if (isMargin) {
-						return new Response(JSON.stringify(mockBitbankSuccess({ trades: [] })), { status: 200 });
-					}
 					return new Response(JSON.stringify(mockBitbankSuccess(customTrades)), { status: 200 });
 				}
 				if (urlStr.includes('deposit_history')) {
@@ -1210,7 +1207,7 @@ describe('analyze_my_portfolio', () => {
 
 	it('信用約定 / 信用口座状態 / 信用建玉が同時に失敗: warning が 1 行に集約されず別々に出る', async () => {
 		setupFetchMock({
-			marginTradesFail: true,
+			tradeHistoryFail: true,
 			marginStatusFail: true,
 			marginPositionsFail: true,
 		});
@@ -1298,7 +1295,7 @@ describe('analyze_my_portfolio — 信頼できない損益値の null 化', () 
 				return new Response(JSON.stringify(mockBitbankSuccess(rawAssetsResponse)), { status: 200 });
 			}
 			if (urlStr.includes('trade_history')) {
-				const payload = urlStr.includes('type=margin') ? { trades: [] } : rawTradeHistoryResponse;
+				const payload = rawTradeHistoryResponse;
 				return new Response(JSON.stringify(mockBitbankSuccess(payload)), { status: 200 });
 			}
 			if (urlStr.includes('deposit_history')) {
@@ -1762,7 +1759,7 @@ describe('analyze_my_portfolio — 入出金取得の include_pnl 紐づけ', ()
 		const urls = fetchedUrls();
 		expect(urls.some((u) => u.includes('deposit_history'))).toBe(true);
 		expect(urls.some((u) => u.includes('withdrawal_history'))).toBe(true);
-		expect(urls.some((u) => u.includes('trade_history') && !u.includes('type=margin'))).toBe(false);
+		expect(urls.some((u) => u.includes('trade_history'))).toBe(false);
 		expect(result.data.deposit_withdrawal_summary).toBeDefined();
 		expect(result.meta.depositWithdrawalStatus).toBe('available');
 		expect(result.meta.dwFetchedForPnl).toBe(false);
@@ -1798,7 +1795,7 @@ describe('analyze_my_portfolio — 入出金取得の include_pnl 紐づけ', ()
 				return new Response(JSON.stringify(mockBitbankSuccess(rawAssetsResponse)), { status: 200 });
 			}
 			if (urlStr.includes('trade_history')) {
-				const payload = urlStr.includes('type=margin') ? { trades: [] } : rawTradeHistoryResponse;
+				const payload = rawTradeHistoryResponse;
 				return new Response(JSON.stringify(mockBitbankSuccess(payload)), { status: 200 });
 			}
 			if (urlStr.includes('deposit_history')) {
@@ -2481,7 +2478,7 @@ describe('analyze_my_portfolio — 入出庫日価格での評価', () => {
 				return new Response(JSON.stringify(mockBitbankSuccess(rawAssetsResponse)), { status: 200 });
 			}
 			if (urlStr.includes('trade_history')) {
-				const payload = urlStr.includes('type=margin') ? { trades: [] } : rawTradeHistoryResponse;
+				const payload = rawTradeHistoryResponse;
 				return new Response(JSON.stringify(mockBitbankSuccess(payload)), { status: 200 });
 			}
 			if (urlStr.includes('deposit_history')) {
@@ -2539,7 +2536,7 @@ describe('analyze_my_portfolio — 入出庫日価格での評価', () => {
 					return new Response(JSON.stringify(mockBitbankSuccess(rawAssetsResponse)), { status: 200 });
 				}
 				if (urlStr.includes('trade_history')) {
-					const payload = urlStr.includes('type=margin') ? { trades: [] } : rawTradeHistoryResponse;
+					const payload = rawTradeHistoryResponse;
 					return new Response(JSON.stringify(mockBitbankSuccess(payload)), { status: 200 });
 				}
 				if (urlStr.includes('deposit_history')) {
@@ -2667,7 +2664,7 @@ describe('analyze_my_portfolio — 入出庫日価格での評価', () => {
 					return new Response(JSON.stringify(mockBitbankSuccess(rawAssetsResponse)), { status: 200 });
 				}
 				if (urlStr.includes('trade_history')) {
-					const payload = urlStr.includes('type=margin') ? { trades: [] } : rawTradeHistoryResponse;
+					const payload = rawTradeHistoryResponse;
 					return new Response(JSON.stringify(mockBitbankSuccess(payload)), { status: 200 });
 				}
 				if (urlStr.includes('deposit_history')) {
@@ -2951,7 +2948,7 @@ describe('analyze_my_portfolio — 取得原価の決定性（出庫に押し出
 				return new Response(JSON.stringify(mockBitbankSuccess(assetsWithDepositedBtc)), { status: 200 });
 			}
 			if (urlStr.includes('trade_history')) {
-				const payload = urlStr.includes('type=margin') ? { trades: [] } : rawTradeHistoryResponse;
+				const payload = rawTradeHistoryResponse;
 				return new Response(JSON.stringify(mockBitbankSuccess(payload)), { status: 200 });
 			}
 			if (urlStr.includes('deposit_history')) {
@@ -3353,7 +3350,7 @@ describe('analyze_my_portfolio — API asset の取得境界正規化', () => {
 				return new Response(JSON.stringify(mockBitbankSuccess(assetsResponse(btc, jpy))), { status: 200 });
 			}
 			if (urlStr.includes('trade_history')) {
-				const payload = urlStr.includes('type=margin') ? { trades: [] } : rawTradeHistoryResponse;
+				const payload = rawTradeHistoryResponse;
 				return new Response(JSON.stringify(mockBitbankSuccess(payload)), { status: 200 });
 			}
 			if (urlStr.includes('deposit_history')) {
@@ -3468,9 +3465,7 @@ describe('analyze_my_portfolio — API pair の取得境界正規化', () => {
 				return new Response(JSON.stringify(mockBitbankSuccess(assetsResponse)), { status: 200 });
 			}
 			if (urlStr.includes('trade_history')) {
-				const payload = urlStr.includes('type=margin')
-					? { trades: [] }
-					: tradesResponse(uppercase ? 'BTC_JPY' : 'btc_jpy');
+				const payload = tradesResponse(uppercase ? 'BTC_JPY' : 'btc_jpy');
 				return new Response(JSON.stringify(mockBitbankSuccess(payload)), { status: 200 });
 			}
 			if (urlStr.includes('deposit_history')) {

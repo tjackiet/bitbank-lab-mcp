@@ -15,6 +15,8 @@
 - `analyze_my_portfolio`：同じ時刻の約定と入出庫は、入庫 → 約定 → 出庫の順で処理する。入庫と同時刻の売りが、原価ゼロの売りとして実現損益を過大に出していた（issue #448）。
 - `preview_order`：指値（`post_only` なし）が現在の板を跨ぐとき（買いは best ask 以上、売りは best bid 以下）は、即時約定するので taker の率で手数料を見積る。maker が -0.02% のペアで 0.01 BTC を 1,500 万円で買うと「推定手数料 -30 円（リベート）」と出ていたが、即時約定すれば実際は taker の +180 円だった。`/ticker` を取得できないとき、該当する側の best ask / bid が無いときは従来どおり maker 想定（issue #449）。
 - `preview_order`：円建ての推定手数料は円未満を四捨五入した概算であることを備考に書く。約定履歴の手数料は円未満まで計上される（issue #449）。
+- `get_margin_trade_history` / `analyze_my_portfolio`：約定履歴の取得で、ドキュメントのパラメータ表に無い `type=margin` を送るのをやめる。`get_margin_positions`：`GET /user/margin/positions` は Parameters: None なので、`pair` を API に送るのをやめ、全建玉を取ってから絞る。どちらも従来からクライアント側で絞り直していたので結果は変わらない。API が未知のパラメータを拒否するようになったときに取得が失敗するのを防ぐ（issue #458 項目 3）。
+- `get_my_orders`：`count` を既定値（100）でも API に送る。`active_orders` の `count` の既定値はドキュメントに無い（issue #458 項目 2）。
 
 ### Added
 

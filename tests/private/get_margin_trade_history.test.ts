@@ -81,7 +81,8 @@ describe('get_margin_trade_history', () => {
 		expect(result.meta.tradeCount).toBe(3);
 	});
 
-	it('type=margin パラメータを API に渡す', async () => {
+	// trade_history のパラメータ表に type は無い（issue 458 項目 3）。信用だけに絞るのは position_side で行う。
+	it('ドキュメントに無い type パラメータを送らない', async () => {
 		setupFetchMock(mockBitbankSuccess({ trades: [] }));
 
 		const { default: getMarginTradeHistory } = await import('../../tools/private/get_margin_trade_history.js');
@@ -89,7 +90,7 @@ describe('get_margin_trade_history', () => {
 
 		const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
 		const calledUrl = fetchMock.mock.calls[0][0] as string;
-		expect(calledUrl).toContain('type=margin');
+		expect(calledUrl).not.toMatch(/[?&]type=/);
 	});
 
 	it('executed_at を ISO8601 に変換する', async () => {
@@ -436,7 +437,7 @@ describe('get_margin_trade_history', () => {
 	});
 
 	it('現物 (position_side 欠損) が混在しても信用のみを返し集計もフィルタ後の値', async () => {
-		// type=margin が API に無視されて現物約定が混入しても、信用だけが残り「ロング X件 / ショート Y件」の集計もフィルタ後の値になること。
+		// 約定履歴 API は現物と信用を混ぜて返すので、信用だけが残り「ロング X件 / ショート Y件」の集計もフィルタ後の値になること。
 		const mixed = {
 			trades: [
 				{
@@ -893,7 +894,7 @@ describe('get_margin_trade_history — ページネーション', () => {
 		const firstUrl = mockFn.mock.calls[0][0] as string;
 		expect(firstUrl).toContain('order=asc');
 		expect(firstUrl).toContain('count=1000');
-		expect(firstUrl).toContain('type=margin');
+		expect(firstUrl).not.toMatch(/[?&]type=/);
 	});
 
 	it('desc + count > 1000 で最新側 count 件が返る（CodeRabbit #458 指摘 2 の回帰防止）', async () => {
@@ -935,7 +936,7 @@ describe('get_margin_trade_history — ページネーション', () => {
 		const firstUrl = mockFn.mock.calls[0][0] as string;
 		expect(firstUrl).toContain('order=desc');
 		expect(firstUrl).toContain('count=1000');
-		expect(firstUrl).toContain('type=margin');
+		expect(firstUrl).not.toMatch(/[?&]type=/);
 		// 初回は end カーソル未設定（ユーザーが end を渡していない）
 		expect(firstUrl).not.toMatch(/[?&]end=/);
 	});

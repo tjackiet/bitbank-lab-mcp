@@ -68,7 +68,7 @@ export async function paginateMarginTrades(
 	let since: string | undefined = sinceMs != null ? String(sinceMs) : undefined;
 	let fetchFailed = false;
 	for (let page = 0; page < MAX_PAGES; page++) {
-		const params: Record<string, string> = { type: 'margin', count: String(TRADE_PAGE_SIZE), order: 'asc' };
+		const params: Record<string, string> = { count: String(TRADE_PAGE_SIZE), order: 'asc' };
 		if (since) params.since = since;
 		const result = await tryGet<{ trades: RawMarginTrade[] }>(client, '/v1/user/spot/trade_history', params);
 		if (!result.ok) {
@@ -76,7 +76,7 @@ export async function paginateMarginTrades(
 			break;
 		}
 		const batch = normalizePairCodes(result.data.trades || []);
-		// type=margin は docs に無く無視されうる。現物が混ざると calcMarginPnl が現物の手数料まで margin_fee_cost として控除する。
+		// 約定履歴 API は現物と信用を混ぜて返す。現物が混ざると calcMarginPnl が現物の手数料まで margin_fee_cost として控除する。
 		const marginOnly = batch.filter((t) => t.position_side != null);
 		const newRecords = marginOnly.filter((t) => !seenIds.has(t.trade_id));
 		for (const t of newRecords) seenIds.add(t.trade_id);
