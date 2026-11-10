@@ -156,6 +156,36 @@ describe('get_my_trade_history', () => {
 		expect(lines.find((l) => l.includes('trade: 900'))).toContain('手数料: 0円 + 0.00001 BTC');
 	});
 
+	it('JPY 以外の建てのペアは、quote の手数料を円ではなくその通貨で出す', async () => {
+		setupFetchMock(
+			mockBitbankSuccess({
+				trades: [
+					{
+						trade_id: 902,
+						pair: 'eth_btc',
+						order_id: 9002,
+						side: 'buy',
+						type: 'limit',
+						amount: '0.1',
+						price: '0.05',
+						maker_taker: 'taker',
+						fee_amount_base: '0',
+						fee_amount_quote: '0.000006',
+						executed_at: 1710000100000,
+					},
+				],
+			}),
+		);
+
+		const { default: getMyTradeHistory } = await import('../../tools/private/get_my_trade_history.js');
+		const result = await getMyTradeHistory({});
+
+		assertOk(result);
+		const line = result.summary.split('\n').find((l) => l.includes('trade: 902'));
+		expect(line).toContain('手数料: 0.000006 BTC');
+		expect(line).not.toContain('円');
+	});
+
 	it('trade_id と order_id をサマリーに含む', async () => {
 		setupFetchMock(mockBitbankSuccess(rawTradeHistoryResponse));
 

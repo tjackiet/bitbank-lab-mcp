@@ -1,6 +1,6 @@
 import { nowIso, parseIso8601, toIsoMs } from '../../lib/datetime.js';
 import { formatPair, formatPrice, formatYenExact } from '../../lib/formatter.js';
-import { normalizePairCodes } from '../../lib/pair-code.js';
+import { isJpyQuotedPair, normalizePairCodes } from '../../lib/pair-code.js';
 import { fail, ok } from '../../lib/result.js';
 import { paginateTrades } from '../../src/handlers/portfolio/fetch.js';
 import type { RawTrade } from '../../src/handlers/portfolio/types.js';
@@ -14,11 +14,15 @@ const PAGE_SIZE = 1000;
 
 // 現物の手数料は売買とも quote 建て。base 建てが非ゼロのときだけ併記する。
 function spotFeeInfo(t: { pair: string; fee_amount_quote: string; fee_amount_base: string }): string {
-	const quote =
-		t.fee_amount_quote !== '' && t.fee_amount_quote != null ? formatYenExact(Number(t.fee_amount_quote)) : null;
+	const [baseAsset, quoteAsset] = t.pair.split('_').map((a) => a.toUpperCase());
+	const hasQuote = t.fee_amount_quote !== '' && t.fee_amount_quote != null;
+	const quote = !hasQuote
+		? null
+		: isJpyQuotedPair(t.pair)
+			? formatYenExact(Number(t.fee_amount_quote))
+			: `${t.fee_amount_quote} ${quoteAsset}`;
 	const baseNum = Number(t.fee_amount_base);
-	const base =
-		Number.isFinite(baseNum) && baseNum !== 0 ? `${t.fee_amount_base} ${t.pair.split('_')[0].toUpperCase()}` : null;
+	const base = Number.isFinite(baseNum) && baseNum !== 0 ? `${t.fee_amount_base} ${baseAsset}` : null;
 	const parts = [quote, base].filter((p): p is string => p != null);
 	return parts.length > 0 ? ` 手数料: ${parts.join(' + ')}` : '';
 }

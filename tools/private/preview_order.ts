@@ -97,6 +97,8 @@ export default async function previewOrder(args: {
 	const warnings: string[] = [];
 	// 手数料見積りでも spec を使うため try の外に保持する（pairs を二重 fetch しない）。
 	let spec: PairSpec | undefined;
+	// 板を跨ぐかの判定用。pairs の取得・検証と並行して取りに行き、待ち時間を重ねない（fetchPairTicker は失敗時に null を返し reject しない）。
+	const tickerPromise = type === 'limit' && !post_only && price ? fetchPairTicker(pair) : null;
 	try {
 		const pairsMap = await fetchPairsSpec();
 		spec = pairsMap.get(pair.toLowerCase());
@@ -163,10 +165,7 @@ export default async function previewOrder(args: {
 		lines.push('  Post Only: 有効');
 	}
 
-	const crossesBook =
-		type === 'limit' && !post_only && price
-			? limitCrossesBook(await fetchPairTicker(pair), side, Number(price))
-			: undefined;
+	const crossesBook = tickerPromise && price ? limitCrossesBook(await tickerPromise, side, Number(price)) : undefined;
 	// spec の取得に失敗していたら undefined のまま渡し、estimateOrderFee 側で公称 taker による概算にフォールバックさせる。
 	const feeEstimate = estimateOrderFee(spec, {
 		type,
