@@ -134,7 +134,23 @@ export const RunBacktestOutputSchema = z.union([
 				effective_bars: z.number().describe('Total fetched candle count (warmup included)'),
 			}),
 			summary: GenericBacktestSummarySchema,
-			trades: z.array(BacktestTradeSchema),
+			trades: z
+				.array(BacktestTradeSchema)
+				.describe('Closed trades only (an open position at the end is in open_position)'),
+			open_position: z
+				.object({
+					entry_time: z.string(),
+					entry_price: z.number(),
+					mark_time: z.string().describe('Last bar time used to value the position'),
+					mark_price: z.number().describe('Last bar close'),
+					unrealized_pnl_pct: z
+						.number()
+						.describe('Unrealized P&L [%] with the entry fee deducted and the exit fee not deducted'),
+				})
+				.nullable()
+				.describe(
+					'Long position still open at the last bar. total_pnl_pct / equity_curve / max_drawdown_pct / sharpe_ratio include its unrealized P&L; trade_count / win_rate / avg_pnl_pct / profit_factor do not.',
+				),
 			equity_curve: z.array(EquityPointSchema),
 			drawdown_curve: z.array(DrawdownPointSchema),
 			overlays: z.array(z.any()),

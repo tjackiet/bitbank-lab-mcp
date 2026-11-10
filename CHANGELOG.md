@@ -7,6 +7,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `run_backtest`：期間の終わりに残った未決済のロングを `data.open_position`（建値・建てた時刻・評価に使った最終バーの終値・含み損益）に出す。本文にも `--- Open Position ---` の節を出し、Total P&L が含み損益込みで、Trades / Win Rate / Avg P&L/Trade / Profit Factor は決済済みトレードだけであることを書く。含み損 30% の未決済 1 件だけのとき「Trades: 0、Total P&L: -30.00%」と出て、差の理由が分からなかった（issue #444）。
+
 ### Fixed
 
 - `run_backtest`：戦略が持たない `params` のキー（例: `sma_cross` の `short_period`）が検証を通り、既定値で実行されていた。未知のキーはエラーにする。期間系のパラメータ（`short` / `long` / `period` / `fast` / `slow` / `signal` / `sma_filter_period` / `rsi_filter_period`）に小数を渡すと、指標が全 NaN になって「0 トレード」を返すか、内部の例外がエラーとして返っていた。整数だけを通す（issue #443）。

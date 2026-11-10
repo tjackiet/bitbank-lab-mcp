@@ -1,9 +1,15 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { dayjs, formatDateInTz } from '../../lib/datetime.js';
+import { formatPrice } from '../../lib/formatter.js';
 import { DEFAULT_CHART_OUTPUT_DIR, ensureAllowedOutputDir } from '../../lib/validate.js';
 import { prependWarnings } from '../../lib/warning-propagation.js';
-import { type BacktestEngineInput, type BacktestEngineResult, runBacktestEngine } from './lib/backtest_engine.js';
+import {
+	type BacktestEngineInput,
+	type BacktestEngineResult,
+	type BacktestOpenPosition,
+	runBacktestEngine,
+} from './lib/backtest_engine.js';
 import { fetchCandlesForBacktest, getPeriodBars } from './lib/fetch_candles.js';
 import { type FeeSource, resolveBacktestFeeBp } from './lib/resolve_fee.js';
 import { getAvailableStrategies, getStrategy, type StrategyConfig, type StrategyType } from './lib/strategies/index.js';
@@ -166,20 +172,19 @@ export default async function runBacktest(input: RunBacktestInput): Promise<RunB
 			svg = renderBacktestChartGeneric(chartData, chartDetail);
 		}
 
-		const summaryBody = result
-			? generateSummaryText(
-					{
-						candles,
-						overlays: result.overlays,
-						trades: result.trades,
-						equity_curve: result.equity_curve,
-						drawdown_curve: result.drawdown_curve,
-						input: chartInput,
-						summary: result.summary,
-					},
-					chartDetail,
-				)
-			: '';
+		const summaryBody = generateSummaryText(
+			{
+				candles,
+				overlays: result.overlays,
+				trades: result.trades,
+				equity_curve: result.equity_curve,
+				drawdown_curve: result.drawdown_curve,
+				input: chartInput,
+				summary: result.summary,
+			},
+			chartDetail,
+			result.open_position,
+		);
 
 		const warning = [resolvedFee.warning, evaluationShortfallWarning(range, timeframe, result.summary.evaluation_bars)]
 			.filter((w): w is string => w != null)
@@ -257,6 +262,10 @@ function sampleCurve<T>(curve: T[], maxPoints: number): T[] {
 	return result;
 }
 
+function formatSignedPct(pct: number): string {
+	return `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
+}
+
 function roundBp(bp: number): number {
 	return Number(bp.toFixed(2));
 }
@@ -272,7 +281,11 @@ function feeSourceLabel(source: FeeSource | undefined): string {
 	}
 }
 
-function generateSummaryText(data: GenericBacktestChartData, chartDetail: ChartDetail): string {
+function generateSummaryText(
+	data: GenericBacktestChartData,
+	chartDetail: ChartDetail,
+	openPosition: BacktestOpenPosition | null,
+): string {
 	const { candles, input, summary, trades, equity_curve, drawdown_curve } = data;
 	const lines: string[] = [];
 
@@ -298,7 +311,8 @@ function generateSummaryText(data: GenericBacktestChartData, chartDetail: ChartD
 	);
 	lines.push('');
 	lines.push(`--- Summary (Compound) ---`);
-	lines.push(`Total P&L: ${summary.total_pnl_pct >= 0 ? '+' : ''}${summary.total_pnl_pct.toFixed(2)}%`);
+	const unrealizedNote = openPosition ? ' (incl. unrealized P&L of the open position)' : '';
+	lines.push(`Total P&L: ${formatSignedPct(summary.total_pnl_pct)}${unrealizedNote}`);
 	const bhStartIdx = summary.warmup_bars + 1;
 	const bhStartDate = isoDateForDisplay(candles[bhStartIdx]?.time);
 	const bhEndDate = isoDateForDisplay(summary.evaluation_end);
@@ -306,12 +320,26 @@ function generateSummaryText(data: GenericBacktestChartData, chartDetail: ChartD
 		`Buy & Hold: ${summary.buy_hold_pnl_pct >= 0 ? '+' : ''}${summary.buy_hold_pnl_pct.toFixed(2)}% (${bhStartDate} open → ${bhEndDate} close)`,
 	);
 	lines.push(`Excess Return: ${summary.excess_return_pct >= 0 ? '+' : ''}${summary.excess_return_pct.toFixed(2)}%`);
-	lines.push(`Trades: ${summary.trade_count}`);
+	lines.push(`Trades: ${summary.trade_count}${openPosition ? ' (closed trades only)' : ''}`);
 	lines.push(`Win Rate: ${(summary.win_rate * 100).toFixed(1)}%`);
 	lines.push(`Avg P&L/Trade: ${summary.avg_pnl_pct >= 0 ? '+' : ''}${summary.avg_pnl_pct.toFixed(2)}%`);
 	lines.push(`Max Drawdown: -${summary.max_drawdown_pct.toFixed(2)}%`);
 	lines.push(`Profit Factor: ${summary.profit_factor != null ? summary.profit_factor.toFixed(2) : 'N/A (no losses)'}`);
 	lines.push(`Sharpe Ratio: ${summary.sharpe_ratio != null ? summary.sharpe_ratio.toFixed(2) : 'N/A'}`);
+
+	if (openPosition) {
+		lines.push('');
+		lines.push('--- Open Position ---');
+		lines.push(
+			`Entry: ${isoDateForDisplay(openPosition.entry_time)} open ${formatPrice(openPosition.entry_price, input.pair)} → Mark: ${isoDateForDisplay(openPosition.mark_time)} close ${formatPrice(openPosition.mark_price, input.pair)}`,
+		);
+		lines.push(
+			`Unrealized P&L: ${formatSignedPct(openPosition.unrealized_pnl_pct)} (entry fee deducted, exit fee not deducted)`,
+		);
+		lines.push(
+			'※ Total P&L / Max Drawdown / Sharpe Ratio / Equity Curve は未決済ポジションの含み損益込み。Trades / Win Rate / Avg P&L/Trade / Profit Factor は決済済みトレードのみ。',
+		);
+	}
 
 	if (trades.length > 0) {
 		lines.push('');

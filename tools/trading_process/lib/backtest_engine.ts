@@ -35,10 +35,20 @@ export interface BacktestEngineSummary {
 	warmup_bars: number;
 }
 
+// 含み損益は建てた時の片道手数料だけを引き、決済の手数料は引かない（equity_curve の最終値と同じ扱い）。
+export interface BacktestOpenPosition {
+	entry_time: string;
+	entry_price: number;
+	mark_time: string;
+	mark_price: number;
+	unrealized_pnl_pct: number;
+}
+
 export interface BacktestEngineResult {
 	input: BacktestEngineInput;
 	summary: BacktestEngineSummary;
 	trades: Trade[];
+	open_position: BacktestOpenPosition | null;
 	equity_curve: EquityPoint[];
 	drawdown_curve: DrawdownPoint[];
 	overlays: Overlay[];
@@ -237,10 +247,24 @@ export function runBacktestEngine(
 
 	const overlays = strategy.getOverlays(candles, params);
 
+	const lastCandle = candles[candles.length - 1];
+	const openPositionOut: BacktestOpenPosition | null =
+		open_position && lastCandle
+			? {
+					entry_time: open_position.entry_time,
+					entry_price: open_position.entry_price,
+					mark_time: lastCandle.time,
+					mark_price: lastCandle.close,
+					unrealized_pnl_pct:
+						((lastCandle.close / open_position.entry_price) * open_position.entry_fee_multiplier - 1) * 100,
+				}
+			: null;
+
 	return {
 		input,
 		summary,
 		trades,
+		open_position: openPositionOut,
 		equity_curve,
 		drawdown_curve,
 		overlays,

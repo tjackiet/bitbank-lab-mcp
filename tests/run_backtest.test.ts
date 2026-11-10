@@ -112,6 +112,7 @@ function buildEngineResult(): BacktestEngineResult {
 				net_return: 1.0123,
 			},
 		],
+		open_position: null,
 		equity_curve: [],
 		drawdown_curve: [],
 		overlays: [],
@@ -678,6 +679,56 @@ describe('run_backtest', () => {
 		expect(res.summary).toContain('fallback: 公称 12bp 概算');
 		const engineInput = mocks.runBacktestEngine.mock.calls[0][2];
 		expect(engineInput.fee_bp).toBe(12);
+	});
+
+	it('未決済ポジションがあると、建値・含み損益と、Total P&L が含み損益込みであることを本文に出す（issue 444）', async () => {
+		setupRsiStrategy();
+		const engineResult = buildEngineResult();
+		engineResult.trades = [];
+		engineResult.summary.trade_count = 0;
+		engineResult.summary.win_rate = 0;
+		engineResult.summary.avg_pnl_pct = 0;
+		engineResult.summary.total_pnl_pct = -30;
+		engineResult.open_position = {
+			entry_time: '2024-01-10T00:00:00.000Z',
+			entry_price: 10_000_000,
+			mark_time: '2024-01-31T00:00:00.000Z',
+			mark_price: 7_008_400,
+			unrealized_pnl_pct: -30,
+		};
+		mocks.runBacktestEngine.mockReturnValue(engineResult);
+
+		const res = await runBacktest({
+			pair: 'btc_jpy',
+			strategy: { type: 'rsi', params: {} },
+			savePng: false,
+			includeSvg: false,
+		});
+
+		assertOk(res);
+		expect(res.summary).toContain('Total P&L: -30.00% (incl. unrealized P&L of the open position)');
+		expect(res.summary).toContain('Trades: 0 (closed trades only)');
+		expect(res.summary).toContain('--- Open Position ---');
+		expect(res.summary).toContain('Entry: 2024-01-10 open ¥10,000,000 → Mark: 2024-01-31 close ¥7,008,400');
+		expect(res.summary).toContain('Unrealized P&L: -30.00% (entry fee deducted, exit fee not deducted)');
+		expect(res.summary).toContain('決済済みトレードのみ');
+		expect(res.data.open_position).toEqual(engineResult.open_position);
+	});
+
+	it('未決済ポジションが無ければ Open Position の節も注記も出さない', async () => {
+		setupRsiStrategy();
+
+		const res = await runBacktest({
+			pair: 'btc_jpy',
+			strategy: { type: 'rsi', params: {} },
+			savePng: false,
+			includeSvg: false,
+		});
+
+		assertOk(res);
+		expect(res.summary).not.toContain('Open Position');
+		expect(res.summary).not.toContain('unrealized');
+		expect(res.summary).toContain('Trades: 1\n');
 	});
 
 	it('評価区間が period の本数に届かないと warning を出す（取得上限・履歴不足、issue 442）', async () => {

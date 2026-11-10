@@ -1485,6 +1485,11 @@ sma_cross / macd_cross の RSI フィルタ（`rsi_filter_period`）も同じで
 | avg_pnl_pct | 1トレードあたり平均損益 [%] |
 | profit_factor | Profit Factor（総利益 / 総損失）。全勝時は null |
 | sharpe_ratio | 年率換算 Sharpe Ratio（日次リターン × √365） |
+| open_position | 期間の終わりに残った未決済のロング（建値・建てた時刻・評価に使った最終バーの終値・含み損益）。無ければ null |
+
+`total_pnl_pct` / `max_drawdown_pct` / `sharpe_ratio` / equity_curve は未決済ポジションの含み損益込み、
+`trades` / `win_rate` / `avg_pnl_pct` / `profit_factor` は決済済みトレードだけを数えます。
+未決済ポジションがあるときは、本文に `--- Open Position ---` の節と、この違いの注記を出します。
 
 ### チャート出力先（savePng / outputDir）
 

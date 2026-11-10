@@ -823,6 +823,45 @@ describe('runBacktestEngine - open position entry fee', () => {
 		expect(result.summary.total_pnl_pct).toBeCloseTo(-1, 2);
 	});
 
+	it('未決済ポジションを open_position に出す（建値・建てた時刻・評価に使った終値・含み損益、issue 444）', () => {
+		// entry at candles[3].open=100、last close=70、片道 1% → 0.7 × 0.99 - 1 = -30.7%
+		const candles: Candle[] = [
+			{ time: 't0', open: 90, high: 95, low: 85, close: 90 },
+			{ time: 't1', open: 95, high: 100, low: 90, close: 95 },
+			{ time: 't2', open: 100, high: 105, low: 95, close: 100 },
+			{ time: 't3', open: 100, high: 105, low: 95, close: 100 },
+			{ time: 't4', open: 90, high: 95, low: 80, close: 85 },
+			{ time: 't5', open: 80, high: 85, low: 65, close: 70 },
+		];
+		const strategy = makeBuyOnceStrategy(2, candles.length, 2);
+		const result = runBacktestEngine(candles, strategy, makeEngineInput(candles, { fee_bp: 100 }));
+		expect(result.summary.trade_count).toBe(0);
+		expect(result.open_position).toEqual({
+			entry_time: 't3',
+			entry_price: 100,
+			mark_time: 't5',
+			mark_price: 70,
+			unrealized_pnl_pct: expect.closeTo(-30.7, 6),
+		});
+		expect(result.summary.total_pnl_pct).toBeCloseTo(-30.7, 2);
+	});
+
+	it('全トレードが決済済みなら open_position は null', () => {
+		const candles = makeFlatCandles(8, 100);
+		const strategy = {
+			...makeBuyOnceStrategy(2, candles.length, 2),
+			generate: (): Signal[] =>
+				Array.from({ length: candles.length }, (_, i) => ({
+					action: i === 2 ? ('buy' as const) : i === 4 ? ('sell' as const) : ('hold' as const),
+					reason: '',
+					time: '',
+				})),
+		};
+		const result = runBacktestEngine(candles, strategy, makeEngineInput(candles));
+		expect(result.summary.trade_count).toBe(1);
+		expect(result.open_position).toBeNull();
+	});
+
 	it('fee_bp=0、entry=close=同値の未決済は従来通り fee 影響なし', () => {
 		const candles = makeFlatCandles(8, 100);
 		const strategy = makeBuyOnceStrategy(2, candles.length, 2);
