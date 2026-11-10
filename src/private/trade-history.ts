@@ -90,22 +90,24 @@ export function scanBoundaryIso(result: FilteredTradeHistory<unknown>): string |
 	return result.isComplete ? undefined : (toIsoMs(result.scanBoundaryMs) ?? undefined);
 }
 
-// 打ち切ったときに「反対側の約定しか見つからなかった」のか「約定が無い」のかを LLM が区別できるようにする。
+// 打ち切ったときに「反対側の約定しか見つからなかった」のか「約定が無い」のかを LLM が区別でき、続きを取れるようにする。
 export function mixedHistoryNote(
 	result: FilteredTradeHistory<unknown>,
 	options: { kept: string; excluded: string; order: 'asc' | 'desc'; limit: number },
 ): string | null {
 	const { kept, excluded, order, limit } = options;
-	if (result.isComplete || result.excluded === 0 || result.trades.length >= limit) return null;
+	if (result.isComplete || result.trades.length >= limit) return null;
 	const direction = order === 'desc' ? { word: '古い', param: 'end' } : { word: '新しい', param: 'since' };
 	const found =
-		result.trades.length === 0
-			? `取得した約定 ${result.scanned}件はすべて${excluded}で、${kept}約定はありませんでした`
-			: `取得した約定 ${result.scanned}件のうち ${result.excluded}件は${excluded}で、${kept}約定は ${result.trades.length}件でした`;
+		result.excluded === 0
+			? `指定の件数に届く前に取得を打ち切りました（${kept}約定 ${result.trades.length}件）`
+			: result.trades.length === 0
+				? `取得した約定 ${result.scanned}件はすべて${excluded}で、${kept}約定はありませんでした（約定履歴 API は現物と信用を混ぜて返します）`
+				: `取得した約定 ${result.scanned}件のうち ${result.excluded}件は${excluded}で、${kept}約定は ${result.trades.length}件でした（約定履歴 API は現物と信用を混ぜて返します）`;
 	const boundary = scanBoundaryIso(result);
 	const next =
 		boundary != null
 			? `続きは ${direction.param} に ${boundary}（最後に調べた約定の時刻）を指定して取得してください`
 			: `続きは ${direction.param} で期間を指定して取得してください`;
-	return `※ ${found}（約定履歴 API は現物と信用を混ぜて返します）。これより${direction.word}約定は取得していません。${next}`;
+	return `※ ${found}。これより${direction.word}約定は取得していません。${next}`;
 }

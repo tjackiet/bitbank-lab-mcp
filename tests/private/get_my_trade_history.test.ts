@@ -522,6 +522,12 @@ describe('get_my_trade_history — ページネーション', () => {
 		assertOk(result);
 		expect(result.meta.isComplete).toBe(false);
 		expect(result.summary).toContain('全件ではなく一部のみ取得されています');
+		// 除外した約定が無くても、LLM は meta を読めないので続きの時刻を本文に出す。
+		const boundary = new Date(1710009999000).toISOString();
+		expect(result.meta.scanBoundary).toBe(boundary);
+		expect(result.summary).toContain('指定の件数に届く前に取得を打ち切りました（現物約定 10000件）');
+		expect(result.summary).toContain(`続きは since に ${boundary}（最後に調べた約定の時刻）を指定して取得してください`);
+		expect(result.summary).not.toContain('現物と信用を混ぜて返します');
 	});
 
 	it('desc: ページネーション結果が新しい順 (API の desc 順) で返る', async () => {
