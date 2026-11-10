@@ -121,6 +121,7 @@ export default async function runBacktest(input: RunBacktestInput): Promise<RunB
 			start_date && end_date
 				? { type: 'absolute', start: start_date, end: end_date }
 				: { type: 'period', value: period };
+		const periodLabel = range.type === 'absolute' ? `${range.start} ~ ${range.end}` : range.value;
 
 		const [candles, resolvedFee] = await Promise.all([
 			fetchCandlesForBacktest(pair, timeframe, range, requiredBars),
@@ -137,7 +138,7 @@ export default async function runBacktest(input: RunBacktestInput): Promise<RunB
 		const engineInput: BacktestEngineInput = {
 			pair,
 			timeframe,
-			period,
+			period: periodLabel,
 			strategy: { type: strategyConfig.type, params },
 			fee_bp: resolvedFee.fee_bp,
 			execution,
@@ -151,7 +152,7 @@ export default async function runBacktest(input: RunBacktestInput): Promise<RunB
 		const chartInput = {
 			pair,
 			timeframe,
-			period,
+			period: periodLabel,
 			strategyName: strategy.name,
 			strategyParams: params,
 			fee_bp: resolvedFee.fee_bp,
@@ -266,6 +267,11 @@ function formatSignedPct(pct: number): string {
 	return `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
 }
 
+function formatProfitFactor(profitFactor: number | null, tradeCount: number): string {
+	if (profitFactor != null) return profitFactor.toFixed(2);
+	return tradeCount === 0 ? 'N/A (no trades)' : 'N/A (no losses)';
+}
+
 function roundBp(bp: number): number {
 	return Number(bp.toFixed(2));
 }
@@ -275,7 +281,7 @@ function feeSourceLabel(source: FeeSource | undefined): string {
 		case 'dynamic':
 			return 'dynamic: /spot/pairs taker レート由来';
 		case 'fallback':
-			return 'fallback: 公称 12bp 概算（pairs 取得失敗）';
+			return 'fallback: 公称 12bp 概算（/spot/pairs から taker レートを取得できず）';
 		default:
 			return 'explicit: 明示指定';
 	}
@@ -317,14 +323,14 @@ function generateSummaryText(
 	const bhStartDate = isoDateForDisplay(candles[bhStartIdx]?.time);
 	const bhEndDate = isoDateForDisplay(summary.evaluation_end);
 	lines.push(
-		`Buy & Hold: ${summary.buy_hold_pnl_pct >= 0 ? '+' : ''}${summary.buy_hold_pnl_pct.toFixed(2)}% (${bhStartDate} open → ${bhEndDate} close)`,
+		`Buy & Hold: ${formatSignedPct(summary.buy_hold_pnl_pct)} (${bhStartDate} open → ${bhEndDate} close, buy fee included)`,
 	);
 	lines.push(`Excess Return: ${summary.excess_return_pct >= 0 ? '+' : ''}${summary.excess_return_pct.toFixed(2)}%`);
 	lines.push(`Trades: ${summary.trade_count}${openPosition ? ' (closed trades only)' : ''}`);
 	lines.push(`Win Rate: ${(summary.win_rate * 100).toFixed(1)}%`);
 	lines.push(`Avg P&L/Trade: ${summary.avg_pnl_pct >= 0 ? '+' : ''}${summary.avg_pnl_pct.toFixed(2)}%`);
 	lines.push(`Max Drawdown: -${summary.max_drawdown_pct.toFixed(2)}%`);
-	lines.push(`Profit Factor: ${summary.profit_factor != null ? summary.profit_factor.toFixed(2) : 'N/A (no losses)'}`);
+	lines.push(`Profit Factor: ${formatProfitFactor(summary.profit_factor, summary.trade_count)}`);
 	lines.push(`Sharpe Ratio: ${summary.sharpe_ratio != null ? summary.sharpe_ratio.toFixed(2) : 'N/A'}`);
 
 	if (openPosition) {

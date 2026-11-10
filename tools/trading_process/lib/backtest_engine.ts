@@ -21,12 +21,13 @@ export interface BacktestEngineSummary {
 	win_rate: number;
 	/** 0以上。最大ドローダウン[%] */
 	max_drawdown_pct: number;
-	/** 起点はウォームアップ終了直後の t+1 open、終点は最終バーの close（ウォームアップ区間の値動きは含めない）。 */
+	/** 起点はウォームアップ終了直後の t+1 open、終点は最終バーの close。起点で買いの片道手数料を引き、売りの手数料は引かない（未決済ポジションと同じ扱い）。 */
 	buy_hold_pnl_pct: number;
 	excess_return_pct: number;
 	profit_factor: number | null;
 	sharpe_ratio: number | null;
 	avg_pnl_pct: number;
+	/** シグナルを出す最初のバー。最初の約定と B&H の起点はその次のバーの始値。 */
 	evaluation_start: string;
 	evaluation_end: string;
 	/** evaluation_bars + warmup_bars === effective_bars が成り立つ。 */
@@ -137,7 +138,7 @@ function calcProfitFactor(trades: Trade[]): number | null {
 		if (t.pnl_pct > 0) grossProfit += t.pnl_pct;
 		else if (t.pnl_pct < 0) grossLoss += Math.abs(t.pnl_pct);
 	}
-	if (grossLoss === 0) return grossProfit > 0 ? null : null; // 全勝 or トレードなし
+	if (grossLoss === 0) return null;
 	return Number((grossProfit / grossLoss).toFixed(2));
 }
 
@@ -180,6 +181,7 @@ export function calculateSummary(
 	equityCurve: EquityPoint[],
 	timeframe: string,
 	tradableStartIdx: number = 0,
+	feeBp: number = 0,
 ): BacktestEngineSummary {
 	let buyHoldPnlPct = 0;
 	const startIdx = tradableStartIdx + 1;
@@ -187,7 +189,7 @@ export function calculateSummary(
 		const startPrice = candles[startIdx].open;
 		const lastClose = candles[candles.length - 1].close;
 		if (startPrice > 0) {
-			buyHoldPnlPct = ((lastClose - startPrice) / startPrice) * 100;
+			buyHoldPnlPct = ((lastClose / startPrice) * (1 - feeBp / 10000) - 1) * 100;
 		}
 	}
 
@@ -243,7 +245,15 @@ export function runBacktestEngine(
 
 	const { equity_curve, drawdown_curve, max_drawdown } = calculateEquityAndDrawdown(trades, candles, open_position);
 
-	const summary = calculateSummary(trades, max_drawdown, candles, equity_curve, input.timeframe, tradableStartIdx);
+	const summary = calculateSummary(
+		trades,
+		max_drawdown,
+		candles,
+		equity_curve,
+		input.timeframe,
+		tradableStartIdx,
+		input.fee_bp,
+	);
 
 	const overlays = strategy.getOverlays(candles, params);
 

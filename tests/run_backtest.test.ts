@@ -248,6 +248,72 @@ describe('run_backtest', () => {
 		expect(res.summary).toContain('Buy & Hold:');
 	});
 
+	it('start_date / end_date 指定時、Period 行と data.input.period は既定の 3M ではなく日付範囲になる（issue 445 項目 4）', async () => {
+		setupRsiStrategy();
+
+		const res = await runBacktest({
+			pair: 'btc_jpy',
+			strategy: { type: 'rsi', params: {} },
+			start_date: '2024-01-01',
+			end_date: '2024-03-31',
+			savePng: false,
+			includeSvg: false,
+		});
+
+		assertOk(res);
+		expect(res.summary).toContain('Period: 2024-01-01 ~ 2024-03-31 (1D)');
+		expect(res.summary).not.toContain('Period: 3M');
+		const engineInput = mocks.runBacktestEngine.mock.calls[0][2];
+		expect(engineInput.period).toBe('2024-01-01 ~ 2024-03-31');
+	});
+
+	it('period 指定時は Period 行に期間を出す', async () => {
+		setupRsiStrategy();
+
+		const res = await runBacktest({
+			pair: 'btc_jpy',
+			period: '6M',
+			strategy: { type: 'rsi', params: {} },
+			savePng: false,
+			includeSvg: false,
+		});
+
+		assertOk(res);
+		expect(res.summary).toContain('Period: 6M (1D)');
+		expect(mocks.runBacktestEngine.mock.calls[0][2].period).toBe('6M');
+	});
+
+	it('Buy & Hold 行に買いの手数料込みであることを書く（issue 445 項目 2）', async () => {
+		setupRsiStrategy();
+
+		const res = await runBacktest({
+			pair: 'btc_jpy',
+			strategy: { type: 'rsi', params: {} },
+			savePng: false,
+			includeSvg: false,
+		});
+
+		assertOk(res);
+		expect(res.summary).toMatch(/Buy & Hold: \+0\.90% \(.* open → .* close, buy fee included\)/);
+	});
+
+	it('Profit Factor が null のとき、トレード 0 件は no trades、損失なしは no losses と出す（issue 445 項目 3）', async () => {
+		setupRsiStrategy();
+		const noTrades = buildEngineResult();
+		noTrades.trades = [];
+		noTrades.summary.trade_count = 0;
+		mocks.runBacktestEngine.mockReturnValue(noTrades);
+
+		const res0 = await runBacktest({ pair: 'btc_jpy', strategy: { type: 'rsi', params: {} } });
+		assertOk(res0);
+		expect(res0.summary).toContain('Profit Factor: N/A (no trades)');
+
+		mocks.runBacktestEngine.mockReturnValue(buildEngineResult());
+		const res1 = await runBacktest({ pair: 'btc_jpy', strategy: { type: 'rsi', params: {} } });
+		assertOk(res1);
+		expect(res1.summary).toContain('Profit Factor: N/A (no losses)');
+	});
+
 	it('content text の summary に equity_curve / drawdown_curve の JSON が含まれる', async () => {
 		mocks.getStrategy.mockReturnValue({
 			name: 'RSI',
@@ -676,7 +742,8 @@ describe('run_backtest', () => {
 		expect(warnIdx).toBeGreaterThanOrEqual(0);
 		expect(warnIdx).toBeLessThan(titleIdx);
 		expect(res.summary).toContain('取得失敗');
-		expect(res.summary).toContain('fallback: 公称 12bp 概算');
+		expect(res.summary).toContain('fallback: 公称 12bp 概算（/spot/pairs から taker レートを取得できず）');
+		expect(res.summary).not.toContain('pairs 取得失敗）');
 		const engineInput = mocks.runBacktestEngine.mock.calls[0][2];
 		expect(engineInput.fee_bp).toBe(12);
 	});

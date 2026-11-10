@@ -1483,13 +1483,19 @@ sma_cross / macd_cross の RSI フィルタ（`rsi_filter_period`）も同じで
 | win_rate | 勝率 [%] |
 | max_drawdown_pct | 最大ドローダウン [%] |
 | avg_pnl_pct | 1トレードあたり平均損益 [%] |
-| profit_factor | Profit Factor（総利益 / 総損失）。全勝時は null |
-| sharpe_ratio | 年率換算 Sharpe Ratio（日次リターン × √365） |
+| buy_hold_pnl_pct | Buy & Hold の損益 [%]。評価開始の次のバーの始値で買い、最終バーの終値で評価する。買いの片道手数料を引き、売りの手数料は引かない |
+| excess_return_pct | total_pnl_pct − buy_hold_pnl_pct（どちらも手数料込み） |
+| profit_factor | Profit Factor（総利益 / 総損失、決済済みトレード）。損失トレードが無いときは null（本文はトレード 0 件なら `N/A (no trades)`、それ以外は `N/A (no losses)`） |
+| sharpe_ratio | 年率換算 Sharpe Ratio（評価区間のバーごとのリターン。1 年のバー数は 1D = 365、4H = 365 × 6、1H = 365 × 24） |
+| evaluation_start / evaluation_bars | 評価区間の開始（シグナルを出す最初のバー）と本数。最初の約定と Buy & Hold の起点はその次のバーの始値なので、約定できるバーは evaluation_bars より 1 本少ない |
 | open_position | 期間の終わりに残った未決済のロング（建値・建てた時刻・評価に使った最終バーの終値・含み損益）。無ければ null |
 
 `total_pnl_pct` / `max_drawdown_pct` / `sharpe_ratio` / equity_curve は未決済ポジションの含み損益込み、
 `trades` / `win_rate` / `avg_pnl_pct` / `profit_factor` は決済済みトレードだけを数えます。
 未決済ポジションがあるときは、本文に `--- Open Position ---` の節と、この違いの注記を出します。
+
+手数料は、確定トレード・未決済ポジション・Buy & Hold のどれも、建てた時点で片道ぶんを引きます。確定トレードは決済時に残りの片道ぶんを引きます。
+`start_date` / `end_date` を指定したときは、本文の `Period:` 行と `data.input.period` に指定した日付範囲を出します。
 
 ### チャート出力先（savePng / outputDir）
 
