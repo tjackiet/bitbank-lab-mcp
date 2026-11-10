@@ -23,6 +23,7 @@ import {
 	PERFORMANCE_NOTE_CHANGE_DIRECTION_UNKNOWN,
 	PERFORMANCE_NOTE_CHANGE_OVERSTATED,
 	PERFORMANCE_NOTE_CHANGE_UNDERSTATED,
+	PERFORMANCE_NOTE_TRADES_TRUNCATED,
 	type PortfolioPerformanceContext,
 	qtyInvariantHolds,
 	qtyInvariantTolerance,
@@ -2345,6 +2346,72 @@ describe('buildPeriodPerformance', () => {
 	});
 
 	// 分母がゼロでさえなければ通すガードでは、年初にほぼ空だった口座に入金して運用を始めると 5 桁の百分率が出るので、期初評価額が現在評価額の 1% 未満（`MIN_START_VALUE_RATIO`）なら率を抑止する（#71）。
+	describe('現物約定の取得が打ち切られたとき（issue 447）', () => {
+		// 期間中に 1 BTC を 800 万円で購入。月初の始値と現在価格はどちらも 1,000 万円。現在の保有は 1 BTC、JPY 0 円。
+		const buy = makeTrade({
+			pair: 'btc_jpy',
+			side: 'buy',
+			amount: '1',
+			price: '8000000',
+			fee_amount_base: '0',
+			fee_amount_quote: '0',
+			executed_at: 5000,
+		});
+		function ctxWith(trades: RawTrade[], tradesTruncated?: boolean) {
+			return makeCtx({
+				currentHoldings: [{ asset: 'btc', amount: '1' }],
+				trades,
+				dwData: makeEmptyDw(),
+				candlePriceData: {
+					boundaryPrices: makeBoundaryPrices([['btc', { monthStart: 10_000_000 }]]),
+					dailyPrices: new Map(),
+				},
+				flowPricing: currentPriceOnly(new Map([['btc', 10_000_000]])),
+				currentValue: 10_000_000,
+				tradesTruncated,
+			});
+		}
+		const spec = { key: 'monthly' as const, startMs: 1000, startIso: '2026-05-01T00:00:00+09:00' };
+
+		it('約定履歴が完全なら、期初は JPY 800 万円で +200 万円 / +25%', () => {
+			const result = buildPeriodPerformance(spec, ctxWith([buy]));
+			expect(result.start_value_jpy).toBe(8_000_000);
+			expect(result.change_jpy).toBe(2_000_000);
+			expect(result.change_pct).toBe(25);
+			expect(result.change_pct_unavailable_reason).toBeUndefined();
+		});
+
+		it('買いが欠けて打ち切られていると、率を出さず trades_truncated を付ける（増減 0 / 0% の確定値にしない）', () => {
+			const result = buildPeriodPerformance(spec, ctxWith([], true));
+			expect(result.start_value_jpy).toBe(10_000_000);
+			expect(result.change_jpy).toBe(0);
+			expect(result.change_pct).toBeUndefined();
+			expect(result.adjusted_change_pct).toBeUndefined();
+			expect(result.change_pct_unavailable_reason).toBe('trades_truncated');
+			expect(result.note).toBe(`${PERFORMANCE_NOTE}${PERFORMANCE_NOTE_TRADES_TRUNCATED}`);
+		});
+
+		it('ずれの向きは確定しないので、overstated / understated のフラグは付けない', () => {
+			const result = buildPeriodPerformance(
+				spec,
+				makeCtx({
+					...ctxWith([], true),
+					candlePriceData: { boundaryPrices: new Map(), dailyPrices: new Map() },
+				}),
+			);
+			expect(result.change_pct_unavailable_reason).toBe('trades_truncated');
+			expect(result.unpriced_start_assets).toEqual(['btc']);
+			expect(result.change_jpy_overstated).toBeUndefined();
+			expect(result.change_jpy_understated).toBeUndefined();
+		});
+
+		it('取得済みの最後の約定が期間開始より前でも、欠けた約定が期間内にありうるので同じ扱いにする', () => {
+			const old = { ...buy, executed_at: 500 };
+			const result = buildPeriodPerformance(spec, ctxWith([old], true));
+			expect(result.change_pct_unavailable_reason).toBe('trades_truncated');
+		});
+	});
+
 	describe('増減率の抑止（期初評価額が現在評価額に対して極小）', () => {
 		/** 期初評価額 = currentValue - depositAmount（入金を巻き戻した値）。価格解決を挟まないので期初評価額を 1 円単位で狙える。 */
 		function jpyDepositCtx(currentValue: number, depositAmount: number): PortfolioPerformanceContext {

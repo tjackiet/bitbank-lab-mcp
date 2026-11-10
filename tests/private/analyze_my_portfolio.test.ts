@@ -467,6 +467,17 @@ describe('analyze_my_portfolio', () => {
 		expect(result.meta.tradesTruncated).toBe(true);
 		expect(result.meta.marginTradesTruncated).toBe(false);
 		expect(result.meta.marginFetchFailed).toBe(false);
+		// 欠けるのは直近の約定なので、期間成績は率を出さず理由コードを付け、資産推移シリーズにも申告を出す（issue 447）。
+		for (const key of ['daily_performance', 'monthly_performance', 'yearly_performance'] as const) {
+			const perf = result.data[key] as { change_pct?: number; change_pct_unavailable_reason?: string };
+			expect(perf.change_pct).toBeUndefined();
+			expect(perf.change_pct_unavailable_reason).toBe('trades_truncated');
+		}
+		expect(result.meta.changePctUnavailablePeriods).toEqual(expect.arrayContaining(['daily', 'monthly', 'yearly']));
+		expect(result.summary).toContain(
+			'現物の約定履歴の取得が打ち切られ、直近の約定を巻き戻せず期初の保有がずれているため',
+		);
+		expect(result.summary).toContain('※ 資産推移シリーズ: 現物の約定履歴の取得が打ち切られ');
 	});
 
 	it('打ち切り (信用): summary に ※ 約定履歴（信用） が含まれ、meta.marginTradesTruncated === true', async () => {

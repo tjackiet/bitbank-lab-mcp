@@ -1061,6 +1061,10 @@ export const PERFORMANCE_NOTE_CHANGE_DIRECTION_UNKNOWN =
 export const PERFORMANCE_NOTE_CHANGE_UNDERSTATED =
 	'この期間は現在価格を解決できなかった暗号資産の保有があり（change_pct_unavailable_reason=current_value_unpriced）、現在評価額から脱落した分がそのまま増減額から欠けるため change_jpy / adjusted_change_jpy は同じ額だけ過小（change_jpy_understated=true）。保有暗号資産が全て脱落している場合は現在評価額が JPY 残高だけに縮退しており、増減額は口座の損失ではなく価格取得の失敗を表す数になる。増減額を運用成績として読まないこと。この期間の値動きはこの結果からは算出できない（資産推移シリーズも最終点に同じ現在評価額を使うため代替にならない）。';
 
+// 欠けるのは直近の約定で、どの期間も現在で終わるので、取得済みの最後の約定が期間開始より前でも期間内の約定が欠けうる。
+export const PERFORMANCE_NOTE_TRADES_TRUNCATED =
+	'今回は現物の約定履歴の取得が打ち切られ（change_pct_unavailable_reason=trades_truncated）、直近の約定が欠けている。欠けた約定は巻き戻せないので期初の保有がずれ、start_value_jpy / change_jpy / adjusted_change_jpy も同じだけずれる（欠けたのが買いか売りかで向きが変わるため、向きは確定しない）。増減額を運用成績として読まないこと。資産推移シリーズも同じ巻き戻しを使うので代替にならない。';
+
 export type PeriodPerformanceKey = 'daily' | 'monthly' | 'yearly';
 
 export interface PeriodSpec {
@@ -1081,6 +1085,7 @@ export interface PortfolioPerformanceContext {
 	nowIso: string;
 	/** 設定されていれば dwData の中身に関わらず未計測として扱う（失敗時の空の中身を集計するとフローゼロの確定値になる）。 */
 	flowUnavailableReason?: PortfolioFlowUnavailableReason;
+	tradesTruncated?: boolean;
 }
 
 // 現在評価額に対する比なので口座規模に依存しない。1% なら増減率は +9,900% を超えない。
@@ -1155,6 +1160,7 @@ function unpricedCurrentAssets(ctx: PortfolioPerformanceContext): string[] | und
 
 // start_value_zero / start_value_negligible は期初評価額が本当に小さいだけで増減額は正しく読めるので追記しない。
 function performanceNote(reason: PortfolioChangePctUnavailableReason | undefined, changeOverstated: boolean): string {
+	if (reason === 'trades_truncated') return `${PERFORMANCE_NOTE}${PERFORMANCE_NOTE_TRADES_TRUNCATED}`;
 	if (reason === 'start_boundary_unpriced') {
 		return `${PERFORMANCE_NOTE}${changeOverstated ? PERFORMANCE_NOTE_CHANGE_OVERSTATED : PERFORMANCE_NOTE_CHANGE_DIRECTION_UNKNOWN}`;
 	}
@@ -1177,15 +1183,18 @@ export function buildPeriodPerformance(spec: PeriodSpec, ctx: PortfolioPerforman
 	const change = ctx.currentValue - startValue;
 	const unpricedStart = unpricedStartAssets(startHoldings, ctx.candlePriceData.boundaryPrices, spec.key);
 	const unpricedCurrent = unpricedCurrentAssets(ctx);
-	// 片端だけが欠けているときだけ向きが確定する。両端で欠けるとその資産の値動きがどちらにも入らない。
-	const changeOverstated = unpricedStart != null && unpricedCurrent == null;
-	const changeUnderstated = unpricedCurrent != null && unpricedStart == null;
-	// 価格の解決欠損 2 種は増減額を読ませない系なので、増減額で読むよう誘導する start_value_* より必ず先に選ぶ。
-	const pctUnavailableReason: PortfolioChangePctUnavailableReason | undefined = unpricedStart
-		? 'start_boundary_unpriced'
-		: unpricedCurrent
-			? 'current_value_unpriced'
-			: changePctUnavailableReasonFor(startValue, ctx.currentValue);
+	const tradesTruncated = ctx.tradesTruncated === true;
+	// 片端だけが欠けているときだけ向きが確定する。両端で欠けるとその資産の値動きがどちらにも入らない。約定が欠けると向きは確定しない。
+	const changeOverstated = !tradesTruncated && unpricedStart != null && unpricedCurrent == null;
+	const changeUnderstated = !tradesTruncated && unpricedCurrent != null && unpricedStart == null;
+	// 期初の保有そのものが壊れる trades_truncated、価格の解決欠損 2 種の順に、増減額で読むよう誘導する start_value_* より必ず先に選ぶ。
+	const pctUnavailableReason: PortfolioChangePctUnavailableReason | undefined = tradesTruncated
+		? 'trades_truncated'
+		: unpricedStart
+			? 'start_boundary_unpriced'
+			: unpricedCurrent
+				? 'current_value_unpriced'
+				: changePctUnavailableReasonFor(startValue, ctx.currentValue);
 	const adjusted = flow.net_flow_jpy != null ? change - flow.net_flow_jpy : null;
 	// dwData が null なのは取得が落ちたときだけなので dw_fetch_failed に落とす（損益を出す構成では常に取得する）。
 	const unavailableReason = flow.measured ? undefined : (ctx.flowUnavailableReason ?? 'dw_fetch_failed');

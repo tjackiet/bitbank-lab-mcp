@@ -150,6 +150,8 @@ const FLOW_UNAVAILABLE_NOTE: Record<PortfolioFlowUnavailableReason, string> = {
 };
 
 const CHANGE_PCT_UNAVAILABLE_NOTE: Record<PortfolioChangePctUnavailableReason, string> = {
+	trades_truncated:
+		'現物の約定履歴の取得が打ち切られ、直近の約定を巻き戻せず期初の保有がずれているため。欠けた約定が期間内にあると率は運用成績を表さない',
 	start_value_zero: '期初評価額が 0 で率を定義できないため',
 	start_value_negligible: `期初評価額が現在評価額の ${MIN_START_VALUE_RATIO * 100}% 未満で、率が運用成績ではなく「期初がほぼ空だった」ことを表す数になるため`,
 	start_boundary_unpriced:
@@ -160,6 +162,8 @@ const CHANGE_PCT_UNAVAILABLE_NOTE: Record<PortfolioChangePctUnavailableReason, s
 
 // 価格の解決欠損 2 種では増減額へ誘導せず、代替（資産推移シリーズ）も示さない。シリーズも同じ始値に依存し、欠けた期間は現在価格で埋まっている（#105, #109）。
 const CHANGE_JPY_GUIDANCE_LINE: Record<PortfolioChangePctUnavailableReason, string> = {
+	trades_truncated:
+		'期初評価額と増減額（change_jpy / adjusted_change_jpy）も欠けた約定の分だけずれており、向きも確定できないので、成績として読まないでください。この期間の値動きはこの結果からは算出できません',
 	start_value_zero: '増減額で読んでください',
 	start_value_negligible: '増減額で読んでください',
 	start_boundary_unpriced:
@@ -174,6 +178,8 @@ const CHANGE_JPY_DIRECTION_UNKNOWN_LINE =
 
 // warning は LLM が最初に読む行なので、代替として資産推移シリーズを持ち出さないことまで明示する。
 const CHANGE_JPY_GUIDANCE_WARNING: Record<PortfolioChangePctUnavailableReason, string> = {
+	trades_truncated:
+		'期初評価額と増減額（change_jpy / adjusted_change_jpy）も欠けた約定の分だけずれており、欠けたのが買いか売りかで向きが変わるため向きも確定できません。成績として読まないこと。該当期間の値動きはこの結果からは算出できません（資産推移シリーズも同じ巻き戻しを使うため代替になりません）',
 	start_value_zero: '増減額（change_jpy / adjusted_change_jpy）は出しているので成績はそちらで読むこと',
 	start_value_negligible: '増減額（change_jpy / adjusted_change_jpy）は出しているので成績はそちらで読むこと',
 	start_boundary_unpriced:
@@ -375,6 +381,7 @@ function buildPerformanceSectionLines(input: {
 	yearlyEquitySeries: EquityPoint[] | undefined;
 	equitySeriesQuality: 'complete' | 'partial_fallback' | 'fallback_only' | 'jpy_only' | undefined;
 	equitySeriesFallbackAssets: readonly string[];
+	tradesTruncated: boolean;
 }): string[] {
 	const {
 		dailyPerformance,
@@ -385,6 +392,7 @@ function buildPerformanceSectionLines(input: {
 		yearlyEquitySeries,
 		equitySeriesQuality,
 		equitySeriesFallbackAssets,
+		tradesTruncated,
 	} = input;
 	const lines: string[] = [];
 	if (dailyPerformance) lines.push(...buildPerformanceLines('前日比', dailyPerformance));
@@ -402,6 +410,11 @@ function buildPerformanceSectionLines(input: {
 				`※ ただし今回は${FLOW_UNAVAILABLE_CAUSE[flowUnavailableReason]}ため入出金を巻き戻せていません。期初評価額・資産推移シリーズは入出金があった期間で実態と乖離します`,
 			);
 		}
+	}
+	if (tradesTruncated && ((monthlyEquitySeries?.length ?? 0) > 0 || (yearlyEquitySeries?.length ?? 0) > 0)) {
+		lines.push(
+			'※ 資産推移シリーズ: 現物の約定履歴の取得が打ち切られ、直近の約定を巻き戻せていません。各点の保有と評価額がずれているので、成績として読まないでください（tradesTruncated=true）',
+		);
 	}
 	if (monthlyEquitySeries && monthlyEquitySeries.length > 0) {
 		if (equitySeriesQuality === 'jpy_only') {
@@ -1243,6 +1256,7 @@ export default async function analyzeMyPortfolioHandler(args: {
 				currentValue: currentJpyValueRounded,
 				nowIso: boundaries.nowIso,
 				flowUnavailableReason,
+				tradesTruncated,
 			};
 			const performanceSpecs: PeriodSpec[] = [
 				{ key: 'yearly', startMs: boundaries.yearStartMs, startIso: boundaries.yearStartIso },
@@ -1352,6 +1366,7 @@ export default async function analyzeMyPortfolioHandler(args: {
 				yearlyEquitySeries,
 				equitySeriesQuality,
 				equitySeriesFallbackAssets,
+				tradesTruncated,
 			}),
 		);
 
