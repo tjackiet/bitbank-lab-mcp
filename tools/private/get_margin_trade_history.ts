@@ -4,7 +4,7 @@ import { fail, ok } from '../../lib/result.js';
 import { getDefaultClient } from '../../src/private/client.js';
 import { GetMarginTradeHistoryInputSchema, GetMarginTradeHistoryOutputSchema } from '../../src/private/schemas.js';
 import { failPrivateToolError } from '../../src/private/tool-error.js';
-import { fetchFilteredTradeHistory, mixedHistoryNote } from '../../src/private/trade-history.js';
+import { fetchFilteredTradeHistory, mixedHistoryNote, scanBoundaryIso } from '../../src/private/trade-history.js';
 import type { ToolDefinition } from '../../src/tool-definition.js';
 
 interface RawMarginTrade {
@@ -158,6 +158,7 @@ export default async function getMarginTradeHistory(args: {
 			tradeCount: trades.length,
 			pair: pair || undefined,
 			isComplete,
+			scanBoundary: scanBoundaryIso(fetched),
 			...(client.lastRateLimit ? { rateLimit: client.lastRateLimit } : {}),
 		};
 

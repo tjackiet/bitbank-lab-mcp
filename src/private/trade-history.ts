@@ -1,3 +1,4 @@
+import { toIsoMs } from '../../lib/datetime.js';
 import { normalizePairCodes } from '../../lib/pair-code.js';
 import type { BitbankPrivateClient } from './client.js';
 
@@ -15,6 +16,8 @@ export interface FilteredTradeHistory<T> {
 	isComplete: boolean;
 	scanned: number;
 	excluded: number;
+	// 件数に届かずページの上限などで打ち切ったときだけ入る。続きを取るときの end（desc）/ since（asc）。
+	scanBoundaryMs: number | null;
 }
 
 // 約定履歴 API は現物と信用を混ぜて返し、分けるパラメータが無いので、絞った後の件数が limit に届くまで取り直す（#455）。
@@ -33,6 +36,7 @@ export async function fetchFilteredTradeHistory<T extends TradeRow>(
 	let excluded = 0;
 	const cursorKey: 'since' | 'end' = order === 'desc' ? 'end' : 'since';
 	let cursor: string | undefined = baseParams[cursorKey];
+	let lastScannedTs: number | undefined;
 
 	for (let page = 0; page < MAX_PAGES; page++) {
 		// 1 ページ目は要求件数だけ取る。混在で足りなかったときだけ、続きを上限件数でまとめて取る。
@@ -60,18 +64,30 @@ export async function fetchFilteredTradeHistory<T extends TradeRow>(
 				isComplete: exhausted && kept.length <= limit,
 				scanned: seenIds.size,
 				excluded,
+				scanBoundaryMs: null,
 			};
 		}
 
 		// 同じ時刻の行は次ページで取り直し、trade_id で重複を除く。
 		const lastTs = batch[batch.length - 1]?.executed_at;
 		if (!lastTs) break;
+		lastScannedTs = lastTs;
 		const nextCursor = String(lastTs);
 		if (nextCursor === cursor) break;
 		cursor = nextCursor;
 	}
 
-	return { trades: kept.slice(0, limit), isComplete: false, scanned: seenIds.size, excluded };
+	return {
+		trades: kept.slice(0, limit),
+		isComplete: false,
+		scanned: seenIds.size,
+		excluded,
+		scanBoundaryMs: lastScannedTs ?? null,
+	};
+}
+
+export function scanBoundaryIso(result: FilteredTradeHistory<unknown>): string | undefined {
+	return result.isComplete ? undefined : (toIsoMs(result.scanBoundaryMs) ?? undefined);
 }
 
 // 打ち切ったときに「反対側の約定しか見つからなかった」のか「約定が無い」のかを LLM が区別できるようにする。
@@ -86,5 +102,10 @@ export function mixedHistoryNote(
 		result.trades.length === 0
 			? `取得した約定 ${result.scanned}件はすべて${excluded}で、${kept}約定はありませんでした`
 			: `取得した約定 ${result.scanned}件のうち ${result.excluded}件は${excluded}で、${kept}約定は ${result.trades.length}件でした`;
-	return `※ ${found}（約定履歴 API は現物と信用を混ぜて返します）。これより${direction.word}約定は取得していません。続きは ${direction.param} で期間を指定して取得してください`;
+	const boundary = scanBoundaryIso(result);
+	const next =
+		boundary != null
+			? `続きは ${direction.param} に ${boundary}（最後に調べた約定の時刻）を指定して取得してください`
+			: `続きは ${direction.param} で期間を指定して取得してください`;
+	return `※ ${found}（約定履歴 API は現物と信用を混ぜて返します）。これより${direction.word}約定は取得していません。${next}`;
 }

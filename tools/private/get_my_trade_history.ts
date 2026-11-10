@@ -6,7 +6,7 @@ import type { RawTrade } from '../../src/handlers/portfolio/types.js';
 import { getDefaultClient } from '../../src/private/client.js';
 import { GetMyTradeHistoryInputSchema, GetMyTradeHistoryOutputSchema } from '../../src/private/schemas.js';
 import { failPrivateToolError } from '../../src/private/tool-error.js';
-import { fetchFilteredTradeHistory, mixedHistoryNote } from '../../src/private/trade-history.js';
+import { fetchFilteredTradeHistory, mixedHistoryNote, scanBoundaryIso } from '../../src/private/trade-history.js';
 import type { ToolDefinition } from '../../src/tool-definition.js';
 
 // 現物の手数料は売買とも quote 建て。base 建てが非ゼロのときだけ併記する。
@@ -125,6 +125,7 @@ export default async function getMyTradeHistory(args: {
 			tradeCount: trades.length,
 			pair: pair || undefined,
 			isComplete,
+			scanBoundary: scanBoundaryIso(fetched),
 			...(client.lastRateLimit ? { rateLimit: client.lastRateLimit } : {}),
 		};
 

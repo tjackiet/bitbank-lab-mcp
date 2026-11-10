@@ -98,6 +98,12 @@ export const GetMyTradeHistoryMetaSchema = z.object({
 		.describe(
 			'期間内全件を取得できたか。count 制限で打ち切られた場合や MAX_PAGES 到達時は false（取得範囲外に未取得レコードがある可能性）',
 		),
+	scanBoundary: z
+		.string()
+		.optional()
+		.describe(
+			'件数に届かずページの上限などで取得を打ち切ったとき、最後に調べた約定の時刻（ISO8601）。続きは order=desc なら end、asc なら since にこの値を指定する。全件取得できたときと、件数に届いて止めたときは無い',
+		),
 });
 
 export const GetMyTradeHistoryOutputSchema = z.union([
@@ -1162,6 +1168,12 @@ export const GetMarginTradeHistoryMetaSchema = z.object({
 		.boolean()
 		.optional()
 		.describe('期間内全件を取得できたか。count 制限で打ち切られた場合や MAX_PAGES 到達時、cursor 進捗停止時は false'),
+	scanBoundary: z
+		.string()
+		.optional()
+		.describe(
+			'件数に届かずページの上限などで取得を打ち切ったとき、最後に調べた約定の時刻（ISO8601）。続きは order=desc なら end、asc なら since にこの値を指定する。全件取得できたときと、件数に届いて止めたときは無い',
+		),
 });
 
 export const GetMarginTradeHistoryOutputSchema = z.union([

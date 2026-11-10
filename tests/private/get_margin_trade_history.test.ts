@@ -626,6 +626,7 @@ describe('get_margin_trade_history — ページネーション', () => {
 		expect(secondUrl).toContain(`end=${boundary.executed_at}`);
 		expect(result.data.trades.map((t) => t.trade_id)).toEqual([5, 4, 3, 2, 1]);
 		expect(result.meta.isComplete).toBe(true);
+		expect(result.meta.scanBoundary).toBeUndefined();
 		expect(result.summary).toContain('信用約定履歴: 全ペア 5件');
 		expect(result.summary).not.toContain('全件ではなく');
 	});
@@ -674,6 +675,10 @@ describe('get_margin_trade_history — ページネーション', () => {
 		expect(result.summary).toContain('信用約定履歴: 全ペア 0件');
 		expect(result.summary).toContain('取得した約定 9020件はすべて現物で、信用約定はありませんでした');
 		expect(result.summary).toContain('これより古い約定は取得していません');
+		// 続きを取れるよう、最後に調べた約定の時刻（最終ページの末尾）を end に渡す値として出す。
+		const boundary = new Date(1718992000000).toISOString();
+		expect(result.summary).toContain(`続きは end に ${boundary}（最後に調べた約定の時刻）を指定して取得してください`);
+		expect(result.meta.scanBoundary).toBe(boundary);
 	});
 
 	it('一部だけ信用約定が見つかったときは、取得件数と現物の件数を本文に書く（asc）', async () => {
@@ -697,6 +702,9 @@ describe('get_margin_trade_history — ページネーション', () => {
 		expect(result.meta.isComplete).toBe(false);
 		expect(result.summary).toContain('取得した約定 9020件のうち 9017件は現物で、信用約定は 3件でした');
 		expect(result.summary).toContain('これより新しい約定は取得していません');
+		const boundary = new Date(1701008999000).toISOString();
+		expect(result.summary).toContain(`続きは since に ${boundary}（最後に調べた約定の時刻）を指定して取得してください`);
+		expect(result.meta.scanBoundary).toBe(boundary);
 	});
 
 	it('asc: count > 1000 で複数ページを自動取得する（2 ページで完了）', async () => {

@@ -589,6 +589,9 @@ describe('get_my_trade_history — ページネーション', () => {
 		expect(result.meta.isComplete).toBe(false);
 		expect(result.summary).toContain('取得した約定 9100件はすべて信用で、現物約定はありませんでした');
 		expect(result.summary).toContain('これより古い約定は取得していません');
+		const boundary = new Date(1718992000000).toISOString();
+		expect(result.summary).toContain(`続きは end に ${boundary}（最後に調べた約定の時刻）を指定して取得してください`);
+		expect(result.meta.scanBoundary).toBe(boundary);
 	});
 
 	it('2 ページ目以降の API エラーは途中までの結果で返さず fail にする', async () => {
