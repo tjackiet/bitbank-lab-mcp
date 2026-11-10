@@ -1155,6 +1155,23 @@ describe('preview_order', () => {
 			expect(tickerCalls).toHaveLength(1);
 		});
 
+		// 連続取引以外（サーキットブレイク中など）は sell <= buy になりうる（public-api.md の Ticker）。
+		it('気配が交差していたら板を跨ぐかを判定せず maker で見積り、その旨を本文に出す', async () => {
+			installTickerMock({ last: '14995000', sell: '14980000', buy: '14990000' });
+			const { default: previewOrder } = await import('../../tools/private/preview_order.js');
+			const result = await previewOrder({
+				pair: 'btc_jpy',
+				amount: '0.01',
+				side: 'buy',
+				type: 'limit',
+				price: '15000000',
+			});
+			assertOk(result);
+			const fee = result.data.preview.fee_estimate;
+			expect(fee?.role).toBe('maker');
+			expect(result.summary).toContain('気配が交差しています');
+		});
+
 		it('/ticker の取得に失敗したら従来どおり maker で見積る', async () => {
 			installTickerMock(null);
 			const { default: previewOrder } = await import('../../tools/private/preview_order.js');
