@@ -112,6 +112,80 @@ describe('get_my_trade_history', () => {
 		expect(result.summary).toContain('売 1件');
 	});
 
+	it('約定行に手数料を出す。base 建ての手数料が非ゼロならそれも出す（issue 452）', async () => {
+		setupFetchMock(
+			mockBitbankSuccess({
+				trades: [
+					{
+						trade_id: 901,
+						pair: 'arb_jpy',
+						order_id: 9001,
+						side: 'buy',
+						type: 'market',
+						amount: '455.6869',
+						price: '25.829',
+						maker_taker: 'taker',
+						fee_amount_base: '0',
+						fee_amount_quote: '14.1239',
+						fee_occurred_amount_quote: '14.1239',
+						executed_at: 1710000100000,
+					},
+					{
+						trade_id: 900,
+						pair: 'btc_jpy',
+						order_id: 9000,
+						side: 'buy',
+						type: 'limit',
+						amount: '0.01',
+						price: '15000000',
+						maker_taker: 'maker',
+						fee_amount_base: '0.00001',
+						fee_amount_quote: '0',
+						executed_at: 1710000000000,
+					},
+				],
+			}),
+		);
+
+		const { default: getMyTradeHistory } = await import('../../tools/private/get_my_trade_history.js');
+		const result = await getMyTradeHistory({});
+
+		assertOk(result);
+		const lines = result.summary.split('\n');
+		expect(lines.find((l) => l.includes('trade: 901'))).toContain('手数料: 14.1239円');
+		expect(lines.find((l) => l.includes('trade: 900'))).toContain('手数料: 0円 + 0.00001 BTC');
+	});
+
+	it('JPY 以外の建てのペアは、quote の手数料を円ではなくその通貨で出す', async () => {
+		setupFetchMock(
+			mockBitbankSuccess({
+				trades: [
+					{
+						trade_id: 902,
+						pair: 'eth_btc',
+						order_id: 9002,
+						side: 'buy',
+						type: 'limit',
+						amount: '0.1',
+						price: '0.05',
+						maker_taker: 'taker',
+						fee_amount_base: '0',
+						fee_amount_quote: '0.000006',
+						executed_at: 1710000100000,
+					},
+				],
+			}),
+		);
+
+		const { default: getMyTradeHistory } = await import('../../tools/private/get_my_trade_history.js');
+		const result = await getMyTradeHistory({});
+
+		assertOk(result);
+		const line = result.summary.split('\n').find((l) => l.includes('trade: 902'));
+		expect(line).toContain('手数料: 0.000006 BTC');
+		expect(line).not.toContain('円');
+	});
+
 	it('trade_id と order_id をサマリーに含む', async () => {
 		setupFetchMock(mockBitbankSuccess(rawTradeHistoryResponse));
 

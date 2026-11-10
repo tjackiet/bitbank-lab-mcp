@@ -1,5 +1,5 @@
 import { nowIso, parseIso8601, toIsoMs } from '../../lib/datetime.js';
-import { formatPair, formatPrice, formatYenAmount } from '../../lib/formatter.js';
+import { formatPair, formatPrice, formatYenExact } from '../../lib/formatter.js';
 import { normalizePairCodes } from '../../lib/pair-code.js';
 import { fail, ok } from '../../lib/result.js';
 import { type BitbankPrivateClient, getDefaultClient } from '../../src/private/client.js';
@@ -77,6 +77,24 @@ async function paginateMarginTrades(
 	}
 
 	return { trades: all.slice(0, limit), isComplete: false };
+}
+
+function hasValue(v: string | undefined): v is string {
+	return v != null && v !== '';
+}
+
+// 信用の手数料は決済時にまとめて計上され、決済行の fee_occurred_amount_quote が新規側と決済側の合計になる。
+function closeCostInfo(t: { profit_loss?: string; fee_occurred_amount_quote?: string; interest?: string }): string {
+	const parts: string[] = [];
+	if (hasValue(t.profit_loss)) parts.push(`損益: ${formatYenExact(Number(t.profit_loss))}（手数料控除後）`);
+	if (hasValue(t.fee_occurred_amount_quote))
+		parts.push(`発生手数料: ${formatYenExact(Number(t.fee_occurred_amount_quote))}`);
+	if (hasValue(t.interest)) parts.push(`利息: ${formatYenExact(Number(t.interest))}`);
+	return parts.length > 0 ? ` ${parts.join(' / ')}` : '';
+}
+
+function openCostInfo(t: { fee_amount_quote: string }): string {
+	return hasValue(t.fee_amount_quote) ? ` 手数料: ${formatYenExact(Number(t.fee_amount_quote))}` : '';
 }
 
 export default async function getMarginTradeHistory(args: {
@@ -158,19 +176,28 @@ export default async function getMarginTradeHistory(args: {
 			lines.push('');
 
 			const displayTrades = order === 'asc' ? trades.slice(-10) : trades.slice(0, 10);
+			let shownClose = false;
 			for (const t of displayTrades) {
 				const sideLabel = t.side === 'buy' ? '買' : '売';
 				const posLabel = t.position_side === 'long' ? 'ロング' : t.position_side === 'short' ? 'ショート' : '';
 				const isJpy = t.pair.includes('jpy');
 				const price = isJpy ? formatPrice(Number(t.price)) : t.price;
-				const plInfo = t.profit_loss ? ` 損益: ${formatYenAmount(Number(t.profit_loss))}` : '';
+				const isClose =
+					(t.side === 'sell' && t.position_side === 'long') || (t.side === 'buy' && t.position_side === 'short');
+				const costInfo = isClose ? closeCostInfo(t) : openCostInfo(t);
+				if (isClose && t.profit_loss) shownClose = true;
 				lines.push(
-					`[trade: ${t.trade_id} / order: ${t.order_id}] ${t.executed_at} ${formatPair(t.pair)} ${posLabel}${sideLabel} ${t.amount} @ ${price} (${t.maker_taker})${plInfo}`,
+					`[trade: ${t.trade_id} / order: ${t.order_id}] ${t.executed_at} ${formatPair(t.pair)} ${posLabel}${sideLabel} ${t.amount} @ ${price} (${t.maker_taker})${costInfo}`,
 				);
 			}
 
 			if (trades.length > 10) {
 				lines.push(`... 他 ${trades.length - 10}件`);
+			}
+			if (shownClose) {
+				lines.push(
+					'※ 損益（profit_loss）は手数料控除後の値です。発生手数料は新規側と決済側の合計で、決済行にまとめて計上されます。利息（interest）は別に出しています（損益に含まれるかは確認できていません）',
+				);
 			}
 
 			const longCount = trades.filter((t) => t.position_side === 'long').length;

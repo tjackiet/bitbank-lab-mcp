@@ -1,6 +1,6 @@
 import { nowIso, parseIso8601, toIsoMs } from '../../lib/datetime.js';
-import { formatPair, formatPrice } from '../../lib/formatter.js';
-import { normalizePairCodes } from '../../lib/pair-code.js';
+import { formatPair, formatPrice, formatYenExact } from '../../lib/formatter.js';
+import { isJpyQuotedPair, normalizePairCodes } from '../../lib/pair-code.js';
 import { fail, ok } from '../../lib/result.js';
 import { paginateTrades } from '../../src/handlers/portfolio/fetch.js';
 import type { RawTrade } from '../../src/handlers/portfolio/types.js';
@@ -11,6 +11,21 @@ import type { ToolDefinition } from '../../src/tool-definition.js';
 
 // `paginateTrades` 内の `TRADE_PAGE_SIZE` と同値（bitbank API の 1 リクエスト上限）。
 const PAGE_SIZE = 1000;
+
+// 現物の手数料は売買とも quote 建て。base 建てが非ゼロのときだけ併記する。
+function spotFeeInfo(t: { pair: string; fee_amount_quote: string; fee_amount_base: string }): string {
+	const [baseAsset, quoteAsset] = t.pair.split('_').map((a) => a.toUpperCase());
+	const hasQuote = t.fee_amount_quote !== '' && t.fee_amount_quote != null;
+	const quote = !hasQuote
+		? null
+		: isJpyQuotedPair(t.pair)
+			? formatYenExact(Number(t.fee_amount_quote))
+			: `${t.fee_amount_quote} ${quoteAsset}`;
+	const baseNum = Number(t.fee_amount_base);
+	const base = Number.isFinite(baseNum) && baseNum !== 0 ? `${t.fee_amount_base} ${baseAsset}` : null;
+	const parts = [quote, base].filter((p): p is string => p != null);
+	return parts.length > 0 ? ` 手数料: ${parts.join(' + ')}` : '';
+}
 
 export default async function getMyTradeHistory(args: {
 	pair?: string;
@@ -97,7 +112,7 @@ export default async function getMyTradeHistory(args: {
 				const isJpy = t.pair.includes('jpy');
 				const price = isJpy ? formatPrice(Number(t.price)) : t.price;
 				lines.push(
-					`[trade: ${t.trade_id} / order: ${t.order_id}] ${t.executed_at} ${formatPair(t.pair)} ${sideLabel} ${t.amount} @ ${price} (${t.maker_taker})`,
+					`[trade: ${t.trade_id} / order: ${t.order_id}] ${t.executed_at} ${formatPair(t.pair)} ${sideLabel} ${t.amount} @ ${price} (${t.maker_taker})${spotFeeInfo(t)}`,
 				);
 			}
 

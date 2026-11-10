@@ -279,7 +279,7 @@ describe('analyze_my_portfolio', () => {
 		expect(result.summary).not.toContain('Interest cost:');
 	});
 
-	it('信用約定あり: account_pnl.total が spot + margin - interest - fee と一致', async () => {
+	it('信用約定あり: account_pnl.total が spot + margin - interest と一致（profit_loss は手数料控除後なので手数料は引かない。issue 450）', async () => {
 		// rawMarginTradeHistoryResponse は決済 1 件（profit_loss=5000, interest=30, fee_occurred_amount_quote=155）+ 建玉 2 件（fee 0）
 		setupFetchMock({ marginTrades: rawMarginTradeHistoryResponse });
 
@@ -297,7 +297,7 @@ describe('analyze_my_portfolio', () => {
 		expect(pnl.margin_interest_cost).toBe(30);
 		expect(pnl.margin_fee_cost).toBe(155);
 		assertDefined(pnl.spot_realized_pnl, 'result.data.account_pnl.spot_realized_pnl');
-		expect(pnl.total).toBe(pnl.spot_realized_pnl + 5000 - 30 - 155);
+		expect(pnl.total).toBe(pnl.spot_realized_pnl + 5000 - 30);
 	});
 
 	it('account_pnl: margin_*_cost で total を減算で検算でき、旧フィールド（margin_interest / margin_fee）は出さない', async () => {
@@ -315,9 +315,7 @@ describe('analyze_my_portfolio', () => {
 		expect(pnl.margin_interest_cost).toBe(30);
 		expect(pnl.margin_fee_cost).toBe(155);
 		assertDefined(pnl.spot_realized_pnl, 'result.data.account_pnl.spot_realized_pnl');
-		expect(pnl.total).toBe(
-			pnl.spot_realized_pnl + pnl.margin_realized_pnl - pnl.margin_interest_cost - pnl.margin_fee_cost,
-		);
+		expect(pnl.total).toBe(pnl.spot_realized_pnl + pnl.margin_realized_pnl - pnl.margin_interest_cost);
 
 		expect(Object.keys(pnl)).toEqual([
 			'spot_realized_pnl',
@@ -328,9 +326,10 @@ describe('analyze_my_portfolio', () => {
 			'spot_realized_pnl_unavailable_reason',
 		]);
 
-		// 表示は total への寄与なので `-` 前置のまま
+		// 利息は total への寄与なので `-` 前置のまま。手数料は Margin に控除済みであることを書き、引く項としては並べない（issue 450）
 		expect(result.summary).toContain('Interest cost: -30円');
-		expect(result.summary).toContain('Fee cost: -155円');
+		expect(result.summary).toContain('Margin: +5,000円（手数料控除後。発生手数料 155円 は控除済み）');
+		expect(result.summary).not.toContain('Fee cost: -155円');
 	});
 
 	it('信用約定レスポンスに現物 (position_side 欠損) が混入しても margin_fee は信用のみから集計', async () => {
@@ -389,7 +388,7 @@ describe('analyze_my_portfolio', () => {
 		// 現物の 9999 が混入していたら 9999+155=10154 になるはずだが、フィルタで除外されて 155 のみ
 		expect(pnl.margin_fee_cost).toBe(155);
 		assertDefined(pnl.spot_realized_pnl, 'result.data.account_pnl.spot_realized_pnl');
-		expect(pnl.total).toBe(pnl.spot_realized_pnl + 5000 - 30 - 155);
+		expect(pnl.total).toBe(pnl.spot_realized_pnl + 5000 - 30);
 	});
 
 	it('信用 fetch 失敗時: ⚠️ 警告 + meta.marginFetchFailed=true + margin pnl 0 で「信用未使用」と区別できる', async () => {
@@ -413,6 +412,58 @@ describe('analyze_my_portfolio', () => {
 		// 信用 fetch 失敗時は信用側 truncated 警告を抑止（メッセージ重複回避）
 		expect(result.summary).not.toContain('※ 約定履歴（信用）');
 		expect(result.summary).not.toContain('※ 約定履歴（現物 / 信用）');
+		// 信用の決済損益を巻き戻せないので、期間成績の率は出さない（issue 446）
+		for (const key of ['daily_performance', 'monthly_performance', 'yearly_performance'] as const) {
+			const perf = result.data[key] as { change_pct?: number; change_pct_unavailable_reason?: string };
+			expect(perf.change_pct).toBeUndefined();
+			expect(perf.change_pct_unavailable_reason).toBe('margin_trades_incomplete');
+		}
+		expect(result.summary).toContain('※ 資産推移シリーズ: 信用の約定履歴を取得しきれず');
+	});
+
+	it('期間中の信用の決済損益を期初の JPY から巻き戻す（issue 446）', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(Date.UTC(2026, 4, 16, 3, 0, 0, 0));
+		try {
+			const closeInMonth = {
+				trades: [
+					{
+						trade_id: 801,
+						pair: 'btc_jpy',
+						order_id: 8001,
+						side: 'sell',
+						position_side: 'long',
+						type: 'market',
+						amount: '0.01',
+						price: '15500000',
+						maker_taker: 'taker',
+						fee_amount_base: '0',
+						fee_amount_quote: '186',
+						fee_occurred_amount_quote: '186',
+						profit_loss: '100000',
+						interest: '1000',
+						executed_at: Date.UTC(2026, 4, 10, 3, 0, 0, 0),
+					},
+				],
+			};
+			setupFetchMock({ marginTrades: closeInMonth });
+			const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
+			const result = await handler({ include_technical: false, include_pnl: true, include_deposit_withdrawal: false });
+
+			assertOk(result);
+			expect(result.data.account_pnl?.margin_realized_pnl).toBe(100_000);
+			// このフィクスチャでは今月・今日とも現物の約定と入出金が無く、暗号資産は境界の始値を引けないので、期初評価額は JPY だけになる。
+			// 決済は 5/10 なので、月初比の期初は決済損益（profit_loss 100,000 − 利息 1,000）だけ小さく、前日比の期初には入らない。
+			const monthly = requireDefined(result.data.monthly_performance, 'monthly_performance');
+			const daily = requireDefined(result.data.daily_performance, 'daily_performance');
+			expect(daily.start_value_jpy - monthly.start_value_jpy).toBe(99_000);
+			expect(monthly.change_jpy - daily.change_jpy).toBe(99_000);
+			expect(result.summary).toContain(
+				'※ 信用の決済損益（手数料控除後。利息は別に差し引く）は JPY 残高に反映されるので巻き戻し',
+			);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('打ち切り (現物): summary に ※ 約定履歴（現物） が含まれ、meta.tradesTruncated === true', async () => {
@@ -467,6 +518,17 @@ describe('analyze_my_portfolio', () => {
 		expect(result.meta.tradesTruncated).toBe(true);
 		expect(result.meta.marginTradesTruncated).toBe(false);
 		expect(result.meta.marginFetchFailed).toBe(false);
+		// 欠けるのは直近の約定なので、期間成績は率を出さず理由コードを付け、資産推移シリーズにも申告を出す（issue 447）。
+		for (const key of ['daily_performance', 'monthly_performance', 'yearly_performance'] as const) {
+			const perf = result.data[key] as { change_pct?: number; change_pct_unavailable_reason?: string };
+			expect(perf.change_pct).toBeUndefined();
+			expect(perf.change_pct_unavailable_reason).toBe('trades_truncated');
+		}
+		expect(result.meta.changePctUnavailablePeriods).toEqual(expect.arrayContaining(['daily', 'monthly', 'yearly']));
+		expect(result.summary).toContain(
+			'現物の約定履歴の取得が打ち切られ、直近の約定を巻き戻せず期初の保有がずれているため',
+		);
+		expect(result.summary).toContain('※ 資産推移シリーズ: 現物の約定履歴の取得が打ち切られ');
 	});
 
 	it('打ち切り (信用): summary に ※ 約定履歴（信用） が含まれ、meta.marginTradesTruncated === true', async () => {
@@ -691,10 +753,7 @@ describe('analyze_my_portfolio', () => {
 			for (const periodPnl of [result.data.yearly_account_pnl, result.data.monthly_account_pnl]) {
 				assertDefined(periodPnl.spot_realized_pnl, 'periodPnl.spot_realized_pnl');
 				expect(periodPnl.total).toBe(
-					periodPnl.spot_realized_pnl +
-						periodPnl.margin_realized_pnl -
-						periodPnl.margin_interest_cost -
-						periodPnl.margin_fee_cost,
+					periodPnl.spot_realized_pnl + periodPnl.margin_realized_pnl - periodPnl.margin_interest_cost,
 				);
 				expect(Object.keys(periodPnl)).toEqual([
 					'spot_realized_pnl',
@@ -1597,6 +1656,35 @@ describe('analyze_my_portfolio — 入出金取得の include_pnl 紐づけ', ()
 		expect(result.summary).toContain(`ステーキング報酬: +${reward.toLocaleString('ja-JP')}円`);
 		expect(result.summary).toContain('ステーキング報酬 1件（暗号資産入庫の内数）');
 		expect(result.summary).toContain('リターンに含めています');
+		// 期間の入出金サマリーにも報酬を内訳として出す（issue 448 項目 1）
+		const monthlyDw = requireDefined(result.data.monthly_dw_summary, 'result.data.monthly_dw_summary');
+		expect(monthlyDw.staking_reward_count).toBe(1);
+		expect(monthlyDw.staking_reward_estimated_jpy).toBe(reward);
+		expect(result.summary).toContain(
+			`うちステーキング報酬 1件（概算 ${reward.toLocaleString('ja-JP')}円、元本ではなく成果）`,
+		);
+		// 報酬は損益に含まれず別建てであること、移動平均法と総平均法の違いを注記する（issue 448 項目 3・7）
+		expect(result.summary).toContain('※ ステーキング報酬の受取時の評価額は実現損益・評価損益に含めず');
+		expect(result.summary).toContain(
+			'総平均法（税務署に届出が無い場合の既定）で申告する場合、実現損益と取得原価はこの値と一致しません',
+		);
+	});
+
+	it('ステーキング報酬が無い口座には報酬の注記を出さず、取得原価の評価方法の注記は出す（issue 448）', async () => {
+		setupFetchMock();
+		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
+		const result = await handler({ include_technical: false, include_pnl: true, include_deposit_withdrawal: true });
+		assertOk(result);
+		expect(result.summary).not.toContain('ステーキング報酬の受取時の評価額');
+		expect(result.summary).toContain('※ 取得原価・実現損益は移動平均法で算出しています');
+	});
+
+	it('include_pnl=false では取得原価の評価方法の注記を出さない', async () => {
+		setupFetchMock();
+		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
+		const result = await handler({ include_technical: false, include_pnl: false, include_deposit_withdrawal: false });
+		assertOk(result);
+		expect(result.summary).not.toContain('移動平均法で算出しています');
 	});
 
 	it('口座全体リターンを算出できない（純投入額が 0）ときも、ステーキング報酬の行を出す', async () => {
@@ -2644,6 +2732,13 @@ describe('analyze_my_portfolio — 入出庫日価格での評価', () => {
 			);
 			expect(result.summary).not.toContain('暗号資産出庫 2件は JPY 出金と同じ');
 			expect(result.summary).toContain('※ 暗号資産出庫 1件は評価額を算出できず純投入額に反映されていません');
+			// 換算できない出庫が純投入額から漏れるので、口座全体リターンは出さない（issue 448 項目 2）
+			expect(dw?.unpriced_flow_assets).toEqual(['mona']);
+			expect(dw?.account_return_jpy).toBeUndefined();
+			expect(dw?.account_return_pct).toBeUndefined();
+			expect(result.summary).toContain(
+				'口座全体リターン: 算出不可（MONA の入出庫を入出庫日の価格でも現在価格でも JPY 換算できず、純投入額から漏れているため',
+			);
 		});
 	});
 
@@ -2719,7 +2814,10 @@ describe('analyze_my_portfolio — 入出庫日価格での評価', () => {
 		expect(perfKeys.indexOf('note')).toBeLessThan(perfKeys.indexOf('flow_valuation'));
 		// このフィクスチャの tickers は btc_jpy しか返さないので ETH / XRP が現在評価額から落ち、unpriced_current_assets が実際に出る。
 		expect(perfKeys.indexOf('flow_valuation')).toBeLessThan(perfKeys.indexOf('unpriced_current_assets'));
-		expect(perfKeys.at(-1)).toBe('change_jpy_understated');
+		// 当日の BTC 入庫が現在の保有より多いので、巻き戻すと期初の BTC が負になり negative_start_assets が末尾に出る（issue 448）。
+		expect(perfKeys.indexOf('change_jpy_understated')).toBeLessThan(perfKeys.indexOf('negative_start_assets'));
+		expect(perfKeys.at(-1)).toBe('negative_start_assets');
+		expect(result.summary).toContain('※ 期初の保有を巻き戻すと BTC の残高が負になりました');
 
 		const periodKeys = Object.keys(result.data.yearly_dw_summary ?? {});
 		expect(periodKeys.indexOf('period_end')).toBeLessThan(periodKeys.indexOf('crypto_deposit_valuation'));
