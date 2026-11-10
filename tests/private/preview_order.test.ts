@@ -992,6 +992,19 @@ describe('preview_order', () => {
 			expect(result.summary).toContain(`${field} は正の数値を通常の 10 進表記`);
 		});
 
+		it('Number に収まらない桁数（Infinity になる）は、/spot/pairs を取れなくても validation_error', async () => {
+			globalThis.fetch = vi.fn(async () => new Response('boom', { status: 500 })) as unknown as typeof fetch;
+			const { default: previewOrder } = await import('../../tools/private/preview_order.js');
+			const result = await previewOrder({
+				pair: 'btc_jpy',
+				amount: '9'.repeat(310),
+				side: 'buy',
+				type: 'market',
+			});
+			assertFail(result);
+			expect(result.summary).toContain('amount は正の数値を通常の 10 進表記');
+		});
+
 		it('trigger_price の指数表記も validation_error', async () => {
 			const { default: previewOrder } = await import('../../tools/private/preview_order.js');
 			const result = await previewOrder({
@@ -1098,8 +1111,8 @@ describe('preview_order', () => {
 			expect(result.data.preview.fee_estimate?.role).toBe('maker');
 		});
 
-		it('best ask / bid が無ければ last と比べる', async () => {
-			installTickerMock({ last: '14995000' });
+		it('該当する側の best ask / bid が無ければ、最終価格では判定せず maker 想定のままにする', async () => {
+			installTickerMock({ last: '14995000', buy: '14980000' });
 			const { default: previewOrder } = await import('../../tools/private/preview_order.js');
 			const result = await previewOrder({
 				pair: 'btc_jpy',
@@ -1109,7 +1122,9 @@ describe('preview_order', () => {
 				price: '15000000',
 			});
 			assertOk(result);
-			expect(result.data.preview.fee_estimate?.role).toBe('taker');
+			const fee = result.data.preview.fee_estimate;
+			expect(fee?.role).toBe('maker');
+			expect(fee?.note).toContain('maker 想定（板を跨ぐと taker）');
 		});
 
 		it('/ticker の取得に失敗したら従来どおり maker で見積る', async () => {

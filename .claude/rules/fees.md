@@ -16,8 +16,8 @@ bitbank の手数料は 3 カテゴリに分かれる。混同するとハルシ
   - 率の解決: `resolveFeeRate(spec, role, override?)`
   - 注文 1 件の見積り: `estimateOrderFee(spec, order)`
   - role 判定: `feeRole(type, postOnly?, crossesBook?)`。`crossesBook` は指値が現在の板を跨ぐか
-    （買いは best ask 以上、売りは best bid 以下。無ければ last と比べる）。跨ぐ指値（post_only なし）は taker、
-    判定できない（`undefined`）ときは maker 想定のまま。stop_limit は発動時の板が分からないので maker。
+    （買いは best ask 以上、売りは best bid 以下。最終価格では決まらないので、該当する側が無ければ判定しない）。
+    跨ぐ指値（post_only なし）は taker、判定できない（`undefined`）ときは maker 想定のまま。stop_limit は発動時の板が分からないので maker。
 - **現物の取引手数料は売買とも quote（JPY）建て**。`*_fee_rate_base` は見積りに使わない
   （実約定で、買いの手数料も円で引かれることを確認済み）。約定履歴の手数料は円未満まで計上されるが、
   見積りは円未満を四捨五入した概算で、`note` にその旨を付ける。

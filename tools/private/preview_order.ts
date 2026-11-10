@@ -47,18 +47,19 @@ function validateOrderParams(args: {
 
 // スキーマと同じ形式。previewOrder を直接呼ぶ経路（テスト・内部呼び出し）でも同じく弾く。
 function isPositiveDecimalString(s: string): boolean {
-	return /^\d+(\.\d+)?$/.test(s) && Number(s) > 0;
+	const n = Number(s);
+	return /^\d+(\.\d+)?$/.test(s) && Number.isFinite(n) && n > 0;
 }
 
 function decimalFormatError(field: 'amount' | 'price' | 'trigger_price'): string {
 	return `${field} は正の数値を通常の 10 進表記（例: 0.001）で指定してください（指数表記・符号・空白は不可）`;
 }
 
-// best ask / bid が無ければ last と比べる。比べられなければ undefined（maker 想定のまま）。
+// 最終価格では板を跨ぐかは決まらない（該当する側が空なら指値は跨げない）ので、best ask / bid が無ければ undefined（maker 想定のまま）。
 function limitCrossesBook(ticker: PairTicker | null, side: 'buy' | 'sell', price: number): boolean | undefined {
-	if (ticker == null) return undefined;
-	if (side === 'buy') return price >= (ticker.bestAsk ?? ticker.last);
-	return price <= (ticker.bestBid ?? ticker.last);
+	const quote = side === 'buy' ? ticker?.bestAsk : ticker?.bestBid;
+	if (quote == null) return undefined;
+	return side === 'buy' ? price >= quote : price <= quote;
 }
 
 function formatRatePercent(rate: number): string {

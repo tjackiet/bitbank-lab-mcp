@@ -71,7 +71,7 @@ function isJpyQuote(spec: PairSpec | undefined): boolean {
 
 const MARGIN_RATE_MISSING_NOTE = '信用手数料率が API 未提供のため概算';
 const MARGIN_INTEREST_NOTE = '利息（interest）は見積りに含めない（実績は trade_history）';
-// 約定履歴の手数料は円未満まで計上される（実績 14.1239 円など）が、端数処理の規則は確認できていないので概算と明記する（issue 449）。
+// 約定履歴の手数料は円未満まで計上されるが、端数処理の規則は確認できていないので概算と明記する（issue 449）。
 const JPY_ROUNDING_NOTE = '推定手数料は円未満を四捨五入した概算（実際の手数料は円未満まで計上される）';
 
 // 信用レートが null なら公称 taker で概算して note に「API 未提供」を付け、利息は見積りに含めない旨を常に note に付ける（誤った確定値を出さない）。

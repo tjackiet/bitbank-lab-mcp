@@ -13,7 +13,7 @@
 - `run_backtest`：Buy & Hold に買いの片道手数料を入れる。起点（ウォームアップ直後の t+1 始値）で引き、最終バーは終値で評価して売りの手数料は引かない（未決済ポジションと同じ扱い）。`buy_hold_pnl_pct` は手数料ぶん下がり、`excess_return_pct` は手数料込みどうしの比較になる。本文の Buy & Hold 行に「buy fee included」と書く（issue #445）。
 - `analyze_my_portfolio`：期間別の純入出金で、ステーキング報酬に換算できない分があると報酬の額（`staking_reward_jpy`）を出していなかった。通常の入出庫（`net_flow_jpy`）と同じく、換算できた分の部分合計を出し、換算できない資産名を `staking_reward_unpriced_assets` に併記する（issue #448）。
 - `analyze_my_portfolio`：同じ時刻の約定と入出庫は、入庫 → 約定 → 出庫の順で処理する。入庫と同時刻の売りが、原価ゼロの売りとして実現損益を過大に出していた（issue #448）。
-- `preview_order`：指値（`post_only` なし）が現在の板を跨ぐとき（買いは best ask 以上、売りは best bid 以下。無ければ最終価格と比べる）は、即時約定するので taker の率で手数料を見積る。maker が -0.02% のペアで 0.01 BTC を 1,500 万円で買うと「推定手数料 -30 円（リベート）」と出ていたが、即時約定すれば実際は taker の +180 円だった。`/ticker` を取得できないときは従来どおり maker 想定（issue #449）。
+- `preview_order`：指値（`post_only` なし）が現在の板を跨ぐとき（買いは best ask 以上、売りは best bid 以下）は、即時約定するので taker の率で手数料を見積る。maker が -0.02% のペアで 0.01 BTC を 1,500 万円で買うと「推定手数料 -30 円（リベート）」と出ていたが、即時約定すれば実際は taker の +180 円だった。`/ticker` を取得できないとき、該当する側の best ask / bid が無いときは従来どおり maker 想定（issue #449）。
 - `preview_order`：円建ての推定手数料は円未満を四捨五入した概算であることを備考に書く。約定履歴の手数料は円未満まで計上される（issue #449）。
 
 ### Added
