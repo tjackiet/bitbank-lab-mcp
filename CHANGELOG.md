@@ -7,6 +7,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `run_backtest`：戦略が持たない `params` のキー（例: `sma_cross` の `short_period`）が検証を通り、既定値で実行されていた。未知のキーはエラーにする。期間系のパラメータ（`short` / `long` / `period` / `fast` / `slow` / `signal` / `sma_filter_period` / `rsi_filter_period`）に小数を渡すと、指標が全 NaN になって「0 トレード」を返すか、内部の例外がエラーとして返っていた。整数だけを通す（issue #443）。
+
 ## [0.7.0] - 2026-11-10
 
 番号は fork（tjackiet/bitbank-lab-mcp）の issue。互換性を壊す変更は「Schema (breaking)」にまとめている（`detect_patterns` の `scoreComponents`、`analyze_bb_snapshot` の `zScore` の単位・`bandwidth_state` の基準・extended の項目、`get_tickers_jpy` の `view` など）。

@@ -28,7 +28,13 @@ export const StrategyTypeEnum = z.enum(['sma_cross', 'rsi', 'macd_cross', 'bb_br
 
 export const StrategyConfigSchema = z.object({
 	type: StrategyTypeEnum.describe('Strategy type'),
-	params: z.record(z.string(), z.number()).optional().default({}).describe('Strategy parameters (overrides defaults)'),
+	params: z
+		.record(z.string(), z.number())
+		.optional()
+		.default({})
+		.describe(
+			'Strategy parameters (overrides defaults). Unknown keys are rejected. Period params (short / long / period / fast / slow / signal / sma_filter_period / rsi_filter_period) must be integers.',
+		),
 });
 
 export const RunBacktestInputSchema = z

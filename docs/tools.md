@@ -1366,6 +1366,9 @@ accepted も押し出されうる（`content` はこの 2 つを区別して書�
 | macd_cross | MACDクロスオーバー | fast, slow, signal + フィルター |
 | bb_breakout | ボリンジャーバンドブレイクアウト | period, stddev |
 
+`params` に戦略が持たないキー（例: sma_cross の `short_period`）を渡すとエラーになります。
+期間系のパラメータ（`short` / `long` / `period` / `fast` / `slow` / `signal` / `sma_filter_period` / `rsi_filter_period`）は整数だけを受け付けます。
+
 ### sma_cross エントリーフィルター
 
 買いシグナル（ゴールデンクロス）にのみフィルターが適用されます。売り（デッドクロス）はフィルターなしで常に通します。

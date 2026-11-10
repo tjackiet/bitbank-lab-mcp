@@ -1,5 +1,6 @@
 import { rsi } from '../../../../lib/indicators.js';
 import type { Candle } from '../../types.js';
+import { checkParamShape } from './params.js';
 import type { Overlay, ParamValidationResult, Signal, Strategy } from './types.js';
 
 const DEFAULT_PARAMS = {
@@ -8,12 +9,14 @@ const DEFAULT_PARAMS = {
 	oversold: 30,
 };
 
+const INTEGER_KEYS = ['period'] as const;
+
 export function calculateRSI(closes: number[], period: number): number[] {
 	return rsi(closes, period);
 }
 
 export function validateParams(params: Record<string, number>): ParamValidationResult {
-	const errors: string[] = [];
+	const errors: string[] = checkParamShape(params, DEFAULT_PARAMS, INTEGER_KEYS);
 	const normalized = { ...DEFAULT_PARAMS, ...params };
 
 	if (normalized.period < 2) {
