@@ -20,37 +20,69 @@ export interface PaginatedWithdrawals<T extends RawWithdrawal = RawWithdrawal> {
 	cause?: unknown;
 }
 
+interface PaginatedHistory<T> {
+	records: T[];
+	complete: boolean;
+	error?: string;
+	cause?: unknown;
+}
+
+// 入出金履歴 API は期間の中で新しい順に count 件を返す（fork の issue 458 項目 1、実口座で確認）。since を下限に残し、各ページのいちばん古い時刻を次の end にしてさかのぼる。
+async function paginateFlowHistory<T extends { uuid: string; asset: string }>(
+	client: BitbankPrivateClient,
+	path: string,
+	key: 'deposits' | 'withdrawals',
+	baseParams: Record<string, string>,
+	sinceMs: number | undefined,
+	timeOf: (record: T) => number | undefined,
+): Promise<PaginatedHistory<T>> {
+	const all: T[] = [];
+	const seenIds = new Set<string>();
+	let end: string | undefined;
+	for (let page = 0; page < MAX_PAGES; page++) {
+		const params: Record<string, string> = {
+			...baseParams,
+			count: String(DW_PAGE_SIZE),
+			...(sinceMs != null ? { since: String(sinceMs) } : {}),
+			...(end ? { end } : {}),
+		};
+		const result = await tryGet<Record<typeof key, T[]>>(client, path, params);
+		if (!result.ok) {
+			return { records: all, complete: false, error: result.error, cause: result.cause };
+		}
+		// 現行 API は小文字を返すが、calc.ts が小文字前提で JPY 判定・prices 検索・holdings キーを組むので取得境界で正規化しておく。
+		const batch = normalizeAssetCodes(result.data[key] || []);
+		const newRecords = batch.filter((r) => !seenIds.has(r.uuid));
+		for (const r of newRecords) seenIds.add(r.uuid);
+		all.push(...newRecords);
+		if (batch.length < DW_PAGE_SIZE) {
+			return { records: all, complete: true };
+		}
+		// 同じ時刻の履歴が DW_PAGE_SIZE 件以上あると end が進まないので、そこで打ち切る。
+		if (newRecords.length === 0) return { records: all, complete: false };
+		const times = batch.map(timeOf).filter((t): t is number => t != null && Number.isFinite(t));
+		if (times.length === 0) break;
+		// end は境界の時刻を含む（fork の issue 458 項目 7）ので 1ms 引かない。同じ時刻の行は次のページで取り直し、uuid で重複を除く。
+		end = String(Math.min(...times));
+	}
+	return { records: all, complete: false };
+}
+
 export async function paginateDeposits<T extends RawDeposit = RawDeposit>(
 	client: BitbankPrivateClient,
 	baseParams: Record<string, string>,
 	sinceMs?: number,
 ): Promise<PaginatedDeposits<T>> {
-	const all: T[] = [];
-	const seenIds = new Set<string>();
-	let since: string | undefined = sinceMs != null ? String(sinceMs) : undefined;
-	for (let page = 0; page < MAX_PAGES; page++) {
-		const params = { ...baseParams, count: String(DW_PAGE_SIZE), ...(since ? { since } : {}) };
-		const result = await tryGet<{ deposits: T[] }>(client, '/v1/user/deposit_history', params);
-		if (!result.ok) {
-			return { deposits: all, complete: false, error: result.error, cause: result.cause };
-		}
-		// 現行 API は小文字を返すが、calc.ts が小文字前提で JPY 判定・prices 検索・holdings キーを組むので取得境界で正規化しておく。
-		const batch = normalizeAssetCodes(result.data.deposits || []);
-		const newRecords = batch.filter((d) => !seenIds.has(d.uuid));
-		for (const d of newRecords) seenIds.add(d.uuid);
-		all.push(...newRecords);
-		if (batch.length < DW_PAGE_SIZE) {
-			return { deposits: all, complete: true };
-		}
-		// 同一タイムスタンプが DW_PAGE_SIZE 件以上連続して進捗しない場合の保険
-		if (newRecords.length === 0) return { deposits: all, complete: false };
-		// 同一 ts を次ページで取り直して dedup する。confirmed_at は確認済の入金にしか無いので found_at にフォールバックする。
-		const last = batch[batch.length - 1];
-		const lastTs = last?.confirmed_at ?? last?.found_at;
-		if (!lastTs) break;
-		since = String(lastTs);
-	}
-	return { deposits: all, complete: false };
+	// confirmed_at は確認済の入金にしか無いので found_at にフォールバックする。
+	const { records, ...rest } = await paginateFlowHistory<T>(
+		client,
+		'/v1/user/deposit_history',
+		'deposits',
+		baseParams,
+		sinceMs,
+		(d) => d.confirmed_at ?? d.found_at,
+	);
+	return { deposits: records, ...rest };
 }
 
 export async function paginateWithdrawals<T extends RawWithdrawal = RawWithdrawal>(
@@ -58,26 +90,13 @@ export async function paginateWithdrawals<T extends RawWithdrawal = RawWithdrawa
 	baseParams: Record<string, string>,
 	sinceMs?: number,
 ): Promise<PaginatedWithdrawals<T>> {
-	const all: T[] = [];
-	const seenIds = new Set<string>();
-	let since: string | undefined = sinceMs != null ? String(sinceMs) : undefined;
-	for (let page = 0; page < MAX_PAGES; page++) {
-		const params = { ...baseParams, count: String(DW_PAGE_SIZE), ...(since ? { since } : {}) };
-		const result = await tryGet<{ withdrawals: T[] }>(client, '/v1/user/withdrawal_history', params);
-		if (!result.ok) {
-			return { withdrawals: all, complete: false, error: result.error, cause: result.cause };
-		}
-		const batch = normalizeAssetCodes(result.data.withdrawals || []);
-		const newRecords = batch.filter((w) => !seenIds.has(w.uuid));
-		for (const w of newRecords) seenIds.add(w.uuid);
-		all.push(...newRecords);
-		if (batch.length < DW_PAGE_SIZE) {
-			return { withdrawals: all, complete: true };
-		}
-		if (newRecords.length === 0) return { withdrawals: all, complete: false };
-		const lastTs = batch[batch.length - 1]?.requested_at;
-		if (!lastTs) break;
-		since = String(lastTs);
-	}
-	return { withdrawals: all, complete: false };
+	const { records, ...rest } = await paginateFlowHistory<T>(
+		client,
+		'/v1/user/withdrawal_history',
+		'withdrawals',
+		baseParams,
+		sinceMs,
+		(w) => w.requested_at,
+	);
+	return { withdrawals: records, ...rest };
 }

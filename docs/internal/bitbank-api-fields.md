@@ -377,6 +377,10 @@ drift 時に「ミラー要更新」issue を起票する。
 確度: **verbatim**（表 `:956-972` / JSON `:995-1019`）。パラメータ `pair` / `count`(≤1000) / `order_id` /
 `since`(ms) / `end`(ms) / `order`(`asc`/`desc`、既定 `desc`)（`:945-952`）。
 
+> **live 確認済み（2026-11-10, fork の issue #458 項目 7）: `since` / `end` はどちらも境界の時刻を含む。**
+> 約定時刻ちょうどを `since` にして `asc`、`end` にして `desc` で呼ぶと、その約定が先頭に来た。docs には記載が無い。
+> ページ送りはこの前提で、境目の時刻をそのまま次のカーソルにして取り直し、`trade_id` で重複を除く。
+
 | フィールド | 型 | 備考 | docs 行 |
 |---|---|---|---|
 | `trade_id` | number | trade id | `:958` |
@@ -442,13 +446,18 @@ drift 時に「ミラー要更新」issue を起票する。
 確度: **verbatim**（表 `:1040-1051` / JSON `:1080-1098`）。パラメータ `asset` / `count`(≤100) /
 `since`(ms) / `end`(ms)（`:1031-1036`）。
 
+> **live 確認済み（2026-11-10, fork の issue #458 項目 1）: 期間（`since` / `end`）の中で新しい順に `count` 件を返す。**
+> docs には `order` パラメータも並び順の記載も無い。`since` に古い日付を渡しても、返るのは `since` に近い古い分ではなく
+> いちばん新しい `count` 件。ページ送り（`src/handlers/portfolio/pagination.ts`）は `since` を下限に残し、各ページの
+> いちばん古い時刻を次の `end` にしてさかのぼる。`end` が境界を含むこと（項目 7）は約定履歴で確認した前提に合わせている。
+
 | フィールド | 型 | 備考 | docs 行 |
 |---|---|---|---|
 | `uuid` | string | 入金識別 uuid | `:1042` |
 | `address` | string | 入金 address（暗号資産入金のみ）。**公式は表のみ・JSON 例には未掲載**だが live 確認済み（2026-06-08, `deposits[]` キーに `address` あり / jpy 入金は無し） | `:1043` |
 | `asset` | string | アセット名 | `:1044` |
 | `network` | string | ネットワーク名 | `:1045` |
-| `amount` | number（表）/ "string"（JSON 例） | 入金数量。**表は `number`・JSON 例は `"string"` で不一致（記録）** | `:1046` |
+| `amount` | number（表）/ "string"（JSON 例） | 入金数量。**表は `number`・JSON 例は `"string"` で不一致（記録）**。live 確認済み（2026-11-10, fork の issue #458 項目 6）: 文字列で返る（`z.string()` の出力検証を通った） | `:1046` |
 | `txid` | string \| null | 入金トランザクションID（暗号資産のみ） | `:1047` |
 | `status` | string | `FOUND` / `CONFIRMED` / `DONE` | `:1048` |
 | `category` | string | 入金種別 `NORMAL` / `MANUAL` / `STAKING`。**`MANUAL` の意味は docs に無い**。live 確認済み（2026-11-05, 暗号資産入金の `deposits[]` に `category` あり。値は `NORMAL` / `MANUAL` を観測、`STAKING` は未観測） | `:1049` |
@@ -490,6 +499,8 @@ drift 時に「ミラー要更新」issue を起票する。
 
 確度: **verbatim**（表 `:1529-1547` / JSON `:1575-1605`）。パラメータ `asset` / `count`(≤100) /
 `since`(ms) / `end`(ms)（`:1520-1525`）。
+
+> **live 確認済み（2026-11-10, fork の issue #458 項目 1）: 入金履歴と同じく、期間の中で新しい順に `count` 件を返す。**
 
 | フィールド | 型 | 備考 | docs 行 |
 |---|---|---|---|

@@ -138,16 +138,16 @@ describe('get_my_deposit_withdrawal', () => {
 
 	it('ページネーション: 100 件バッチの末尾が未確認入金(confirmed_at 欠落)でも break せず found_at で次ページを取得する', async () => {
 		let depositCallCount = 0;
-		const sinceValues: string[] = [];
+		const endValues: string[] = [];
 		setupFetchMock({
 			customHandler: (url: string) => {
 				if (url.includes('deposit_history')) {
 					depositCallCount++;
 					const u = new URL(url);
-					const since = u.searchParams.get('since');
-					if (since) sinceValues.push(since);
+					const end = u.searchParams.get('end');
+					if (end) endValues.push(end);
 					if (depositCallCount === 1) {
-						// 100 件返す → 次ページあり。末尾レコードは status:'FOUND'（confirmed_at プロパティ無し）。
+						// API は新しい順に返す。100 件 → 次ページあり。いちばん古い末尾は status:'FOUND'（confirmed_at プロパティ無し）。
 						const deposits = Array.from({ length: 100 }, (_, i) => {
 							const isLast = i === 99;
 							return {
@@ -155,20 +155,20 @@ describe('get_my_deposit_withdrawal', () => {
 								asset: 'jpy',
 								amount: '10000',
 								status: isLast ? 'FOUND' : 'DONE',
-								found_at: 1709900000000 + i * 1000,
-								...(isLast ? {} : { confirmed_at: 1709900000000 + i * 1000 + 100 }),
+								found_at: 1709900000000 + (99 - i) * 1000,
+								...(isLast ? {} : { confirmed_at: 1709900000000 + (99 - i) * 1000 + 100 }),
 							};
 						});
 						return new Response(JSON.stringify(mockBitbankSuccess({ deposits })), { status: 200 });
 					}
-					// 2 ページ目: 30 件 → 完了
+					// 2 ページ目: それより古い 30 件 → 完了
 					const deposits = Array.from({ length: 30 }, (_, i) => ({
 						uuid: `dep-page2-${i}`,
 						asset: 'jpy',
 						amount: '10000',
 						status: 'DONE',
-						found_at: 1709990000000 + i * 1000,
-						confirmed_at: 1709990000000 + i * 1000 + 100,
+						found_at: 1709800000000 - i * 1000,
+						confirmed_at: 1709800000000 - i * 1000 + 100,
 					}));
 					return new Response(JSON.stringify(mockBitbankSuccess({ deposits })), { status: 200 });
 				}
@@ -187,8 +187,8 @@ describe('get_my_deposit_withdrawal', () => {
 		expect(depositCallCount).toBe(2);
 		expect(result.data.deposits.length).toBe(130);
 		expect(result.meta.isComplete).toBe(true);
-		// カーソルは末尾レコードの found_at にフォールバックする（同じ時刻を取り直し、重複は uuid で除く）
-		expect(sinceValues).toContain(String(1709900000000 + 99 * 1000));
+		// 次の end はいちばん古い末尾レコードの found_at にフォールバックする（同じ時刻を取り直し、重複は uuid で除く）
+		expect(endValues).toEqual([String(1709900000000)]);
 	});
 
 	it('部分的失敗時に警告付きで成功する', async () => {
@@ -430,18 +430,21 @@ describe('get_my_deposit_withdrawal — ページの境目と途中の失敗', (
 	});
 
 	it('ページの境目と同じミリ秒の入金を取りこぼさない', async () => {
-		// 100 件目から 102 件目までが同じ時刻。API の since はその時刻を含むものとして、昇順に 100 件ずつ返す。
+		// 新しいほうから 100 件目から 102 件目までが同じ時刻。API は end（境界を含む）までを新しい順に 100 件ずつ返す。
 		const all = [
-			...Array.from({ length: 99 }, (_, i) => depositAt(`dep-${i}`, T0 + i)),
-			depositAt('dep-99', T0 + 1000),
-			depositAt('dep-100', T0 + 1000),
-			depositAt('dep-101', T0 + 1000),
+			depositAt('dep-0', T0),
+			depositAt('dep-1', T0),
+			depositAt('dep-2', T0),
+			...Array.from({ length: 99 }, (_, i) => depositAt(`dep-${i + 3}`, T0 + 1000 + i)),
 		];
 		setupFetchMock({
 			customHandler: (url: string) => {
 				if (url.includes('deposit_history')) {
-					const since = Number(new URL(url).searchParams.get('since') ?? 0);
-					const deposits = all.filter((d) => d.confirmed_at >= since).slice(0, 100);
+					const end = Number(new URL(url).searchParams.get('end') ?? Number.POSITIVE_INFINITY);
+					const deposits = all
+						.filter((d) => d.confirmed_at <= end)
+						.sort((a, b) => b.confirmed_at - a.confirmed_at)
+						.slice(0, 100);
 					return new Response(JSON.stringify(mockBitbankSuccess({ deposits })), { status: 200 });
 				}
 				return new Response(JSON.stringify(mockBitbankSuccess({ withdrawals: [] })), { status: 200 });
@@ -452,7 +455,7 @@ describe('get_my_deposit_withdrawal — ページの境目と途中の失敗', (
 		const result = await getMyDepositWithdrawal({ asset: 'jpy', type: 'deposit' });
 
 		assertOk(result);
-		expect(result.data.deposits.map((d) => d.uuid)).toEqual(all.map((d) => d.uuid));
+		expect(result.data.deposits.map((d) => d.uuid).sort()).toEqual(all.map((d) => d.uuid).sort());
 		expect(result.meta.isComplete).toBe(true);
 	});
 
