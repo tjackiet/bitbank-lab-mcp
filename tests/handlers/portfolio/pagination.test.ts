@@ -32,10 +32,7 @@ function withdrawal(i: number, ts: number) {
 	return { uuid: `wd-${i}`, asset: 'jpy', amount: '1000', fee: '550', status: 'DONE', requested_at: ts };
 }
 
-/**
- * 実口座で確かめた入出金履歴 API の振る舞いだけを再現する（fork の issue 458 項目 1・7）。
- * 期間（since / end、どちらも境界を含む）の中で新しい順に並べ、先頭から count 件を返す。
- */
+// 実口座で確かめた振る舞い（since / end はどちらも境界を含む）だけを再現する（fork の issue 458 項目 1・7）。
 function fakeHistoryApi(
 	key: 'deposits' | 'withdrawals',
 	records: Array<Record<string, unknown>>,
@@ -61,7 +58,6 @@ function fakeHistoryApi(
 const depositTime = (r: Record<string, unknown>) => Number(r.confirmed_at ?? r.found_at);
 const withdrawalTime = (r: Record<string, unknown>) => Number(r.requested_at);
 
-// 入出金履歴 API は新しい順に返すので、最後の行の時刻を次の since にすると毎回同じ新しい分が返り、100 件を超えると欠けていた（fork の issue 458 項目 1）。
 describe('paginateDeposits / paginateWithdrawals — 新しい順の API を古いほうへさかのぼる', () => {
 	it('入金 250 件を取りこぼさずに全件取得し、complete=true を返す', async () => {
 		const records = Array.from({ length: 250 }, (_, i) => deposit(i, BASE_TS + i * 1000));

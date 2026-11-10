@@ -27,7 +27,7 @@ interface PaginatedHistory<T> {
 	cause?: unknown;
 }
 
-// 入出金履歴 API は期間の中で新しい順に count 件を返す（fork の issue 458 項目 1、実口座で確認）。since を下限に残し、各ページのいちばん古い時刻を次の end にしてさかのぼる。
+// 入出金履歴 API は期間の中で新しい順に count 件を返す（実口座で確認。fork の issue 458 項目 1）。
 async function paginateFlowHistory<T extends { uuid: string; asset: string }>(
 	client: BitbankPrivateClient,
 	path: string,
@@ -62,7 +62,7 @@ async function paginateFlowHistory<T extends { uuid: string; asset: string }>(
 		if (newRecords.length === 0) return { records: all, complete: false };
 		const times = batch.map(timeOf).filter((t): t is number => t != null && Number.isFinite(t));
 		if (times.length === 0) break;
-		// end は境界の時刻を含む（fork の issue 458 項目 7）ので 1ms 引かない。同じ時刻の行は次のページで取り直し、uuid で重複を除く。
+		// end は境界の時刻を含む（fork の issue 458 項目 7）ので 1ms 引かずに同じ時刻を取り直し、uuid で重複を除く。
 		end = String(Math.min(...times));
 	}
 	return { records: all, complete: false };
