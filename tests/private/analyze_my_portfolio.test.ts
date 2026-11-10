@@ -1113,8 +1113,9 @@ describe('analyze_my_portfolio', () => {
 
 		assertOk(result);
 		expect(result.summary).toContain('信用建玉:');
-		expect(result.summary).toContain('BTC/JPY ロング 0.01');
-		expect(result.summary).toContain('ETH/JPY ショート 1.0');
+		expect(result.summary).toContain('BTC/JPY ロング 0.01 (建玉金額（建値ベース）: 150,000円)');
+		expect(result.summary).toContain('ETH/JPY ショート 1.0 (建玉金額（建値ベース）: 400,000円)');
+		expect(result.summary).not.toMatch(/(ロング|ショート) [\d.]+ \(評価額/);
 		expect(result.summary).toContain('集計: ロング 1件 / ショート 1件');
 		// rawMarginStatusResponse.margin_position_profit_loss = '50000' を踏襲
 		expect(result.summary).toContain('建玉含み損益: +50,000円');
@@ -4529,7 +4530,7 @@ describe('analyze_my_portfolio — ゼロ建玉の表示抑制', () => {
 		expect(result.summary).not.toContain('ゼロ建玉');
 	});
 
-	it('open_amount=0 でも評価額が非ゼロなら抑制しない（ゼロと断定できる行だけ落とす）', async () => {
+	it('open_amount=0 でも product が非ゼロなら抑制しない（ゼロと断定できる行だけ落とす）', async () => {
 		setupFetchMock({
 			marginPositions: positionsResponse([
 				{ ...zeroPosition('btc_jpy', 'long'), product: '150000' },
@@ -4540,7 +4541,7 @@ describe('analyze_my_portfolio — ゼロ建玉の表示抑制', () => {
 		const result = await callHandler();
 
 		assertOk(result);
-		expect(result.summary).toContain('BTC/JPY ロング 0 (評価額: 150,000円)');
+		expect(result.summary).toContain('BTC/JPY ロング 0 (建玉金額（建値ベース）: 150,000円)');
 		expect(result.summary).toContain('集計: ロング 1件 / ショート 0件 / ゼロ建玉 1件省略');
 	});
 });

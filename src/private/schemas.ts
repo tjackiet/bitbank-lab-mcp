@@ -1054,10 +1054,10 @@ const MarginPositionSchema = z.object({
 		.describe(
 			'建玉ロック数量（アクティブな信用決済注文の remaining_amount の合計）。open_amount のうち決済注文に充てられている分。API が返さない場合は undefined',
 		),
-	product: z.string().describe('建玉評価額'),
-	average_price: z.string().describe('平均取得価格'),
-	unrealized_fee_amount: z.string().describe('未収手数料'),
-	unrealized_interest_amount: z.string().describe('未収利息'),
+	product: z.string().describe('建玉金額（建値ベース。average_price × open_amount の quote 量で、現在の時価ではない）'),
+	average_price: z.string().describe('平均約定価格（product / open_amount）'),
+	unrealized_fee_amount: z.string().describe('未実現手数料'),
+	unrealized_interest_amount: z.string().describe('未実現利息'),
 });
 
 const MarginNoticeSchema = z
