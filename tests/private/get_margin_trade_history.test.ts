@@ -303,7 +303,8 @@ describe('get_margin_trade_history', () => {
 		expect(result.summary).not.toContain('trade: 501]');
 	});
 
-	it('count がデフォルト値 (20) の場合はパラメータを送らない', async () => {
+	// count の既定値はドキュメントに無いので、既定の件数でも省略しない（issue 458 項目 2）。
+	it('count が既定値 (20) でも API に送る', async () => {
 		setupFetchMock(mockBitbankSuccess({ trades: [] }));
 
 		const { default: getMarginTradeHistory } = await import('../../tools/private/get_margin_trade_history.js');
@@ -311,10 +312,10 @@ describe('get_margin_trade_history', () => {
 
 		const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
 		const calledUrl = fetchMock.mock.calls[0][0] as string;
-		expect(calledUrl).not.toContain('count=');
+		expect(calledUrl).toContain('count=20');
 	});
 
-	it('order がデフォルト値 (desc) の場合はパラメータを送らない', async () => {
+	it('order が既定値 (desc) でも API に明示して送る', async () => {
 		setupFetchMock(mockBitbankSuccess({ trades: [] }));
 
 		const { default: getMarginTradeHistory } = await import('../../tools/private/get_margin_trade_history.js');
@@ -322,7 +323,7 @@ describe('get_margin_trade_history', () => {
 
 		const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
 		const calledUrl = fetchMock.mock.calls[0][0] as string;
-		expect(calledUrl).not.toContain('order=');
+		expect(calledUrl).toContain('order=desc');
 	});
 
 	it('order=asc を API に渡す', async () => {
@@ -582,22 +583,119 @@ describe('get_margin_trade_history — ページネーション', () => {
 		expect(result.summary).toContain('全件ではなく一部のみ取得されています');
 	});
 
-	it('単発リクエストで現物混入をフィルタしても isComplete は生 batch.length で判定する', async () => {
-		// 生 batch.length=20 は count と等しいので isComplete=false が正しい
+	it('1 ページ目が満杯で、絞った後の件数が count に届かなければ続きを取りに行く', async () => {
+		// 生 batch.length=20 は count と等しいので続きがありうる。続きが空なら、そこで全件取得済み。
 		const margin = generateMarginTrades(12, 1, 1710000000000);
 		const spot = generateSpotTrades(8, 100, 1710000020000);
-		const trades = [...margin.slice(0, 6), ...spot.slice(0, 4), ...margin.slice(6), ...spot.slice(4)];
-		setupFetchMock(mockBitbankSuccess({ trades }));
+		const trades = [...margin.slice(0, 6), ...spot.slice(0, 4), ...margin.slice(6), ...spot.slice(4)].reverse();
+		const mockFn = setupSequentialFetchMock([mockBitbankSuccess({ trades }), mockBitbankSuccess({ trades: [] })]);
 
 		const { default: getMarginTradeHistory } = await import('../../tools/private/get_margin_trade_history.js');
 		const result = await getMarginTradeHistory({ count: 20 });
 
 		assertOk(result);
+		expect(mockFn).toHaveBeenCalledTimes(2);
 		expect(result.data.trades).toHaveLength(12);
 		for (const t of result.data.trades) {
 			expect(t.position_side).toBeDefined();
 		}
+		expect(result.meta.isComplete).toBe(true);
+	});
+
+	// 約定履歴 API は現物と信用を混ぜて返し、分けるパラメータが無い（issue 455）。
+	it('直近 count 件がすべて現物でも、古いページを取りに行って信用約定を返す', async () => {
+		const page1 = generateSpotTrades(20, 101, 1710000100000).reverse();
+		const boundary = page1[page1.length - 1];
+		const margin = generateMarginTrades(5, 1, 1710000000000).reverse();
+		const mockFn = setupSequentialFetchMock([
+			mockBitbankSuccess({ trades: page1 }),
+			mockBitbankSuccess({ trades: [boundary, ...margin] }),
+		]);
+
+		const { default: getMarginTradeHistory } = await import('../../tools/private/get_margin_trade_history.js');
+		const result = await getMarginTradeHistory({});
+
+		assertOk(result);
+		expect(mockFn).toHaveBeenCalledTimes(2);
+		const firstUrl = mockFn.mock.calls[0][0] as string;
+		expect(firstUrl).toContain('count=20');
+		const secondUrl = mockFn.mock.calls[1][0] as string;
+		expect(secondUrl).toContain('count=1000');
+		expect(secondUrl).toContain('order=desc');
+		expect(secondUrl).toContain(`end=${boundary.executed_at}`);
+		expect(result.data.trades.map((t) => t.trade_id)).toEqual([5, 4, 3, 2, 1]);
+		expect(result.meta.isComplete).toBe(true);
+		expect(result.summary).toContain('信用約定履歴: 全ペア 5件');
+		expect(result.summary).not.toContain('全件ではなく');
+	});
+
+	it('絞った後の件数が count に届いたらページ送りを止める', async () => {
+		const page1 = [
+			...generateSpotTrades(10, 301, 1710000300000).reverse(),
+			...generateMarginTrades(10, 201, 1710000200000).reverse(),
+		];
+		const page2 = generateMarginTrades(1000, 1, 1709999000000).reverse();
+		const mockFn = setupSequentialFetchMock([
+			mockBitbankSuccess({ trades: page1 }),
+			mockBitbankSuccess({ trades: page2 }),
+		]);
+
+		const { default: getMarginTradeHistory } = await import('../../tools/private/get_margin_trade_history.js');
+		const result = await getMarginTradeHistory({ count: 20 });
+
+		assertOk(result);
+		expect(mockFn).toHaveBeenCalledTimes(2);
+		const ids = result.data.trades.map((t) => t.trade_id);
+		expect(ids).toHaveLength(20);
+		expect(ids.slice(0, 10)).toEqual([210, 209, 208, 207, 206, 205, 204, 203, 202, 201]);
+		expect(ids.slice(10)).toEqual([1000, 999, 998, 997, 996, 995, 994, 993, 992, 991]);
 		expect(result.meta.isComplete).toBe(false);
+	});
+
+	it('上限ページ数まで取りに行っても信用約定が無ければ 0 件で、取得した約定がすべて現物だったと本文に書く', async () => {
+		const pages = [mockBitbankSuccess({ trades: generateSpotTrades(20, 100001, 1720000000000).reverse() })];
+		for (let i = 0; i < 9; i++) {
+			pages.push(
+				mockBitbankSuccess({
+					trades: generateSpotTrades(1000, 90001 - i * 1000, 1719000000000 - i * 1000000).reverse(),
+				}),
+			);
+		}
+		const mockFn = setupSequentialFetchMock(pages);
+
+		const { default: getMarginTradeHistory } = await import('../../tools/private/get_margin_trade_history.js');
+		const result = await getMarginTradeHistory({});
+
+		assertOk(result);
+		expect(mockFn).toHaveBeenCalledTimes(10);
+		expect(result.data.trades).toHaveLength(0);
+		expect(result.meta.isComplete).toBe(false);
+		expect(result.summary).toContain('信用約定履歴: 全ペア 0件');
+		expect(result.summary).toContain('取得した約定 9020件はすべて現物で、信用約定はありませんでした');
+		expect(result.summary).toContain('これより古い約定は取得していません');
+	});
+
+	it('一部だけ信用約定が見つかったときは、取得件数と現物の件数を本文に書く（asc）', async () => {
+		const pages = [
+			mockBitbankSuccess({
+				trades: [...generateMarginTrades(3, 1, 1700000000000), ...generateSpotTrades(17, 11, 1700000010000)],
+			}),
+		];
+		for (let i = 0; i < 9; i++) {
+			pages.push(
+				mockBitbankSuccess({ trades: generateSpotTrades(1000, 1001 + i * 1000, 1701000000000 + i * 1000000) }),
+			);
+		}
+		setupSequentialFetchMock(pages);
+
+		const { default: getMarginTradeHistory } = await import('../../tools/private/get_margin_trade_history.js');
+		const result = await getMarginTradeHistory({ order: 'asc' });
+
+		assertOk(result);
+		expect(result.data.trades).toHaveLength(3);
+		expect(result.meta.isComplete).toBe(false);
+		expect(result.summary).toContain('取得した約定 9020件のうち 9017件は現物で、信用約定は 3件でした');
+		expect(result.summary).toContain('これより新しい約定は取得していません');
 	});
 
 	it('asc: count > 1000 で複数ページを自動取得する（2 ページで完了）', async () => {

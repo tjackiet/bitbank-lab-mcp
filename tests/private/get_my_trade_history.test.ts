@@ -39,6 +39,10 @@ function generateTrades(n: number, baseId = 1, baseTimestamp = 1710000000000) {
 	}));
 }
 
+function generateMarginTrades(n: number, baseId = 1, baseTimestamp = 1710000000000) {
+	return generateTrades(n, baseId, baseTimestamp).map((t) => ({ ...t, position_side: 'long' }));
+}
+
 function setupSequentialFetchMock(responses: unknown[]) {
 	const mockFn = vi.fn();
 	for (const res of responses) {
@@ -285,8 +289,8 @@ describe('get_my_trade_history', () => {
 		expect(result.data.trades[0].fee_occurred_amount_quote).not.toBe(result.data.trades[0].fee_amount_quote);
 	});
 
-	it('単発リクエスト経路で position_side != null の信用約定は除外される（paginateTrades と対称）', async () => {
-		// position_side は docs 上「信用取引の時のみ」だが、混入に備えて単発経路でも paginateTrades と同じく position_side == null で絞る（calcPnl での二重計上を防ぐ）。
+	it('position_side != null の信用約定は除外される', async () => {
+		// position_side はドキュメント上「信用取引のときのみ」。約定履歴 API は現物と信用を混ぜて返すので position_side == null で絞る。
 		const trades = [
 			// 現物約定（保持）
 			{
@@ -524,6 +528,69 @@ describe('get_my_trade_history — ページネーション', () => {
 		for (let i = 1; i < tradeIds.length; i++) {
 			expect(tradeIds[i]).toBeLessThan(tradeIds[i - 1]);
 		}
+	});
+
+	// 約定履歴 API は現物と信用を混ぜて返し、分けるパラメータが無い（issue 455）。
+	it('直近 count 件がすべて信用でも、古いページを取りに行って現物約定を返す', async () => {
+		const page1 = generateMarginTrades(100, 101, 1710000100000).reverse();
+		const boundary = page1[page1.length - 1];
+		const spot = generateTrades(3, 1, 1710000000000).reverse();
+		const mockFn = setupSequentialFetchMock([
+			mockBitbankSuccess({ trades: page1 }),
+			mockBitbankSuccess({ trades: [boundary, ...spot] }),
+		]);
+
+		const { default: getMyTradeHistory } = await import('../../tools/private/get_my_trade_history.js');
+		const result = await getMyTradeHistory({});
+
+		assertOk(result);
+		expect(mockFn).toHaveBeenCalledTimes(2);
+		expect(mockFn.mock.calls[0][0] as string).toContain('count=100');
+		const secondUrl = mockFn.mock.calls[1][0] as string;
+		expect(secondUrl).toContain('count=1000');
+		expect(secondUrl).toContain(`end=${boundary.executed_at}`);
+		expect(result.data.trades.map((t) => t.trade_id)).toEqual([3, 2, 1]);
+		expect(result.meta.isComplete).toBe(true);
+		expect(result.summary).toContain('約定履歴: 全ペア 3件');
+	});
+
+	it('上限ページ数まで取りに行っても現物約定が無ければ 0 件で、取得した約定がすべて信用だったと本文に書く', async () => {
+		const pages = [mockBitbankSuccess({ trades: generateMarginTrades(100, 100001, 1720000000000).reverse() })];
+		for (let i = 0; i < 9; i++) {
+			pages.push(
+				mockBitbankSuccess({
+					trades: generateMarginTrades(1000, 90001 - i * 1000, 1719000000000 - i * 1000000).reverse(),
+				}),
+			);
+		}
+		const mockFn = setupSequentialFetchMock(pages);
+
+		const { default: getMyTradeHistory } = await import('../../tools/private/get_my_trade_history.js');
+		const result = await getMyTradeHistory({});
+
+		assertOk(result);
+		expect(mockFn).toHaveBeenCalledTimes(10);
+		expect(result.data.trades).toHaveLength(0);
+		expect(result.meta.isComplete).toBe(false);
+		expect(result.summary).toContain('取得した約定 9100件はすべて信用で、現物約定はありませんでした');
+		expect(result.summary).toContain('これより古い約定は取得していません');
+	});
+
+	it('2 ページ目以降の API エラーは途中までの結果で返さず fail にする', async () => {
+		const mockFn = vi.fn();
+		mockFn.mockResolvedValueOnce(
+			new Response(JSON.stringify(mockBitbankSuccess({ trades: generateMarginTrades(100, 1).reverse() })), {
+				status: 200,
+			}),
+		);
+		mockFn.mockRejectedValueOnce(new TypeError('fetch failed'));
+		globalThis.fetch = mockFn as unknown as typeof fetch;
+
+		const { default: getMyTradeHistory } = await import('../../tools/private/get_my_trade_history.js');
+		const result = await getMyTradeHistory({});
+
+		assertFail(result);
+		expect(result.meta.errorType).toBe('upstream_error');
 	});
 
 	it('count=1000 ちょうどで全件返ると isComplete=false（まだある可能性）', async () => {
@@ -934,7 +1001,7 @@ describe('get_my_trade_history — API pair の取得境界正規化', () => {
 		expect(result.summary).toContain('BTC/JPY');
 	});
 
-	it('ページネーション経路（paginateTrades）でも大文字 pair が小文字化される', async () => {
+	it('ページネーション経路でも大文字 pair が小文字化される', async () => {
 		const upper = generateTrades(1000).map((t) => ({ ...t, pair: t.pair.toUpperCase() }));
 		setupSequentialFetchMock([mockBitbankSuccess({ trades: upper }), mockBitbankSuccess({ trades: [] })]);
 

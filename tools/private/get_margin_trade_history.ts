@@ -1,10 +1,10 @@
 import { nowIso, parseIso8601, toIsoMs } from '../../lib/datetime.js';
 import { formatPair, formatPrice, formatYenExact } from '../../lib/formatter.js';
-import { normalizePairCodes } from '../../lib/pair-code.js';
 import { fail, ok } from '../../lib/result.js';
-import { type BitbankPrivateClient, getDefaultClient } from '../../src/private/client.js';
+import { getDefaultClient } from '../../src/private/client.js';
 import { GetMarginTradeHistoryInputSchema, GetMarginTradeHistoryOutputSchema } from '../../src/private/schemas.js';
 import { failPrivateToolError } from '../../src/private/tool-error.js';
+import { fetchFilteredTradeHistory, mixedHistoryNote } from '../../src/private/trade-history.js';
 import type { ToolDefinition } from '../../src/tool-definition.js';
 
 interface RawMarginTrade {
@@ -23,60 +23,6 @@ interface RawMarginTrade {
 	profit_loss?: string;
 	interest?: string;
 	executed_at: number;
-}
-
-const PAGE_SIZE = 1000;
-const MAX_PAGES = 10;
-
-async function paginateMarginTrades(
-	client: BitbankPrivateClient,
-	baseParams: Record<string, string>,
-	limit: number,
-	order: 'asc' | 'desc',
-): Promise<{ trades: RawMarginTrade[]; isComplete: boolean }> {
-	const all: RawMarginTrade[] = [];
-	const seenIds = new Set<number>();
-	const cursorKey: 'since' | 'end' = order === 'desc' ? 'end' : 'since';
-	let cursor: string | undefined = baseParams[cursorKey];
-
-	for (let page = 0; page < MAX_PAGES; page++) {
-		const params: Record<string, string> = {
-			...baseParams,
-			type: 'margin',
-			count: String(PAGE_SIZE),
-			order,
-			...(cursor ? { [cursorKey]: cursor } : {}),
-		};
-		const rawData = await client.get<{ trades: RawMarginTrade[] }>('/v1/user/spot/trade_history', params);
-		// JPY 建て判定と価格フォーマットが小文字前提なので、取得境界で pair を揃える。
-		const batch = normalizePairCodes(rawData.trades || []);
-		// type=margin が無視された場合に備え、position_side != null で margin 約定のみに絞る。
-		const marginOnly = batch.filter((t) => t.position_side != null);
-		const newRecords = marginOnly.filter((t) => !seenIds.has(t.trade_id));
-		for (const t of newRecords) seenIds.add(t.trade_id);
-		all.push(...newRecords);
-
-		// 終了判定はフィルタ前の生 batch.length を使う。フィルタ後の長さで判定すると、現物比率が高いとき早期終了して次ページの margin 約定を取り逃がす。
-		const exhausted = batch.length < PAGE_SIZE;
-		if (all.length >= limit) {
-			return { trades: all.slice(0, limit), isComplete: exhausted && all.length === limit };
-		}
-		if (exhausted) {
-			return { trades: all.slice(0, limit), isComplete: true };
-		}
-
-		// 次ページ: batch 末尾の executed_at をカーソルに（同一 ts のレコードを次ページに含めて再取得し、dedup する）
-		const lastTs = batch[batch.length - 1]?.executed_at;
-		if (!lastTs) break;
-		const nextCursor = String(lastTs);
-		// カーソル停滞検知: cursor が前進/後退しない（API が同じ範囲を返し続ける）と無限ループになるので打ち切る
-		if (nextCursor === cursor) {
-			return { trades: all.slice(0, limit), isComplete: false };
-		}
-		cursor = nextCursor;
-	}
-
-	return { trades: all.slice(0, limit), isComplete: false };
 }
 
 function hasValue(v: string | undefined): v is string {
@@ -128,22 +74,14 @@ export default async function getMarginTradeHistory(args: {
 			baseParams.end = String(parsed.valueOf());
 		}
 
-		let rawTrades: RawMarginTrade[];
-		let isComplete: boolean;
-
-		if (count <= PAGE_SIZE) {
-			const params: Record<string, string> = { ...baseParams, type: 'margin' };
-			if (count !== 20) params.count = String(count);
-			if (order !== 'desc') params.order = order;
-			const rawData = await client.get<{ trades: RawMarginTrade[] }>('/v1/user/spot/trade_history', params);
-			const rawBatch = normalizePairCodes(rawData.trades);
-			rawTrades = rawBatch.filter((t) => t.position_side != null);
-			isComplete = rawBatch.length < count;
-		} else {
-			const result = await paginateMarginTrades(client, baseParams, count, order);
-			rawTrades = result.trades;
-			isComplete = result.isComplete;
-		}
+		const fetched = await fetchFilteredTradeHistory<RawMarginTrade>(client, {
+			baseParams: { ...baseParams, type: 'margin' },
+			order,
+			limit: count,
+			keep: (t) => t.position_side != null,
+		});
+		const rawTrades = fetched.trades;
+		const isComplete = fetched.isComplete;
 
 		const timestamp = nowIso();
 
@@ -171,6 +109,8 @@ export default async function getMarginTradeHistory(args: {
 		if (!isComplete) {
 			lines.push('※ 全件ではなく一部のみ取得されています。API件数上限に達した可能性があります');
 		}
+		const mixedNote = mixedHistoryNote(fetched, { kept: '信用', excluded: '現物', order, limit: count });
+		if (mixedNote) lines.push(mixedNote);
 
 		if (trades.length > 0) {
 			lines.push('');

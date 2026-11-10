@@ -47,7 +47,13 @@ export const GetMyAssetsOutputSchema = z.union([
 
 export const GetMyTradeHistoryInputSchema = z.object({
 	pair: z.string().optional().describe('通貨ペア（例: btc_jpy）。省略で全ペア'),
-	count: z.number().max(10000).default(100).describe('取得件数（最大10000、1000超は自動ページネーション）'),
+	count: z
+		.number()
+		.max(10000)
+		.default(100)
+		.describe(
+			'取得件数（最大10000）。約定履歴 API は信用約定も混ぜて返すので、現物に絞った件数が届くまで自動でページ送りする',
+		),
 	order: z.enum(['asc', 'desc']).default('desc').describe('ソート順（asc: 古い順, desc: 新しい順）'),
 	since: z.string().optional().describe('開始日時（ISO8601、例: 2025-01-01T00:00:00+09:00）'),
 	end: z.string().optional().describe('終了日時（ISO8601、例: 2025-12-31T23:59:59+09:00）'),
@@ -1105,7 +1111,13 @@ export const GetMarginPositionsOutputSchema = z.union([
 
 export const GetMarginTradeHistoryInputSchema = z.object({
 	pair: z.string().optional().describe('通貨ペア（例: btc_jpy）。省略で全ペア'),
-	count: z.number().max(10000).default(20).describe('取得件数（最大10000、1000超は自動ページネーション）'),
+	count: z
+		.number()
+		.max(10000)
+		.default(20)
+		.describe(
+			'取得件数（最大10000）。約定履歴 API は現物約定も混ぜて返すので、信用に絞った件数が届くまで自動でページ送りする',
+		),
 	order: z.enum(['asc', 'desc']).default('desc').describe('ソート順（asc: 古い順, desc: 新しい順）'),
 	since: z.string().optional().describe('開始日時（ISO8601、例: 2025-01-01T00:00:00+09:00）'),
 	end: z.string().optional().describe('終了日時（ISO8601、例: 2025-12-31T23:59:59+09:00）'),
