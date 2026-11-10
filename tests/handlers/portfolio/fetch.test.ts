@@ -48,9 +48,9 @@ function makeTrade(overrides: { trade_id: number; executed_at: number; pair?: st
 		type: 'limit',
 		amount: '0.01',
 		price: '15000000',
-		maker_taker: 'maker',
-		fee_amount_base: '0.00001',
-		fee_amount_quote: '0',
+		maker_taker: 'taker',
+		fee_amount_base: '0',
+		fee_amount_quote: '180',
 		executed_at: overrides.executed_at,
 	};
 }
@@ -300,9 +300,9 @@ describe('paginateTrades — ページネーション境界', () => {
 			type: 'limit',
 			amount: '0.01',
 			price: '15000000',
-			maker_taker: 'maker',
-			fee_amount_base: '0.00001',
-			fee_amount_quote: '0',
+			maker_taker: 'taker',
+			fee_amount_base: '0',
+			fee_amount_quote: '180',
 		};
 		const fullPage = [...head, trailingTrade];
 
@@ -583,9 +583,9 @@ describe('paginateMarginTrades — ページネーション境界', () => {
 				type: 'limit',
 				amount: '0.01',
 				price: '15000000',
-				maker_taker: 'maker',
-				fee_amount_base: '0.00001',
-				fee_amount_quote: '0',
+				maker_taker: 'taker',
+				fee_amount_base: '0',
+				fee_amount_quote: '180',
 				executed_at: 1710000001000,
 			} as unknown as ReturnType<typeof makeMarginTrade>,
 			makeMarginTrade({ trade_id: 3, executed_at: 1710000002000, profit_loss: '200' }),
@@ -612,9 +612,9 @@ describe('paginateMarginTrades — ページネーション境界', () => {
 			type: 'limit',
 			amount: '0.01',
 			price: '15000000',
-			maker_taker: 'maker',
-			fee_amount_base: '0.00001',
-			fee_amount_quote: '0',
+			maker_taker: 'taker',
+			fee_amount_base: '0',
+			fee_amount_quote: '180',
 			executed_at: 1710000000000 + i * 1000,
 		}));
 		const { fetcher } = makeSequentialFetcher([mockBitbankSuccess({ trades: spotOnly })]);
@@ -635,9 +635,9 @@ describe('paginateMarginTrades — ページネーション境界', () => {
 			type: 'limit',
 			amount: '0.01',
 			price: '15000000',
-			maker_taker: 'maker',
-			fee_amount_base: '0.00001',
-			fee_amount_quote: '0',
+			maker_taker: 'taker',
+			fee_amount_base: '0',
+			fee_amount_quote: '180',
 			executed_at: 1710000000000 + i * 1000,
 		}));
 		const marginPage = [
@@ -671,9 +671,9 @@ describe('paginateMarginTrades — ページネーション境界', () => {
 			type: 'limit',
 			amount: '0.01',
 			price: '15000000',
-			maker_taker: 'maker',
-			fee_amount_base: '0.00001',
-			fee_amount_quote: '0',
+			maker_taker: 'taker',
+			fee_amount_base: '0',
+			fee_amount_quote: '180',
 			executed_at: sameTs,
 		}));
 		const { fetcher, calls } = makeSequentialFetcher([

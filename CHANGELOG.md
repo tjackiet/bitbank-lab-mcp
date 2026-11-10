@@ -41,6 +41,10 @@
 - `analyze_my_portfolio`：全期間の入出金サマリーで、入出庫日の価格でも現在価格でも換算できない暗号資産の入出庫を、純投入額から黙って落としていた（JPY 入金 10 万円と換算できない入庫 1 件、評価額 30 万円で `account_return_pct` +200%）。資産名を `deposit_withdrawal_summary.unpriced_flow_assets` に出し、その場合は `account_return_pct` / `account_return_jpy` を出さない。ステーキング報酬は換算できなくても純投入額はずれないので数えない（issue #448）。
 - `analyze_my_portfolio`：現物の約定履歴の取得が打ち切られると（件数上限・途中の API エラー）、欠けるのは直近の約定なのに、期間成績（`yearly` / `monthly` / `daily`）は欠けた約定を巻き戻さないまま確定値を出していた。期間中の売買が無かったことになり、`start_value_jpy` / `change_jpy` / `change_pct` がずれる（期間中に 800 万円で 1 BTC を買った月が「+0 円 / 0%」になる）。打ち切り時は `change_pct_unavailable_reason=trades_truncated` を付けて率を出さず、増減額も成績として読まないよう本文とスキーマに書く。どの期間も現在で終わるので、取得済みの最後の約定が期間開始より前でも同じ扱いにする。資産推移シリーズにも同じ申告を出す（issue #447）。
 
+### Internal
+
+- テストの約定履歴のフィクスチャを実 API の形に直した。現物の買いの手数料を base 建て（`fee_amount_base` に値、`fee_amount_quote` は 0）にしていたが、実口座では現物の手数料は売買とも quote（JPY）建てだった。テストがコードのコメントに合わせたデータで通り、実 API との食い違いを検知できなかった。共有フィクスチャ（`tests/fixtures/private-api.ts`）と各テストの約定の生成関数を、`fee_amount_base: '0'`・`fee_amount_quote` / `fee_occurred_amount_quote` に約定代金の 0.12%（taker）の形にし、残高のフィクスチャと期待値を合わせた。信用の新規約定の `fee_amount_base` も 0 にした（信用の手数料は決済時に円でまとめて計上される）。base 建ての手数料を扱う分岐のテストは、実 API では現状起きない防御的な分岐の確認であることを明記して残した。計算コードは変えていない（issue #457）。
+
 ## [0.7.0] - 2026-11-10
 
 番号は fork（tjackiet/bitbank-lab-mcp）の issue。互換性を壊す変更は「Schema (breaking)」にまとめている（`detect_patterns` の `scoreComponents`、`analyze_bb_snapshot` の `zScore` の単位・`bandwidth_state` の基準・extended の項目、`get_tickers_jpy` の `view` など）。

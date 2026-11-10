@@ -32,9 +32,9 @@ function generateTrades(n: number, baseId = 1, baseTimestamp = 1710000000000) {
 		type: 'limit',
 		amount: '0.01',
 		price: '15000000',
-		maker_taker: 'maker',
-		fee_amount_base: '0.00001',
-		fee_amount_quote: '0',
+		maker_taker: 'taker',
+		fee_amount_base: '0',
+		fee_amount_quote: '180',
 		executed_at: baseTimestamp + i * 1000,
 	}));
 }
@@ -116,7 +116,7 @@ describe('get_my_trade_history', () => {
 		expect(result.summary).toContain('売 1件');
 	});
 
-	it('約定行に手数料を出す。base 建ての手数料が非ゼロならそれも出す（issue 452）', async () => {
+	it('約定行に円建ての手数料を出し、base 建てが 0 なら併記しない（issue 452）', async () => {
 		setupFetchMock(
 			mockBitbankSuccess({
 				trades: [
@@ -134,6 +134,23 @@ describe('get_my_trade_history', () => {
 						fee_occurred_amount_quote: '14.1239',
 						executed_at: 1710000100000,
 					},
+				],
+			}),
+		);
+
+		const { default: getMyTradeHistory } = await import('../../tools/private/get_my_trade_history.js');
+		const result = await getMyTradeHistory({});
+
+		assertOk(result);
+		const line = result.summary.split('\n').find((l) => l.includes('trade: 901'));
+		expect(line).toMatch(/ 手数料: 14\.1239円$/);
+	});
+
+	// 実 API の現物の手数料は売買とも quote 建てで、base 建ては現状返らない。防御的な分岐の確認（issue 457）。
+	it('base 建ての手数料が非ゼロなら併記する', async () => {
+		setupFetchMock(
+			mockBitbankSuccess({
+				trades: [
 					{
 						trade_id: 900,
 						pair: 'btc_jpy',
@@ -155,9 +172,7 @@ describe('get_my_trade_history', () => {
 		const result = await getMyTradeHistory({});
 
 		assertOk(result);
-		const lines = result.summary.split('\n');
-		expect(lines.find((l) => l.includes('trade: 901'))).toContain('手数料: 14.1239円');
-		expect(lines.find((l) => l.includes('trade: 900'))).toContain('手数料: 0円 + 0.00001 BTC');
+		expect(result.summary.split('\n').find((l) => l.includes('trade: 900'))).toContain('手数料: 0円 + 0.00001 BTC');
 	});
 
 	it('JPY 以外の建てのペアは、quote の手数料を円ではなくその通貨で出す', async () => {
@@ -211,9 +226,9 @@ describe('get_my_trade_history', () => {
 			type: 'limit',
 			amount: '0.01',
 			price: '15000000',
-			maker_taker: 'maker',
-			fee_amount_base: '0.00001',
-			fee_amount_quote: '0',
+			maker_taker: 'taker',
+			fee_amount_base: '0',
+			fee_amount_quote: '180',
 			executed_at: 1710000000000 + i * 1000,
 		}));
 		setupFetchMock(mockBitbankSuccess({ trades }));
@@ -301,9 +316,9 @@ describe('get_my_trade_history', () => {
 				type: 'limit',
 				amount: '0.01',
 				price: '15000000',
-				maker_taker: 'maker',
-				fee_amount_base: '0.00001',
-				fee_amount_quote: '0',
+				maker_taker: 'taker',
+				fee_amount_base: '0',
+				fee_amount_quote: '180',
 				executed_at: 1710000000000,
 			},
 			// 信用 long（除外）
@@ -359,9 +374,9 @@ describe('get_my_trade_history', () => {
 				type: 'limit',
 				amount: '0.01',
 				price: '15000000',
-				maker_taker: 'maker',
-				fee_amount_base: '0.00001',
-				fee_amount_quote: '0',
+				maker_taker: 'taker',
+				fee_amount_base: '0',
+				fee_amount_quote: '180',
 				executed_at: 1710000000000,
 			},
 		];
@@ -383,9 +398,9 @@ describe('get_my_trade_history', () => {
 			type: 'limit',
 			amount: '0.01',
 			price: '15000000',
-			maker_taker: 'maker',
-			fee_amount_base: '0.00001',
-			fee_amount_quote: '0',
+			maker_taker: 'taker',
+			fee_amount_base: '0',
+			fee_amount_quote: '180',
 			executed_at: 1710000000000 + i * 1000,
 		}));
 		setupFetchMock(mockBitbankSuccess({ trades }));
@@ -627,9 +642,9 @@ describe('get_my_trade_history — ページネーション', () => {
 			type: 'limit',
 			amount: '0.01',
 			price: '15000000',
-			maker_taker: 'maker',
-			fee_amount_base: '0.00001',
-			fee_amount_quote: '0',
+			maker_taker: 'taker',
+			fee_amount_base: '0',
+			fee_amount_quote: '180',
 			executed_at: i < 997 ? 1710000000000 + i * 1000 : tBoundary,
 		}));
 		const page2 = [
@@ -642,9 +657,9 @@ describe('get_my_trade_history — ページネーション', () => {
 				type: 'limit',
 				amount: '0.01',
 				price: '15000000',
-				maker_taker: 'maker',
-				fee_amount_base: '0.00001',
-				fee_amount_quote: '0',
+				maker_taker: 'taker',
+				fee_amount_base: '0',
+				fee_amount_quote: '180',
 				executed_at: tBoundary,
 			},
 			{
@@ -655,9 +670,9 @@ describe('get_my_trade_history — ページネーション', () => {
 				type: 'limit',
 				amount: '0.01',
 				price: '15000000',
-				maker_taker: 'maker',
-				fee_amount_base: '0.00001',
-				fee_amount_quote: '0',
+				maker_taker: 'taker',
+				fee_amount_base: '0',
+				fee_amount_quote: '180',
 				executed_at: tBoundary,
 			},
 			// 同一 ts の残レコード（executed_at + 1 を since にするとここから取りこぼす）
@@ -745,9 +760,9 @@ describe('get_my_trade_history — ページネーション', () => {
 			type: 'limit',
 			amount: '0.01',
 			price: '15000000',
-			maker_taker: 'maker',
-			fee_amount_base: '0.00001',
-			fee_amount_quote: '0',
+			maker_taker: 'taker',
+			fee_amount_base: '0',
+			fee_amount_quote: '180',
 			executed_at: sameTs,
 		}));
 		// 次ページ以降も全く同じレコードを返す（API が since=sameTs で同じ範囲を返却する想定）
@@ -863,9 +878,9 @@ describe('get_my_trade_history — ページネーション', () => {
 				type: 'limit',
 				amount: '0.01',
 				price: '15000000',
-				maker_taker: 'maker',
-				fee_amount_base: '0.00001',
-				fee_amount_quote: '0',
+				maker_taker: 'taker',
+				fee_amount_base: '0',
+				fee_amount_quote: '180',
 				executed_at: tBoundary,
 			},
 			{
@@ -876,9 +891,9 @@ describe('get_my_trade_history — ページネーション', () => {
 				type: 'limit',
 				amount: '0.01',
 				price: '15000000',
-				maker_taker: 'maker',
-				fee_amount_base: '0.00001',
-				fee_amount_quote: '0',
+				maker_taker: 'taker',
+				fee_amount_base: '0',
+				fee_amount_quote: '180',
 				executed_at: tBoundary,
 			},
 			{
@@ -889,9 +904,9 @@ describe('get_my_trade_history — ページネーション', () => {
 				type: 'limit',
 				amount: '0.01',
 				price: '15000000',
-				maker_taker: 'maker',
-				fee_amount_base: '0.00001',
-				fee_amount_quote: '0',
+				maker_taker: 'taker',
+				fee_amount_base: '0',
+				fee_amount_quote: '180',
 				executed_at: tBoundary,
 			},
 		];
@@ -905,9 +920,9 @@ describe('get_my_trade_history — ページネーション', () => {
 				type: 'limit',
 				amount: '0.01',
 				price: '15000000',
-				maker_taker: 'maker',
-				fee_amount_base: '0.00001',
-				fee_amount_quote: '0',
+				maker_taker: 'taker',
+				fee_amount_base: '0',
+				fee_amount_quote: '180',
 				executed_at: tBoundary,
 			},
 			{
@@ -918,9 +933,9 @@ describe('get_my_trade_history — ページネーション', () => {
 				type: 'limit',
 				amount: '0.01',
 				price: '15000000',
-				maker_taker: 'maker',
-				fee_amount_base: '0.00001',
-				fee_amount_quote: '0',
+				maker_taker: 'taker',
+				fee_amount_base: '0',
+				fee_amount_quote: '180',
 				executed_at: tBoundary,
 			},
 			// 同一 ts の残レコード（境界で取りこぼしやすい）

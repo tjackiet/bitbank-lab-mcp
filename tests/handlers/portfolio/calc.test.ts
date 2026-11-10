@@ -89,6 +89,7 @@ function makeDeposit(overrides: Partial<RawDeposit> = {}): RawDeposit {
 	};
 }
 
+// fee_amount_base を非ゼロにするテストは防御的な分岐の確認。実 API の現物の手数料は売買とも quote 建てで、base 建ては現状返らない（issue 457）。
 describe('calcPnl', () => {
 	it('買い 1 件、fee_amount_base > 0 で保有量が減少し平均取得単価が上昇する', () => {
 		// 1 BTC を 10_000_000 JPY で買い、手数料 0.001 BTC（base 側）→ holdingCost = 10_000_000、holdingQty = 0.999、avg_buy_price = 10_000_000 / 0.999 ≈ 10_010_010.0100
@@ -1020,7 +1021,7 @@ describe('reconstructHoldingsAtDate', () => {
 				side: 'buy',
 				amount: 'NaN', // qty=NaN → スキップ
 				price: '10000000',
-				fee_amount_base: '0.001',
+				fee_amount_quote: '12000',
 			}),
 			makeTrade({
 				trade_id: 2,

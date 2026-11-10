@@ -26,13 +26,13 @@ function assetFixture(asset: string) {
 }
 
 /**
- * onhand を既定の約定・出庫履歴から復元される数量に揃えた assets（btc: 0.01 − fee 0.00001 − 売 0.005 = 0.00499、eth: 1.0 − fee 0.001 = 0.999）。
+ * onhand を既定の約定・出庫履歴から復元される数量に揃えた assets（btc: 買 0.01 − 売 0.005 = 0.005、eth: 買 1.0。現物の手数料は円建てなので数量は減らない）。
  * rawAssetsResponse のままだと数量不変条件で原価が抑止される。xrp は約定履歴が無く常に乖離するので含めない。
  */
 const consistentAssetsResponse = {
 	assets: [
-		{ ...assetFixture('btc'), free_amount: '0.00499', onhand_amount: '0.00499', locked_amount: '0' },
-		{ ...assetFixture('eth'), free_amount: '0.999', onhand_amount: '0.999' },
+		{ ...assetFixture('btc'), free_amount: '0.005', onhand_amount: '0.005', locked_amount: '0' },
+		{ ...assetFixture('eth'), free_amount: '1.0', onhand_amount: '1.0' },
 		assetFixture('jpy'),
 		assetFixture('doge'),
 	],
@@ -364,7 +364,7 @@ describe('analyze_my_portfolio', () => {
 					amount: '0.01',
 					price: '15000000',
 					maker_taker: 'maker',
-					fee_amount_base: '0.00001',
+					fee_amount_base: '0',
 					fee_amount_quote: '9999',
 					fee_occurred_amount_quote: '9999',
 					executed_at: 1710000000000,
@@ -1491,17 +1491,17 @@ describe('analyze_my_portfolio — 入出金取得の include_pnl 紐づけ', ()
 	};
 
 	/**
-	 * 約定のみ: 買 0.01 @15,000,000（fee 0.00001 BTC）→ 売 0.005 @15,500,000 で残 0.00499 BTC / 原価 74,925 円。
-	 * 出庫 0.002 + 出庫手数料 0.0006 を平均単価で按分減少させると 0.00239 BTC / 原価 35,886 円（出庫が渡らないと 74,925 円のまま）。
+	 * 約定のみ: 買 0.01 @15,000,000（手数料 180 円）→ 売 0.005 @15,500,000 で残 0.005 BTC / 原価 75,090 円。
+	 * 出庫 0.002 + 出庫手数料 0.0006 を平均単価で按分減少させると 0.0024 BTC / 原価 36,043 円（出庫が渡らないと 75,090 円のまま）。
 	 */
-	const BTC_COST_BASIS_WITH_WITHDRAWAL = 35_886;
-	const BTC_COST_BASIS_WITHOUT_WITHDRAWAL = 74_925;
+	const BTC_COST_BASIS_WITH_WITHDRAWAL = 36_043;
+	const BTC_COST_BASIS_WITHOUT_WITHDRAWAL = 75_090;
 
-	/** 出庫按分後の残数量（0.00499 - 0.0026 = 0.00239 BTC）と onhand を整合させた assets */
+	/** 出庫按分後の残数量（0.005 - 0.0026 = 0.0024 BTC）と onhand を整合させた assets */
 	const assetsAfterWithdrawal = {
 		assets: [
-			{ ...assetFixture('btc'), free_amount: '0.00239', onhand_amount: '0.00239', locked_amount: '0' },
-			{ ...assetFixture('eth'), free_amount: '0.999', onhand_amount: '0.999' },
+			{ ...assetFixture('btc'), free_amount: '0.0024', onhand_amount: '0.0024', locked_amount: '0' },
+			{ ...assetFixture('eth'), free_amount: '1.0', onhand_amount: '1.0' },
 			assetFixture('jpy'),
 		],
 	};
@@ -2870,10 +2870,10 @@ describe('analyze_my_portfolio — 取得原価の決定性（出庫に押し出
 		'flr',
 	];
 
-	/** 入庫と同数量ぶん増やした btc 残高（0.00499 + 0.1）。入庫が原価に算入されて初めて数量が整合する */
+	/** 入庫と同数量ぶん増やした btc 残高（0.005 + 0.1）。入庫が原価に算入されて初めて数量が整合する */
 	const assetsWithDepositedBtc = {
 		assets: [
-			{ ...assetFixture('btc'), free_amount: '0.10499', onhand_amount: '0.10499', locked_amount: '0' },
+			{ ...assetFixture('btc'), free_amount: '0.105', onhand_amount: '0.105', locked_amount: '0' },
 			assetFixture('jpy'),
 		],
 	};
@@ -3028,10 +3028,10 @@ describe('analyze_my_portfolio — 取得原価の決定性（出庫に押し出
 		const withDeposit = resolvable.data.holdings.find((h) => h.asset === 'btc');
 		const withoutDeposit = unresolvable.data.holdings.find((h) => h.asset === 'btc');
 
-		// 入庫が原価に算入され、復元数量が実残高（0.10499）と整合する
+		// 入庫が原価に算入され、復元数量が実残高（0.105）と整合する
 		expect(withDeposit?.cost_basis_reliable).toBe(true);
 		expect(withDeposit?.cost_basis).toBeGreaterThan(0);
-		// 算入されないと復元数量が 0.00499 に留まり、数量不変条件で原価が抑止される
+		// 算入されないと復元数量が 0.005 に留まり、数量不変条件で原価が抑止される
 		expect(withoutDeposit?.cost_basis_reliable).toBe(false);
 		expect(withoutDeposit?.cost_basis).toBeUndefined();
 		expect(withoutDeposit?.realized_pnl).not.toBe(withDeposit?.realized_pnl);
@@ -3723,12 +3723,12 @@ describe('analyze_my_portfolio — 復元数量 vs 実残高の不変条件', ()
 		const btc = holdingOf(result.data.holdings, 'btc');
 		expect(btc.cost_basis_reliable).toBe(true);
 		expect(btc.cost_basis_unavailable_reason).toBeUndefined();
-		expect(btc.cost_basis).toBe(74_925);
+		expect(btc.cost_basis).toBe(75_090);
 		// avg_buy_price は板の刻みに縛られない加重平均なので price_digits（btc_jpy は 0）+ 2 桁で丸める。
-		expect(btc.avg_buy_price).toBe(15_015_015.02);
+		expect(btc.avg_buy_price).toBe(15_018_000);
 		const eth = holdingOf(result.data.holdings, 'eth');
 		expect(eth.cost_basis_reliable).toBe(true);
-		expect(eth.cost_basis).toBe(380_000);
+		expect(eth.cost_basis).toBe(380_456);
 		const jpy = holdingOf(result.data.holdings, 'jpy');
 		expect(jpy.cost_basis_reliable).toBeUndefined();
 		expect(result.meta.warnings).toBeUndefined();
@@ -3841,11 +3841,11 @@ describe('analyze_my_portfolio — 復元数量 vs 実残高の不変条件', ()
 	});
 
 	it('乖離銘柄は合計から除外され、整合銘柄の合計だけが出る（銘柄名は summary に出る）', async () => {
-		// btc は既定履歴と整合、eth は onhand 5.0 で乖離（既定 eth 買 1.0 → 復元 0.999）
+		// btc は既定履歴と整合、eth は onhand 5.0 で乖離（既定 eth 買 1.0 → 復元 1.0）
 		setupFetchMock({
 			assets: {
 				assets: [
-					{ ...assetFixture('btc'), free_amount: '0.00499', onhand_amount: '0.00499', locked_amount: '0' },
+					{ ...assetFixture('btc'), free_amount: '0.005', onhand_amount: '0.005', locked_amount: '0' },
 					{ ...assetFixture('eth'), free_amount: '5.0', onhand_amount: '5.0' },
 					assetFixture('jpy'),
 				],
