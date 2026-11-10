@@ -127,6 +127,61 @@ describe('get_margin_trade_history', () => {
 		expect(result.summary).not.toMatch(/¥[\d,.-]+ ?円/);
 	});
 
+	it('決済行に手数料控除後の損益（丸めない）・発生手数料・利息を、新規行に手数料を出す（issue 452）', async () => {
+		setupFetchMock(
+			mockBitbankSuccess({
+				trades: [
+					{
+						trade_id: 701,
+						pair: 'btc_jpy',
+						order_id: 7001,
+						side: 'buy',
+						position_side: 'short',
+						type: 'market',
+						amount: '0.0007',
+						price: '12029981',
+						maker_taker: 'taker',
+						fee_amount_base: '0',
+						fee_amount_quote: '8.4210',
+						fee_occurred_amount_quote: '8.4210',
+						profit_loss: '-15.4077',
+						interest: '0.0000',
+						executed_at: 1710000100000,
+					},
+					{
+						trade_id: 700,
+						pair: 'btc_jpy',
+						order_id: 7000,
+						side: 'sell',
+						position_side: 'short',
+						type: 'limit',
+						amount: '0.0007',
+						price: '12020000',
+						maker_taker: 'maker',
+						fee_amount_base: '0',
+						fee_amount_quote: '0',
+						fee_occurred_amount_quote: '',
+						executed_at: 1710000000000,
+					},
+				],
+			}),
+		);
+
+		const { default: getMarginTradeHistory } = await import('../../tools/private/get_margin_trade_history.js');
+		const result = await getMarginTradeHistory({});
+
+		assertOk(result);
+		const lines = result.summary.split('\n');
+		const closeLine = lines.find((l) => l.includes('ショート買'));
+		const openLine = lines.find((l) => l.includes('ショート売'));
+		expect(closeLine).toContain('損益: -15.4077円（手数料控除後）');
+		expect(closeLine).toContain('発生手数料: 8.421円');
+		expect(closeLine).toContain('利息: 0円');
+		expect(openLine).toContain('手数料: 0円');
+		expect(openLine).not.toContain('損益');
+		expect(result.summary).toContain('※ 損益（profit_loss）は手数料控除後の値です');
+	});
+
 	it('pair 指定を API に渡す', async () => {
 		setupFetchMock(mockBitbankSuccess({ trades: [] }));
 

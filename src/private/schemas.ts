@@ -1121,8 +1121,13 @@ const MarginTradeItemSchema = z.object({
 	fee_occurred_amount_quote: z
 		.string()
 		.optional()
-		.describe('実際に発生した決済通貨手数料（現物では fee_amount_quote と同値、信用で乖離する可能性）'),
-	profit_loss: z.string().optional().describe('実現損益（決済時のみ）'),
+		.describe(
+			'実際に発生した決済通貨手数料。信用の手数料は決済時にまとめて計上され、決済行の値が新規側と決済側の合計になる（新規行は空）',
+		),
+	profit_loss: z
+		.string()
+		.optional()
+		.describe('実現損益（決済時のみ）。手数料（fee_occurred_amount_quote）控除後の値。利息を含むかは未確認'),
 	interest: z.string().optional().describe('利息（決済時のみ）'),
 	executed_at: z.string().describe('約定日時（ISO8601）'),
 });

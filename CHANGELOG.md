@@ -22,6 +22,7 @@
 
 ### Fixed
 
+- `get_margin_trade_history`：約定ごとの手数料と利息が LLM の読む本文に出ず、損益は円の整数に丸めていた（-15.4077 円が「-15円」）。決済行に手数料控除後の損益（丸めない）・発生手数料（`fee_occurred_amount_quote`、新規側と決済側の合計）・利息（`interest`）を、新規行に手数料（`fee_amount_quote`）を出し、損益が手数料控除後であることを注記する。`get_my_trade_history`（現物）も手数料を本文に出していなかったので、約定行に手数料を出す（issue #452）。
 - `preview_order` / `create_order`：`amount` / `price` / `trigger_price` に指数表記（`1e-3`）・16 進（`0x1`）・前後の空白を含む文字列が通り、確認カードと bitbank に生の文字列のまま渡っていた（`1e-3` は小数 0 桁と数えて桁数の検証もすり抜けていた）。通常の 10 進表記だけを通す（issue #449）。
 - `analyze_my_portfolio`：コメントの「現物の手数料は買いが base で発生する」が実態と違っていた。現物の手数料は売買とも quote（JPY）で引かれる（実約定で確認）。計算は base / quote の両方に対応していたので結果は変わらない。`.claude/rules/fees.md` にもこの前提を書いた（issue #449）。
 - `analyze_my_portfolio`：全期間の入出金サマリーで、入出庫日の価格でも現在価格でも換算できない暗号資産の入出庫を、純投入額から黙って落としていた（JPY 入金 10 万円と換算できない入庫 1 件、評価額 30 万円で `account_return_pct` +200%）。資産名を `deposit_withdrawal_summary.unpriced_flow_assets` に出し、その場合は `account_return_pct` / `account_return_jpy` を出さない。ステーキング報酬は換算できなくても純投入額はずれないので数えない（issue #448）。
