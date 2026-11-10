@@ -2,6 +2,7 @@ import { estimateOrderFee } from '../../lib/fees.js';
 import { formatPair, formatPrice } from '../../lib/formatter.js';
 import { isJpyQuotedPair } from '../../lib/pair-code.js';
 import { fetchPairsSpec, type PairSpec, validateOrderConstraints } from '../../lib/pairs.js';
+import { isCrossedQuote } from '../../lib/price.js';
 import { fail, ok } from '../../lib/result.js';
 import { fetchPairTicker, type PairTicker } from '../../lib/tickers.js';
 import { validateTriggerPrice } from '../../lib/trigger-price.js';
@@ -129,7 +130,14 @@ export default async function previewOrder(args: {
 	}
 
 	// 確認トークンの有効期限を待ち時間で食わないよう、トークンを作る前に待ち終える。
-	const crossesBook = tickerPromise && price ? limitCrossesBook(await tickerPromise, side, Number(price)) : undefined;
+	const ticker = tickerPromise ? await tickerPromise : null;
+	const quoteCrossed = ticker != null && isCrossedQuote(ticker.bestBid, ticker.bestAsk);
+	const crossesBook = price && !quoteCrossed ? limitCrossesBook(ticker, side, Number(price)) : undefined;
+	if (quoteCrossed) {
+		warnings.push(
+			'気配が交差しています（最良売り ≤ 最良買い）。サーキットブレイク中など連続取引ではない可能性があり、指値が板を跨ぐかを判定できないため maker 想定で見積もっています',
+		);
+	}
 
 	const tokenParams: Record<string, unknown> = { pair, amount, side, type };
 	if (price) tokenParams.price = price;
