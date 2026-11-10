@@ -9,6 +9,8 @@
 
 ### Changed
 
+- `run_backtest`：確定トレードの手数料を、建てた時点で片道ぶん、決済時に残りの片道ぶん引く。保有中のエクイティが手数料ぶん高く、決済バーで往復 2 回ぶんの段差が出ていたので、`max_drawdown_pct` / `sharpe_ratio` が最大 0.24%（既定の 12 bp）ずれていた。未決済ポジションと同じ扱いになる。確定トレードの損益（`net_return`）と `total_pnl_pct` は変わらない（issue #445）。
+- `run_backtest`：Buy & Hold に買いの片道手数料を入れる。起点（ウォームアップ直後の t+1 始値）で引き、最終バーは終値で評価して売りの手数料は引かない（未決済ポジションと同じ扱い）。`buy_hold_pnl_pct` は手数料ぶん下がり、`excess_return_pct` は手数料込みどうしの比較になる。本文の Buy & Hold 行に「buy fee included」と書く（issue #445）。
 - `analyze_my_portfolio`：期間別の純入出金で、ステーキング報酬に換算できない分があると報酬の額（`staking_reward_jpy`）を出していなかった。通常の入出庫（`net_flow_jpy`）と同じく、換算できた分の部分合計を出し、換算できない資産名を `staking_reward_unpriced_assets` に併記する（issue #448）。
 - `analyze_my_portfolio`：同じ時刻の約定と入出庫は、入庫 → 約定 → 出庫の順で処理する。入庫と同時刻の売りが、原価ゼロの売りとして実現損益を過大に出していた（issue #448）。
 - `preview_order`：指値（`post_only` なし）が現在の板を跨ぐとき（買いは best ask 以上、売りは best bid 以下。無ければ最終価格と比べる）は、即時約定するので taker の率で手数料を見積る。maker が -0.02% のペアで 0.01 BTC を 1,500 万円で買うと「推定手数料 -30 円（リベート）」と出ていたが、即時約定すれば実際は taker の +180 円だった。`/ticker` を取得できないときは従来どおり maker 想定（issue #449）。
@@ -16,12 +18,19 @@
 
 ### Added
 
+- `run_backtest`：期間の終わりに残った未決済のロングを `data.open_position`（建値・建てた時刻・評価に使った最終バーの終値・含み損益）に出す。本文にも `--- Open Position ---` の節を出し、Total P&L が含み損益込みで、Trades / Win Rate / Avg P&L/Trade / Profit Factor は決済済みトレードだけであることを書く。含み損 30% の未決済 1 件だけのとき「Trades: 0、Total P&L: -30.00%」と出て、差の理由が分からなかった（issue #444）。
 - `analyze_my_portfolio`：期間の入出金サマリー（`yearly_dw_summary` / `monthly_dw_summary`）に、ステーキング報酬の `staking_reward_count` / `staking_reward_estimated_jpy` / `staking_reward_valuation` を追加。期間サマリーだけを読むと報酬を元本の入庫として数えていた（issue #448）。
 - `analyze_my_portfolio`：期初の保有を巻き戻して残高が負になった資産を `*_performance.negative_start_assets` に出し、本文にも注記する。履歴の欠落の証拠なのに、黙って 0 にして期初評価額から外していた（issue #448）。
 - `analyze_my_portfolio`：ステーキング報酬の受取時の評価額は実現損益・評価損益に含めず `staking_reward_*` に別建てで出していること（所得として数えるときは足して読む）と、取得原価・実現損益は移動平均法で、総平均法（届出が無い場合の既定）で申告するとこの値と一致しないことを、本文とスキーマに注記する（issue #448）。
 
 ### Fixed
 
+- `run_backtest`：戦略が持たない `params` のキー（例: `sma_cross` の `short_period`）が検証を通り、既定値で実行されていた。未知のキーはエラーにする。期間系のパラメータ（`short` / `long` / `period` / `fast` / `slow` / `signal` / `sma_filter_period` / `rsi_filter_period`）に小数を渡すと、指標が全 NaN になって「0 トレード」を返すか、内部の例外がエラーとして返っていた。整数だけを通す（issue #443）。
+- `run_backtest`：`rsi` と `macd_cross` のウォームアップが「指標が NaN でなくなる本数」ぎりぎりで、Wilder 平滑・EMA の初期値の影響が評価区間の先頭に残っていた。同じ評価区間でも、取得開始位置（`period` の長さなど）で売買と損益が変わっていた。初期値の重みが 0.1% を切るまでをウォームアップに含める（既定パラメータで rsi は 20 → 109 本、macd_cross は 35 → 156 本）。sma_cross / macd_cross の RSI フィルタ（`rsi_filter_period`）も同じ。取得本数の上限や履歴の長さに届かず、評価区間が `period` の本数より短くなったときは warning を出す（issue #442）。
+- `run_backtest`：Profit Factor が null のとき、トレード 0 件でも本文に `N/A (no losses)` と出て、全勝と区別できなかった。0 件は `N/A (no trades)` と出す。値は従来どおり null（issue #445）。
+- `run_backtest`：`start_date` / `end_date` を指定しても、本文の `Period:` 行と `data.input.period` に `period` の既定値 `3M` が出ていた。指定した日付範囲（`2024-01-01 ~ 2024-03-31` の形）を出す（issue #445）。
+- `run_backtest`：`/spot/pairs` にペアはあるが `taker_fee_rate_quote` が無いとき、公称の 12 bp に落ちても手数料の出所を `dynamic` と表示していた。`fallback` にして、理由を warning に出す。`fallback` の文言を「pairs 取得失敗」固定から「/spot/pairs から taker レートを取得できず」に直した（取得失敗・ペア未発見・率の欠落の理由は warning 側に出る）（issue #445）。
+- `run_backtest`：出力スキーマの説明を実装に合わせた。`sharpe_ratio` は日次リターン × √365 ではなく、バーごとのリターンを時間足に合わせて年率化している。`evaluation_start` はシグナルを出す最初のバーで、最初の約定と Buy & Hold の起点はその次のバーの始値（issue #445）。
 - `analyze_my_portfolio`：期間成績（`yearly` / `monthly` / `daily`）と資産推移シリーズの期初の保有の巻き戻しに、信用取引が入っていなかった。信用の決済損益・利息・手数料は JPY 残高に反映されるので、期間中の信用の実現益が期初評価額に乗ったまま増減から消えていた（月初の JPY 100 万円・今月の実現益 +10 万円で「増減 0」）。決済行の `profit_loss`（手数料控除後）から `interest` を引いた額を JPY から巻き戻す（口座損益の合計と同じ扱い。利息が `profit_loss` に含まれるかは未確認）。信用建玉の含み損益は期初・現在の評価額のどちらにも含めない。信用の約定履歴を取得しきれなかったとき（`marginTradesTruncated` / `marginFetchFailed`）は `change_pct_unavailable_reason=margin_trades_incomplete` を付けて率を出さない（issue #446）。
 - `analyze_my_portfolio`：口座損益の合計（`account_pnl.total`、`yearly_account_pnl` / `monthly_account_pnl` の `total`）で、信用の手数料を二重に引いていた。API の `profit_loss` は手数料控除後の値だった（実口座の BTC/JPY 信用決済で、ツールの表示 -15円 が -15.4077 円の丸め。控除前なら -7円）。`total` から `margin_fee_cost` を引かない。`margin_fee_cost` は内訳として残し、本文の Account PnL 行は「Margin: …（手数料控除後。発生手数料 … は控除済み）」と出す。`margin_realized_pnl` の説明の「グロス: 利息・手数料控除前」も直した。利息が `profit_loss` に含まれるかは未確認なので、利息の扱いは変えない（issue #450）。
 - `get_margin_trade_history`：約定ごとの手数料と利息が LLM の読む本文に出ず、損益は円の整数に丸めていた（-15.4077 円が「-15円」）。決済行に手数料控除後の損益（丸めない）・発生手数料（`fee_occurred_amount_quote`、新規側と決済側の合計）・利息（`interest`）を、新規行に手数料（`fee_amount_quote`）を出し、損益が手数料控除後であることを注記する。`get_my_trade_history`（現物）も手数料を本文に出していなかったので、約定行に手数料を出す（JPY 以外の建てのペアは、その通貨で出す）（issue #452）。
