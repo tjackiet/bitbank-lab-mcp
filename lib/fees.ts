@@ -17,9 +17,14 @@ function resolveRate(raw: unknown, override?: number): number {
 	return override ?? toNum(raw) ?? DEFAULT_TAKER_FALLBACK;
 }
 
-export function resolveFeeRate(spec: PairSpec | undefined, role: FeeRole, override?: number): number {
+// 公称率に落とす前の値。null は「API が率を返していない」。
+export function specFeeRate(spec: PairSpec | undefined, role: FeeRole): number | null {
 	const raw = spec == null ? undefined : role === 'maker' ? spec.maker_fee_rate_quote : spec.taker_fee_rate_quote;
-	return resolveRate(raw, override);
+	return toNum(raw);
+}
+
+export function resolveFeeRate(spec: PairSpec | undefined, role: FeeRole, override?: number): number {
+	return override ?? specFeeRate(spec, role) ?? DEFAULT_TAKER_FALLBACK;
 }
 
 // post_only は板を跨げず拒否されるので必ず maker。
