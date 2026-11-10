@@ -28,7 +28,7 @@ import type {
 	RawWithdrawal,
 } from './types.js';
 
-// 現物の手数料は買いが base、売りが quote で発生する（API 仕様）。両方が非ゼロでも正しくなるよう両方を参照する。
+// 現物の手数料は売買とも quote（JPY）で引かれる（実約定で確認。issue 449）。fee_amount_base が非ゼロでも正しくなるよう両方を参照する。
 
 export interface DepositCostBasisInput {
 	deposits: RawDeposit[];

@@ -3,6 +3,7 @@ import { formatPair, formatPrice } from '../../lib/formatter.js';
 import { isJpyQuotedPair } from '../../lib/pair-code.js';
 import { fetchPairsSpec, type PairSpec, validateOrderConstraints } from '../../lib/pairs.js';
 import { fail, ok } from '../../lib/result.js';
+import { fetchPairTicker, type PairTicker } from '../../lib/tickers.js';
 import { validateTriggerPrice } from '../../lib/trigger-price.js';
 import { confirmationTtlSeconds, generateToken } from '../../src/private/confirmation.js';
 import { confirmPreview } from '../../src/private/preview-confirmation.js';
@@ -44,9 +45,20 @@ function validateOrderParams(args: {
 	return null;
 }
 
-function isPositiveNumericString(s: string): boolean {
-	const n = Number(s);
-	return Number.isFinite(n) && n > 0;
+// スキーマと同じ形式。previewOrder を直接呼ぶ経路（テスト・内部呼び出し）でも同じく弾く。
+function isPositiveDecimalString(s: string): boolean {
+	return /^\d+(\.\d+)?$/.test(s) && Number(s) > 0;
+}
+
+function decimalFormatError(field: 'amount' | 'price' | 'trigger_price'): string {
+	return `${field} は正の数値を通常の 10 進表記（例: 0.001）で指定してください（指数表記・符号・空白は不可）`;
+}
+
+// best ask / bid が無ければ last と比べる。比べられなければ undefined（maker 想定のまま）。
+function limitCrossesBook(ticker: PairTicker | null, side: 'buy' | 'sell', price: number): boolean | undefined {
+	if (ticker == null) return undefined;
+	if (side === 'buy') return price >= (ticker.bestAsk ?? ticker.last);
+	return price <= (ticker.bestBid ?? ticker.last);
 }
 
 function formatRatePercent(rate: number): string {
@@ -71,14 +83,14 @@ export default async function previewOrder(args: {
 		return PreviewOrderOutputSchema.parse(fail(paramError, 'validation_error'));
 	}
 
-	if (!isPositiveNumericString(amount)) {
-		return PreviewOrderOutputSchema.parse(fail('amount は正の数値を指定してください', 'validation_error'));
+	if (!isPositiveDecimalString(amount)) {
+		return PreviewOrderOutputSchema.parse(fail(decimalFormatError('amount'), 'validation_error'));
 	}
-	if (price && !isPositiveNumericString(price)) {
-		return PreviewOrderOutputSchema.parse(fail('price は正の数値を指定してください', 'validation_error'));
+	if (price && !isPositiveDecimalString(price)) {
+		return PreviewOrderOutputSchema.parse(fail(decimalFormatError('price'), 'validation_error'));
 	}
-	if (trigger_price && !isPositiveNumericString(trigger_price)) {
-		return PreviewOrderOutputSchema.parse(fail('trigger_price は正の数値を指定してください', 'validation_error'));
+	if (trigger_price && !isPositiveDecimalString(trigger_price)) {
+		return PreviewOrderOutputSchema.parse(fail(decimalFormatError('trigger_price'), 'validation_error'));
 	}
 
 	// /spot/pairs の取得に失敗しても warning に留めて続行する（後段の bitbank 側で必ず検証されるため）。
@@ -151,6 +163,10 @@ export default async function previewOrder(args: {
 		lines.push('  Post Only: 有効');
 	}
 
+	const crossesBook =
+		type === 'limit' && !post_only && price
+			? limitCrossesBook(await fetchPairTicker(pair), side, Number(price))
+			: undefined;
 	// spec の取得に失敗していたら undefined のまま渡し、estimateOrderFee 側で公称 taker による概算にフォールバックさせる。
 	const feeEstimate = estimateOrderFee(spec, {
 		type,
@@ -159,6 +175,7 @@ export default async function previewOrder(args: {
 		amount,
 		postOnly: post_only,
 		positionSide: position_side,
+		crossesBook,
 	});
 
 	let feeKindLabel: string = feeEstimate.role;

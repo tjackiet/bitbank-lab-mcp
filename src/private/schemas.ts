@@ -1197,18 +1197,25 @@ const OrderResponseSchema = z.object({
 
 export type OrderResponse = z.infer<typeof OrderResponseSchema>;
 
+// 指数表記・16 進・前後の空白は Number() では通るが、確認カードと bitbank に生の文字列のまま渡るので弾く（issue 449）。
+const OrderDecimalStringSchema = z
+	.string()
+	.regex(/^\d+(\.\d+)?$/, '通常の 10 進表記（例: 0.001）で指定してください（指数表記・符号・空白は不可）');
+
 export const PreviewOrderInputSchema = z
 	.object({
 		pair: z.string().describe('通貨ペア（例: btc_jpy）'),
-		amount: z.string().describe('注文数量'),
-		price: z.string().optional().describe('指値価格。limit / stop_limit で必須'),
+		amount: OrderDecimalStringSchema.describe('注文数量（通常の 10 進表記。例: 0.001）'),
+		price: OrderDecimalStringSchema.optional().describe('指値価格（通常の 10 進表記）。limit / stop_limit で必須'),
 		side: z.enum(['buy', 'sell']).describe('売買方向'),
 		type: SpotOrderTypeEnum.describe(
 			'注文タイプ（limit / market / stop / stop_limit）。' +
 				'※ take_profit / stop_loss / losscut は本実装では未対応（公式 docs の動作仕様が曖昧なため意図的に除外）。',
 		),
 		post_only: z.boolean().optional().describe('Post Only（limit のみ有効。Maker 手数料を確保）'),
-		trigger_price: z.string().optional().describe('トリガー価格。stop / stop_limit で必須'),
+		trigger_price: OrderDecimalStringSchema.optional().describe(
+			'トリガー価格（通常の 10 進表記）。stop / stop_limit で必須',
+		),
 		position_side: PositionSideEnum.optional().describe(
 			'信用取引の建玉方向。指定時は信用注文として扱う。' +
 				'ロング新規=buy+long, ロング決済=sell+long, ショート新規=sell+short, ショート決済=buy+short。' +
@@ -1272,15 +1279,17 @@ export const PreviewOrderOutputSchema = z.union([
 export const CreateOrderInputSchema = z
 	.object({
 		pair: z.string().describe('通貨ペア（例: btc_jpy）'),
-		amount: z.string().describe('注文数量'),
-		price: z.string().optional().describe('指値価格。limit / stop_limit で必須'),
+		amount: OrderDecimalStringSchema.describe('注文数量（通常の 10 進表記）'),
+		price: OrderDecimalStringSchema.optional().describe('指値価格（通常の 10 進表記）。limit / stop_limit で必須'),
 		side: z.enum(['buy', 'sell']).describe('売買方向'),
 		type: SpotOrderTypeEnum.describe(
 			'注文タイプ（limit / market / stop / stop_limit）。' +
 				'※ take_profit / stop_loss / losscut は本実装では未対応（公式 docs の動作仕様が曖昧なため意図的に除外）。',
 		),
 		post_only: z.boolean().optional().describe('Post Only（limit のみ有効。Maker 手数料を確保）'),
-		trigger_price: z.string().optional().describe('トリガー価格。stop / stop_limit で必須'),
+		trigger_price: OrderDecimalStringSchema.optional().describe(
+			'トリガー価格（通常の 10 進表記）。stop / stop_limit で必須',
+		),
 		position_side: PositionSideEnum.optional().describe('信用取引の建玉方向。preview_order で指定した値をそのまま渡す'),
 		confirmation_token: z.string().describe('preview_order が発行した確認トークン'),
 		token_expires_at: z

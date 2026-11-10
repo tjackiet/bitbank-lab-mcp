@@ -1,4 +1,4 @@
-// bitbank の現物手数料は、買いは base 通貨（fee_amount_base > 0）、売りは quote 通貨（fee_amount_quote > 0）で発生する。売り側 fee_amount_base は API 仕様上ゼロだが、防御的に保有量・保有復元の両方で対称に扱う。
+// bitbank の現物手数料は売買とも quote 通貨（fee_amount_quote）で引かれる（issue 449）。fee_amount_base を使うフィクスチャは、base 建ての手数料が来ても保有量・保有復元の両方で対称に扱えることを確かめる防御的なもの。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { dayjs } from '../../../lib/datetime.js';

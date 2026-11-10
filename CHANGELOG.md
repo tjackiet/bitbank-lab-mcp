@@ -11,6 +11,8 @@
 
 - `analyze_my_portfolio`：期間別の純入出金で、ステーキング報酬に換算できない分があると報酬の額（`staking_reward_jpy`）を出していなかった。通常の入出庫（`net_flow_jpy`）と同じく、換算できた分の部分合計を出し、換算できない資産名を `staking_reward_unpriced_assets` に併記する（issue #448）。
 - `analyze_my_portfolio`：同じ時刻の約定と入出庫は、入庫 → 約定 → 出庫の順で処理する。入庫と同時刻の売りが、原価ゼロの売りとして実現損益を過大に出していた（issue #448）。
+- `preview_order`：指値（`post_only` なし）が現在の板を跨ぐとき（買いは best ask 以上、売りは best bid 以下。無ければ最終価格と比べる）は、即時約定するので taker の率で手数料を見積る。maker が -0.02% のペアで 0.01 BTC を 1,500 万円で買うと「推定手数料 -30 円（リベート）」と出ていたが、即時約定すれば実際は taker の +180 円だった。`/ticker` を取得できないときは従来どおり maker 想定（issue #449）。
+- `preview_order`：円建ての推定手数料は円未満を四捨五入した概算であることを備考に書く。約定履歴の手数料は円未満まで計上される（issue #449）。
 
 ### Added
 
@@ -20,6 +22,8 @@
 
 ### Fixed
 
+- `preview_order` / `create_order`：`amount` / `price` / `trigger_price` に指数表記（`1e-3`）・16 進（`0x1`）・前後の空白を含む文字列が通り、確認カードと bitbank に生の文字列のまま渡っていた（`1e-3` は小数 0 桁と数えて桁数の検証もすり抜けていた）。通常の 10 進表記だけを通す（issue #449）。
+- `analyze_my_portfolio`：コメントの「現物の手数料は買いが base で発生する」が実態と違っていた。現物の手数料は売買とも quote（JPY）で引かれる（実約定で確認）。計算は base / quote の両方に対応していたので結果は変わらない。`.claude/rules/fees.md` にもこの前提を書いた（issue #449）。
 - `analyze_my_portfolio`：全期間の入出金サマリーで、入出庫日の価格でも現在価格でも換算できない暗号資産の入出庫を、純投入額から黙って落としていた（JPY 入金 10 万円と換算できない入庫 1 件、評価額 30 万円で `account_return_pct` +200%）。資産名を `deposit_withdrawal_summary.unpriced_flow_assets` に出し、その場合は `account_return_pct` / `account_return_jpy` を出さない。ステーキング報酬は換算できなくても純投入額はずれないので数えない（issue #448）。
 
 - `analyze_my_portfolio`：現物の約定履歴の取得が打ち切られると（件数上限・途中の API エラー）、欠けるのは直近の約定なのに、期間成績（`yearly` / `monthly` / `daily`）は欠けた約定を巻き戻さないまま確定値を出していた。期間中の売買が無かったことになり、`start_value_jpy` / `change_jpy` / `change_pct` がずれる（期間中に 800 万円で 1 BTC を買った月が「+0 円 / 0%」になる）。打ち切り時は `change_pct_unavailable_reason=trades_truncated` を付けて率を出さず、増減額も成績として読まないよう本文とスキーマに書く。どの期間も現在で終わるので、取得済みの最後の約定が期間開始より前でも同じ扱いにする。資産推移シリーズにも同じ申告を出す（issue #447）。

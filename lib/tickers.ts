@@ -1,7 +1,7 @@
 // URL は環境変数 TICKERS_JPY_URL で上書きできる（get_tickers_jpy と同じ先例）。
 
 import { toNum } from './conversions.js';
-import { BITBANK_API_BASE } from './http.js';
+import { BITBANK_API_BASE, fetchJson } from './http.js';
 import { normalizePairCode } from './pair-code.js';
 
 interface TickersJpyResponse {
@@ -39,5 +39,28 @@ export async function fetchTickerPricesMap(): Promise<TickerPricesResult> {
 		return { prices };
 	} catch (e) {
 		return { prices: new Map(), error: e instanceof Error ? e.message : 'ticker 取得失敗' };
+	}
+}
+
+export interface PairTicker {
+	last: number;
+	bestAsk: number | null;
+	bestBid: number | null;
+}
+
+// 取得失敗・応答不正は null。呼び出し側は検証や見積りを「判定できない」として続行する。
+export async function fetchPairTicker(pair: string): Promise<PairTicker | null> {
+	try {
+		const url = `${BITBANK_API_BASE}/${pair}/ticker`;
+		const json = (await fetchJson(url, { timeoutMs: 5000 })) as {
+			success?: number;
+			data?: { last?: string; sell?: string; buy?: string };
+		};
+		if (json?.success !== 1 || !json.data?.last) return null;
+		const last = toNum(json.data.last);
+		if (last == null) return null;
+		return { last, bestAsk: toNum(json.data.sell), bestBid: toNum(json.data.buy) };
+	} catch {
+		return null;
 	}
 }
