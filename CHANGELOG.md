@@ -10,6 +10,7 @@
 ### Fixed
 
 - `run_backtest`：戦略が持たない `params` のキー（例: `sma_cross` の `short_period`）が検証を通り、既定値で実行されていた。未知のキーはエラーにする。期間系のパラメータ（`short` / `long` / `period` / `fast` / `slow` / `signal` / `sma_filter_period` / `rsi_filter_period`）に小数を渡すと、指標が全 NaN になって「0 トレード」を返すか、内部の例外がエラーとして返っていた。整数だけを通す（issue #443）。
+- `run_backtest`：`rsi` と `macd_cross` のウォームアップが「指標が NaN でなくなる本数」ぎりぎりで、Wilder 平滑・EMA の初期値の影響が評価区間の先頭に残っていた。同じ評価区間でも、取得開始位置（`period` の長さなど）で売買と損益が変わっていた。初期値の重みが 0.1% を切るまでをウォームアップに含める（既定パラメータで rsi は 20 → 109 本、macd_cross は 35 → 156 本）。sma_cross / macd_cross の RSI フィルタ（`rsi_filter_period`）も同じ。取得本数の上限や履歴の長さに届かず、評価区間が `period` の本数より短くなったときは warning を出す（issue #442）。
 
 ## [0.7.0] - 2026-11-10
 

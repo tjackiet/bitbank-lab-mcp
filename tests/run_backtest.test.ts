@@ -202,6 +202,7 @@ describe('run_backtest', () => {
 		});
 		mocks.getPeriodBars.mockReturnValue(90);
 		mocks.fetchCandlesForBacktest.mockResolvedValue(buildCandles(40));
+		mocks.runBacktestEngine.mockReturnValue(buildEngineResult());
 
 		const res = await runBacktest({
 			pair: 'btc_jpy',
@@ -677,6 +678,48 @@ describe('run_backtest', () => {
 		expect(res.summary).toContain('fallback: 公称 12bp 概算');
 		const engineInput = mocks.runBacktestEngine.mock.calls[0][2];
 		expect(engineInput.fee_bp).toBe(12);
+	});
+
+	it('評価区間が period の本数に届かないと warning を出す（取得上限・履歴不足、issue 442）', async () => {
+		setupRsiStrategy();
+		mocks.getPeriodBars.mockReturnValue(4380);
+		const engineResult = buildEngineResult();
+		engineResult.summary.evaluation_bars = 4200;
+		mocks.runBacktestEngine.mockReturnValue(engineResult);
+
+		const res = await runBacktest({
+			pair: 'btc_jpy',
+			timeframe: '4H',
+			period: '2Y',
+			strategy: { type: 'rsi', params: {} },
+			savePng: false,
+			includeSvg: false,
+		});
+
+		assertOk(res);
+		expect(mocks.getPeriodBars).toHaveBeenCalledWith('4H', '2Y');
+		const titleIdx = res.summary.indexOf('=== RSI Backtest Result ===');
+		const warnIdx = res.summary.indexOf('⚠️ 評価区間が指定期間より短い: 4200 本（2Y は 4380 本）');
+		expect(warnIdx).toBeGreaterThanOrEqual(0);
+		expect(warnIdx).toBeLessThan(titleIdx);
+	});
+
+	it('評価区間が period の本数以上なら warning を出さない', async () => {
+		setupRsiStrategy();
+		mocks.getPeriodBars.mockReturnValue(90);
+		const engineResult = buildEngineResult();
+		engineResult.summary.evaluation_bars = 100;
+		mocks.runBacktestEngine.mockReturnValue(engineResult);
+
+		const res = await runBacktest({
+			pair: 'btc_jpy',
+			strategy: { type: 'rsi', params: {} },
+			savePng: false,
+			includeSvg: false,
+		});
+
+		assertOk(res);
+		expect(res.summary).not.toContain('評価区間が指定期間より短い');
 	});
 
 	it('回帰: 同一 fee_bp 入力なら engine に渡る fee_bp は従来通り（数値再現性）', async () => {

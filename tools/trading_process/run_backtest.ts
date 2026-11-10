@@ -4,7 +4,7 @@ import { dayjs, formatDateInTz } from '../../lib/datetime.js';
 import { DEFAULT_CHART_OUTPUT_DIR, ensureAllowedOutputDir } from '../../lib/validate.js';
 import { prependWarnings } from '../../lib/warning-propagation.js';
 import { type BacktestEngineInput, type BacktestEngineResult, runBacktestEngine } from './lib/backtest_engine.js';
-import { fetchCandlesForBacktest } from './lib/fetch_candles.js';
+import { fetchCandlesForBacktest, getPeriodBars } from './lib/fetch_candles.js';
 import { type FeeSource, resolveBacktestFeeBp } from './lib/resolve_fee.js';
 import { getAvailableStrategies, getStrategy, type StrategyConfig, type StrategyType } from './lib/strategies/index.js';
 import { generateBacktestChartFilename, svgToPng } from './lib/svg_to_png.js';
@@ -181,9 +181,10 @@ export default async function runBacktest(input: RunBacktestInput): Promise<RunB
 				)
 			: '';
 
-		const summaryText = prependWarnings(summaryBody, resolvedFee.warning ? { warning: resolvedFee.warning } : null, {
-			separator: '\n\n',
-		});
+		const warning = [resolvedFee.warning, evaluationShortfallWarning(range, timeframe, result.summary.evaluation_bars)]
+			.filter((w): w is string => w != null)
+			.join('\n');
+		const summaryText = prependWarnings(summaryBody, warning ? { warning } : null, { separator: '\n\n' });
 
 		const output: RunBacktestOutput = {
 			ok: true,
@@ -216,6 +217,18 @@ export default async function runBacktest(input: RunBacktestInput): Promise<RunB
 		const message = e instanceof Error ? e.message : String(e);
 		return { ok: false, error: message };
 	}
+}
+
+// 取得上限（MAX_FETCHABLE_BARS）かペアの履歴に届かないと、ウォームアップを確保したぶん評価区間が削られる。
+function evaluationShortfallWarning(
+	range: BacktestRange,
+	timeframe: Timeframe,
+	evaluationBars: number,
+): string | undefined {
+	if (range.type !== 'period') return undefined;
+	const periodBars = getPeriodBars(timeframe, range.value);
+	if (evaluationBars >= periodBars) return undefined;
+	return `評価区間が指定期間より短い: ${evaluationBars} 本（${range.value} は ${periodBars} 本）。取得できる本数の上限か、ペアの履歴の長さに届かなかったため。`;
 }
 
 /** trade / candle の time フィールド自体は UTC ISO のまま（表示だけ JST の暦日にする）。 */

@@ -2,6 +2,7 @@ import { rsi } from '../../../../lib/indicators.js';
 import type { Candle } from '../../types.js';
 import { checkParamShape } from './params.js';
 import type { Overlay, ParamValidationResult, Signal, Strategy } from './types.js';
+import { wilderConvergenceBars } from './warmup.js';
 
 const DEFAULT_PARAMS = {
 	period: 14,
@@ -39,10 +40,10 @@ export function validateParams(params: Record<string, number>): ParamValidationR
 	};
 }
 
-// 余裕を持たせて period + 6 を要求する（prev / curr 比較で i >= period + 1 が要る）。
+// RSI は index period から出るが、Wilder 平滑の初期値が抜けるまで待つ。prev / curr 比較で 1 本足す。
 function computeRequiredBarsImpl(params: Record<string, number>): number {
 	const p = { ...DEFAULT_PARAMS, ...params };
-	return p.period + 6;
+	return p.period + 1 + wilderConvergenceBars(p.period);
 }
 
 export const rsiStrategy: Strategy = {

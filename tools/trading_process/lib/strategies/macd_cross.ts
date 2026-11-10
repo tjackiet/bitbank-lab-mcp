@@ -7,6 +7,7 @@ import { describeEntryFilters, entryFilterStartIdx, isEntryBlockedBySmaRsi } fro
 import { checkParamShape } from './params.js';
 import { calculateRSI } from './rsi.js';
 import type { Overlay, ParamValidationResult, Signal, Strategy } from './types.js';
+import { emaConvergenceBars } from './warmup.js';
 
 const DEFAULT_PARAMS: Record<string, number> = {
 	fast: 12,
@@ -70,10 +71,11 @@ function zeroLineFilterParts(params: Record<string, number>): string[] {
 	return [];
 }
 
-// signal 線は index >= slow + signal - 2 で有効で、クロス判定に prev / curr が要るので最低 slow + signal 本。
+// signal 線は index slow + signal - 2 から出るが、slow の EMA と signal の EMA の初期値が抜けるまで待つ。
 function computeRequiredBarsImpl(params: Record<string, number>): number {
 	const p = { ...DEFAULT_PARAMS, ...params };
-	return Math.max(p.slow + p.signal, entryFilterStartIdx(p));
+	const macdBars = p.slow + p.signal + emaConvergenceBars(p.slow) + emaConvergenceBars(p.signal);
+	return Math.max(macdBars, entryFilterStartIdx(p));
 }
 
 export const macdCrossStrategy: Strategy = {
