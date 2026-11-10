@@ -634,8 +634,8 @@ function buildAccountPnlLines(input: {
 	const spotRealized = accountPnl.spot_realized_pnl;
 	const hasMargin =
 		accountPnl.margin_realized_pnl !== 0 || accountPnl.margin_interest_cost !== 0 || accountPnl.margin_fee_cost !== 0;
-	// data 側はコスト = 正値なので、表示は total への寄与として - を前置する（#72）。
-	const marginPart = `Margin: ${accountPnl.margin_realized_pnl >= 0 ? '+' : ''}${formatYenAmount(accountPnl.margin_realized_pnl)} / Interest cost: -${formatYenAmount(accountPnl.margin_interest_cost)} / Fee cost: -${formatYenAmount(accountPnl.margin_fee_cost)}`;
+	// data 側はコスト = 正値なので、利息は total への寄与として - を前置する（#72）。手数料は Margin に控除済みなので引く項として並べない（issue 450）。
+	const marginPart = `Margin: ${accountPnl.margin_realized_pnl >= 0 ? '+' : ''}${formatYenAmount(accountPnl.margin_realized_pnl)}（手数料控除後。発生手数料 ${formatYenAmount(accountPnl.margin_fee_cost)} は控除済み） / Interest cost: -${formatYenAmount(accountPnl.margin_interest_cost)}`;
 	if (spotRealized == null && totalRealizedPnlUnavailableReason != null) {
 		// 抑止した銘柄を除いた部分和を見出しに載せない。数字を出した時点で口座の実現損益として読まれる（#80）。
 		lines.push(

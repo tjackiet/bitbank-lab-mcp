@@ -279,7 +279,7 @@ describe('analyze_my_portfolio', () => {
 		expect(result.summary).not.toContain('Interest cost:');
 	});
 
-	it('信用約定あり: account_pnl.total が spot + margin - interest - fee と一致', async () => {
+	it('信用約定あり: account_pnl.total が spot + margin - interest と一致（profit_loss は手数料控除後なので手数料は引かない。issue 450）', async () => {
 		// rawMarginTradeHistoryResponse は決済 1 件（profit_loss=5000, interest=30, fee_occurred_amount_quote=155）+ 建玉 2 件（fee 0）
 		setupFetchMock({ marginTrades: rawMarginTradeHistoryResponse });
 
@@ -297,7 +297,7 @@ describe('analyze_my_portfolio', () => {
 		expect(pnl.margin_interest_cost).toBe(30);
 		expect(pnl.margin_fee_cost).toBe(155);
 		assertDefined(pnl.spot_realized_pnl, 'result.data.account_pnl.spot_realized_pnl');
-		expect(pnl.total).toBe(pnl.spot_realized_pnl + 5000 - 30 - 155);
+		expect(pnl.total).toBe(pnl.spot_realized_pnl + 5000 - 30);
 	});
 
 	it('account_pnl: margin_*_cost で total を減算で検算でき、旧フィールド（margin_interest / margin_fee）は出さない', async () => {
@@ -315,9 +315,7 @@ describe('analyze_my_portfolio', () => {
 		expect(pnl.margin_interest_cost).toBe(30);
 		expect(pnl.margin_fee_cost).toBe(155);
 		assertDefined(pnl.spot_realized_pnl, 'result.data.account_pnl.spot_realized_pnl');
-		expect(pnl.total).toBe(
-			pnl.spot_realized_pnl + pnl.margin_realized_pnl - pnl.margin_interest_cost - pnl.margin_fee_cost,
-		);
+		expect(pnl.total).toBe(pnl.spot_realized_pnl + pnl.margin_realized_pnl - pnl.margin_interest_cost);
 
 		expect(Object.keys(pnl)).toEqual([
 			'spot_realized_pnl',
@@ -328,9 +326,10 @@ describe('analyze_my_portfolio', () => {
 			'spot_realized_pnl_unavailable_reason',
 		]);
 
-		// 表示は total への寄与なので `-` 前置のまま
+		// 利息は total への寄与なので `-` 前置のまま。手数料は Margin に控除済みであることを書き、引く項としては並べない（issue 450）
 		expect(result.summary).toContain('Interest cost: -30円');
-		expect(result.summary).toContain('Fee cost: -155円');
+		expect(result.summary).toContain('Margin: +5,000円（手数料控除後。発生手数料 155円 は控除済み）');
+		expect(result.summary).not.toContain('Fee cost: -155円');
 	});
 
 	it('信用約定レスポンスに現物 (position_side 欠損) が混入しても margin_fee は信用のみから集計', async () => {
@@ -389,7 +388,7 @@ describe('analyze_my_portfolio', () => {
 		// 現物の 9999 が混入していたら 9999+155=10154 になるはずだが、フィルタで除外されて 155 のみ
 		expect(pnl.margin_fee_cost).toBe(155);
 		assertDefined(pnl.spot_realized_pnl, 'result.data.account_pnl.spot_realized_pnl');
-		expect(pnl.total).toBe(pnl.spot_realized_pnl + 5000 - 30 - 155);
+		expect(pnl.total).toBe(pnl.spot_realized_pnl + 5000 - 30);
 	});
 
 	it('信用 fetch 失敗時: ⚠️ 警告 + meta.marginFetchFailed=true + margin pnl 0 で「信用未使用」と区別できる', async () => {
@@ -702,10 +701,7 @@ describe('analyze_my_portfolio', () => {
 			for (const periodPnl of [result.data.yearly_account_pnl, result.data.monthly_account_pnl]) {
 				assertDefined(periodPnl.spot_realized_pnl, 'periodPnl.spot_realized_pnl');
 				expect(periodPnl.total).toBe(
-					periodPnl.spot_realized_pnl +
-						periodPnl.margin_realized_pnl -
-						periodPnl.margin_interest_cost -
-						periodPnl.margin_fee_cost,
+					periodPnl.spot_realized_pnl + periodPnl.margin_realized_pnl - periodPnl.margin_interest_cost,
 				);
 				expect(Object.keys(periodPnl)).toEqual([
 					'spot_realized_pnl',

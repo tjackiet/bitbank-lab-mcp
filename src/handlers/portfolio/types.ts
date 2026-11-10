@@ -131,15 +131,15 @@ export interface PeriodRealizedPnl {
 	qty_clamp_absorbed_qty: number;
 }
 
-// コスト項は正値で持ち total から引く。符号を変えると同じ名前のまま意味が反転する（#72）。
+// コスト項は正値で持つ。利息は total から引き、手数料は margin_realized_pnl に控除済みなので引かない（#72 / issue 450）。
 export interface AccountPnl {
 	spot_realized_pnl: number | undefined;
-	/** 信用の決済済み損益合計（JPY、グロス: 利息・手数料控除前） */
+	/** 信用の決済済み損益合計（JPY、手数料控除後。利息を含むかは未確認） */
 	margin_realized_pnl: number;
 	/** spot が抑止された実行では undefined（信用側だけの合計を口座全体 PnL として出さない）。 */
 	total: number | undefined;
 	margin_interest_cost: number;
-	/** fee_occurred_amount_quote の合算（実績側）。 */
+	/** fee_occurred_amount_quote の合算（実績側）。margin_realized_pnl の内数なので total からは引かない。 */
 	margin_fee_cost: number;
 	spot_realized_pnl_unavailable_reason: PortfolioUnresolvedDepositReason | undefined;
 }

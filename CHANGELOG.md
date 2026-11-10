@@ -22,6 +22,7 @@
 
 ### Fixed
 
+- `analyze_my_portfolio`：口座損益の合計（`account_pnl.total`、`yearly_account_pnl` / `monthly_account_pnl` の `total`）で、信用の手数料を二重に引いていた。API の `profit_loss` は手数料控除後の値だった（実口座の BTC/JPY 信用決済で、ツールの表示 -15円 が -15.4077 円の丸め。控除前なら -7円）。`total` から `margin_fee_cost` を引かない。`margin_fee_cost` は内訳として残し、本文の Account PnL 行は「Margin: …（手数料控除後。発生手数料 … は控除済み）」と出す。`margin_realized_pnl` の説明の「グロス: 利息・手数料控除前」も直した。利息が `profit_loss` に含まれるかは未確認なので、利息の扱いは変えない（issue #450）。
 - `get_margin_trade_history`：約定ごとの手数料と利息が LLM の読む本文に出ず、損益は円の整数に丸めていた（-15.4077 円が「-15円」）。決済行に手数料控除後の損益（丸めない）・発生手数料（`fee_occurred_amount_quote`、新規側と決済側の合計）・利息（`interest`）を、新規行に手数料（`fee_amount_quote`）を出し、損益が手数料控除後であることを注記する。`get_my_trade_history`（現物）も手数料を本文に出していなかったので、約定行に手数料を出す（issue #452）。
 - `preview_order` / `create_order`：`amount` / `price` / `trigger_price` に指数表記（`1e-3`）・16 進（`0x1`）・前後の空白を含む文字列が通り、確認カードと bitbank に生の文字列のまま渡っていた（`1e-3` は小数 0 桁と数えて桁数の検証もすり抜けていた）。通常の 10 進表記だけを通す（issue #449）。
 - `analyze_my_portfolio`：コメントの「現物の手数料は買いが base で発生する」が実態と違っていた。現物の手数料は売買とも quote（JPY）で引かれる（実約定で確認）。計算は base / quote の両方に対応していたので結果は変わらない。`.claude/rules/fees.md` にもこの前提を書いた（issue #449）。

@@ -424,7 +424,7 @@ export interface MarginPnlTotals {
 	margin_fee_cost: number;
 }
 
-// profit_loss は手数料・利息控除前のグロスなので interest と手数料を別に足し上げる。手数料は fee_amount_quote ではなく per-trade の発生額の fee_occurred_amount_quote を使う。
+// profit_loss は手数料控除後（実口座で確認。issue 450）なので、手数料は内訳として足し上げるだけで total からは引かない。利息を含むかは未確認なので別に足し上げて引く。手数料は per-trade の発生額の fee_occurred_amount_quote を使う。
 export function calcMarginPnl(trades: RawMarginTrade[]): MarginPnlTotals & { close_trade_count: number } {
 	let realized = 0;
 	let interest = 0;
@@ -481,7 +481,7 @@ export function buildAccountPnl(
 		total:
 			spotRealizedPnl == null
 				? undefined
-				: spotRealizedPnl + marginPnl.margin_realized_pnl - marginPnl.margin_interest_cost - marginPnl.margin_fee_cost,
+				: spotRealizedPnl + marginPnl.margin_realized_pnl - marginPnl.margin_interest_cost,
 		margin_interest_cost: marginPnl.margin_interest_cost,
 		margin_fee_cost: marginPnl.margin_fee_cost,
 		spot_realized_pnl_unavailable_reason: spotRealizedPnl == null ? suppressedReason : undefined,

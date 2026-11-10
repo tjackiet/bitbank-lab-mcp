@@ -1291,7 +1291,7 @@ function definedAmount(value: number | undefined, label: string): number {
 }
 
 describe('buildAccountPnl', () => {
-	it('total = spot + margin - interest - fee を返す', () => {
+	it('total = spot + margin - interest。profit_loss は手数料控除後なので手数料は引かない（issue 450）', () => {
 		const result = buildAccountPnl(1000, {
 			margin_realized_pnl: 500,
 			margin_interest_cost: 100,
@@ -1301,7 +1301,24 @@ describe('buildAccountPnl', () => {
 		expect(result.margin_realized_pnl).toBe(500);
 		expect(result.margin_interest_cost).toBe(100);
 		expect(result.margin_fee_cost).toBe(50);
-		expect(result.total).toBe(1350); // 1000 + 500 - 100 - 50
+		expect(result.total).toBe(1400); // 1000 + 500 - 100
+	});
+
+	it('実口座の検算: ロングの決済（0.0348 BTC の行と残り 3 行の合計。実現損益 -1,587.74 円、発生手数料 997.42 円）で手数料を二重に引かない（issue 450）', () => {
+		const margin = calcMarginPnl([
+			makeMarginTrade({
+				side: 'sell',
+				profit_loss: '-1319.8607',
+				fee_occurred_amount_quote: '822.5094',
+				interest: '0',
+			}),
+			makeMarginTrade({ side: 'sell', profit_loss: '-267.8793', fee_occurred_amount_quote: '174.9106', interest: '0' }),
+		]);
+		expect(margin.margin_realized_pnl).toBe(-1588);
+		expect(margin.margin_fee_cost).toBe(997);
+		const result = buildAccountPnl(0, margin);
+		expect(result.total).toBe(-1588);
+		expect(result.total).not.toBe(-1588 - 997);
 	});
 
 	it('信用約定なし（margin=0, interest=0, fee=0）のとき total === spot_realized_pnl', () => {
@@ -1325,18 +1342,18 @@ describe('buildAccountPnl', () => {
 		expect(result.margin_fee_cost).toBe(50);
 	});
 
-	/** JSON を直読みする消費者が `_cost` を引き算して total を再現できること。足し込むと符号が反転する（#72 の症状）ので、その向きも固定する。 */
-	it('total は新フィールドで検算できる（コスト項は減算）', () => {
+	/** JSON を直読みする消費者が total を再現できること。利息は減算、手数料は margin_realized_pnl に控除済みなので引かない（#72 / issue 450）。 */
+	it('total は spot + margin_realized_pnl - margin_interest_cost で検算できる', () => {
 		const result = buildAccountPnl(-2000, {
 			margin_realized_pnl: 8000,
 			margin_interest_cost: 1,
 			margin_fee_cost: 149,
 		});
 		const spot = definedAmount(result.spot_realized_pnl, 'spot_realized_pnl');
-		expect(result.total).toBe(spot + result.margin_realized_pnl - result.margin_interest_cost - result.margin_fee_cost);
-		expect(result.total).toBe(5850);
-		// 足し込むと 150 円ぶんずれる = 符号規約を取り違えたときの誤差
-		expect(spot + result.margin_realized_pnl + result.margin_interest_cost + result.margin_fee_cost).toBe(6150);
+		expect(result.total).toBe(spot + result.margin_realized_pnl - result.margin_interest_cost);
+		expect(result.total).toBe(5999);
+		// 利息を足し込むと 2 円ずれる = 符号規約を取り違えたときの誤差
+		expect(spot + result.margin_realized_pnl + result.margin_interest_cost).toBe(6001);
 	});
 });
 
@@ -1358,7 +1375,7 @@ describe('buildAccountPnl — 現物側の抑止（#80）', () => {
 	it('spot が 0 円のときは抑止と区別して確定値を出す', () => {
 		const result = buildAccountPnl(0, marginPnl, 'deposit_price_fetch_failed');
 		expect(result.spot_realized_pnl).toBe(0);
-		expect(result.total).toBe(350);
+		expect(result.total).toBe(400);
 		expect(result.spot_realized_pnl_unavailable_reason).toBeUndefined();
 	});
 
@@ -1383,7 +1400,7 @@ describe('buildAccountPnl — 現物側の抑止（#80）', () => {
 });
 
 describe('buildPeriodAccountPnl', () => {
-	it('期間版でも新旧フィールドが同じ値で並び、total を新フィールドで検算できる', () => {
+	it('期間版でも total を spot + margin_realized_pnl - margin_interest_cost で検算できる（手数料は控除済み）', () => {
 		const result = buildPeriodAccountPnl(
 			300,
 			{ margin_realized_pnl: 200, margin_interest_cost: 15, margin_fee_cost: 75 },
@@ -1393,8 +1410,8 @@ describe('buildPeriodAccountPnl', () => {
 		expect(result.margin_interest_cost).toBe(15);
 		expect(result.margin_fee_cost).toBe(75);
 		const spot = definedAmount(result.spot_realized_pnl, 'spot_realized_pnl');
-		expect(result.total).toBe(spot + result.margin_realized_pnl - result.margin_interest_cost - result.margin_fee_cost);
-		expect(result.total).toBe(410);
+		expect(result.total).toBe(spot + result.margin_realized_pnl - result.margin_interest_cost);
+		expect(result.total).toBe(485);
 		expect(result.period_start).toBe('2026-01-01T00:00:00+09:00');
 		expect(result.period_end).toBe('2026-08-23T00:00:00+09:00');
 	});

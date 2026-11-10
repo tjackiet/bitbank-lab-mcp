@@ -24,6 +24,8 @@ bitbank の手数料は 3 カテゴリに分かれる。混同するとハルシ
 - **C はパススルー**。API が返す値をそのまま出力する。A と混同して `lib/fees.ts` に通さない。
 - **実績側は変更しない**。`portfolio/calc.ts` / `get_my_trade_history` / `get_margin_trade_history` 等は
   既に `fee_occurred_amount_quote` + `interest` を別建てで実額計上しており正しい。見積り側のみ本ルールの対象。
+  - 信用の `profit_loss` は手数料控除後（実口座で確認）。口座損益の合計で `fee_occurred_amount_quote` を引かない
+    （手数料は内訳として出すだけ）。`interest` を含むかは未確認なので、利息は別に引いたままにする。
 
 ## 信用（カテゴリ B）の見積り
 

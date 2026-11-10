@@ -507,12 +507,16 @@ const accountPnlCoreShape = {
 		.describe(
 			'現物の実現損益（JPY、全銘柄 = 現在保有中の銘柄 + 売り切り銘柄）。対象期間は本オブジェクトのスコープに従う（account_pnl=全履歴、yearly_account_pnl / monthly_account_pnl=period_start〜period_end）。全履歴版は total_realized_pnl と同値で、内訳は Σ holdings[].realized_pnl + closed_position_realized_pnl。**入庫日価格の取得失敗・打ち切りで銘柄を抑止した実行では undefined**（理由は spot_realized_pnl_unavailable_reason）——抑止した銘柄を除いた部分和は出さない',
 		),
-	margin_realized_pnl: z.number().describe('信用の決済済み損益（JPY、グロス: 利息・手数料控除前）'),
+	margin_realized_pnl: z
+		.number()
+		.describe(
+			'信用の決済済み損益（JPY、API の profit_loss の合計）。**手数料控除後**の値（手数料は margin_fee_cost に内訳として出る）。利息を含むかは未確認で、利息は margin_interest_cost として別に total から引いている',
+		),
 	total: z
 		.number()
 		.optional()
 		.describe(
-			'口座全体 PnL = spot_realized_pnl + margin_realized_pnl − margin_interest_cost − margin_fee_cost。コスト項は正値で入っているので**減算**する（足すと符号が反転する）。spot_realized_pnl が抑止された実行では本値も undefined（信用側だけの合計を口座全体 PnL として出さない）。信用側の内訳は margin_realized_pnl / margin_interest_cost / margin_fee_cost に残るので、そこから読むこと',
+			'口座全体 PnL = spot_realized_pnl + margin_realized_pnl − margin_interest_cost。margin_realized_pnl は手数料控除後なので **margin_fee_cost は引かない**（引くと手数料を二重に控除する。issue #450）。利息は正値で入っているので**減算**する（足すと符号が反転する）。spot_realized_pnl が抑止された実行では本値も undefined（信用側だけの合計を口座全体 PnL として出さない）。信用側の内訳は margin_realized_pnl / margin_interest_cost / margin_fee_cost に残るので、そこから読むこと',
 		),
 };
 
@@ -525,7 +529,7 @@ const marginCostShape = {
 	margin_fee_cost: z
 		.number()
 		.describe(
-			'信用の発生手数料合計（JPY、fee_occurred_amount_quote の合算）。**コスト = 正値**で保持し、total では**減算**される',
+			'信用の発生手数料合計（JPY、fee_occurred_amount_quote の合算）。**コスト = 正値**で保持する。margin_realized_pnl（profit_loss）に控除済みの内訳なので、total では**引かない**（issue #450）',
 		),
 };
 
