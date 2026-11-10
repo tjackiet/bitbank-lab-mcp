@@ -794,8 +794,16 @@ export function reconstructHoldingsAtDate(
 	trades: RawTrade[],
 	sinceMs: number,
 	dw: DepositWithdrawalData | null,
+	marginTrades: RawMarginTrade[] = [],
 ): Map<string, number> {
-	return reconstructHoldingsWithNegatives(currentHoldings, trades, sinceMs, dw).holdings;
+	return reconstructHoldingsWithNegatives(currentHoldings, trades, sinceMs, dw, marginTrades).holdings;
+}
+
+// 信用の決済で JPY 残高が動く額。profit_loss は手数料控除後（issue 450）で、利息は口座損益の total と同じく別に引く。
+function marginJpyDelta(t: RawMarginTrade): number {
+	const pl = Number(t.profit_loss);
+	const interest = Number(t.interest);
+	return (Number.isFinite(pl) ? pl : 0) - (Number.isFinite(interest) ? interest : 0);
 }
 
 // amount_precision の最小単位（8 桁）より細かい負値は、浮動小数点の誤差として負とみなさない。
@@ -807,6 +815,7 @@ export function reconstructHoldingsWithNegatives(
 	trades: RawTrade[],
 	sinceMs: number,
 	dw: DepositWithdrawalData | null,
+	marginTrades: RawMarginTrade[] = [],
 ): { holdings: Map<string, number>; negativeAssets: string[] } {
 	const holdings = new Map<string, number>();
 	for (const h of currentHoldings) {
@@ -837,6 +846,13 @@ export function reconstructHoldingsWithNegatives(
 			holdings.set(asset, current + qty + feeBase);
 			holdings.set('jpy', currentJpy - qty * price + feeQuote);
 		}
+	}
+
+	// 信用の決済損益・利息・手数料は JPY 残高に反映される（issue 446）。新規の約定は JPY を動かさない。
+	for (const t of marginTrades) {
+		if (t.executed_at < sinceMs) continue;
+		const delta = marginJpyDelta(t);
+		if (delta !== 0) holdings.set('jpy', (holdings.get('jpy') ?? 0) - delta);
 	}
 
 	if (dw) {
@@ -948,6 +964,7 @@ export function buildEquitySeries(
 	currentIso: string,
 	fallbackPrices?: Map<string, number>,
 	flowPricing?: FlowPricing,
+	marginTrades: RawMarginTrade[] = [],
 ): EquityPoint[] {
 	const series: EquityPoint[] = [];
 	const flowByPoint = flowPricing
@@ -960,7 +977,7 @@ export function buildEquitySeries(
 
 	for (const date of dates) {
 		const dateMs = date.valueOf();
-		const holdings = reconstructHoldingsAtDate(currentHoldings, allTrades, dateMs, dwData);
+		const holdings = reconstructHoldingsAtDate(currentHoldings, allTrades, dateMs, dwData, marginTrades);
 
 		// dailyPrices ではなく holdings を起点に回す。candle が全失敗すると priceMap が空になり、最終点とスケールが合わなくなる。
 		const priceMap = new Map<string, number>();
@@ -1098,7 +1115,7 @@ export function calcPeriodNetFlow(
 }
 
 export const PERFORMANCE_NOTE =
-	'期初評価額は現在の保有状態から約定・入出金を逆算して復元し、期初時点の始値（1day candle open）で評価。暗号資産の入出庫は入出庫日（入庫: confirmed_at / 出庫: requested_at）の始値で JPY 換算し、その日の価格を取得できなかった分のみ現在価格で仮評価する（内訳は flow_valuation）。純入出金は元本移動のみ（出金手数料を含まない。ステーキング報酬（入金種別 STAKING）は元本ではなく成果として扱い、純入出金に含めない。額は staking_reward_jpy）。調整後増減 = 単純増減 - 純入出金（市場変動 + 出金手数料コスト）。増減率（change_pct / adjusted_change_pct）は期初評価額が 0、現在評価額の 1% 未満、期初の始値を解決できなかった暗号資産があり期初評価額が過小、または現在価格を解決できなかった保有があり現在評価額が過小のときは出さない（分母が小さすぎて率が運用成績を表さない、過小な分母になる、または分子が過小になるため。理由は change_pct_unavailable_reason、資産名は unpriced_start_assets / unpriced_current_assets、増減額は通常どおり出る）。期初評価額・現在評価額そのものは過小である場合でも金額を出すが、過小であることは unpriced_start_assets / unpriced_current_assets と理由コードで申告する（黙って出さない）。';
+	'期初評価額は現在の保有状態から約定・入出金を逆算して復元し、期初時点の始値（1day candle open）で評価。信用の決済損益（手数料控除後の profit_loss から利息を引いた額）は JPY 残高に反映されるので巻き戻して増減に含め、信用建玉の含み損益は期初・現在の評価額のどちらにも含めない。暗号資産の入出庫は入出庫日（入庫: confirmed_at / 出庫: requested_at）の始値で JPY 換算し、その日の価格を取得できなかった分のみ現在価格で仮評価する（内訳は flow_valuation）。純入出金は元本移動のみ（出金手数料を含まない。ステーキング報酬（入金種別 STAKING）は元本ではなく成果として扱い、純入出金に含めない。額は staking_reward_jpy）。調整後増減 = 単純増減 - 純入出金（市場変動 + 出金手数料コスト）。増減率（change_pct / adjusted_change_pct）は期初評価額が 0、現在評価額の 1% 未満、期初の始値を解決できなかった暗号資産があり期初評価額が過小、または現在価格を解決できなかった保有があり現在評価額が過小のときは出さない（分母が小さすぎて率が運用成績を表さない、過小な分母になる、または分子が過小になるため。理由は change_pct_unavailable_reason、資産名は unpriced_start_assets / unpriced_current_assets、増減額は通常どおり出る）。期初評価額・現在評価額そのものは過小である場合でも金額を出すが、過小であることは unpriced_start_assets / unpriced_current_assets と理由コードで申告する（黙って出さない）。';
 
 export const PERFORMANCE_NOTE_CHANGE_OVERSTATED =
 	'この期間は期初の始値を解決できなかった暗号資産があり（change_pct_unavailable_reason=start_boundary_unpriced）、期初評価額から脱落した分がそのまま増減額に乗るため change_jpy / adjusted_change_jpy も同じ額だけ過大（change_jpy_overstated=true）。増減額を運用成績として読まないこと。この期間の値動きはこの結果からは算出できない（資産推移シリーズも同じ日次価格に依存するため代替にならない）。';
@@ -1112,6 +1129,9 @@ export const PERFORMANCE_NOTE_CHANGE_UNDERSTATED =
 // 欠けるのは直近の約定で、どの期間も現在で終わるので、取得済みの最後の約定が期間開始より前でも期間内の約定が欠けうる。
 export const PERFORMANCE_NOTE_TRADES_TRUNCATED =
 	'今回は現物の約定履歴の取得が打ち切られ（change_pct_unavailable_reason=trades_truncated）、直近の約定が欠けている。欠けた約定は巻き戻せないので期初の保有がずれ、start_value_jpy / change_jpy / adjusted_change_jpy も同じだけずれる（欠けたのが買いか売りかで向きが変わるため、向きは確定しない）。増減額を運用成績として読まないこと。資産推移シリーズも同じ巻き戻しを使うので代替にならない。';
+
+export const PERFORMANCE_NOTE_MARGIN_TRADES_INCOMPLETE =
+	'今回は信用の約定履歴を取得しきれず（取得失敗・打ち切り。change_pct_unavailable_reason=margin_trades_incomplete）、期間中の信用の決済損益を JPY 残高から巻き戻せていない可能性がある。そのため start_value_jpy / change_jpy / adjusted_change_jpy も信用の決済損益の分だけずれうる（向きは確定しない）。増減額を運用成績として読まないこと。資産推移シリーズも同じ巻き戻しを使うので代替にならない。';
 
 export type PeriodPerformanceKey = 'daily' | 'monthly' | 'yearly';
 
@@ -1134,6 +1154,8 @@ export interface PortfolioPerformanceContext {
 	/** 設定されていれば dwData の中身に関わらず未計測として扱う（失敗時の空の中身を集計するとフローゼロの確定値になる）。 */
 	flowUnavailableReason?: PortfolioFlowUnavailableReason;
 	tradesTruncated?: boolean;
+	marginTrades?: RawMarginTrade[];
+	marginTradesIncomplete?: boolean;
 }
 
 // 現在評価額に対する比なので口座規模に依存しない。1% なら増減率は +9,900% を超えない。
@@ -1209,6 +1231,7 @@ function unpricedCurrentAssets(ctx: PortfolioPerformanceContext): string[] | und
 // start_value_zero / start_value_negligible は期初評価額が本当に小さいだけで増減額は正しく読めるので追記しない。
 function performanceNote(reason: PortfolioChangePctUnavailableReason | undefined, changeOverstated: boolean): string {
 	if (reason === 'trades_truncated') return `${PERFORMANCE_NOTE}${PERFORMANCE_NOTE_TRADES_TRUNCATED}`;
+	if (reason === 'margin_trades_incomplete') return `${PERFORMANCE_NOTE}${PERFORMANCE_NOTE_MARGIN_TRADES_INCOMPLETE}`;
 	if (reason === 'start_boundary_unpriced') {
 		return `${PERFORMANCE_NOTE}${changeOverstated ? PERFORMANCE_NOTE_CHANGE_OVERSTATED : PERFORMANCE_NOTE_CHANGE_DIRECTION_UNKNOWN}`;
 	}
@@ -1223,6 +1246,7 @@ export function buildPeriodPerformance(spec: PeriodSpec, ctx: PortfolioPerforman
 		ctx.trades,
 		spec.startMs,
 		ctx.dwData,
+		ctx.marginTrades,
 	);
 	const priceMap = new Map<string, number>();
 	for (const [asset, pp] of ctx.candlePriceData.boundaryPrices) {
@@ -1237,17 +1261,21 @@ export function buildPeriodPerformance(spec: PeriodSpec, ctx: PortfolioPerforman
 	const unpricedStart = unpricedStartAssets(startHoldings, ctx.candlePriceData.boundaryPrices, spec.key);
 	const unpricedCurrent = unpricedCurrentAssets(ctx);
 	const tradesTruncated = ctx.tradesTruncated === true;
+	const marginIncomplete = ctx.marginTradesIncomplete === true;
+	const historyIncomplete = tradesTruncated || marginIncomplete;
 	// 片端だけが欠けているときだけ向きが確定する。両端で欠けるとその資産の値動きがどちらにも入らない。約定が欠けると向きは確定しない。
-	const changeOverstated = !tradesTruncated && unpricedStart != null && unpricedCurrent == null;
-	const changeUnderstated = !tradesTruncated && unpricedCurrent != null && unpricedStart == null;
-	// 期初の保有そのものが壊れる trades_truncated、価格の解決欠損 2 種の順に、増減額で読むよう誘導する start_value_* より必ず先に選ぶ。
+	const changeOverstated = !historyIncomplete && unpricedStart != null && unpricedCurrent == null;
+	const changeUnderstated = !historyIncomplete && unpricedCurrent != null && unpricedStart == null;
+	// 期初の保有そのものが壊れる約定の欠落 2 種、価格の解決欠損 2 種の順に、増減額で読むよう誘導する start_value_* より必ず先に選ぶ。
 	const pctUnavailableReason: PortfolioChangePctUnavailableReason | undefined = tradesTruncated
 		? 'trades_truncated'
-		: unpricedStart
-			? 'start_boundary_unpriced'
-			: unpricedCurrent
-				? 'current_value_unpriced'
-				: changePctUnavailableReasonFor(startValue, ctx.currentValue);
+		: marginIncomplete
+			? 'margin_trades_incomplete'
+			: unpricedStart
+				? 'start_boundary_unpriced'
+				: unpricedCurrent
+					? 'current_value_unpriced'
+					: changePctUnavailableReasonFor(startValue, ctx.currentValue);
 	const adjusted = flow.net_flow_jpy != null ? change - flow.net_flow_jpy : null;
 	// dwData が null なのは取得が落ちたときだけなので dw_fetch_failed に落とす（損益を出す構成では常に取得する）。
 	const unavailableReason = flow.measured ? undefined : (ctx.flowUnavailableReason ?? 'dw_fetch_failed');

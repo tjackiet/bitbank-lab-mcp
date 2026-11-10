@@ -211,6 +211,7 @@ export const PortfolioChangePctUnavailableReasonEnum = z.enum([
 	'start_boundary_unpriced',
 	'current_value_unpriced',
 	'trades_truncated',
+	'margin_trades_incomplete',
 ]);
 
 export type PortfolioChangePctUnavailableReason = z.infer<typeof PortfolioChangePctUnavailableReasonEnum>;
@@ -565,7 +566,7 @@ const PeriodPerformanceSchema = z
 			.number()
 			.optional()
 			.describe(
-				'単純増減率（%）= change_jpy / start_value_jpy。**期初評価額が小さすぎて率が意味を持たない場合は undefined**（理由は change_pct_unavailable_reason）: (1) start_value_jpy が 0、(2) start_value_jpy が current_value_jpy の 1% 未満、(3) 期初の始値を解決できなかった暗号資産があり start_value_jpy が過小（当該期間のみ欠損・boundaryPrices 未登録・3 境界すべて欠損のいずれも含む）、(4) 現在 ticker 価格を解決できなかった保有があり current_value_jpy が過小（#109）、(5) 現物の約定履歴の取得が打ち切られ、直近の約定を巻き戻せず期初の保有がずれている（trades_truncated、issue #447）。(2) は年初にほぼ空だった口座に入金して運用を始めた場合に起き、率は運用成績ではなく「期初がほぼ空だった」ことを表す数になるため出さない。(3) は過小な分母では率が運用成績を表さないため出さない（資産名は unpriced_start_assets）。(4) は分母ではなく分子が壊れており、率は「口座が消し飛んだ」ように見える偽の数になるため出さない（資産名は unpriced_current_assets）。いずれも増減額 change_jpy は出すが、**(3)(4)(5) では分子も同じ欠損の影響を受ける**ので成績として読めない（ずれの向きが確定する場合は (3) で change_jpy_overstated=true、(4) で change_jpy_understated=true）。(1)(2) の増減額は正しい。undefined は「率がゼロ」ではない',
+				'単純増減率（%）= change_jpy / start_value_jpy。**期初評価額が小さすぎて率が意味を持たない場合は undefined**（理由は change_pct_unavailable_reason）: (1) start_value_jpy が 0、(2) start_value_jpy が current_value_jpy の 1% 未満、(3) 期初の始値を解決できなかった暗号資産があり start_value_jpy が過小（当該期間のみ欠損・boundaryPrices 未登録・3 境界すべて欠損のいずれも含む）、(4) 現在 ticker 価格を解決できなかった保有があり current_value_jpy が過小（#109）、(5) 現物の約定履歴の取得が打ち切られ、直近の約定を巻き戻せず期初の保有がずれている（trades_truncated、issue #447）、(6) 信用の約定履歴を取得しきれず、信用の決済損益を巻き戻せていない可能性がある（margin_trades_incomplete、issue #446）。(2) は年初にほぼ空だった口座に入金して運用を始めた場合に起き、率は運用成績ではなく「期初がほぼ空だった」ことを表す数になるため出さない。(3) は過小な分母では率が運用成績を表さないため出さない（資産名は unpriced_start_assets）。(4) は分母ではなく分子が壊れており、率は「口座が消し飛んだ」ように見える偽の数になるため出さない（資産名は unpriced_current_assets）。いずれも増減額 change_jpy は出すが、**(3)〜(6) では分子も同じ欠損の影響を受ける**ので成績として読めない（ずれの向きが確定する場合は (3) で change_jpy_overstated=true、(4) で change_jpy_understated=true）。(1)(2) の増減額は正しい。undefined は「率がゼロ」ではない',
 			),
 		net_flow_jpy: z
 			.number()
@@ -590,7 +591,7 @@ const PeriodPerformanceSchema = z
 			.nullable()
 			.optional()
 			.describe(
-				'調整後増減率（%）= adjusted_change_jpy / start_value_jpy。**分母は期初評価額のままで、期中に入った資金は分母に入らない**。そのため期初評価額に比べて期中の入金が大きい期間では、投下資本あたりの運用成績よりずっと大きな率になる（フロー加重の収益率ではない。#111）。null=純入出金が未計測で算出不能。undefined=change_pct と同じ理由で率を出せない（start_value_jpy が 0、current_value_jpy の 1% 未満、期初始値の解決欠損で start_value_jpy が過小、現在価格の解決欠損で current_value_jpy が過小、または現物約定の取得の打ち切りで期初の保有がずれている。理由は change_pct_unavailable_reason）。change_pct と抑止条件が共通なので必ず両方同時に起きる',
+				'調整後増減率（%）= adjusted_change_jpy / start_value_jpy。**分母は期初評価額のままで、期中に入った資金は分母に入らない**。そのため期初評価額に比べて期中の入金が大きい期間では、投下資本あたりの運用成績よりずっと大きな率になる（フロー加重の収益率ではない。#111）。null=純入出金が未計測で算出不能。undefined=change_pct と同じ理由で率を出せない（start_value_jpy が 0、current_value_jpy の 1% 未満、期初始値の解決欠損で start_value_jpy が過小、現在価格の解決欠損で current_value_jpy が過小、または現物・信用の約定の取得の不足で期初の保有がずれている。理由は change_pct_unavailable_reason）。change_pct と抑止条件が共通なので必ず両方同時に起きる',
 			),
 		period_start: z.string().describe('期間の開始日時（ISO8601 JST）'),
 		period_end: z.string().describe('期間の終了日時（ISO8601 JST）'),
@@ -637,7 +638,7 @@ const PeriodPerformanceSchema = z
 				'現在評価額（current_value_jpy）の算出時に現在 ticker 価格を解決できなかった暗号資産シンボル一覧（小文字・昇順・重複なし、#109）。該当資産は current_value_jpy に含まれていない（過小）ので、change_jpy = current_value_jpy - start_value_jpy も同じ額だけ過小になる。現在価格は tickers_jpy を 1 回叩いて全銘柄ぶんを取るため、**このリストに保有暗号資産が全て並んでいる場合は ticker 取得そのものが失敗している**（現在評価額が JPY 残高だけに縮退し、増減額は「口座が消し飛んだ」ように見える偽の巨額損失になる）。同じ銘柄集合は total_unrealized_pnl / total_cost_basis からも除外される（現在価格を引けた銘柄だけを積むガード）。3 期間で同じ値になる（現在価格は期間に依存しない）。JPY のみ保有・全て解決できた場合は undefined。資産名のみ出し金額は出さない（unpriced_start_assets / unpriced_flow_assets と同じ粒度）',
 			),
 		change_pct_unavailable_reason: PortfolioChangePctUnavailableReasonEnum.optional().describe(
-			'change_pct / adjusted_change_pct を出せなかった理由。trades_truncated=現物の約定履歴の取得が打ち切られ（tradesTruncated=true）、直近の約定を巻き戻せず期初の保有がずれている（start_value_jpy / change_jpy / adjusted_change_jpy も読めず、ずれの向きは確定しないので change_jpy_overstated / change_jpy_understated は付かない）、start_value_zero=期初評価額が 0、start_value_negligible=期初評価額が現在評価額の 1% 未満（相対基準。絶対額固定は口座規模に依存するため採らない）、start_boundary_unpriced=期初の始値を解決できなかった暗号資産があり期初評価額が過小（unpriced_start_assets を参照。start_value_negligible とは原因が異なる）、current_value_unpriced=現在 ticker 価格を解決できなかった保有があり現在評価額が過小（unpriced_current_assets を参照。分母ではなく分子が壊れる系統）。設定されている場合 change_pct は undefined で、adjusted_change_pct は undefined（純入出金が未計測なら null が優先）。増減額 change_jpy / adjusted_change_jpy はどの理由でも出るが、**成績として読めるのは start_value_zero / start_value_negligible のときだけ**（期初評価額が本当に小さいだけで分子は正しい）。trades_truncated / start_boundary_unpriced / current_value_unpriced では分子も同じ欠損の影響を受けるため読めない（ずれの向きが確定する期間には change_jpy_overstated=true / change_jpy_understated=true が付く。付かない期間は「正しい」ではなく「向きが確定しない」）。複数の理由が同時に成立しうるため優先順位は trades_truncated > start_boundary_unpriced > current_value_unpriced > start_value_zero > start_value_negligible で固定してある（増減額へ誘導しない系を必ず先に選ぶ。詳細は PortfolioChangePctUnavailableReasonEnum の doc）。率を出せている場合は undefined',
+			'change_pct / adjusted_change_pct を出せなかった理由。trades_truncated=現物の約定履歴の取得が打ち切られ（tradesTruncated=true）、直近の約定を巻き戻せず期初の保有がずれている（start_value_jpy / change_jpy / adjusted_change_jpy も読めず、ずれの向きは確定しないので change_jpy_overstated / change_jpy_understated は付かない）、margin_trades_incomplete=信用の約定履歴を取得しきれず（marginTradesTruncated / marginFetchFailed）、期間中の信用の決済損益を JPY 残高から巻き戻せていない可能性がある（読めない範囲とフラグの扱いは trades_truncated と同じ。issue #446）、start_value_zero=期初評価額が 0、start_value_negligible=期初評価額が現在評価額の 1% 未満（相対基準。絶対額固定は口座規模に依存するため採らない）、start_boundary_unpriced=期初の始値を解決できなかった暗号資産があり期初評価額が過小（unpriced_start_assets を参照。start_value_negligible とは原因が異なる）、current_value_unpriced=現在 ticker 価格を解決できなかった保有があり現在評価額が過小（unpriced_current_assets を参照。分母ではなく分子が壊れる系統）。設定されている場合 change_pct は undefined で、adjusted_change_pct は undefined（純入出金が未計測なら null が優先）。増減額 change_jpy / adjusted_change_jpy はどの理由でも出るが、**成績として読めるのは start_value_zero / start_value_negligible のときだけ**（期初評価額が本当に小さいだけで分子は正しい）。trades_truncated / margin_trades_incomplete / start_boundary_unpriced / current_value_unpriced では分子も同じ欠損の影響を受けるため読めない（ずれの向きが確定する期間には change_jpy_overstated=true / change_jpy_understated=true が付く。付かない期間は「正しい」ではなく「向きが確定しない」）。複数の理由が同時に成立しうるため優先順位は trades_truncated > margin_trades_incomplete > start_boundary_unpriced > current_value_unpriced > start_value_zero > start_value_negligible で固定してある（増減額へ誘導しない系を必ず先に選ぶ。詳細は PortfolioChangePctUnavailableReasonEnum の doc）。率を出せている場合は undefined',
 		),
 		change_jpy_overstated: z
 			.boolean()
@@ -819,12 +820,12 @@ export const AnalyzeMyPortfolioMetaSchema = z.object({
 	marginTradesTruncated: z
 		.boolean()
 		.describe(
-			'信用約定履歴の取得が不完全（paginateMarginTrades が MAX_PAGES / API エラー / lastTs 欠損などで途中終了）。true のとき信用 PnL が不正確な可能性。',
+			'信用約定履歴の取得が不完全（paginateMarginTrades が MAX_PAGES / API エラー / lastTs 欠損などで途中終了）。true のとき信用 PnL が不正確な可能性。期初の保有の巻き戻しにも信用の決済損益を使うので、*_performance は change_pct_unavailable_reason=margin_trades_incomplete になり、*_equity_series もずれうる（issue #446）。',
 		),
 	marginFetchFailed: z
 		.boolean()
 		.describe(
-			'信用約定 API（type=margin）が途中で失敗した。true のとき margin_realized_pnl=0 が「信用未使用」ではなく「取得失敗による欠落」を意味する点に注意。',
+			'信用約定 API（type=margin）が途中で失敗した。true のとき margin_realized_pnl=0 が「信用未使用」ではなく「取得失敗による欠落」を意味する点に注意。期間成績も信用の決済損益を巻き戻せないので change_pct_unavailable_reason=margin_trades_incomplete になる。',
 		),
 	marginStatusFetchFailed: z
 		.boolean()
@@ -898,7 +899,7 @@ export const AnalyzeMyPortfolioMetaSchema = z.object({
 		.array(z.enum(['daily', 'monthly', 'yearly']))
 		.optional()
 		.describe(
-			'増減率（change_pct / adjusted_change_pct）を出さなかった期間の一覧。期初評価額が 0、現在評価額の 1% 未満、期初始値の解決欠損、現在価格の解決欠損、または現物約定の取得の打ち切りで率が意味を持たない期間が対象で、期間ごとの理由コードは *_performance.change_pct_unavailable_reason に載る。理由が trades_truncated / start_boundary_unpriced / current_value_unpriced の期間では増減額（change_jpy / adjusted_change_jpy）も同じ欠損の影響を受けるので、代わりに増減額を読むことはできない（ずれの向きは *_performance.change_jpy_overstated / change_jpy_understated を参照）。該当なしのときは undefined（「全期間で率が出ている」の意味であり、率がゼロという意味ではない）。',
+			'増減率（change_pct / adjusted_change_pct）を出さなかった期間の一覧。期初評価額が 0、現在評価額の 1% 未満、期初始値の解決欠損、現在価格の解決欠損、または現物・信用の約定の取得の不足で率が意味を持たない期間が対象で、期間ごとの理由コードは *_performance.change_pct_unavailable_reason に載る。理由が trades_truncated / margin_trades_incomplete / start_boundary_unpriced / current_value_unpriced の期間では増減額（change_jpy / adjusted_change_jpy）も同じ欠損の影響を受けるので、代わりに増減額を読むことはできない（ずれの向きは *_performance.change_jpy_overstated / change_jpy_understated を参照）。該当なしのときは undefined（「全期間で率が出ている」の意味であり、率がゼロという意味ではない）。',
 		),
 	warnings: z
 		.array(z.string())

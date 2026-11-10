@@ -23,6 +23,7 @@ import {
 	PERFORMANCE_NOTE_CHANGE_DIRECTION_UNKNOWN,
 	PERFORMANCE_NOTE_CHANGE_OVERSTATED,
 	PERFORMANCE_NOTE_CHANGE_UNDERSTATED,
+	PERFORMANCE_NOTE_MARGIN_TRADES_INCOMPLETE,
 	PERFORMANCE_NOTE_TRADES_TRUNCATED,
 	type PortfolioPerformanceContext,
 	qtyInvariantHolds,
@@ -2363,6 +2364,89 @@ describe('buildPeriodPerformance', () => {
 	});
 
 	// 分母がゼロでさえなければ通すガードでは、年初にほぼ空だった口座に入金して運用を始めると 5 桁の百分率が出るので、期初評価額が現在評価額の 1% 未満（`MIN_START_VALUE_RATIO`）なら率を抑止する（#71）。
+	describe('信用の決済損益の巻き戻し（issue 446）', () => {
+		// 月初の JPY 100 万円、今月の信用の実現益 +10 万円、現物約定と入出金は無し、現在の JPY 110 万円。
+		const spec = { key: 'monthly' as const, startMs: 1000, startIso: '2026-05-01T00:00:00+09:00' };
+		const closeTrade = makeMarginTrade({
+			side: 'sell',
+			position_side: 'long',
+			profit_loss: '100000',
+			interest: '0',
+			fee_occurred_amount_quote: '120',
+			executed_at: 5000,
+		});
+		function ctxWith(overrides: Partial<PortfolioPerformanceContext>) {
+			return makeCtx({
+				currentHoldings: [{ asset: 'jpy', amount: '1100000' }],
+				dwData: makeEmptyDw(),
+				currentValue: 1_100_000,
+				...overrides,
+			});
+		}
+
+		it('期間中の信用の決済損益を JPY から巻き戻し、期初 100 万円・増減 +10 万円にする', () => {
+			const result = buildPeriodPerformance(spec, ctxWith({ marginTrades: [closeTrade] }));
+			expect(result.start_value_jpy).toBe(1_000_000);
+			expect(result.change_jpy).toBe(100_000);
+			expect(result.change_pct).toBe(10);
+		});
+
+		it('回帰の逆側: 信用約定を渡さないと期初に実現益が乗ったまま増減 0 になる', () => {
+			const result = buildPeriodPerformance(spec, ctxWith({}));
+			expect(result.start_value_jpy).toBe(1_100_000);
+			expect(result.change_jpy).toBe(0);
+		});
+
+		it('手数料は profit_loss に控除済みなので引かず、利息は口座損益と同じく別に引く（issue 450 に合わせる）', () => {
+			const withInterest = { ...closeTrade, interest: '1000' };
+			const result = buildPeriodPerformance(
+				spec,
+				ctxWith({
+					currentHoldings: [{ asset: 'jpy', amount: '1099000' }],
+					currentValue: 1_099_000,
+					marginTrades: [withInterest],
+				}),
+			);
+			expect(result.start_value_jpy).toBe(1_000_000);
+			expect(result.change_jpy).toBe(99_000);
+		});
+
+		it('損失も同じく巻き戻す（損が消えない）', () => {
+			const loss = { ...closeTrade, profit_loss: '-50000' };
+			const result = buildPeriodPerformance(
+				spec,
+				ctxWith({ currentHoldings: [{ asset: 'jpy', amount: '950000' }], currentValue: 950_000, marginTrades: [loss] }),
+			);
+			expect(result.start_value_jpy).toBe(1_000_000);
+			expect(result.change_jpy).toBe(-50_000);
+		});
+
+		it('期間開始より前の決済と、新規（profit_loss が無い）の約定は巻き戻さない', () => {
+			const before = { ...closeTrade, executed_at: 500 };
+			const open = makeMarginTrade({ side: 'buy', position_side: 'long', executed_at: 6000 });
+			const result = buildPeriodPerformance(spec, ctxWith({ marginTrades: [before, open] }));
+			expect(result.start_value_jpy).toBe(1_100_000);
+		});
+
+		it('信用約定を取りきれなかったときは率を出さず margin_trades_incomplete を付ける', () => {
+			const result = buildPeriodPerformance(
+				spec,
+				ctxWith({ marginTrades: [closeTrade], marginTradesIncomplete: true }),
+			);
+			expect(result.change_pct).toBeUndefined();
+			expect(result.change_pct_unavailable_reason).toBe('margin_trades_incomplete');
+			expect(result.note).toBe(`${PERFORMANCE_NOTE}${PERFORMANCE_NOTE_MARGIN_TRADES_INCOMPLETE}`);
+		});
+
+		it('現物の打ち切りと重なったら trades_truncated を優先する', () => {
+			const result = buildPeriodPerformance(
+				spec,
+				ctxWith({ marginTrades: [closeTrade], marginTradesIncomplete: true, tradesTruncated: true }),
+			);
+			expect(result.change_pct_unavailable_reason).toBe('trades_truncated');
+		});
+	});
+
 	describe('現物約定の取得が打ち切られたとき（issue 447）', () => {
 		// 期間中に 1 BTC を 800 万円で購入。月初の始値と現在価格はどちらも 1,000 万円。現在の保有は 1 BTC、JPY 0 円。
 		const buy = makeTrade({
@@ -3490,6 +3574,29 @@ describe('buildEquitySeries — 入出金フローマーカー', () => {
 	) {
 		return buildEquitySeries(dates, currentHoldings, [], dw, new Map(), currentValueJpy, NOW_ISO, new Map(), pricing);
 	}
+
+	it('信用の決済損益も各点の JPY から巻き戻す（issue 446）', () => {
+		const close = makeMarginTrade({
+			side: 'sell',
+			position_side: 'long',
+			profit_loss: '100000',
+			interest: '0',
+			executed_at: jstMs(2026, 8, 2, 10),
+		});
+		const series = buildEquitySeries(
+			dailyPoints(2026, 8, 1, 3),
+			[{ asset: 'jpy', amount: '1100000' }],
+			[],
+			makeDwData(),
+			new Map(),
+			1_100_000,
+			NOW_ISO,
+			new Map(),
+			currentPriceOnly(),
+			[close],
+		);
+		expect(series.map((p) => p.value_jpy)).toEqual([1_000_000, 1_000_000, 1_100_000, 1_100_000]);
+	});
 
 	it('JPY 入金があった日の点に flow_jpy が付く', () => {
 		// 8/1〜8/3 の日次点 + 現在。8/2 に 500,000 円入金。

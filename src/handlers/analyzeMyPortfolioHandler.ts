@@ -153,6 +153,8 @@ const FLOW_UNAVAILABLE_NOTE: Record<PortfolioFlowUnavailableReason, string> = {
 const CHANGE_PCT_UNAVAILABLE_NOTE: Record<PortfolioChangePctUnavailableReason, string> = {
 	trades_truncated:
 		'現物の約定履歴の取得が打ち切られ、直近の約定を巻き戻せず期初の保有がずれているため。欠けた約定が期間内にあると率は運用成績を表さない',
+	margin_trades_incomplete:
+		'信用の約定履歴を取得しきれず、期間中の信用の決済損益を JPY 残高から巻き戻せていない可能性があるため',
 	start_value_zero: '期初評価額が 0 で率を定義できないため',
 	start_value_negligible: `期初評価額が現在評価額の ${MIN_START_VALUE_RATIO * 100}% 未満で、率が運用成績ではなく「期初がほぼ空だった」ことを表す数になるため`,
 	start_boundary_unpriced:
@@ -165,6 +167,8 @@ const CHANGE_PCT_UNAVAILABLE_NOTE: Record<PortfolioChangePctUnavailableReason, s
 const CHANGE_JPY_GUIDANCE_LINE: Record<PortfolioChangePctUnavailableReason, string> = {
 	trades_truncated:
 		'期初評価額と増減額（change_jpy / adjusted_change_jpy）も欠けた約定の分だけずれており、向きも確定できないので、成績として読まないでください。この期間の値動きはこの結果からは算出できません',
+	margin_trades_incomplete:
+		'期初評価額と増減額（change_jpy / adjusted_change_jpy）も信用の決済損益の分だけずれうるので、成績として読まないでください。この期間の値動きはこの結果からは算出できません',
 	start_value_zero: '増減額で読んでください',
 	start_value_negligible: '増減額で読んでください',
 	start_boundary_unpriced:
@@ -181,6 +185,8 @@ const CHANGE_JPY_DIRECTION_UNKNOWN_LINE =
 const CHANGE_JPY_GUIDANCE_WARNING: Record<PortfolioChangePctUnavailableReason, string> = {
 	trades_truncated:
 		'期初評価額と増減額（change_jpy / adjusted_change_jpy）も欠けた約定の分だけずれており、欠けたのが買いか売りかで向きが変わるため向きも確定できません。成績として読まないこと。該当期間の値動きはこの結果からは算出できません（資産推移シリーズも同じ巻き戻しを使うため代替になりません）',
+	margin_trades_incomplete:
+		'期初評価額と増減額（change_jpy / adjusted_change_jpy）も、巻き戻せなかった信用の決済損益の分だけずれている可能性があり、向きも確定できません。成績として読まないこと。該当期間の値動きはこの結果からは算出できません（資産推移シリーズも同じ巻き戻しを使うため代替になりません）',
 	start_value_zero: '増減額（change_jpy / adjusted_change_jpy）は出しているので成績はそちらで読むこと',
 	start_value_negligible: '増減額（change_jpy / adjusted_change_jpy）は出しているので成績はそちらで読むこと',
 	start_boundary_unpriced:
@@ -387,6 +393,7 @@ function buildPerformanceSectionLines(input: {
 	equitySeriesQuality: 'complete' | 'partial_fallback' | 'fallback_only' | 'jpy_only' | undefined;
 	equitySeriesFallbackAssets: readonly string[];
 	tradesTruncated: boolean;
+	marginTradesIncomplete: boolean;
 }): string[] {
 	const {
 		dailyPerformance,
@@ -398,6 +405,7 @@ function buildPerformanceSectionLines(input: {
 		equitySeriesQuality,
 		equitySeriesFallbackAssets,
 		tradesTruncated,
+		marginTradesIncomplete,
 	} = input;
 	const lines: string[] = [];
 	if (dailyPerformance) lines.push(...buildPerformanceLines('前日比', dailyPerformance));
@@ -408,6 +416,9 @@ function buildPerformanceSectionLines(input: {
 		lines.push(
 			'※ 期初評価額は約定・入出金を逆算して復元、期初始値で評価。暗号資産入出庫は入出庫日（入庫: confirmed_at / 出庫: requested_at）の始値で JPY 換算',
 		);
+		lines.push(
+			'※ 信用の決済損益（手数料控除後。利息は別に差し引く）は JPY 残高に反映されるので巻き戻し、増減に含める。信用建玉の含み損益は期初・現在の評価額のどちらにも含めない',
+		);
 		lines.push('※ 出金元本は外部フローとして除外、出金手数料はコストとして performance に含む');
 		// 上の 2 行が復元前提を語っているので、前提が満たせていないことをその直後に置く。
 		if (flowUnavailableReason != null) {
@@ -416,9 +427,15 @@ function buildPerformanceSectionLines(input: {
 			);
 		}
 	}
-	if (tradesTruncated && ((monthlyEquitySeries?.length ?? 0) > 0 || (yearlyEquitySeries?.length ?? 0) > 0)) {
+	const hasSeries = (monthlyEquitySeries?.length ?? 0) > 0 || (yearlyEquitySeries?.length ?? 0) > 0;
+	if (tradesTruncated && hasSeries) {
 		lines.push(
 			'※ 資産推移シリーズ: 現物の約定履歴の取得が打ち切られ、直近の約定を巻き戻せていません。各点の保有と評価額がずれているので、成績として読まないでください（tradesTruncated=true）',
+		);
+	}
+	if (marginTradesIncomplete && hasSeries) {
+		lines.push(
+			'※ 資産推移シリーズ: 信用の約定履歴を取得しきれず、信用の決済損益を JPY 残高から巻き戻せていない可能性があります。各点の評価額がずれうるので、成績として読まないでください',
 		);
 	}
 	if (monthlyEquitySeries && monthlyEquitySeries.length > 0) {
@@ -1106,6 +1123,7 @@ export default async function analyzeMyPortfolioHandler(args: {
 		const allMarginTrades = marginTradeResult.trades;
 		const marginTradesTruncated = marginTradeResult.truncated;
 		const marginFetchFailed = marginTradeResult.fetchFailed;
+		const marginTradesIncomplete = marginTradesTruncated || marginFetchFailed;
 		const marginStatusFetchFailed = marginAccountInfo.statusFetchFailed;
 		const marginPositionsFetchFailed = marginAccountInfo.positionsFetchFailed;
 
@@ -1294,6 +1312,8 @@ export default async function analyzeMyPortfolioHandler(args: {
 				nowIso: boundaries.nowIso,
 				flowUnavailableReason,
 				tradesTruncated,
+				marginTrades: allMarginTrades,
+				marginTradesIncomplete,
 			};
 			const performanceSpecs: PeriodSpec[] = [
 				{ key: 'yearly', startMs: boundaries.yearStartMs, startIso: boundaries.yearStartIso },
@@ -1322,6 +1342,7 @@ export default async function analyzeMyPortfolioHandler(args: {
 					boundaries.nowIso,
 					prices,
 					flowPricing,
+					allMarginTrades,
 				);
 			monthlyEquitySeries = equitySeriesOver(monthDates);
 			yearlyEquitySeries = equitySeriesOver(yearDates);
@@ -1404,6 +1425,7 @@ export default async function analyzeMyPortfolioHandler(args: {
 				equitySeriesQuality,
 				equitySeriesFallbackAssets,
 				tradesTruncated,
+				marginTradesIncomplete,
 			}),
 		);
 

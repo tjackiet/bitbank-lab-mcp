@@ -412,6 +412,58 @@ describe('analyze_my_portfolio', () => {
 		// 信用 fetch 失敗時は信用側 truncated 警告を抑止（メッセージ重複回避）
 		expect(result.summary).not.toContain('※ 約定履歴（信用）');
 		expect(result.summary).not.toContain('※ 約定履歴（現物 / 信用）');
+		// 信用の決済損益を巻き戻せないので、期間成績の率は出さない（issue 446）
+		for (const key of ['daily_performance', 'monthly_performance', 'yearly_performance'] as const) {
+			const perf = result.data[key] as { change_pct?: number; change_pct_unavailable_reason?: string };
+			expect(perf.change_pct).toBeUndefined();
+			expect(perf.change_pct_unavailable_reason).toBe('margin_trades_incomplete');
+		}
+		expect(result.summary).toContain('※ 資産推移シリーズ: 信用の約定履歴を取得しきれず');
+	});
+
+	it('期間中の信用の決済損益を期初の JPY から巻き戻す（issue 446）', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(Date.UTC(2026, 4, 16, 3, 0, 0, 0));
+		try {
+			const closeInMonth = {
+				trades: [
+					{
+						trade_id: 801,
+						pair: 'btc_jpy',
+						order_id: 8001,
+						side: 'sell',
+						position_side: 'long',
+						type: 'market',
+						amount: '0.01',
+						price: '15500000',
+						maker_taker: 'taker',
+						fee_amount_base: '0',
+						fee_amount_quote: '186',
+						fee_occurred_amount_quote: '186',
+						profit_loss: '100000',
+						interest: '1000',
+						executed_at: Date.UTC(2026, 4, 10, 3, 0, 0, 0),
+					},
+				],
+			};
+			setupFetchMock({ marginTrades: closeInMonth });
+			const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
+			const result = await handler({ include_technical: false, include_pnl: true, include_deposit_withdrawal: false });
+
+			assertOk(result);
+			expect(result.data.account_pnl?.margin_realized_pnl).toBe(100_000);
+			// このフィクスチャでは今月・今日とも現物の約定と入出金が無く、暗号資産は境界の始値を引けないので、期初評価額は JPY だけになる。
+			// 決済は 5/10 なので、月初比の期初は決済損益（profit_loss 100,000 − 利息 1,000）だけ小さく、前日比の期初には入らない。
+			const monthly = requireDefined(result.data.monthly_performance, 'monthly_performance');
+			const daily = requireDefined(result.data.daily_performance, 'daily_performance');
+			expect(daily.start_value_jpy - monthly.start_value_jpy).toBe(99_000);
+			expect(monthly.change_jpy - daily.change_jpy).toBe(99_000);
+			expect(result.summary).toContain(
+				'※ 信用の決済損益（手数料控除後。利息は別に差し引く）は JPY 残高に反映されるので巻き戻し',
+			);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('打ち切り (現物): summary に ※ 約定履歴（現物） が含まれ、meta.tradesTruncated === true', async () => {
