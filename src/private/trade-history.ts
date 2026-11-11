@@ -104,7 +104,7 @@ export function completenessNote(
 		const lastAt = toIsoMs(result.trades[result.trades.length - 1]?.executed_at ?? null);
 		const next =
 			lastAt != null
-				? `続きは ${direction.param} に ${lastAt}（取得した最後の約定の時刻。この約定は次の結果にも含まれます）を指定して取得してください`
+				? `続きは ${direction.param} に ${lastAt}（取得した最後の約定の時刻）を指定し、count を今回より大きくして取得してください。境界の時刻は含まれるので、同じ時刻の約定は重複して返ります（trade_id で除いてください）`
 				: `続きは ${direction.param} で期間を指定して取得してください`;
 		return `${INCOMPLETE_PREFIX}指定した件数（${limit}件）に達したので取得を止めました。これより${direction.word}${kept}約定もある可能性があります。${next}`;
 	}

@@ -631,7 +631,9 @@ describe('get_my_trade_history — ページネーション', () => {
 		expect(result.summary).toContain(
 			'※ 全件ではなく一部のみ取得されています。指定した件数（1000件）に達したので取得を止めました。これより古い現物約定もある可能性があります',
 		);
-		expect(result.summary).toContain(`続きは end に ${last}（取得した最後の約定の時刻。`);
+		expect(result.summary).toContain(
+			`続きは end に ${last}（取得した最後の約定の時刻）を指定し、count を今回より大きくして`,
+		);
 		expect(result.summary).not.toContain('API件数上限');
 	});
 
@@ -764,7 +766,11 @@ describe('get_my_trade_history — ページネーション', () => {
 		expect(result.summary).toContain('全件ではなく一部のみ取得されています');
 		const last = new Date(1710001999000).toISOString();
 		expect(result.summary).toContain('これより新しい現物約定もある可能性があります');
-		expect(result.summary).toContain(`続きは since に ${last}（取得した最後の約定の時刻。`);
+		expect(result.summary).toContain(
+			`続きは since に ${last}（取得した最後の約定の時刻）を指定し、count を今回より大きくして`,
+		);
+		// 境界の時刻は含まれるので、同じ時刻を渡すだけだと count が小さいとき同じ約定しか返らず進めない（PR 462 のレビュー）。
+		expect(result.summary).toContain('同じ時刻の約定は重複して返ります（trade_id で除いてください）');
 	});
 
 	it('asc: 全件同一 executed_at で進捗ゼロのとき isComplete=false で無限ループせず打ち切る', async () => {
