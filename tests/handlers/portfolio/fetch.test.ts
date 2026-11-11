@@ -806,11 +806,11 @@ describe('paginateDeposits / paginateWithdrawals — ページネーション境
 	it('入金: 100 件（満杯）+ 残り 2 ページで境界 dedup 込みで complete:true を返す', async () => {
 		const { fetchDepositWithdrawal } = await import('../../../src/handlers/portfolio/fetch.js');
 		const tBoundary = 1710000999000;
-		// crypto 入金: page1 100 件（うち末尾 3 件が同一 ts）+ page2 5 件（先頭 2 件重複 + 新規 3 件）
+		// API は新しい順に返す。crypto 入金: page1 100 件（うちいちばん古い末尾 3 件が同一 ts）+ page2 5 件（先頭 2 件重複 + 新規 3 件）
 		const cryptoPage1 = Array.from({ length: 100 }, (_, i) =>
 			makeDeposit({
 				uuid: `dep-${i + 1}`,
-				confirmed_at: i < 97 ? 1710000000000 + i * 1000 : tBoundary,
+				confirmed_at: i < 97 ? tBoundary + (97 - i) * 1000 : tBoundary,
 				asset: 'btc',
 			}),
 		);
@@ -819,7 +819,7 @@ describe('paginateDeposits / paginateWithdrawals — ページネーション境
 			makeDeposit({ uuid: 'dep-100', confirmed_at: tBoundary, asset: 'btc' }),
 			makeDeposit({ uuid: 'dep-101', confirmed_at: tBoundary, asset: 'btc' }),
 			makeDeposit({ uuid: 'dep-102', confirmed_at: tBoundary, asset: 'btc' }),
-			makeDeposit({ uuid: 'dep-103', confirmed_at: tBoundary + 1000, asset: 'btc' }),
+			makeDeposit({ uuid: 'dep-103', confirmed_at: tBoundary - 1000, asset: 'btc' }),
 		];
 
 		let cryptoPage = 0;
@@ -850,14 +850,15 @@ describe('paginateDeposits / paginateWithdrawals — ページネーション境
 		expect(new Set(uuids).size).toBe(uuids.length);
 		expect(result.isComplete).toBe(true);
 
-		// crypto deposit の 2 回目呼び出しの URL に since=tBoundary（+1 ではない）が含まれる
+		// crypto deposit の 2 回目呼び出しの URL に end=tBoundary（1ms 引かない）が含まれ、since は付けない
 		const fetchMock = fetcher as unknown as ReturnType<typeof vi.fn>;
 		const cryptoDepositCalls = fetchMock.mock.calls
 			.map((c) => c[0] as string)
 			.filter((u) => u.includes('deposit_history') && !u.includes('asset=jpy'));
 		expect(cryptoDepositCalls).toHaveLength(2);
-		expect(cryptoDepositCalls[1]).toContain(`since=${tBoundary}`);
-		expect(cryptoDepositCalls[1]).not.toContain(`since=${tBoundary + 1}`);
+		expect(cryptoDepositCalls[1]).toContain(`end=${tBoundary}`);
+		expect(cryptoDepositCalls[1]).not.toContain(`end=${tBoundary - 1}`);
+		expect(cryptoDepositCalls[1]).not.toContain('since=');
 	});
 
 	it('出金: 100 件（満杯）+ 残り 2 ページで境界 dedup 込みで complete:true を返す', async () => {
@@ -866,7 +867,7 @@ describe('paginateDeposits / paginateWithdrawals — ページネーション境
 		const cryptoWdPage1 = Array.from({ length: 100 }, (_, i) =>
 			makeWithdrawal({
 				uuid: `wd-${i + 1}`,
-				requested_at: i < 98 ? 1710000000000 + i * 1000 : tBoundary,
+				requested_at: i < 98 ? tBoundary + (98 - i) * 1000 : tBoundary,
 				asset: 'btc',
 			}),
 		);
@@ -874,7 +875,7 @@ describe('paginateDeposits / paginateWithdrawals — ページネーション境
 			makeWithdrawal({ uuid: 'wd-99', requested_at: tBoundary, asset: 'btc' }),
 			makeWithdrawal({ uuid: 'wd-100', requested_at: tBoundary, asset: 'btc' }),
 			makeWithdrawal({ uuid: 'wd-101', requested_at: tBoundary, asset: 'btc' }),
-			makeWithdrawal({ uuid: 'wd-102', requested_at: tBoundary + 1000, asset: 'btc' }),
+			makeWithdrawal({ uuid: 'wd-102', requested_at: tBoundary - 1000, asset: 'btc' }),
 		];
 
 		let cryptoPage = 0;
@@ -909,8 +910,9 @@ describe('paginateDeposits / paginateWithdrawals — ページネーション境
 			.map((c) => c[0] as string)
 			.filter((u) => u.includes('withdrawal_history') && !u.includes('asset=jpy'));
 		expect(cryptoWdCalls).toHaveLength(2);
-		expect(cryptoWdCalls[1]).toContain(`since=${tBoundary}`);
-		expect(cryptoWdCalls[1]).not.toContain(`since=${tBoundary + 1}`);
+		expect(cryptoWdCalls[1]).toContain(`end=${tBoundary}`);
+		expect(cryptoWdCalls[1]).not.toContain(`end=${tBoundary - 1}`);
+		expect(cryptoWdCalls[1]).not.toContain('since=');
 	});
 
 	it('JPY/crypto 間で同一 uuid の入金は重複排除される（fetchDepositWithdrawal レベルの dedup を維持）', async () => {
