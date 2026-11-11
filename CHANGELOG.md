@@ -18,6 +18,7 @@
 - `get_orderbook` / `prepare_depth_data` / `detect_whale_events` / `get_depth`（内部）：板の最良売りが最良買い以下（交差）のときは、中値・スプレッド（`get_orderbook` の pressure は中値を基準にした帯域、`detect_whale_events` は中値からの距離）を出さず、「板が交差しています。サーキットブレイク中など連続取引ではない可能性」という warning を本文の先頭と `meta.warning` に出す。ドキュメント（public-api.md の Depth）は、サーキットブレイク中で予想価格があるときは買いと売りの価格が交差しうるとしている。`preview_order`：ticker の `sell <= buy` のとき（Ticker のドキュメント: 連続取引以外では起こりうる）は、指値が板を跨ぐかを判定せず maker 想定で見積もり、その旨を本文に出す（issue #458 項目 5）。
 - `get_margin_trade_history` / `analyze_my_portfolio`：約定履歴の取得で、ドキュメントのパラメータ表に無い `type=margin` を送るのをやめる。`get_margin_positions`：`GET /user/margin/positions` は Parameters: None なので、`pair` を API に送るのをやめ、全建玉を取ってから絞る。どちらも従来からクライアント側で絞り直していたので結果は変わらない。API が未知のパラメータを拒否するようになったときに取得が失敗するのを防ぐ（issue #458 項目 3）。
 - `get_my_orders`：`count` を既定値（100）でも API に送る。`active_orders` の `count` の既定値はドキュメントに無い（issue #458 項目 2）。
+- `get_my_trade_history` / `get_margin_trade_history`：取得が全件でないときの注記を「全件ではなく一部のみ取得されています。API件数上限に達した可能性があります」から、止めた理由ごとの文面に変える。指定した `count` に届いて止めたときは「指定した件数（N件）に達したので取得を止めました。これより古い（`asc` なら新しい）約定もある可能性があります」と書き、続きを取るときに `end`（`asc` なら `since`）に渡す時刻（取得した最後の約定の時刻）と、境界の時刻は含まれるので `count` を増やして `trade_id` で重複を除くことを書く。ページの上限などで打ち切ったときは、これまでの「取得した約定 N件のうち…」の行に同じ前置きを付けて 1 行にまとめる。原因が API の上限であるかのように読め、指定した件数に届いただけでも出ていた（issue #458 の確認で見つかった）。
 
 ### Added
 

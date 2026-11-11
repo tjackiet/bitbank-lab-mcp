@@ -6,7 +6,7 @@ import type { RawTrade } from '../../src/handlers/portfolio/types.js';
 import { getDefaultClient } from '../../src/private/client.js';
 import { GetMyTradeHistoryInputSchema, GetMyTradeHistoryOutputSchema } from '../../src/private/schemas.js';
 import { failPrivateToolError } from '../../src/private/tool-error.js';
-import { fetchFilteredTradeHistory, mixedHistoryNote, scanBoundaryIso } from '../../src/private/trade-history.js';
+import { completenessNote, fetchFilteredTradeHistory, scanBoundaryIso } from '../../src/private/trade-history.js';
 import type { ToolDefinition } from '../../src/tool-definition.js';
 
 // 現物の手数料は売買とも quote 建て。base 建てが非ゼロのときだけ併記する。
@@ -84,11 +84,8 @@ export default async function getMyTradeHistory(args: {
 		const lines: string[] = [];
 		const pairLabel = pair ? formatPair(pair) : '全ペア';
 		lines.push(`約定履歴: ${pairLabel} ${trades.length}件`);
-		if (!isComplete) {
-			lines.push('※ 全件ではなく一部のみ取得されています。API件数上限に達した可能性があります');
-		}
-		const mixedNote = mixedHistoryNote(fetched, { kept: '現物', excluded: '信用', order, limit: count });
-		if (mixedNote) lines.push(mixedNote);
+		const note = completenessNote(fetched, { kept: '現物', excluded: '信用', order, limit: count });
+		if (note) lines.push(note);
 
 		if (trades.length > 0) {
 			lines.push('');
