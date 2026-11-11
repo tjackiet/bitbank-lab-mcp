@@ -62,26 +62,33 @@ export function useConfirmApp(
 		// connect() が pending のままアンマウントされると .then() は cleanup の後に走るので、破棄済みなら hydration を開始しない（#29）。
 		let disposed = false;
 		const connecting = mcpApp.connect();
-		// 取り直しの途中で新しい push が届いたら、古い取り直しの結果を捨てる。
-		let pushSeq = 0;
-
-		mcpApp.ontoolresult = (params) => {
-			if (!applyPreviewResult(params?.structuredContent, params?._meta)) return;
-			const seq = ++pushSeq;
+		// 取り直しの途中で新しい preview が届いたら、古い取り直しの結果を捨てる。
+		let previewSeq = 0;
+		const recoverConfirmation = (
+			structured: unknown,
+			meta: unknown,
+			sources: ReadonlyArray<() => Promise<unknown>>,
+		): void => {
+			const seq = ++previewSeq;
 			void connecting.then(
 				() =>
 					pullConfirmationIfMissing({
-						structured: params?.structuredContent,
-						meta: params?._meta,
-						sources: [fetchSnapshot, fetchConfirmationResource],
+						structured,
+						meta,
+						sources,
 						apply: (result) => {
 							const snapshot = result as { structuredContent?: unknown; _meta?: unknown };
 							applyPreviewResult(snapshot.structuredContent, snapshot._meta);
 						},
-						isAborted: () => disposed || seq !== pushSeq,
+						isAborted: () => disposed || seq !== previewSeq,
 					}),
 				() => undefined,
 			);
+		};
+
+		mcpApp.ontoolresult = (params) => {
+			if (!applyPreviewResult(params?.structuredContent, params?._meta)) return;
+			recoverConfirmation(params?.structuredContent, params?._meta, [fetchSnapshot, fetchConfirmationResource]);
 		};
 
 		mcpApp.onhostcontextchanged = (ctx) => {
@@ -109,11 +116,13 @@ export function useConfirmApp(
 					apply: (result) => {
 						// get_ui_snapshot も同じ `_meta` 契約でトークンを返す（有効化ゲートはサーバー側で再判定される）。
 						const snapshot = result as { structuredContent?: unknown; _meta?: unknown };
-						applyPreviewResult(snapshot.structuredContent, snapshot._meta);
+						const applied = applyPreviewResult(snapshot.structuredContent, snapshot._meta);
 						// 取り込めなかったら失敗として throw する。resolve したまま終わるとリトライも failed 表示も起きず「復元中」のまま固まる（#29）。
 						if (!hasPreviewRef.current) {
 							throw new Error('snapshot did not contain a usable preview');
 						}
+						// スナップショットは取り直したばかりなので、トークンが無ければ残りの経路（リソース）だけを試す。
+						if (applied) recoverConfirmation(snapshot.structuredContent, snapshot._meta, [fetchConfirmationResource]);
 					},
 					onPhase: setHydrationPhase,
 				});

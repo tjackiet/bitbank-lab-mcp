@@ -136,6 +136,11 @@ describe('E2E: MCP Apps `_meta` 経由の確認トークン配送', () => {
 		};
 
 		const pushed = preview._meta?.[CONFIRMATION_META_KEY] as { confirmation_token?: string } | undefined;
+		expect((preview.structuredContent as { ok?: boolean } | undefined)?.ok).toBe(true);
+		expect(pushed?.confirmation_token).toEqual(expect.any(String));
+		expect(pushed?.confirmation_token).not.toBe('');
+		// カードは expires_at が有限の数でないトークンを読み捨てるので、ここまで確かめる。
+		expect(Number.isFinite(body.confirmation?.expires_at)).toBe(true);
 		expect(body.confirmation?.confirmation_token).toBe(pushed?.confirmation_token);
 		expect(body.structuredContent).toEqual(preview.structuredContent);
 
