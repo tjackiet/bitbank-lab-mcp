@@ -736,10 +736,9 @@ drift 時に「ミラー要更新」issue を起票する。
 
 | 境界 | 対象 |
 |---|---|
-| `src/handlers/portfolio/fetch.ts` `paginateTrades` / `paginateMarginTrades` | `trades[].pair` |
+| `src/handlers/portfolio/fetch.ts` `paginateAllTrades` | `trades[].pair` |
 | `lib/tickers.ts` `fetchTickerPricesMap` | `tickers_jpy` の `data[].pair`（価格マップのキー源） |
-| `tools/private/get_my_trade_history.ts` | 単発リクエスト経路の `trades[].pair`（ページネーション経路は `paginateTrades` 側） |
-| `tools/private/get_margin_trade_history.ts` | 単発・ページネーション両経路の `trades[].pair` |
+| `src/private/trade-history.ts` `fetchFilteredTradeHistory`（`get_my_trade_history` / `get_margin_trade_history`） | `trades[].pair` |
 | `tools/private/get_my_orders.ts` | `active_orders` の `orders[].pair` |
 | `tools/private/get_margin_positions.ts` | `margin/positions` の `positions[].pair` |
 | `tools/private/get_margin_status.ts` | `margin/status` の `available_balances[].pair` |
@@ -750,7 +749,7 @@ drift 時に「ミラー要更新」issue を起票する。
 
 `src/handlers/portfolio/fetch.ts` の `fetchCandlePriceData` は API レスポンスの受け口ではなく
 **呼び出し元由来の pair を受けるだけ**なので正規化しない（`analyzeMyPortfolioHandler` は正規化済み
-asset から組んだ `${asset}_jpy` と `paginateTrades` が正規化した `t.pair` のみを渡す）。
+asset から組んだ `${asset}_jpy` と `paginateAllTrades` が正規化した `t.pair` のみを渡す）。
 
 ### 取得境界でやらないこと
 

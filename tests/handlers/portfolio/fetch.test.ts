@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { dayjs } from '../../../lib/datetime.js';
 import { fail, ok } from '../../../lib/result.js';
-import { paginateMarginTrades, paginateTrades } from '../../../src/handlers/portfolio/fetch.js';
+import { paginateAllTrades } from '../../../src/handlers/portfolio/fetch.js';
 import type { FlowValuationTarget } from '../../../src/handlers/portfolio/types.js';
 import type { GetCandlesData, GetCandlesMeta } from '../../../src/schemas.js';
 import getCandles from '../../../tools/get_candles.js';
@@ -113,7 +113,7 @@ function candlesFail(errorType = 'upstream') {
 	return fail(`get_candles failed (${errorType})`, errorType);
 }
 
-describe('paginateTrades — ページネーション境界', () => {
+describe('paginateAllTrades — 現物の振り分けとページネーション境界', () => {
 	it('ページ境界に同一 executed_at のレコードが跨っていても全件取得できる', async () => {
 		// executed_at + 1 を次ページ since にすると、ページ末尾と次ページ先頭に同じ executed_at があるとき取りこぼす。page1 末尾 3 件（id 998-1000）と page2 先頭 2 件（id 998, 1000）が同一 ts で、page2 には同一 ts の新規 id 1001-1003 もある。
 		const tBoundary = 1710000999000;
@@ -137,10 +137,10 @@ describe('paginateTrades — ページネーション境界', () => {
 		]);
 		const client = new BitbankPrivateClient({ fetcher });
 
-		const result = await paginateTrades(client);
+		const result = await paginateAllTrades(client);
 		// 全 1003 件（page1 1000 + page2 新規 3）が取得され、重複 2 件は dedup される
-		expect(result.trades).toHaveLength(1003);
-		const ids = result.trades.map((t) => t.trade_id);
+		expect(result.spotTrades).toHaveLength(1003);
+		const ids = result.spotTrades.map((t) => t.trade_id);
 		expect(ids).toContain(1001);
 		expect(ids).toContain(1002);
 		expect(ids).toContain(1003);
@@ -170,10 +170,10 @@ describe('paginateTrades — ページネーション境界', () => {
 		]);
 		const client = new BitbankPrivateClient({ fetcher });
 
-		const result = await paginateTrades(client);
+		const result = await paginateAllTrades(client);
 		// 1000 (page1) + 997 (page2 新規) = 1997 件
-		expect(result.trades).toHaveLength(1997);
-		const ids = result.trades.map((t) => t.trade_id);
+		expect(result.spotTrades).toHaveLength(1997);
+		const ids = result.spotTrades.map((t) => t.trade_id);
 		expect(new Set(ids).size).toBe(ids.length);
 		expect(result.truncated).toBe(false);
 	});
@@ -189,8 +189,8 @@ describe('paginateTrades — ページネーション境界', () => {
 		]);
 		const client = new BitbankPrivateClient({ fetcher });
 
-		const result = await paginateTrades(client);
-		expect(result.trades).toHaveLength(1000);
+		const result = await paginateAllTrades(client);
+		expect(result.spotTrades).toHaveLength(1000);
 		expect(result.truncated).toBe(true);
 		// MAX_PAGES (10) より早く打ち切られたことを確認（page1 + 1 回目の重複検出 = 2 回）
 		expect(calls.length).toBeLessThan(10);
@@ -210,8 +210,8 @@ describe('paginateTrades — ページネーション境界', () => {
 		]);
 		const client = new BitbankPrivateClient({ fetcher });
 
-		const result = await paginateTrades(client);
-		expect(result.trades).toHaveLength(1500);
+		const result = await paginateAllTrades(client);
+		expect(result.spotTrades).toHaveLength(1500);
 		expect(result.truncated).toBe(false);
 		expect(calls.length).toBe(2);
 	});
@@ -220,8 +220,8 @@ describe('paginateTrades — ページネーション境界', () => {
 		const { fetcher } = makeSequentialFetcher([mockBitbankSuccess({ trades: [] })]);
 		const client = new BitbankPrivateClient({ fetcher });
 
-		const result = await paginateTrades(client);
-		expect(result.trades).toHaveLength(0);
+		const result = await paginateAllTrades(client);
+		expect(result.spotTrades).toHaveLength(0);
 		expect(result.truncated).toBe(false);
 	});
 
@@ -254,13 +254,13 @@ describe('paginateTrades — ページネーション境界', () => {
 		const { fetcher, calls } = makeSequentialFetcher(responses);
 		const client = new BitbankPrivateClient({ fetcher });
 
-		const result = await paginateTrades(client);
-		expect(result.trades).toHaveLength(9991);
+		const result = await paginateAllTrades(client);
+		expect(result.spotTrades).toHaveLength(9991);
 		// 前提: 件数が PAGE_SIZE の倍数ではない（9991 % 1000 = 991）
-		expect(result.trades.length % PAGE_SIZE).not.toBe(0);
+		expect(result.spotTrades.length % PAGE_SIZE).not.toBe(0);
 		expect(result.truncated).toBe(true);
 		expect(calls.length).toBe(MAX_PAGES);
-		const ids = result.trades.map((t) => t.trade_id);
+		const ids = result.spotTrades.map((t) => t.trade_id);
 		expect(new Set(ids).size).toBe(ids.length);
 	});
 
@@ -280,8 +280,8 @@ describe('paginateTrades — ページネーション境界', () => {
 		};
 		const client = new BitbankPrivateClient({ fetcher });
 
-		const result = await paginateTrades(client);
-		expect(result.trades).toHaveLength(1000);
+		const result = await paginateAllTrades(client);
+		expect(result.spotTrades).toHaveLength(1000);
 		expect(result.truncated).toBe(true);
 		expect(callIndex).toBe(2);
 	});
@@ -309,14 +309,14 @@ describe('paginateTrades — ページネーション境界', () => {
 		const { fetcher, calls } = makeSequentialFetcher([mockBitbankSuccess({ trades: fullPage })]);
 		const client = new BitbankPrivateClient({ fetcher });
 
-		const result = await paginateTrades(client);
-		expect(result.trades).toHaveLength(1000);
+		const result = await paginateAllTrades(client);
+		expect(result.spotTrades).toHaveLength(1000);
 		expect(result.truncated).toBe(true);
 		expect(calls.length).toBe(1);
 	});
 
 	it('信用約定 (position_side 付き) が混入したレスポンスから現物のみが返る', async () => {
-		// 公式 docs は position_side を「信用取引の時のみ」と明記しているが、API 挙動変更や信用約定の混入に備えて現物経路でも position_side == null で防御フィルタし、paginateMarginTrades の position_side != null と対称にして calcPnl と calcMarginPnl の二重計上を防ぐ。
+		// 公式 docs は position_side を「信用取引の時のみ」と明記しているが、API 挙動変更や信用約定の混入に備えて現物経路でも position_side == null で防御フィルタし、信用側（position_side != null）と対称に振り分けて calcPnl と calcMarginPnl の二重計上を防ぐ。
 		const mixed = [
 			makeTrade({ trade_id: 1, executed_at: 1710000000000 }),
 			// 信用約定（position_side='long'）。フィルタで除外されるべき
@@ -356,11 +356,11 @@ describe('paginateTrades — ページネーション境界', () => {
 		const { fetcher } = makeSequentialFetcher([mockBitbankSuccess({ trades: mixed })]);
 		const client = new BitbankPrivateClient({ fetcher });
 
-		const result = await paginateTrades(client);
-		expect(result.trades).toHaveLength(2);
-		const ids = result.trades.map((t) => t.trade_id);
+		const result = await paginateAllTrades(client);
+		expect(result.spotTrades).toHaveLength(2);
+		const ids = result.spotTrades.map((t) => t.trade_id);
 		expect(ids).toEqual([1, 4]);
-		for (const t of result.trades) {
+		for (const t of result.spotTrades) {
 			expect(t.position_side).toBeUndefined();
 		}
 		expect(result.truncated).toBe(false);
@@ -385,8 +385,8 @@ describe('paginateTrades — ページネーション境界', () => {
 		const { fetcher } = makeSequentialFetcher([mockBitbankSuccess({ trades: marginOnly })]);
 		const client = new BitbankPrivateClient({ fetcher });
 
-		const result = await paginateTrades(client);
-		expect(result.trades).toHaveLength(0);
+		const result = await paginateAllTrades(client);
+		expect(result.spotTrades).toHaveLength(0);
 		// batch.length (5) < TRADE_PAGE_SIZE (1000) で通常完了扱い
 		expect(result.truncated).toBe(false);
 	});
@@ -417,9 +417,9 @@ describe('paginateTrades — ページネーション境界', () => {
 		]);
 		const client = new BitbankPrivateClient({ fetcher });
 
-		const result = await paginateTrades(client);
-		expect(result.trades).toHaveLength(2);
-		const ids = result.trades.map((t) => t.trade_id);
+		const result = await paginateAllTrades(client);
+		expect(result.spotTrades).toHaveLength(2);
+		const ids = result.spotTrades.map((t) => t.trade_id);
 		expect(ids).toEqual([9001, 9002]);
 		expect(result.truncated).toBe(false);
 		// 2 ページ取得（早期打ち切りしていない）
@@ -429,7 +429,7 @@ describe('paginateTrades — ページネーション境界', () => {
 	});
 });
 
-describe('paginateMarginTrades — ページネーション境界', () => {
+describe('paginateAllTrades — 信用の振り分けとページネーション境界', () => {
 	it('ページ境界に同一 executed_at の信用約定が跨っていても全件取得できる', async () => {
 		const tBoundary = 1710000999000;
 		const page1 = Array.from({ length: 1000 }, (_, i) =>
@@ -452,10 +452,10 @@ describe('paginateMarginTrades — ページネーション境界', () => {
 		]);
 		const client = new BitbankPrivateClient({ fetcher });
 
-		const result = await paginateMarginTrades(client);
+		const result = await paginateAllTrades(client);
 		// 1000 (page1) + 2 新規 (id 1001, 1002) = 1002 件
-		expect(result.trades).toHaveLength(1002);
-		const ids = result.trades.map((t) => t.trade_id);
+		expect(result.marginTrades).toHaveLength(1002);
+		const ids = result.marginTrades.map((t) => t.trade_id);
 		expect(ids).toContain(1001);
 		expect(ids).toContain(1002);
 		expect(new Set(ids).size).toBe(ids.length);
@@ -476,8 +476,8 @@ describe('paginateMarginTrades — ページネーション境界', () => {
 		]);
 		const client = new BitbankPrivateClient({ fetcher });
 
-		const result = await paginateMarginTrades(client);
-		expect(result.trades).toHaveLength(1000);
+		const result = await paginateAllTrades(client);
+		expect(result.marginTrades).toHaveLength(1000);
 		expect(result.truncated).toBe(true);
 		expect(calls.length).toBeLessThan(10);
 	});
@@ -510,9 +510,9 @@ describe('paginateMarginTrades — ページネーション境界', () => {
 		const { fetcher, calls } = makeSequentialFetcher(responses);
 		const client = new BitbankPrivateClient({ fetcher });
 
-		const result = await paginateMarginTrades(client);
-		expect(result.trades).toHaveLength(9991);
-		expect(result.trades.length % PAGE_SIZE).not.toBe(0);
+		const result = await paginateAllTrades(client);
+		expect(result.marginTrades).toHaveLength(9991);
+		expect(result.marginTrades.length % PAGE_SIZE).not.toBe(0);
 		expect(result.truncated).toBe(true);
 		expect(calls.length).toBe(MAX_PAGES);
 	});
@@ -532,8 +532,8 @@ describe('paginateMarginTrades — ページネーション境界', () => {
 		};
 		const client = new BitbankPrivateClient({ fetcher });
 
-		const result = await paginateMarginTrades(client);
-		expect(result.trades).toHaveLength(1000);
+		const result = await paginateAllTrades(client);
+		expect(result.marginTrades).toHaveLength(1000);
 		expect(result.truncated).toBe(true);
 		// API エラーで break したパスを区別するフラグ
 		expect(result.fetchFailed).toBe(true);
@@ -563,8 +563,8 @@ describe('paginateMarginTrades — ページネーション境界', () => {
 		const { fetcher, calls } = makeSequentialFetcher([mockBitbankSuccess({ trades: fullPage })]);
 		const client = new BitbankPrivateClient({ fetcher });
 
-		const result = await paginateMarginTrades(client);
-		expect(result.trades).toHaveLength(1000);
+		const result = await paginateAllTrades(client);
+		expect(result.marginTrades).toHaveLength(1000);
 		expect(result.truncated).toBe(true);
 		// lastTs 欠損は API エラーではないので fetchFailed=false
 		expect(result.fetchFailed).toBe(false);
@@ -594,11 +594,11 @@ describe('paginateMarginTrades — ページネーション境界', () => {
 		const { fetcher } = makeSequentialFetcher([mockBitbankSuccess({ trades: mixed })]);
 		const client = new BitbankPrivateClient({ fetcher });
 
-		const result = await paginateMarginTrades(client);
-		expect(result.trades).toHaveLength(2);
-		const ids = result.trades.map((t) => t.trade_id);
+		const result = await paginateAllTrades(client);
+		expect(result.marginTrades).toHaveLength(2);
+		const ids = result.marginTrades.map((t) => t.trade_id);
 		expect(ids).toEqual([1, 3]);
-		for (const t of result.trades) {
+		for (const t of result.marginTrades) {
 			expect(t.position_side).toBeDefined();
 		}
 		expect(result.truncated).toBe(false);
@@ -621,8 +621,8 @@ describe('paginateMarginTrades — ページネーション境界', () => {
 		const { fetcher } = makeSequentialFetcher([mockBitbankSuccess({ trades: spotOnly })]);
 		const client = new BitbankPrivateClient({ fetcher });
 
-		const result = await paginateMarginTrades(client);
-		expect(result.trades).toHaveLength(0);
+		const result = await paginateAllTrades(client);
+		expect(result.marginTrades).toHaveLength(0);
 		expect(result.truncated).toBe(false);
 	});
 
@@ -651,9 +651,9 @@ describe('paginateMarginTrades — ページネーション境界', () => {
 		]);
 		const client = new BitbankPrivateClient({ fetcher });
 
-		const result = await paginateMarginTrades(client);
-		expect(result.trades).toHaveLength(2);
-		const ids = result.trades.map((t) => t.trade_id);
+		const result = await paginateAllTrades(client);
+		expect(result.marginTrades).toHaveLength(2);
+		const ids = result.marginTrades.map((t) => t.trade_id);
 		expect(ids).toEqual([9001, 9002]);
 		expect(result.truncated).toBe(false);
 		expect(calls.length).toBe(2);
@@ -683,8 +683,8 @@ describe('paginateMarginTrades — ページネーション境界', () => {
 		]);
 		const client = new BitbankPrivateClient({ fetcher });
 
-		const result = await paginateMarginTrades(client);
-		expect(result.trades).toHaveLength(0);
+		const result = await paginateAllTrades(client);
+		expect(result.marginTrades).toHaveLength(0);
 		expect(result.truncated).toBe(true);
 		// MAX_PAGES (10) より早く打ち切られる（初回 since=undefined → page1、since=sameTs → page2 で即打ち切り）
 		expect(calls.length).toBeLessThan(10);

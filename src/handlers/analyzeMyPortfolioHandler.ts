@@ -50,8 +50,7 @@ import {
 	fetchTickerPrices,
 	MAX_DEPOSIT_FLOW_PRICE_YEAR_CHUNKS,
 	MAX_WITHDRAWAL_FLOW_PRICE_YEAR_CHUNKS,
-	paginateMarginTrades,
-	paginateTrades,
+	paginateAllTrades,
 } from './portfolio/fetch.js';
 import {
 	assetCountLabel,
@@ -77,8 +76,6 @@ import type {
 	PeriodPerformance,
 	PeriodRealizedPnl,
 	RawAsset,
-	RawMarginTrade,
-	RawTrade,
 	TechnicalSummary,
 } from './portfolio/types.js';
 
@@ -1099,13 +1096,9 @@ export default async function analyzeMyPortfolioHandler(args: {
 		const boundaries = getJstPeriodBoundaries();
 
 		// 損益計算は全履歴で移動平均を回すので全期間を取得する。期間集計は各関数の sinceMs で絞る。
-		const tradePromise = include_pnl
-			? paginateTrades(client)
-			: Promise.resolve({ trades: [] as RawTrade[], truncated: false });
-
-		const marginTradePromise = include_pnl
-			? paginateMarginTrades(client)
-			: Promise.resolve({ trades: [] as RawMarginTrade[], truncated: false, fetchFailed: false });
+		const tradeHistoryPromise = include_pnl
+			? paginateAllTrades(client)
+			: Promise.resolve({ spotTrades: [], marginTrades: [], truncated: false, fetchFailed: false });
 
 		// 入出金履歴は表示セクションの有無ではなく損益計算に要るかで取得する（include_pnl=true なら必須の入力）。
 		const dwPromise =
@@ -1114,17 +1107,17 @@ export default async function analyzeMyPortfolioHandler(args: {
 		// 信用約定の取得とは独立して失敗しうるので別フラグで持つ。
 		const marginAccountInfoPromise = fetchMarginAccountInfo();
 
-		const [tradeResult, marginTradeResult, dwData, marginAccountInfo] = await Promise.all([
-			tradePromise,
-			marginTradePromise,
+		const [tradeHistory, dwData, marginAccountInfo] = await Promise.all([
+			tradeHistoryPromise,
 			dwPromise,
 			marginAccountInfoPromise,
 		]);
-		const allTrades = tradeResult.trades;
-		const tradesTruncated = tradeResult.truncated;
-		const allMarginTrades = marginTradeResult.trades;
-		const marginTradesTruncated = marginTradeResult.truncated;
-		const marginFetchFailed = marginTradeResult.fetchFailed;
+		// 現物と信用は同じ一覧から振り分けるので、打ち切りも取得失敗も両方に同じく効く。
+		const allTrades = tradeHistory.spotTrades;
+		const tradesTruncated = tradeHistory.truncated;
+		const allMarginTrades = tradeHistory.marginTrades;
+		const marginTradesTruncated = tradeHistory.truncated;
+		const marginFetchFailed = tradeHistory.fetchFailed;
 		const marginTradesIncomplete = marginTradesTruncated || marginFetchFailed;
 		const marginStatusFetchFailed = marginAccountInfo.statusFetchFailed;
 		const marginPositionsFetchFailed = marginAccountInfo.positionsFetchFailed;

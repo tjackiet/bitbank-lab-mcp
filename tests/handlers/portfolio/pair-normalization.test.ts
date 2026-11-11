@@ -1,4 +1,4 @@
-// calc 層は「pair は小文字」を前提に組んでおり、前提を担保するのは取得境界（`portfolio/fetch.ts` / `lib/tickers.ts`）だけなので、検証は必ず `paginateTrades` / `fetchTickerPricesMap` 経由で fetch 層を通した結果を calc 層へ流す形で行う（calc 側に `.toLowerCase()` を撒く実装へ退行するとこのテストは意味を失う）。
+// calc 層は「pair は小文字」を前提に組んでおり、前提を担保するのは取得境界（`portfolio/fetch.ts` / `lib/tickers.ts`）だけなので、検証は必ず `paginateAllTrades` / `fetchTickerPricesMap` 経由で fetch 層を通した結果を calc 層へ流す形で行う（calc 側に `.toLowerCase()` を撒く実装へ退行するとこのテストは意味を失う）。
 // `'BTC_JPY'.replace('_jpy', '')` は何も置換せず asset が `BTC_JPY` のまま Map キーになり、`calcPnl` はエラーにならず「取引履歴なし」に見えて平均取得単価・実現損益が静かに消える。現行 API は小文字を返すので、これは防御的正規化。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -9,7 +9,7 @@ import {
 	calcPortfolioValue,
 	reconstructHoldingsAtDate,
 } from '../../../src/handlers/portfolio/calc.js';
-import { paginateTrades } from '../../../src/handlers/portfolio/fetch.js';
+import { paginateAllTrades } from '../../../src/handlers/portfolio/fetch.js';
 import type { RawTrade } from '../../../src/handlers/portfolio/types.js';
 import { BitbankPrivateClient } from '../../../src/private/client.js';
 import { currentPriceOnly } from '../../_flowPricing.js';
@@ -39,8 +39,8 @@ const T_SELL = 1_710_000_100_000;
 async function fetchTrades(trades: unknown[]): Promise<RawTrade[]> {
 	const fetcher = (async () =>
 		new Response(JSON.stringify(mockBitbankSuccess({ trades })), { status: 200 })) as unknown as typeof fetch;
-	const result = await paginateTrades(new BitbankPrivateClient({ fetcher }));
-	return result.trades;
+	const result = await paginateAllTrades(new BitbankPrivateClient({ fetcher }));
+	return result.spotTrades;
 }
 
 /** 買い 1 BTC @10,000,000 → 売り 0.5 BTC @12,000,000。pair の大文字/小文字だけを差し替える。 */
