@@ -672,12 +672,53 @@ describe('get_my_deposit_withdrawal — 全件でないときの注記', () => {
 		const oldest = new Date(T0 + 7 * 1000).toISOString();
 		expect(result.summary).toContain('※ 全件ではなく一部のみ取得されています。');
 		expect(result.summary).toContain(
-			`入金/入庫履歴: 指定した件数（3件）に達したので取得を止めました。これより古い履歴もある可能性があります。続きは end に ${oldest}（取得したいちばん古い時刻）を指定して取得してください`,
+			`入金/入庫履歴: 指定した件数（3件）に達したので取得を止めました。これより古い履歴もある可能性があります。続きは end に ${oldest}（取得したいちばん古い時刻）を指定し、count を今回より大きくして（上限 100）取得してください`,
 		);
 		expect(result.summary).toContain(
 			'end は境界の時刻を含むので、同じ時刻の履歴は重複して返ります（uuid で除いてください）',
 		);
 		expect(result.summary).not.toContain('API件数上限');
+	});
+
+	it('count=1 で止まったときも、同じ 1 件を取り直すだけにならないよう count を増やす案内を書く', async () => {
+		fakeApi(
+			Array.from({ length: 3 }, (_, i) => dep(i, T0 + i * 1000)),
+			[],
+		);
+
+		const { default: getMyDepositWithdrawal } = await import('../../tools/private/get_my_deposit_withdrawal.js');
+		const result = await getMyDepositWithdrawal({
+			asset: 'jpy',
+			type: 'deposit',
+			since: new Date(T0).toISOString(),
+			count: 1,
+		});
+
+		assertOk(result);
+		expect(result.summary).toContain(
+			`続きは end に ${new Date(T0 + 2 * 1000).toISOString()}（取得したいちばん古い時刻）を指定し、count を今回より大きくして（上限 100）取得してください`,
+		);
+	});
+
+	it('count が上限の 100 で止まったときは、count を増やす案内を書かない', async () => {
+		fakeApi(
+			Array.from({ length: 150 }, (_, i) => dep(i, T0 + i * 1000)),
+			[],
+		);
+
+		const { default: getMyDepositWithdrawal } = await import('../../tools/private/get_my_deposit_withdrawal.js');
+		const result = await getMyDepositWithdrawal({
+			asset: 'jpy',
+			type: 'deposit',
+			since: new Date(T0).toISOString(),
+			count: 100,
+		});
+
+		assertOk(result);
+		expect(result.summary).toContain(
+			`続きは end に ${new Date(T0 + 50 * 1000).toISOString()}（取得したいちばん古い時刻）を指定して取得してください`,
+		);
+		expect(result.summary).not.toContain('count を今回より大きく');
 	});
 
 	it('期間を指定せずページ数の上限で打ち切ったら、その理由と続きの end を書く', async () => {

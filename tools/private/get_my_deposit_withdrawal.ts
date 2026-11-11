@@ -132,6 +132,9 @@ const FLOW_STOP_TEXT: Record<FlowStopReason, { text: (count: number) => string; 
 	},
 };
 
+// GetMyDepositWithdrawalInputSchema の count の上限とそろえる。
+const DW_COUNT_MAX = 100;
+
 function incompleteLines(parts: FlowPart[], count: number): string[] {
 	const lines: string[] = [];
 	let resumable = false;
@@ -145,7 +148,10 @@ function incompleteLines(parts: FlowPart[], count: number): string[] {
 		if (!stop) continue;
 		const at = stop.resumable ? toIsoMs(p.oldestMs) : null;
 		if (at != null) resumable = true;
-		const next = at != null ? `。続きは end に ${at}（取得したいちばん古い時刻）を指定して取得してください` : '';
+		// end は境界を含むので、count のまま取り直すと同じ時刻の行だけが返って先へ進まないことがある。
+		const widen = p.stopReason === 'count' && count < DW_COUNT_MAX;
+		const how = widen ? `し、count を今回より大きくして（上限 ${DW_COUNT_MAX}）` : 'して';
+		const next = at != null ? `。続きは end に ${at}（取得したいちばん古い時刻）を指定${how}取得してください` : '';
 		lines.push(`  ${p.label}: ${stop.text(count)}${next}`);
 	}
 	if (resumable) lines.push('  end は境界の時刻を含むので、同じ時刻の履歴は重複して返ります（uuid で除いてください）');
