@@ -1,5 +1,3 @@
-// URL は環境変数 TICKERS_JPY_URL で上書きできる（get_tickers_jpy と同じ先例）。
-
 import { toNum } from './conversions.js';
 import { BITBANK_API_BASE, fetchJson } from './http.js';
 import { normalizePairCode } from './pair-code.js';
@@ -16,7 +14,7 @@ export interface TickerPricesResult {
 
 // raw fetch のまま。fetchJson 系に移すと retry / 429 の挙動が変わるので対象外にしている。
 export async function fetchTickerPricesMap(): Promise<TickerPricesResult> {
-	const url = String(process.env.TICKERS_JPY_URL || `${BITBANK_API_BASE}/tickers_jpy`);
+	const url = `${BITBANK_API_BASE}/tickers_jpy`;
 	try {
 		const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
 		if (!res.ok) {
