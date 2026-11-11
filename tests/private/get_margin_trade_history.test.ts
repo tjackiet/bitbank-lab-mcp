@@ -247,73 +247,36 @@ describe('get_margin_trade_history', () => {
 		expect(result.summary).toContain('ショート 1件');
 	});
 
-	it('10 件超の trades で省略表示される', async () => {
-		const manyTrades = {
-			trades: Array.from({ length: 15 }, (_, i) => ({
-				trade_id: 400 + i,
-				pair: 'btc_jpy',
-				order_id: 4000 + i,
-				side: 'buy',
-				position_side: 'long',
-				type: 'limit',
-				amount: '0.01',
-				price: '15000000',
-				maker_taker: 'maker',
-				fee_amount_base: '0',
-				fee_amount_quote: '0',
-				executed_at: 1710000000000 + i * 1000,
-			})),
-		};
-		setupFetchMock(mockBitbankSuccess(manyTrades));
+	it('100 件を超えた分は本文に出さず、件数と明細を取るときの end を書く', async () => {
+		setupFetchMock(mockBitbankSuccess({ trades: generateMarginTrades(120, 400).reverse() }));
 
 		const { default: getMarginTradeHistory } = await import('../../tools/private/get_margin_trade_history.js');
-		const result = await getMarginTradeHistory({});
+		const result = await getMarginTradeHistory({ count: 120 });
 
 		assertOk(result);
-		expect(result.data.trades).toHaveLength(15);
-		expect(result.meta.tradeCount).toBe(15);
-		expect(result.summary).toContain('他 5件');
+		expect(result.data.trades).toHaveLength(120);
+		expect(result.meta.tradeCount).toBe(120);
+		expect(result.summary.match(/\[trade: /g)).toHaveLength(100);
+		expect(result.summary).toContain('[trade: 420 /');
+		expect(result.summary).not.toContain('[trade: 419 /');
+		const oldestShown = new Date(1710000000000 + 20 * 1000).toISOString();
+		expect(result.summary).toContain(
+			`... 他 20件（本文の明細は新しいほうから 100件まで。残りの 20件は ${oldestShown} 以前の約定です。`,
+		);
 	});
 
-	it('order=asc 時は末尾 10 件を表示する', async () => {
-		const manyTrades = {
-			trades: Array.from({ length: 12 }, (_, i) => ({
-				trade_id: 500 + i,
-				pair: 'btc_jpy',
-				order_id: 5000 + i,
-				side: 'buy',
-				position_side: 'long',
-				type: 'limit',
-				amount: '0.01',
-				price: '15000000',
-				maker_taker: 'maker',
-				fee_amount_base: '0',
-				fee_amount_quote: '0',
-				executed_at: 1710000000000 + i * 1000,
-			})),
-		};
-		setupFetchMock(mockBitbankSuccess(manyTrades));
+	it('order=asc でも本文には新しいほうの 100 件を出す', async () => {
+		setupFetchMock(mockBitbankSuccess({ trades: generateMarginTrades(105, 500) }));
 
 		const { default: getMarginTradeHistory } = await import('../../tools/private/get_margin_trade_history.js');
-		const result = await getMarginTradeHistory({ order: 'asc' });
+		const result = await getMarginTradeHistory({ order: 'asc', count: 105 });
 
 		assertOk(result);
-		// asc 時は末尾 10 件（trade_id 502〜511）が表示される
-		expect(result.summary).toContain('trade: 502');
-		expect(result.summary).not.toContain('trade: 500]');
-		expect(result.summary).not.toContain('trade: 501]');
-	});
-
-	// count の既定値はドキュメントに無いので、既定の件数でも省略しない（issue 458 項目 2）。
-	it('count が既定値 (20) でも API に送る', async () => {
-		setupFetchMock(mockBitbankSuccess({ trades: [] }));
-
-		const { default: getMarginTradeHistory } = await import('../../tools/private/get_margin_trade_history.js');
-		await getMarginTradeHistory({});
-
-		const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
-		const calledUrl = fetchMock.mock.calls[0][0] as string;
-		expect(calledUrl).toContain('count=20');
+		expect(result.summary).toContain('... 他 5件');
+		expect(result.summary).toContain('[trade: 505 /');
+		expect(result.summary).not.toContain('[trade: 504 /');
+		const oldestShown = new Date(1710000000000 + 5 * 1000).toISOString();
+		expect(result.summary).toContain(`end に ${oldestShown} を指定して取得してください`);
 	});
 
 	it('order が既定値 (desc) でも API に明示して送る', async () => {
@@ -683,6 +646,7 @@ describe('get_margin_trade_history — ページネーション', () => {
 		expect(result.meta.isComplete).toBe(false);
 		expect(result.summary).toContain('信用約定履歴: 全ペア 0件');
 		expect(result.summary).toContain('取得した約定 9020件はすべて現物で、信用約定はありませんでした');
+		expect(result.summary).toContain('取得するページ数の上限（10 ページ）まで調べて打ち切りました');
 		expect(result.summary).toContain('これより古い約定は取得していません');
 		// 続きを取れるよう、最後に調べた約定の時刻（最終ページの末尾）を end に渡す値として出す。
 		const boundary = new Date(1718992000000).toISOString();

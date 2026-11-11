@@ -484,6 +484,7 @@ describe('get_my_deposit_withdrawal — ページの境目と途中の失敗', (
 		expect(result.meta.isComplete).toBe(false);
 		expect(result.meta.hasWarnings).toBe(true);
 		expect(result.summary).toContain('取得状態: partial');
+		expect(result.summary).toContain('入金/入庫履歴: 取得に失敗しました（末尾の警告を参照）');
 	});
 });
 
@@ -604,5 +605,135 @@ describe('get_my_deposit_withdrawal — handler (toolDef)', () => {
 		const result = await toolDef.handler({});
 
 		expect((result as { ok: boolean }).ok).toBe(true);
+	});
+});
+
+describe('get_my_deposit_withdrawal — 全件でないときの注記', () => {
+	const T0 = 1_710_000_000_000;
+	const dep = (i: number, ts: number, asset = 'jpy') => ({
+		uuid: `dep-${i}`,
+		asset,
+		amount: '1000',
+		status: 'DONE',
+		found_at: ts,
+		confirmed_at: ts,
+	});
+	const wd = (i: number, ts: number) => ({
+		uuid: `wd-${i}`,
+		asset: 'jpy',
+		amount: '1000',
+		fee: '550',
+		status: 'DONE',
+		requested_at: ts,
+	});
+
+	// 実口座で確かめた振る舞い（期間の中で新しい順に count 件、since / end は境界を含む）だけを再現する。
+	function fakeApi(deposits: Array<ReturnType<typeof dep>>, withdrawals: Array<ReturnType<typeof wd>>) {
+		setupFetchMock({
+			customHandler: (url: string) => {
+				const params = new URL(url).searchParams;
+				const since = params.get('since');
+				const end = params.get('end');
+				const asset = params.get('asset');
+				const count = Number(params.get('count') ?? 100);
+				const isDeposit = url.includes('deposit_history');
+				const timeOf = (r: Record<string, unknown>) => Number(isDeposit ? r.confirmed_at : r.requested_at);
+				const rows = (isDeposit ? deposits : withdrawals)
+					.filter((r) => asset == null || r.asset === asset)
+					.filter((r) => (since == null || timeOf(r) >= Number(since)) && (end == null || timeOf(r) <= Number(end)))
+					.sort((x, y) => timeOf(y) - timeOf(x))
+					.slice(0, count);
+				return new Response(
+					JSON.stringify(mockBitbankSuccess(isDeposit ? { deposits: rows } : { withdrawals: rows })),
+					{
+						status: 200,
+					},
+				);
+			},
+		});
+	}
+
+	it('期間を指定して count 件に届いたら、止めた理由と続きの end を書く', async () => {
+		fakeApi(
+			Array.from({ length: 10 }, (_, i) => dep(i, T0 + i * 1000)),
+			[],
+		);
+
+		const { default: getMyDepositWithdrawal } = await import('../../tools/private/get_my_deposit_withdrawal.js');
+		const result = await getMyDepositWithdrawal({
+			asset: 'jpy',
+			type: 'deposit',
+			since: new Date(T0).toISOString(),
+			count: 3,
+		});
+
+		assertOk(result);
+		expect(result.meta.isComplete).toBe(false);
+		const oldest = new Date(T0 + 7 * 1000).toISOString();
+		expect(result.summary).toContain('※ 全件ではなく一部のみ取得されています。');
+		expect(result.summary).toContain(
+			`入金/入庫履歴: 指定した件数（3件）に達したので取得を止めました。これより古い履歴もある可能性があります。続きは end に ${oldest}（取得したいちばん古い時刻）を指定して取得してください`,
+		);
+		expect(result.summary).toContain(
+			'end は境界の時刻を含むので、同じ時刻の履歴は重複して返ります（uuid で除いてください）',
+		);
+		expect(result.summary).not.toContain('API件数上限');
+	});
+
+	it('期間を指定せずページ数の上限で打ち切ったら、その理由と続きの end を書く', async () => {
+		fakeApi(
+			[],
+			Array.from({ length: 1500 }, (_, i) => wd(i, T0 + i * 1000)),
+		);
+
+		const { default: getMyDepositWithdrawal } = await import('../../tools/private/get_my_deposit_withdrawal.js');
+		const result = await getMyDepositWithdrawal({ asset: 'jpy', type: 'withdrawal' });
+
+		assertOk(result);
+		expect(result.meta.isComplete).toBe(false);
+		const oldest = result.data.withdrawals.map((w) => w.requested_at ?? '').sort()[0];
+		expect(result.summary).toContain(
+			`出金/出庫履歴: 取得するページ数の上限（10 ページ）まで調べて打ち切りました。これより古い履歴は取得していません。続きは end に ${oldest}（取得したいちばん古い時刻）を指定して取得してください`,
+		);
+	});
+
+	it('同じ時刻の履歴で先へ進めずに打ち切ったら、その理由を書き、進めない end は案内しない', async () => {
+		fakeApi(
+			Array.from({ length: 150 }, (_, i) => dep(i, T0)),
+			[],
+		);
+
+		const { default: getMyDepositWithdrawal } = await import('../../tools/private/get_my_deposit_withdrawal.js');
+		const result = await getMyDepositWithdrawal({ asset: 'jpy', type: 'deposit' });
+
+		assertOk(result);
+		expect(result.meta.isComplete).toBe(false);
+		expect(result.summary).toContain(
+			'入金/入庫履歴: 同じ時刻の履歴が 1 ページ分を超えて並び、先へ進めずに打ち切りました。これより古い履歴は取得していません',
+		);
+		expect(result.summary).not.toContain('続きは end に');
+	});
+
+	it('全通貨で取得したときは、止まった履歴ごとに書き分ける', async () => {
+		fakeApi(
+			[
+				...Array.from({ length: 3 }, (_, i) => dep(i, T0 + i * 1000)),
+				...Array.from({ length: 3 }, (_, i) => dep(10 + i, T0 + (10 + i) * 1000, 'btc')),
+			],
+			[],
+		);
+
+		const { default: getMyDepositWithdrawal } = await import('../../tools/private/get_my_deposit_withdrawal.js');
+		const result = await getMyDepositWithdrawal({ type: 'all', since: new Date(T0).toISOString(), count: 2 });
+
+		assertOk(result);
+		expect(result.summary).toContain(
+			`暗号資産入庫履歴: 指定した件数（2件）に達したので取得を止めました。これより古い履歴もある可能性があります。続きは end に ${new Date(T0 + 11 * 1000).toISOString()}`,
+		);
+		expect(result.summary).toContain(
+			`JPY入金履歴: 指定した件数（2件）に達したので取得を止めました。これより古い履歴もある可能性があります。続きは end に ${new Date(T0 + 1000).toISOString()}`,
+		);
+		expect(result.summary).not.toContain('暗号資産出庫履歴:');
+		expect(result.summary).not.toContain('JPY出金履歴:');
 	});
 });

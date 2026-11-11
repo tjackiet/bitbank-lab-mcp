@@ -4,7 +4,13 @@ import { fail, ok } from '../../lib/result.js';
 import { getDefaultClient } from '../../src/private/client.js';
 import { GetMarginTradeHistoryInputSchema, GetMarginTradeHistoryOutputSchema } from '../../src/private/schemas.js';
 import { failPrivateToolError } from '../../src/private/tool-error.js';
-import { completenessNote, fetchFilteredTradeHistory, scanBoundaryIso } from '../../src/private/trade-history.js';
+import {
+	completenessNote,
+	fetchFilteredTradeHistory,
+	hiddenTradesNote,
+	scanBoundaryIso,
+	tradesToDisplay,
+} from '../../src/private/trade-history.js';
 import type { ToolDefinition } from '../../src/tool-definition.js';
 
 interface RawMarginTrade {
@@ -112,7 +118,7 @@ export default async function getMarginTradeHistory(args: {
 		if (trades.length > 0) {
 			lines.push('');
 
-			const displayTrades = order === 'asc' ? trades.slice(-10) : trades.slice(0, 10);
+			const displayTrades = tradesToDisplay(trades, order);
 			let shownClose = false;
 			for (const t of displayTrades) {
 				const sideLabel = t.side === 'buy' ? '買' : '売';
@@ -128,9 +134,8 @@ export default async function getMarginTradeHistory(args: {
 				);
 			}
 
-			if (trades.length > 10) {
-				lines.push(`... 他 ${trades.length - 10}件`);
-			}
+			const hiddenNote = hiddenTradesNote(trades.length, displayTrades, order);
+			if (hiddenNote) lines.push(hiddenNote);
 			if (shownClose) {
 				lines.push(
 					'※ 損益（profit_loss）は手数料控除後の値です。発生手数料は新規側と決済側の合計で、決済行にまとめて計上されます。利息（interest）は別に出しています（損益に含まれるかは確認できていません）',
@@ -170,7 +175,7 @@ export default async function getMarginTradeHistory(args: {
 export const toolDef: ToolDefinition = {
 	name: 'get_margin_trade_history',
 	description:
-		'[Margin Trades / 信用約定履歴] 信用取引の約定履歴（新規建て・決済）を取得。通貨ペア・期間・件数でフィルタ可能。決済時の実現損益・利息を含む。注意: since を信用新規建て後に指定すると決済約定のみが返る場合があります。Private API。',
+		'[Margin Trades / 信用約定履歴] 信用取引の約定履歴（新規建て・決済）を取得。通貨ペア・期間・件数でフィルタ可能。決済時の実現損益・利息を含む。本文に出す明細は新しいほうから 100 件まで（超えた分は件数と、明細を取るときに end に渡す時刻を書く）。注意: since を信用新規建て後に指定すると決済約定のみが返る場合があります。Private API。',
 	inputSchema: GetMarginTradeHistoryInputSchema,
 	handler: async (args: { pair?: string; count?: number; order?: 'asc' | 'desc'; since?: string; end?: string }) =>
 		getMarginTradeHistory(args),

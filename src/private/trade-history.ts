@@ -18,6 +18,7 @@ export interface FilteredTradeHistory<T> {
 	excluded: number;
 	// 件数に届かずページの上限などで打ち切ったときだけ入る。続きを取るときの end（desc）/ since（asc）。
 	scanBoundaryMs: number | null;
+	stopReason: 'page_limit' | 'stalled' | 'no_timestamp' | null;
 }
 
 // 約定履歴 API は現物と信用を混ぜて返し、分けるパラメータが無いので、絞った後の件数が limit に届くまで取り直す（#455）。
@@ -37,6 +38,7 @@ export async function fetchFilteredTradeHistory<T extends TradeRow>(
 	const cursorKey: 'since' | 'end' = order === 'desc' ? 'end' : 'since';
 	let cursor: string | undefined = baseParams[cursorKey];
 	let lastScannedTs: number | undefined;
+	let stopReason: FilteredTradeHistory<T>['stopReason'] = 'page_limit';
 
 	for (let page = 0; page < MAX_PAGES; page++) {
 		// 1 ページ目は要求件数だけ取る。混在で足りなかったときだけ、続きを上限件数でまとめて取る。
@@ -65,15 +67,22 @@ export async function fetchFilteredTradeHistory<T extends TradeRow>(
 				scanned: seenIds.size,
 				excluded,
 				scanBoundaryMs: null,
+				stopReason: null,
 			};
 		}
 
 		// 同じ時刻の行は次ページで取り直し、trade_id で重複を除く。
 		const lastTs = batch[batch.length - 1]?.executed_at;
-		if (!lastTs) break;
+		if (!lastTs) {
+			stopReason = 'no_timestamp';
+			break;
+		}
 		lastScannedTs = lastTs;
 		const nextCursor = String(lastTs);
-		if (nextCursor === cursor) break;
+		if (nextCursor === cursor) {
+			stopReason = 'stalled';
+			break;
+		}
 		cursor = nextCursor;
 	}
 
@@ -83,14 +92,45 @@ export async function fetchFilteredTradeHistory<T extends TradeRow>(
 		scanned: seenIds.size,
 		excluded,
 		scanBoundaryMs: lastScannedTs ?? null,
+		stopReason,
 	};
 }
 
+const STOP_REASON_TEXT: Record<NonNullable<FilteredTradeHistory<unknown>['stopReason']>, string> = {
+	page_limit: `取得するページ数の上限（${MAX_PAGES} ページ）まで調べて打ち切りました`,
+	stalled: '同じ時刻の約定が 1 ページ分を超えて並び、先へ進めずに打ち切りました',
+	no_timestamp: '約定時刻の無い行があり、先へ進めずに打ち切りました',
+};
+
+// stalled のときの境界は送り済みのカーソルと同じで、渡しても同じページが返るだけなので出さない。
 export function scanBoundaryIso(result: FilteredTradeHistory<unknown>): string | undefined {
-	return result.isComplete ? undefined : (toIsoMs(result.scanBoundaryMs) ?? undefined);
+	if (result.isComplete || result.stopReason === 'stalled') return undefined;
+	return toIsoMs(result.scanBoundaryMs) ?? undefined;
 }
 
 const INCOMPLETE_PREFIX = '※ 全件ではなく一部のみ取得されています。';
+
+const TRADE_DISPLAY_LIMIT = 100;
+
+// asc でも新しい側を出す。続きの案内が「表示した中で最も古い約定より前」の 1 通りで済む。
+export function tradesToDisplay<T>(trades: T[], order: 'asc' | 'desc'): T[] {
+	return order === 'asc' ? trades.slice(-TRADE_DISPLAY_LIMIT) : trades.slice(0, TRADE_DISPLAY_LIMIT);
+}
+
+export function hiddenTradesNote(
+	total: number,
+	shown: Array<{ executed_at: string }>,
+	order: 'asc' | 'desc',
+): string | null {
+	const hidden = total - shown.length;
+	if (hidden <= 0) return null;
+	const oldestShown = (order === 'asc' ? shown[0] : shown[shown.length - 1])?.executed_at;
+	const next =
+		oldestShown != null
+			? `残りの ${hidden}件は ${oldestShown} 以前の約定です。明細が必要なら end に ${oldestShown} を指定して取得してください。境界の時刻は含まれるので trade_id で重複を除いてください`
+			: '明細が必要なら since / end で期間を絞って取得してください';
+	return `... 他 ${hidden}件（本文の明細は新しいほうから ${TRADE_DISPLAY_LIMIT}件まで。${next}）`;
+}
 
 // 止めた理由（指定した件数に届いた / ページの上限などで打ち切った）を書き分け、LLM が続きを取れる時刻を出す。
 export function completenessNote(
@@ -110,7 +150,7 @@ export function completenessNote(
 	}
 	const found =
 		result.excluded === 0
-			? `指定の件数に届く前に取得を打ち切りました（${kept}約定 ${result.trades.length}件）`
+			? `${kept}約定は ${result.trades.length}件で、指定の件数に届きませんでした`
 			: result.trades.length === 0
 				? `取得した約定 ${result.scanned}件はすべて${excluded}で、${kept}約定はありませんでした（約定履歴 API は現物と信用を混ぜて返します）`
 				: `取得した約定 ${result.scanned}件のうち ${result.excluded}件は${excluded}で、${kept}約定は ${result.trades.length}件でした（約定履歴 API は現物と信用を混ぜて返します）`;
@@ -119,5 +159,6 @@ export function completenessNote(
 		boundary != null
 			? `続きは ${direction.param} に ${boundary}（最後に調べた約定の時刻）を指定して取得してください`
 			: `続きは ${direction.param} で期間を指定して取得してください`;
-	return `${INCOMPLETE_PREFIX}${found}。これより${direction.word}約定は取得していません。${next}`;
+	const reason = result.stopReason != null ? `${STOP_REASON_TEXT[result.stopReason]}。` : '';
+	return `${INCOMPLETE_PREFIX}${found}。${reason}これより${direction.word}約定は取得していません。${next}`;
 }

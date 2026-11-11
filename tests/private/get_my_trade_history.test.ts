@@ -217,28 +217,32 @@ describe('get_my_trade_history', () => {
 		expect(result.summary).toContain('[trade: 103 / order: 1003]');
 	});
 
-	it('10件超で省略メッセージを表示する', async () => {
-		const trades = Array.from({ length: 15 }, (_, i) => ({
-			trade_id: 200 + i,
-			pair: 'btc_jpy',
-			order_id: 2000 + i,
-			side: i % 2 === 0 ? 'buy' : 'sell',
-			type: 'limit',
-			amount: '0.01',
-			price: '15000000',
-			maker_taker: 'taker',
-			fee_amount_base: '0',
-			fee_amount_quote: '180',
-			executed_at: 1710000000000 + i * 1000,
-		}));
-		setupFetchMock(mockBitbankSuccess({ trades }));
+	it('100 件までは明細をすべて本文に出す', async () => {
+		setupFetchMock(mockBitbankSuccess({ trades: generateTrades(15, 200).reverse() }));
 
 		const { default: getMyTradeHistory } = await import('../../tools/private/get_my_trade_history.js');
 		const result = await getMyTradeHistory({});
 
 		assertOk(result);
-		expect(result.summary).toContain('他 5件');
-		expect(result.data.trades).toHaveLength(15);
+		expect(result.summary.match(/\[trade: /g)).toHaveLength(15);
+		expect(result.summary).not.toContain('... 他');
+	});
+
+	it('100 件を超えた分は本文に出さず、件数と明細を取るときの end を書く', async () => {
+		setupFetchMock(mockBitbankSuccess({ trades: generateTrades(120, 200).reverse() }));
+
+		const { default: getMyTradeHistory } = await import('../../tools/private/get_my_trade_history.js');
+		const result = await getMyTradeHistory({ count: 120 });
+
+		assertOk(result);
+		expect(result.data.trades).toHaveLength(120);
+		expect(result.summary.match(/\[trade: /g)).toHaveLength(100);
+		expect(result.summary).toContain('[trade: 220 /');
+		expect(result.summary).not.toContain('[trade: 219 /');
+		const oldestShown = new Date(1710000000000 + 20 * 1000).toISOString();
+		expect(result.summary).toContain(
+			`... 他 20件（本文の明細は新しいほうから 100件まで。残りの 20件は ${oldestShown} 以前の約定です。明細が必要なら end に ${oldestShown} を指定して取得してください。境界の時刻は含まれるので trade_id で重複を除いてください）`,
+		);
 	});
 
 	it('非 PrivateApiError の例外で upstream_error を返す', async () => {
@@ -389,30 +393,18 @@ describe('get_my_trade_history', () => {
 		expect(result.data.trades[0].position_side).toBeUndefined();
 	});
 
-	it('asc 順で10件超の場合は末尾10件を表示する', async () => {
-		const trades = Array.from({ length: 12 }, (_, i) => ({
-			trade_id: 300 + i,
-			pair: 'btc_jpy',
-			order_id: 3000 + i,
-			side: 'buy',
-			type: 'limit',
-			amount: '0.01',
-			price: '15000000',
-			maker_taker: 'taker',
-			fee_amount_base: '0',
-			fee_amount_quote: '180',
-			executed_at: 1710000000000 + i * 1000,
-		}));
-		setupFetchMock(mockBitbankSuccess({ trades }));
+	it('asc でも本文には新しいほうの 100 件を出す', async () => {
+		setupFetchMock(mockBitbankSuccess({ trades: generateTrades(105, 300) }));
 
 		const { default: getMyTradeHistory } = await import('../../tools/private/get_my_trade_history.js');
-		const result = await getMyTradeHistory({ order: 'asc' });
+		const result = await getMyTradeHistory({ order: 'asc', count: 105 });
 
 		assertOk(result);
-		expect(result.summary).toContain('他 2件');
-		// asc の場合は末尾10件が表示される（trade_id 302〜311）
-		expect(result.summary).toContain('[trade: 302');
-		expect(result.summary).not.toContain('[trade: 300 /');
+		expect(result.summary).toContain('... 他 5件');
+		expect(result.summary).toContain('[trade: 305 /');
+		expect(result.summary).not.toContain('[trade: 304 /');
+		const oldestShown = new Date(1710000000000 + 5 * 1000).toISOString();
+		expect(result.summary).toContain(`end に ${oldestShown} を指定して取得してください`);
 	});
 });
 
@@ -525,7 +517,9 @@ describe('get_my_trade_history — ページネーション', () => {
 		// 除外した約定が無くても、LLM は meta を読めないので続きの時刻を本文に出す。
 		const boundary = new Date(1710009999000).toISOString();
 		expect(result.meta.scanBoundary).toBe(boundary);
-		expect(result.summary).toContain('指定の件数に届く前に取得を打ち切りました（現物約定 10000件）');
+		expect(result.summary).toContain(
+			'現物約定は 10000件で、指定の件数に届きませんでした。取得するページ数の上限（10 ページ）まで調べて打ち切りました',
+		);
 		expect(result.summary).toContain(`続きは since に ${boundary}（最後に調べた約定の時刻）を指定して取得してください`);
 		expect(result.summary).not.toContain('現物と信用を混ぜて返します');
 	});
@@ -618,7 +612,8 @@ describe('get_my_trade_history — ページネーション', () => {
 	});
 
 	it('count=1000 ちょうどで全件返ると isComplete=false（まだある可能性）', async () => {
-		const trades = generateTrades(1000, 1, 1710000000000);
+		// 既定の新しい順に合わせ、API の応答も新しい順にする。続きの end は取得したうちいちばん古い約定の時刻。
+		const trades = generateTrades(1000, 1, 1710000000000).reverse();
 		setupFetchMock(mockBitbankSuccess({ trades }));
 
 		const { default: getMyTradeHistory } = await import('../../tools/private/get_my_trade_history.js');
@@ -627,7 +622,7 @@ describe('get_my_trade_history — ページネーション', () => {
 		assertOk(result);
 		// count と同数が返った場合 → まだ続きがある可能性
 		expect(result.meta.isComplete).toBe(false);
-		const last = new Date(1710000999000).toISOString();
+		const last = new Date(1710000000000).toISOString();
 		expect(result.summary).toContain(
 			'※ 全件ではなく一部のみ取得されています。指定した件数（1000件）に達したので取得を止めました。これより古い現物約定もある可能性があります',
 		);
@@ -802,6 +797,11 @@ describe('get_my_trade_history — ページネーション', () => {
 		expect(result.meta.isComplete).toBe(false);
 		// MAX_PAGES (10) より早く打ち切られたことを fetch 呼び出し回数で確認
 		expect(mockFn.mock.calls.length).toBeLessThan(10);
+		expect(result.summary).toContain('同じ時刻の約定が 1 ページ分を超えて並び、先へ進めずに打ち切りました');
+		expect(result.summary).not.toContain('ページ数の上限');
+		// 送り済みの時刻を続きとして案内すると、同じページが返って同じところで止まる。
+		expect(result.meta.scanBoundary).toBeUndefined();
+		expect(result.summary).not.toContain('最後に調べた約定の時刻');
 	});
 
 	it('asc: 連続ページで重複する trade_id は dedup される', async () => {
