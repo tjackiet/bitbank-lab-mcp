@@ -35,6 +35,7 @@
 
 ### Fixed
 
+- 確認カード（注文と取消）：最新の Claude Desktop でボタンが出ない件の続き。Claude Desktop は、カード自身が呼んだ `get_ui_snapshot` の結果からも `_meta` を落としていた。一覧に出さないリソース `bitbank-confirmation://{app}` を追加し、カードはトークンが届かないときにこれを読んで、本文からトークンを受け取る。渡す条件は `_meta` と同じ（`BITBANK_MCP_APPS_EXECUTE=1`、MCP Apps UI の宣言、elicitation 非対応、同じセッション、期限内）で、満たさなければ本文は空。`resources/list` には出さない。この経路は「モデルが MCP リソースを自分で読めない」ことを前提にする（ADR-0007 判断事項 C）。
 - 確認カード（注文と取消）：最新の Claude Desktop で「注文を確定する」などのボタンが出なくなっていた。サーバーは確認トークンをツール結果の `_meta` に載せているが、ホストがカードへ渡す結果に `_meta` が含まれなくなったと見られる。カードがトークン無しで内容を受け取ったときは、`get_ui_snapshot` を 1 回だけ呼んでトークンを取り直す。`get_ui_snapshot` がトークンを返す条件（`BITBANK_MCP_APPS_EXECUTE=1` かつクライアントが MCP Apps UI を宣言し、elicitation 非対応）は変わらない。ホストがこちらの結果の `_meta` も渡さない場合は、ボタンが出ないまま（実行できない側に倒れる）。
 - MCP Apps の実行経路（`BITBANK_MCP_APPS_EXECUTE=1`）と elicitation の判定が、2026-07-28 版のクライアントが送るリクエストごとの capability（per-request envelope）を読めていなかった。SDK は envelope を `_meta` のキー名（`io.modelcontextprotocol/clientCapabilities`）のまま渡すのに、`clientCapabilities` という名前で読んでいたため、そのクライアントでは確認カード（MCP Apps UI）も elicitation も常に「非対応」と判定されていた。2025 系のクライアント（`initialize` で宣言する。現行の Claude Desktop）は影響を受けない。
 - `run_backtest`：戦略が持たない `params` のキー（例: `sma_cross` の `short_period`）が検証を通り、既定値で実行されていた。未知のキーはエラーにする。期間系のパラメータ（`short` / `long` / `period` / `fast` / `slow` / `signal` / `sma_filter_period` / `rsi_filter_period`）に小数を渡すと、指標が全 NaN になって「0 トレード」を返すか、内部の例外がエラーとして返っていた。整数だけを通す（issue #443）。

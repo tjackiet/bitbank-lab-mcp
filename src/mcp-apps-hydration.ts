@@ -1,7 +1,7 @@
 // サーバーと UI バンドルの両方から import されるので、Node 依存（`node:*` / `process`）も重い依存も持たせない。
 // `fetchSnapshot` の結果は `apply` へ渡すだけで、内容を読まず、ログにも出さない（確認トークンを含む `_meta` が流れる）。
 
-import { readConfirmationMeta } from './mcp-apps-meta.js';
+import { CONFIRMATION_META_KEY, readConfirmationMeta } from './mcp-apps-meta.js';
 
 export type SnapshotHydrationPhase = 'waiting' | 'restoring' | 'failed';
 
@@ -119,7 +119,8 @@ export function startSnapshotHydration(opts: SnapshotHydrationOptions): () => vo
 export interface ConfirmationPullOptions {
 	structured: unknown;
 	meta: unknown;
-	fetchSnapshot: () => Promise<unknown>;
+	/** 順に試す。どれも `{ structuredContent, _meta }`（スナップショットと同じ形）を返す。 */
+	sources: ReadonlyArray<() => Promise<unknown>>;
 	apply: (result: unknown) => void;
 	isAborted: () => boolean;
 }
@@ -137,17 +138,38 @@ function canonicalJson(value: unknown): string {
 // ホストが tool-result の `_meta` を iframe に渡さないとトークンが届かないので、`get_ui_snapshot` の結果 `_meta` から 1 回だけ取り直す（ゲートはサーバーが再判定する）。
 // スナップショットはセッション内で最後の preview に置き換わるので、このカードが受け取った内容と同じときだけ取り込む。別の注文の表示とトークンに差し替えない。
 export async function pullConfirmationIfMissing(opts: ConfirmationPullOptions): Promise<boolean> {
-	const { structured, meta, fetchSnapshot, apply, isAborted } = opts;
+	const { structured, meta, sources, apply, isAborted } = opts;
 	if (readConfirmationMeta(meta)) return false;
-	let result: unknown;
-	try {
-		result = await fetchSnapshot();
-	} catch {
-		return false;
+	for (const fetchSource of sources) {
+		let result: unknown;
+		try {
+			result = await fetchSource();
+		} catch {
+			continue;
+		}
+		if (isAborted()) return false;
+		const snapshot = result as { structuredContent?: unknown; _meta?: unknown } | undefined;
+		if (!readConfirmationMeta(snapshot?._meta)) continue;
+		// 別の preview に置き換わっていたら、ほかの経路も同じスナップショットを返すので打ち切る。
+		if (canonicalJson(snapshot?.structuredContent) !== canonicalJson(structured)) return false;
+		apply(result);
+		return true;
 	}
-	const snapshot = result as { structuredContent?: unknown; _meta?: unknown } | undefined;
-	if (isAborted() || !readConfirmationMeta(snapshot?._meta)) return false;
-	if (canonicalJson(snapshot?.structuredContent) !== canonicalJson(structured)) return false;
-	apply(result);
-	return true;
+	return false;
+}
+
+export function confirmationResourceToSnapshot(
+	result: unknown,
+): { structuredContent: unknown; _meta: Record<string, unknown> } | undefined {
+	const text = (result as { contents?: Array<{ text?: unknown }> } | undefined)?.contents?.[0]?.text;
+	if (typeof text !== 'string') return undefined;
+	let body: unknown;
+	try {
+		body = JSON.parse(text);
+	} catch {
+		return undefined;
+	}
+	const { structuredContent, confirmation } = (body ?? {}) as { structuredContent?: unknown; confirmation?: unknown };
+	const meta = { [CONFIRMATION_META_KEY]: confirmation };
+	return readConfirmationMeta(meta) ? { structuredContent, _meta: meta } : undefined;
 }
