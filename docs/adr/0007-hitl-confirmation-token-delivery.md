@@ -232,7 +232,7 @@ pull hydration を使ったカードもボタン実行に成功しており（�
    - `mimeTypes` が欠落／空／該当型を含まない場合は**トークンを一切載せない**（fail-closed）
 
    **capability の取得元が食い違う場合の解決順序**: per-request envelope
-   （`extra.mcpReq.envelope.clientCapabilities`）が存在すればそれを**権威として採用**し、
+   （`extra.mcpReq.envelope['io.modelcontextprotocol/clientCapabilities']`。SDK は envelope を `_meta` のキー名のまま持ち上げる）が存在すればそれを**権威として採用**し、
    無い場合にのみ `server.getClientCapabilities()`（`initialize` 時の宣言）へフォールバックする。
    - 2026-07-28 系はリクエストごとの capability 提示が前提であり、envelope が「UI 非対応」と
      言っているのに `initialize` 時の宣言を根拠に載せるのは、より新しい宣言を無視することになる
@@ -363,6 +363,14 @@ SDK 更新で静かに壊れうる箇所なので回帰を張る）。
 > `RESULT_WAIT_HINT_MS` 以内に間に合わないことがある」だった。上の本文はこれに合わせて訂正済み。
 > **判断そのものは有効**——pull hydration は実際に使われており、トークンを `get_ui_snapshot`
 > から外すと Desktop 再起動後の 1 回目の発注が失敗する。モデルへの漏洩懸念も計測 4 で否定された。
+
+> **2026-11-11 追記（Claude Desktop の更新後）**: 最新の Claude Desktop で確認カードのボタンが出なくなった。
+> サーバーはトークンを結果 `_meta` に載せていた（`content` が確認カード経路の文面だった）が、カードはトークン無しの
+> preview を受け取っていた。ホストが `ui/notifications/tool-result` の `_meta` を iframe に渡さなくなったと見られる
+> （後述のリスク表「ホストが結果 `_meta` を iframe へ転送しなくなる」に当たる。fail-closed）。同日、モデルに
+> トークンが見えていないことを確認した（計測 1 の簡易な再確認）。対策として、push にトークンが無いときは iframe から
+> `get_ui_snapshot` を 1 回だけ呼び、その結果 `_meta` からトークンを取り直す（`pullConfirmationIfMissing`）。
+> 有効化の条件はサーバーが再判定するので変わらない。ホストがこちらの `_meta` も渡さなければボタンは出ないまま（fail-closed）。
 
 **推奨**: スナップショットに `_meta` も保持し、`get_ui_snapshot` の結果 `_meta` として同じ
 名前空間キーで返す。ゲートは preview 側とまったく同じ 2 段（オプトイン AND MCP Apps UI 宣言 +

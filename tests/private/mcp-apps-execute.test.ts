@@ -1,6 +1,6 @@
 // ADR-0007「テストで固定する不変条件」1〜8 の回帰。最重要は content / structuredContent にトークンが出ないこと（LLM が読めない `_meta` にしか載らないことが認可の根拠）。
 
-import { isInputRequiredResult } from '@modelcontextprotocol/server';
+import { CLIENT_CAPABILITIES_META_KEY, isInputRequiredResult } from '@modelcontextprotocol/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { APP_RESOURCE_MIME_TYPE, MCP_APPS_UI_EXTENSION_ID } from '../../src/resources/app-resources.js';
 import { mockBitbankSuccess, mockSpotPairsResponse } from '../fixtures/private-api.js';
@@ -32,7 +32,7 @@ function appUiCtx(mimeTypes: unknown = [APP_RESOURCE_MIME_TYPE]): Record<string,
 function envelopeCtx(clientCapabilities: unknown, initCapabilities?: unknown): Record<string, unknown> {
 	return {
 		...(initCapabilities !== undefined ? { server: { getClientCapabilities: () => initCapabilities } } : {}),
-		mcpReq: { envelope: { clientCapabilities } },
+		mcpReq: { envelope: { [CLIENT_CAPABILITIES_META_KEY]: clientCapabilities } },
 	};
 }
 
