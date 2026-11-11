@@ -271,6 +271,8 @@ drift 時に「ミラー要更新」issue を起票する。
 > 強制決済率は `losscut_percentage`、保証金率は `total_margin_balance_percentage`。
 > `*_percentage` 系は建玉なし時に `null`（schema は `.nullable()`）。
 
+> **実口座で確認した建玉合計の中身:** `open_margin_position_product`（建玉の保有分）は、`margin/positions` の建玉ごとの `product`（建値ベース。時価ではない）の合計と、円未満の端数を除いて一致した。`total_margin_position_product` は保有分と新規発注中の合計なので、時価で評価した額ではない。`open_margin_order_product` の基準（注文価格かどうか）は未確認。
+
 ### 公式 JSON 例（verbatim, `:807-838`）
 
 ```json
