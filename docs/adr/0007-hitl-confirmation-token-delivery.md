@@ -420,6 +420,32 @@ MRTR の `requestState` は `bind` で session/principal + method に束縛さ�
 `confirmation_token` の bind（`bindRequestStateContext` 相当）を実装すること。
 stdio のままなら `sessionId` が常に undefined なので、束縛を足しても効果は無い。
 
+### C. 確認トークンのリソース（`bitbank-confirmation://{app}`）— **採用（2026-11-11）**
+
+**背景**: 2026-11 の Claude Desktop は、iframe に渡すツール結果から `_meta` を落とすようになった。
+push（`ui/notifications/tool-result`）だけでなく、iframe 自身が呼んだ `get_ui_snapshot` の結果でも同じだった
+（サーバーの記録で preview の約 1 秒後に `get_ui_snapshot` が呼ばれていることを確認したが、ボタンは出なかった）。
+結果 `_meta` だけに頼る経路 2 は、このホストでは動かない（fail-closed）。
+
+**決定**: 一覧に出さないリソーステンプレート `bitbank-confirmation://{app}`（`{app}` は確認 UI
+`ui://{app}/confirm.html` の名前）を足し、本文（`contents[0].text`）に `{ structuredContent, confirmation }` を返す。
+
+- 渡す条件は `get_ui_snapshot` の `_meta` とまったく同じ（オプトイン AND MCP Apps UI 宣言（MIME 型込み）AND
+  elicitation 非対応、同じセッション、トークンの期限内）。満たさなければ本文は `{}`
+  （`src/resources/confirmation-resource.ts`）
+- `list` を持たせないので `resources/list` に出ない。ホストの添付メニューなどからトークン入りの本文を会話へ入れさせない
+  （テンプレート自体は `resources/templates/list` に出る）
+- iframe は push → `get_ui_snapshot` の `_meta` → このリソース の順に試し、内容が push と同じときだけ取り込む
+  （`src/mcp-apps-hydration.ts` の `pullConfirmationIfMissing`）
+- 読まれたか・渡したかだけをサーバーの記録に残す（`confirmation_resource_read`。トークンは残さない）
+
+**新しく置く前提**: 「モデルが MCP リソースを自分で読めない」こと。Claude Desktop ではリソースはユーザーが添付するもので、
+モデルが読む手段は無い。**実測で確かめること**（ボタンが出るか、モデルがトークンを読めないか）。
+
+**リスク**: モデルがリソースを読めるホスト（例: リソースを読むツールをモデルに渡すクライアント）が、同時に MCP Apps UI を
+宣言すると、モデルがトークンを読んで HITL をバイパスできる。MCP Apps UI を宣言しないホストではゲートで閉じる。
+「想定リスクの境界」の表に追加した。
+
 ## Consequences
 
 ### Pros
@@ -454,6 +480,7 @@ stdio のままなら `sessionId` が常に undefined なので、束縛を足�
 |---|---|---|
 | preview 応答からの HITL バイパス | × token / 同等 credential を返さない | △ **`_meta` がモデル可視になったホストでは成立する**（実測では非可視。これが本設計の唯一の依存点） |
 | `structuredContent` からの token 取得 | × 常に strip | × 常に strip（変更なし） |
+| 確認トークンのリソース（`bitbank-confirmation://`）からの HITL バイパス | × 本文は `{}` | △ **モデルが MCP リソースを読めるホストでは成立する**（Claude Desktop ではモデルが読む手段が無い。判断事項 C、要実測） |
 | MCP tools/call での直接 execute（token 無し） | × handler が常に拒否 | × handler が `direct_execute_forbidden` で拒否 |
 | 期限切れ / 使用済み / 別注文の token での execute | × validateToken が拒否 | × validateToken が拒否（変更なし） |
 | 攻撃者が任意の注文内容を作る | × token 未発行 | × token はプレビュー済みパラメータに HMAC 束縛 |

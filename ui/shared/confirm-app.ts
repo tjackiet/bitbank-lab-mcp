@@ -3,10 +3,12 @@
 import { App as McpApp, applyDocumentTheme, getDocumentTheme } from '@modelcontextprotocol/ext-apps';
 import { type RefObject, useEffect, useRef, useState } from 'react';
 import {
+	confirmationResourceToSnapshot,
 	pullConfirmationIfMissing,
 	type SnapshotHydrationPhase,
 	startSnapshotHydration,
 } from '../../src/mcp-apps-hydration.js';
+import { confirmationResourceUri } from '../../src/mcp-apps-meta.js';
 import { applyHostStyles } from './host-styles';
 
 const CONNECT_TIMEOUT_MS = 7_000;
@@ -50,6 +52,13 @@ export function useConfirmApp(
 				{ name: 'get_ui_snapshot', arguments: { resource_uri: resourceUri } },
 				{ timeout: SNAPSHOT_TIMEOUT_MS },
 			);
+		const tokenResourceUri = confirmationResourceUri(resourceUri);
+		const fetchConfirmationResource = async () =>
+			tokenResourceUri
+				? confirmationResourceToSnapshot(
+						await mcpApp.readServerResource({ uri: tokenResourceUri }, { timeout: SNAPSHOT_TIMEOUT_MS }),
+					)
+				: undefined;
 		// connect() が pending のままアンマウントされると .then() は cleanup の後に走るので、破棄済みなら hydration を開始しない（#29）。
 		let disposed = false;
 		const connecting = mcpApp.connect();
@@ -64,7 +73,7 @@ export function useConfirmApp(
 					pullConfirmationIfMissing({
 						structured: params?.structuredContent,
 						meta: params?._meta,
-						fetchSnapshot,
+						sources: [fetchSnapshot, fetchConfirmationResource],
 						apply: (result) => {
 							const snapshot = result as { structuredContent?: unknown; _meta?: unknown };
 							applyPreviewResult(snapshot.structuredContent, snapshot._meta);

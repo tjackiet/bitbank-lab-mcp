@@ -1,14 +1,15 @@
 import './env.js'; // must be first — loads .env before other modules read process.env
 import { createRequire } from 'node:module';
-import { isInputRequiredResult, McpServer } from '@modelcontextprotocol/server';
+import { isInputRequiredResult, McpServer, ResourceTemplate } from '@modelcontextprotocol/server';
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import type { z } from 'zod';
 import { toPublicError } from '../lib/error.js';
 import { logError, logToolRun } from '../lib/logger.js';
-import { CONFIRMATION_META_KEY } from './mcp-apps-meta.js';
+import { CONFIRMATION_META_KEY, CONFIRMATION_RESOURCE_TEMPLATE } from './mcp-apps-meta.js';
 import { requestStateCodec } from './private/request-state.js';
 import { type PromptDef, prompts as promptDefs } from './prompts.js';
 import { appResourceRegistry } from './resources/app-resources.js';
+import { readConfirmationResource } from './resources/confirmation-resource.js';
 import { allToolDefs } from './tool-registry.js';
 import { storeUiSnapshot } from './ui-snapshot-cache.js';
 
@@ -247,6 +248,20 @@ for (const r of appResourceRegistry) {
 		],
 	}));
 }
+
+// list を持たせないのは、resources/list に出してホストの添付メニューなどからトークン入りの本文を会話へ入れさせないため。
+server.registerResource(
+	'confirmation-token',
+	new ResourceTemplate(CONFIRMATION_RESOURCE_TEMPLATE, { list: undefined }),
+	{
+		description:
+			'[Internal / MCP Apps] 確認 UI（iframe）専用。ホストが結果 _meta を渡さないとき、確認カードが確認トークンを受け取るために読む。LLM が読む必要はない。',
+		mimeType: 'application/json',
+	},
+	(uri, variables, ctx) =>
+		// 2025 系接続の client capabilities 判定（getClientCapabilities）に要るので、ツールと同じく内部 Server を合流させる。
+		readConfirmationResource(uri.href, variables.app, { ...ctx, server: server.server }),
+);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
