@@ -117,15 +117,27 @@ export function startSnapshotHydration(opts: SnapshotHydrationOptions): () => vo
 }
 
 export interface ConfirmationPullOptions {
+	structured: unknown;
 	meta: unknown;
 	fetchSnapshot: () => Promise<unknown>;
 	apply: (result: unknown) => void;
 	isAborted: () => boolean;
 }
 
+function canonicalJson(value: unknown): string {
+	return JSON.stringify(value, (_key, v: unknown) =>
+		v && typeof v === 'object' && !Array.isArray(v)
+			? Object.fromEntries(
+					Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+				)
+			: v,
+	);
+}
+
 // ホストが tool-result の `_meta` を iframe に渡さないとトークンが届かないので、`get_ui_snapshot` の結果 `_meta` から 1 回だけ取り直す（ゲートはサーバーが再判定する）。
+// スナップショットはセッション内で最後の preview に置き換わるので、このカードが受け取った内容と同じときだけ取り込む。別の注文の表示とトークンに差し替えない。
 export async function pullConfirmationIfMissing(opts: ConfirmationPullOptions): Promise<boolean> {
-	const { meta, fetchSnapshot, apply, isAborted } = opts;
+	const { structured, meta, fetchSnapshot, apply, isAborted } = opts;
 	if (readConfirmationMeta(meta)) return false;
 	let result: unknown;
 	try {
@@ -133,7 +145,9 @@ export async function pullConfirmationIfMissing(opts: ConfirmationPullOptions): 
 	} catch {
 		return false;
 	}
-	if (isAborted() || !readConfirmationMeta((result as { _meta?: unknown } | undefined)?._meta)) return false;
+	const snapshot = result as { structuredContent?: unknown; _meta?: unknown } | undefined;
+	if (isAborted() || !readConfirmationMeta(snapshot?._meta)) return false;
+	if (canonicalJson(snapshot?.structuredContent) !== canonicalJson(structured)) return false;
 	apply(result);
 	return true;
 }

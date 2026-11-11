@@ -53,19 +53,23 @@ export function useConfirmApp(
 		// connect() が pending のままアンマウントされると .then() は cleanup の後に走るので、破棄済みなら hydration を開始しない（#29）。
 		let disposed = false;
 		const connecting = mcpApp.connect();
+		// 取り直しの途中で新しい push が届いたら、古い取り直しの結果を捨てる。
+		let pushSeq = 0;
 
 		mcpApp.ontoolresult = (params) => {
 			if (!applyPreviewResult(params?.structuredContent, params?._meta)) return;
+			const seq = ++pushSeq;
 			void connecting.then(
 				() =>
 					pullConfirmationIfMissing({
+						structured: params?.structuredContent,
 						meta: params?._meta,
 						fetchSnapshot,
 						apply: (result) => {
 							const snapshot = result as { structuredContent?: unknown; _meta?: unknown };
 							applyPreviewResult(snapshot.structuredContent, snapshot._meta);
 						},
-						isAborted: () => disposed,
+						isAborted: () => disposed || seq !== pushSeq,
 					}),
 				() => undefined,
 			);
