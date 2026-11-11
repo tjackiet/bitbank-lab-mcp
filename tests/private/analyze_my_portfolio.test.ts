@@ -74,21 +74,7 @@ afterEach(() => {
 	delete process.env.BITBANK_API_KEY;
 	delete process.env.BITBANK_API_SECRET;
 	vi.resetModules();
-	vi.doUnmock('../../src/handlers/portfolio/fetch.js');
 });
-
-// 現物と信用は同じ一覧を取るので、片方だけの打ち切りや失敗は片方の要求だけが一時的に失敗したときに限られる。片方の取得を差し替えてその状態を作る。
-function stubTradeFetcher(
-	stub:
-		| { paginateTrades: { trades: unknown[]; truncated: boolean } }
-		| { paginateMarginTrades: { trades: unknown[]; truncated: boolean; fetchFailed: boolean } },
-) {
-	vi.doMock('../../src/handlers/portfolio/fetch.js', async (importOriginal) => {
-		const actual = await importOriginal<typeof import('../../src/handlers/portfolio/fetch.js')>();
-		const [name, result] = Object.entries(stub)[0];
-		return { ...actual, [name]: async () => result };
-	});
-}
 
 function setupFetchMock(opts?: {
 	assets?: unknown;
@@ -163,7 +149,7 @@ function setupFetchMock(opts?: {
 			return new Response(JSON.stringify(mockBitbankSuccess(payload)), { status: 200 });
 		}
 
-		// 約定履歴 API は現物と信用を混ぜて返し、分けるパラメータが無いので、現物の取得も信用の取得も同じ一覧を受け取る。
+		// 約定履歴 API は現物と信用を混ぜて返し、分けるパラメータが無いので、両方のフィクスチャを時刻順に混ぜて返す。
 		if (urlStr.includes('trade_history')) {
 			if (opts?.tradeHistoryFail) {
 				return new Response(JSON.stringify(mockBitbankError(10007)), { status: 200 });
@@ -399,10 +385,9 @@ describe('analyze_my_portfolio', () => {
 		expect(pnl.total).toBe(pnl.spot_realized_pnl + 5000 - 30);
 	});
 
-	it('信用 fetch 失敗時: ⚠️ 警告 + meta.marginFetchFailed=true + margin pnl 0 で「信用未使用」と区別できる', async () => {
-		// paginateMarginTrades が API エラーで break したとき、「信用未使用」と区別できない結果を返さないこと。
-		setupFetchMock();
-		stubTradeFetcher({ paginateMarginTrades: { trades: [], truncated: true, fetchFailed: true } });
+	it('約定履歴の取得に失敗したとき: ⚠️ 警告 + meta.marginFetchFailed=true + margin pnl 0 で「信用未使用」と区別できる', async () => {
+		// 現物と信用は同じ一覧から振り分けるので、取得に失敗すると両方が欠ける。
+		setupFetchMock({ tradeHistoryFail: true });
 
 		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
 		const result = await handler({
@@ -421,13 +406,13 @@ describe('analyze_my_portfolio', () => {
 		// 信用 fetch 失敗時は信用側 truncated 警告を抑止（メッセージ重複回避）
 		expect(result.summary).not.toContain('※ 約定履歴（信用）');
 		expect(result.summary).not.toContain('※ 約定履歴（現物 / 信用）');
-		// 信用の決済損益を巻き戻せないので、期間成績の率は出さない（issue 446）
+		// 期初の保有を巻き戻せないので、期間成績の率は出さない（issue 446 / 447）。理由は現物の打ち切りが優先される。
 		for (const key of ['daily_performance', 'monthly_performance', 'yearly_performance'] as const) {
 			const perf = result.data[key] as { change_pct?: number; change_pct_unavailable_reason?: string };
 			expect(perf.change_pct).toBeUndefined();
-			expect(perf.change_pct_unavailable_reason).toBe('margin_trades_incomplete');
+			expect(perf.change_pct_unavailable_reason).toBe('trades_truncated');
 		}
-		expect(result.summary).toContain('※ 資産推移シリーズ: 信用の約定履歴を取得しきれず');
+		expect(result.summary).toContain('※ 資産推移シリーズ: 現物の約定履歴の取得が打ち切られ');
 	});
 
 	it('期間中の信用の決済損益を期初の JPY から巻き戻す（issue 446）', async () => {
@@ -475,8 +460,8 @@ describe('analyze_my_portfolio', () => {
 		}
 	});
 
-	it('打ち切り (現物): summary に ※ 約定履歴（現物） が含まれ、meta.tradesTruncated === true', async () => {
-		// paginateTrades は満杯ページ × 同一カーソルで進捗ゼロを検出し、truncated=true で打ち切る。
+	it('打ち切り（現物の約定だけ）: 信用も同じ一覧から振り分けるので、両方の打ち切りとして申告する', async () => {
+		// 満杯ページ × 同一カーソルで進捗ゼロを検出し、truncated=true で打ち切る。
 		const SAME_TS = 1710000000000;
 		const fullSpotPage = Array.from({ length: 1000 }, (_, i) => ({
 			trade_id: i + 1,
@@ -513,8 +498,6 @@ describe('analyze_my_portfolio', () => {
 			return new Response(JSON.stringify(mockBitbankSuccess({})), { status: 200 });
 		}) as unknown as typeof fetch;
 
-		stubTradeFetcher({ paginateMarginTrades: { trades: [], truncated: false, fetchFailed: false } });
-
 		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
 		const result = await handler({
 			include_technical: false,
@@ -523,9 +506,9 @@ describe('analyze_my_portfolio', () => {
 		});
 
 		assertOk(result);
-		expect(result.summary).toContain('※ 約定履歴（現物）');
+		expect(result.summary).toContain('※ 約定履歴（現物 / 信用）');
 		expect(result.meta.tradesTruncated).toBe(true);
-		expect(result.meta.marginTradesTruncated).toBe(false);
+		expect(result.meta.marginTradesTruncated).toBe(true);
 		expect(result.meta.marginFetchFailed).toBe(false);
 		// 欠けるのは直近の約定なので、期間成績は率を出さず理由コードを付け、資産推移シリーズにも申告を出す（issue 447）。
 		for (const key of ['daily_performance', 'monthly_performance', 'yearly_performance'] as const) {
@@ -540,7 +523,7 @@ describe('analyze_my_portfolio', () => {
 		expect(result.summary).toContain('※ 資産推移シリーズ: 現物の約定履歴の取得が打ち切られ');
 	});
 
-	it('打ち切り (信用): summary に ※ 約定履歴（信用） が含まれ、meta.marginTradesTruncated === true', async () => {
+	it('打ち切り（信用の約定だけ）: 現物も同じ一覧から振り分けるので、両方の打ち切りとして申告する', async () => {
 		const SAME_TS = 1710000000000;
 		const fullMarginPage = Array.from({ length: 1000 }, (_, i) => ({
 			trade_id: 9000 + i,
@@ -580,8 +563,6 @@ describe('analyze_my_portfolio', () => {
 			return new Response(JSON.stringify(mockBitbankSuccess({})), { status: 200 });
 		}) as unknown as typeof fetch;
 
-		stubTradeFetcher({ paginateTrades: { trades: [], truncated: false } });
-
 		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
 		const result = await handler({
 			include_technical: false,
@@ -590,10 +571,9 @@ describe('analyze_my_portfolio', () => {
 		});
 
 		assertOk(result);
-		expect(result.summary).toContain('※ 約定履歴（信用）');
-		expect(result.summary).not.toContain('※ 約定履歴（現物 / 信用）');
+		expect(result.summary).toContain('※ 約定履歴（現物 / 信用）');
 		expect(result.meta.marginTradesTruncated).toBe(true);
-		expect(result.meta.tradesTruncated).toBe(false);
+		expect(result.meta.tradesTruncated).toBe(true);
 		expect(result.meta.marginFetchFailed).toBe(false);
 	});
 
@@ -824,6 +804,44 @@ describe('analyze_my_portfolio', () => {
 		for (const u of [...tradeUrls, ...depositUrls, ...withdrawalUrls]) {
 			expect(u).not.toMatch(/[?&]since=/);
 		}
+	});
+
+	it('約定履歴は 1 回の取得で現物と信用に振り分け、同じページを 2 回取らない', async () => {
+		const marginClose = {
+			trades: [
+				{
+					trade_id: 801,
+					pair: 'btc_jpy',
+					order_id: 8001,
+					side: 'sell',
+					position_side: 'long',
+					type: 'market',
+					amount: '0.01',
+					price: '15500000',
+					maker_taker: 'taker',
+					fee_amount_base: '0',
+					fee_amount_quote: '186',
+					fee_occurred_amount_quote: '186',
+					profit_loss: '100000',
+					interest: '1000',
+					executed_at: 1710000500000,
+				},
+			],
+		};
+		setupFetchMock({ marginTrades: marginClose });
+
+		const { default: handler } = await import('../../src/handlers/analyzeMyPortfolioHandler.js');
+		const result = await handler({ include_technical: false, include_pnl: true, include_deposit_withdrawal: false });
+
+		assertOk(result);
+		const urls = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map(([u]) =>
+			typeof u === 'string' ? u : u instanceof URL ? u.href : (u as Request).url,
+		);
+		expect(urls.filter((u) => u.includes('trade_history'))).toHaveLength(1);
+		const pnl = requireDefined(result.data.account_pnl, 'account_pnl');
+		expect(pnl.margin_realized_pnl).toBe(100_000);
+		assertDefined(pnl.spot_realized_pnl, 'account_pnl.spot_realized_pnl');
+		expect(pnl.total).toBe(pnl.spot_realized_pnl + 100_000 - 1000);
 	});
 
 	it('年初前入金で形成された保有: account_return_jpy は年初前入金も含めた純投入額に対して計算される', async () => {

@@ -827,17 +827,17 @@ export const AnalyzeMyPortfolioMetaSchema = z.object({
 	tradesTruncated: z
 		.boolean()
 		.describe(
-			'現物約定履歴の取得が不完全（paginateTrades が MAX_PAGES / API エラー / lastTs 欠損などで途中終了）。true のとき損益計算が不正確な可能性。古い順に取得するので欠けるのは直近の約定で、期初の保有の巻き戻しから漏れる。そのため *_performance は change_pct_unavailable_reason=trades_truncated（率を出さず、start_value_jpy / change_jpy / adjusted_change_jpy もずれの向きが確定しない）になり、*_equity_series も各点の保有がずれる（成績として読まないこと）。',
+			'現物約定履歴の取得が不完全（約定履歴の取得 paginateAllTrades が MAX_PAGES / API エラー / lastTs 欠損などで途中終了）。true のとき損益計算が不正確な可能性。古い順に取得するので欠けるのは直近の約定で、期初の保有の巻き戻しから漏れる。そのため *_performance は change_pct_unavailable_reason=trades_truncated（率を出さず、start_value_jpy / change_jpy / adjusted_change_jpy もずれの向きが確定しない）になり、*_equity_series も各点の保有がずれる（成績として読まないこと）。',
 		),
 	marginTradesTruncated: z
 		.boolean()
 		.describe(
-			'信用約定履歴の取得が不完全（paginateMarginTrades が MAX_PAGES / API エラー / lastTs 欠損などで途中終了）。true のとき信用 PnL が不正確な可能性。期初の保有の巻き戻しにも信用の決済損益を使うので、*_performance は change_pct_unavailable_reason=margin_trades_incomplete になり、*_equity_series もずれうる（issue #446）。',
+			'信用約定履歴の取得が不完全（約定履歴の取得 paginateAllTrades が MAX_PAGES / API エラー / lastTs 欠損などで途中終了）。true のとき信用 PnL が不正確な可能性。現物と信用は同じ一覧から振り分けるので tradesTruncated と同じ値になり、*_performance の理由は現物の trades_truncated が優先される。*_equity_series もずれうる（issue #446）。',
 		),
 	marginFetchFailed: z
 		.boolean()
 		.describe(
-			'信用約定の取得（約定履歴 API を信用だけに絞る）が途中で失敗した。true のとき margin_realized_pnl=0 が「信用未使用」ではなく「取得失敗による欠落」を意味する点に注意。期間成績も信用の決済損益を巻き戻せないので change_pct_unavailable_reason=margin_trades_incomplete になる。',
+			'約定履歴の取得が途中で失敗した（現物と信用は同じ一覧から振り分けるので、現物も欠ける）。true のとき margin_realized_pnl=0 が「信用未使用」ではなく「取得失敗による欠落」を意味する点に注意。期間成績は率を出さず、理由は現物の trades_truncated が優先される。',
 		),
 	marginStatusFetchFailed: z
 		.boolean()
