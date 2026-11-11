@@ -15,8 +15,6 @@ import { BitbankPrivateClient } from '../../../src/private/client.js';
 import { currentPriceOnly } from '../../_flowPricing.js';
 import { mockBitbankSuccess } from '../../fixtures/private-api.js';
 
-const ORIGINAL_TICKERS_JPY_URL = process.env.TICKERS_JPY_URL;
-
 beforeEach(() => {
 	process.env.BITBANK_API_KEY = 'test_key';
 	process.env.BITBANK_API_SECRET = 'test_secret';
@@ -26,11 +24,6 @@ afterEach(() => {
 	vi.restoreAllMocks();
 	delete process.env.BITBANK_API_KEY;
 	delete process.env.BITBANK_API_SECRET;
-	if (ORIGINAL_TICKERS_JPY_URL === undefined) {
-		delete process.env.TICKERS_JPY_URL;
-	} else {
-		process.env.TICKERS_JPY_URL = ORIGINAL_TICKERS_JPY_URL;
-	}
 });
 
 const T_BUY = 1_710_000_000_000;
@@ -173,7 +166,6 @@ describe('取得境界での pair 正規化 — 損益（fetch → calc）', () 
 		const trades = await fetchTrades(tradesWithPair('BTC_JPY'));
 		const holdings = reconstructHoldingsAtDate([{ asset: 'btc', amount: '0.5' }], trades, T_SELL - 1, null);
 
-		process.env.TICKERS_JPY_URL = 'https://example.test/tickers_jpy';
 		vi.spyOn(globalThis, 'fetch').mockResolvedValue(
 			new Response(JSON.stringify({ success: 1, data: [{ pair: 'BTC_JPY', last: '12000000' }] }), { status: 200 }),
 		);
@@ -185,7 +177,6 @@ describe('取得境界での pair 正規化 — 損益（fetch → calc）', () 
 
 describe('取得境界での pair 正規化 — ticker 価格マップ', () => {
 	function mockTickers(data: unknown[]) {
-		process.env.TICKERS_JPY_URL = 'https://example.test/tickers_jpy';
 		vi.spyOn(globalThis, 'fetch').mockResolvedValue(
 			new Response(JSON.stringify({ success: 1, data }), { status: 200 }),
 		);
