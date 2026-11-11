@@ -525,7 +525,9 @@ describe('get_my_trade_history — ページネーション', () => {
 		// 除外した約定が無くても、LLM は meta を読めないので続きの時刻を本文に出す。
 		const boundary = new Date(1710009999000).toISOString();
 		expect(result.meta.scanBoundary).toBe(boundary);
-		expect(result.summary).toContain('指定の件数に届く前に取得を打ち切りました（現物約定 10000件）');
+		expect(result.summary).toContain(
+			'現物約定は 10000件で、指定の件数に届きませんでした。取得するページ数の上限（10 ページ）まで調べて打ち切りました',
+		);
 		expect(result.summary).toContain(`続きは since に ${boundary}（最後に調べた約定の時刻）を指定して取得してください`);
 		expect(result.summary).not.toContain('現物と信用を混ぜて返します');
 	});
@@ -618,7 +620,8 @@ describe('get_my_trade_history — ページネーション', () => {
 	});
 
 	it('count=1000 ちょうどで全件返ると isComplete=false（まだある可能性）', async () => {
-		const trades = generateTrades(1000, 1, 1710000000000);
+		// 既定の新しい順に合わせ、API の応答も新しい順にする。続きの end は取得したうちいちばん古い約定の時刻。
+		const trades = generateTrades(1000, 1, 1710000000000).reverse();
 		setupFetchMock(mockBitbankSuccess({ trades }));
 
 		const { default: getMyTradeHistory } = await import('../../tools/private/get_my_trade_history.js');
@@ -627,7 +630,7 @@ describe('get_my_trade_history — ページネーション', () => {
 		assertOk(result);
 		// count と同数が返った場合 → まだ続きがある可能性
 		expect(result.meta.isComplete).toBe(false);
-		const last = new Date(1710000999000).toISOString();
+		const last = new Date(1710000000000).toISOString();
 		expect(result.summary).toContain(
 			'※ 全件ではなく一部のみ取得されています。指定した件数（1000件）に達したので取得を止めました。これより古い現物約定もある可能性があります',
 		);
@@ -802,6 +805,8 @@ describe('get_my_trade_history — ページネーション', () => {
 		expect(result.meta.isComplete).toBe(false);
 		// MAX_PAGES (10) より早く打ち切られたことを fetch 呼び出し回数で確認
 		expect(mockFn.mock.calls.length).toBeLessThan(10);
+		expect(result.summary).toContain('同じ時刻の約定が 1 ページ分を超えて並び、先へ進めずに打ち切りました');
+		expect(result.summary).not.toContain('ページ数の上限');
 	});
 
 	it('asc: 連続ページで重複する trade_id は dedup される', async () => {

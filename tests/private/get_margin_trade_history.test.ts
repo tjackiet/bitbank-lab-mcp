@@ -683,6 +683,7 @@ describe('get_margin_trade_history — ページネーション', () => {
 		expect(result.meta.isComplete).toBe(false);
 		expect(result.summary).toContain('信用約定履歴: 全ペア 0件');
 		expect(result.summary).toContain('取得した約定 9020件はすべて現物で、信用約定はありませんでした');
+		expect(result.summary).toContain('取得するページ数の上限（10 ページ）まで調べて打ち切りました');
 		expect(result.summary).toContain('これより古い約定は取得していません');
 		// 続きを取れるよう、最後に調べた約定の時刻（最終ページの末尾）を end に渡す値として出す。
 		const boundary = new Date(1718992000000).toISOString();
