@@ -652,6 +652,15 @@ describe('get_margin_trade_history — ページネーション', () => {
 		expect(ids.slice(0, 10)).toEqual([210, 209, 208, 207, 206, 205, 204, 203, 202, 201]);
 		expect(ids.slice(10)).toEqual([1000, 999, 998, 997, 996, 995, 994, 993, 992, 991]);
 		expect(result.meta.isComplete).toBe(false);
+		// 止めた理由は API の上限ではなく指定した件数。続きを取る時刻（取得した最後の約定）も出す。
+		const last = new Date(1709999990000).toISOString();
+		expect(result.summary).toContain(
+			'※ 全件ではなく一部のみ取得されています。指定した件数（20件）に達したので取得を止めました。これより古い信用約定もある可能性があります',
+		);
+		expect(result.summary).toContain(
+			`続きは end に ${last}（取得した最後の約定の時刻。この約定は次の結果にも含まれます）を指定して取得してください`,
+		);
+		expect(result.summary).not.toContain('API件数上限');
 	});
 
 	it('上限ページ数まで取りに行っても信用約定が無ければ 0 件で、取得した約定がすべて現物だったと本文に書く', async () => {

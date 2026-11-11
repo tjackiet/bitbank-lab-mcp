@@ -90,14 +90,24 @@ export function scanBoundaryIso(result: FilteredTradeHistory<unknown>): string |
 	return result.isComplete ? undefined : (toIsoMs(result.scanBoundaryMs) ?? undefined);
 }
 
-// 打ち切ったときに「反対側の約定しか見つからなかった」のか「約定が無い」のかを LLM が区別でき、続きを取れるようにする。
-export function mixedHistoryNote(
-	result: FilteredTradeHistory<unknown>,
+const INCOMPLETE_PREFIX = '※ 全件ではなく一部のみ取得されています。';
+
+// 止めた理由（指定した件数に届いた / ページの上限などで打ち切った）を書き分け、LLM が続きを取れる時刻を出す。
+export function completenessNote(
+	result: FilteredTradeHistory<TradeRow>,
 	options: { kept: string; excluded: string; order: 'asc' | 'desc'; limit: number },
 ): string | null {
 	const { kept, excluded, order, limit } = options;
-	if (result.isComplete || result.trades.length >= limit) return null;
+	if (result.isComplete) return null;
 	const direction = order === 'desc' ? { word: '古い', param: 'end' } : { word: '新しい', param: 'since' };
+	if (result.trades.length >= limit) {
+		const lastAt = toIsoMs(result.trades[result.trades.length - 1]?.executed_at ?? null);
+		const next =
+			lastAt != null
+				? `続きは ${direction.param} に ${lastAt}（取得した最後の約定の時刻。この約定は次の結果にも含まれます）を指定して取得してください`
+				: `続きは ${direction.param} で期間を指定して取得してください`;
+		return `${INCOMPLETE_PREFIX}指定した件数（${limit}件）に達したので取得を止めました。これより${direction.word}${kept}約定もある可能性があります。${next}`;
+	}
 	const found =
 		result.excluded === 0
 			? `指定の件数に届く前に取得を打ち切りました（${kept}約定 ${result.trades.length}件）`
@@ -109,5 +119,5 @@ export function mixedHistoryNote(
 		boundary != null
 			? `続きは ${direction.param} に ${boundary}（最後に調べた約定の時刻）を指定して取得してください`
 			: `続きは ${direction.param} で期間を指定して取得してください`;
-	return `※ ${found}。これより${direction.word}約定は取得していません。${next}`;
+	return `${INCOMPLETE_PREFIX}${found}。これより${direction.word}約定は取得していません。${next}`;
 }

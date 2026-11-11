@@ -627,6 +627,12 @@ describe('get_my_trade_history — ページネーション', () => {
 		assertOk(result);
 		// count と同数が返った場合 → まだ続きがある可能性
 		expect(result.meta.isComplete).toBe(false);
+		const last = new Date(1710000999000).toISOString();
+		expect(result.summary).toContain(
+			'※ 全件ではなく一部のみ取得されています。指定した件数（1000件）に達したので取得を止めました。これより古い現物約定もある可能性があります',
+		);
+		expect(result.summary).toContain(`続きは end に ${last}（取得した最後の約定の時刻。`);
+		expect(result.summary).not.toContain('API件数上限');
 	});
 
 	it('空配列で isComplete=true', async () => {
@@ -756,6 +762,9 @@ describe('get_my_trade_history — ページネーション', () => {
 		expect(result.data.trades).toHaveLength(2000);
 		expect(result.meta.isComplete).toBe(false);
 		expect(result.summary).toContain('全件ではなく一部のみ取得されています');
+		const last = new Date(1710001999000).toISOString();
+		expect(result.summary).toContain('これより新しい現物約定もある可能性があります');
+		expect(result.summary).toContain(`続きは since に ${last}（取得した最後の約定の時刻。`);
 	});
 
 	it('asc: 全件同一 executed_at で進捗ゼロのとき isComplete=false で無限ループせず打ち切る', async () => {
