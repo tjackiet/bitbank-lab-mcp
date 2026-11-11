@@ -102,8 +102,10 @@ const STOP_REASON_TEXT: Record<NonNullable<FilteredTradeHistory<unknown>['stopRe
 	no_timestamp: '約定時刻の無い行があり、先へ進めずに打ち切りました',
 };
 
+// stalled のときの境界は送り済みのカーソルと同じで、渡しても同じページが返るだけなので出さない。
 export function scanBoundaryIso(result: FilteredTradeHistory<unknown>): string | undefined {
-	return result.isComplete ? undefined : (toIsoMs(result.scanBoundaryMs) ?? undefined);
+	if (result.isComplete || result.stopReason === 'stalled') return undefined;
+	return toIsoMs(result.scanBoundaryMs) ?? undefined;
 }
 
 const INCOMPLETE_PREFIX = '※ 全件ではなく一部のみ取得されています。';

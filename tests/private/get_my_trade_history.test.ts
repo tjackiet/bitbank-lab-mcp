@@ -799,6 +799,9 @@ describe('get_my_trade_history — ページネーション', () => {
 		expect(mockFn.mock.calls.length).toBeLessThan(10);
 		expect(result.summary).toContain('同じ時刻の約定が 1 ページ分を超えて並び、先へ進めずに打ち切りました');
 		expect(result.summary).not.toContain('ページ数の上限');
+		// 送り済みの時刻を続きとして案内すると、同じページが返って同じところで止まる。
+		expect(result.meta.scanBoundary).toBeUndefined();
+		expect(result.summary).not.toContain('最後に調べた約定の時刻');
 	});
 
 	it('asc: 連続ページで重複する trade_id は dedup される', async () => {
