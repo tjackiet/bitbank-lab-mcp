@@ -4,10 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vite
 import {
 	DEFAULT_INITIAL_DELAY_MS,
 	DEFAULT_RETRY_DELAYS_MS,
+	pullConfirmationIfMissing,
 	type SnapshotHydrationOptions,
 	type SnapshotHydrationPhase,
 	startSnapshotHydration,
 } from '../src/mcp-apps-hydration.js';
+import { CONFIRMATION_META_KEY } from '../src/mcp-apps-meta.js';
 
 /** テスト用の短い既定値（既定値そのものは別テストで確認する） */
 const INITIAL_DELAY_MS = 2_500;
@@ -416,5 +418,67 @@ describe('タイマー注入', () => {
 		await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
 
 		expect(apply).toHaveBeenCalledTimes(1);
+	});
+});
+
+// Claude Desktop の更新後、ホストが ui/notifications/tool-result の `_meta` を iframe に渡さず、確認トークンが届かなくなった（確認カードのボタンが出ない）。
+describe('pullConfirmationIfMissing（push にトークンが無いときの取り直し）', () => {
+	const TOKEN_META = { [CONFIRMATION_META_KEY]: { confirmation_token: 'tok', expires_at: 1_900_000_000_000 } };
+
+	it('push の `_meta` にトークンがあれば取り直さない', async () => {
+		const fetchSnapshot = vi.fn(async () => ({ _meta: TOKEN_META }));
+		const apply = vi.fn();
+		const applied = await pullConfirmationIfMissing({ meta: TOKEN_META, fetchSnapshot, apply, isAborted: () => false });
+		expect(applied).toBe(false);
+		expect(fetchSnapshot).not.toHaveBeenCalled();
+		expect(apply).not.toHaveBeenCalled();
+	});
+
+	it('push にトークンが無く、スナップショットにあれば、その結果を 1 回だけ apply する', async () => {
+		const snapshot = { structuredContent: { ok: true }, _meta: TOKEN_META };
+		const fetchSnapshot = vi.fn(async () => snapshot);
+		const apply = vi.fn();
+		const applied = await pullConfirmationIfMissing({ meta: undefined, fetchSnapshot, apply, isAborted: () => false });
+		expect(applied).toBe(true);
+		expect(fetchSnapshot).toHaveBeenCalledTimes(1);
+		expect(apply).toHaveBeenCalledTimes(1);
+		expect(apply).toHaveBeenCalledWith(snapshot);
+	});
+
+	it('スナップショットにもトークンが無ければ apply しない（ボタンは出さないまま）', async () => {
+		const fetchSnapshot = vi.fn(async () => ({ structuredContent: { ok: true } }));
+		const apply = vi.fn();
+		const applied = await pullConfirmationIfMissing({ meta: {}, fetchSnapshot, apply, isAborted: () => false });
+		expect(applied).toBe(false);
+		expect(fetchSnapshot).toHaveBeenCalledTimes(1);
+		expect(apply).not.toHaveBeenCalled();
+	});
+
+	it('取り直しに失敗しても例外を投げず、apply しない', async () => {
+		const fetchSnapshot = vi.fn(async () => {
+			throw new Error('timeout');
+		});
+		const apply = vi.fn();
+		await expect(
+			pullConfirmationIfMissing({ meta: undefined, fetchSnapshot, apply, isAborted: () => false }),
+		).resolves.toBe(false);
+		expect(apply).not.toHaveBeenCalled();
+	});
+
+	it('取り直しの途中で iframe が破棄されたら apply しない', async () => {
+		let aborted = false;
+		const fetchSnapshot = vi.fn(async () => {
+			aborted = true;
+			return { _meta: TOKEN_META };
+		});
+		const apply = vi.fn();
+		const applied = await pullConfirmationIfMissing({
+			meta: undefined,
+			fetchSnapshot,
+			apply,
+			isAborted: () => aborted,
+		});
+		expect(applied).toBe(false);
+		expect(apply).not.toHaveBeenCalled();
 	});
 });
