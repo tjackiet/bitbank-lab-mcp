@@ -2,6 +2,7 @@
 // SEP-1865 は iframe 起源の tools/call を識別できないので、`_meta` 経路ではトークン所持そのものが認可の実体になる（ADR-0007）。
 
 import {
+	CLIENT_CAPABILITIES_META_KEY,
 	type InputRequiredResult,
 	inputRequired,
 	inputResponse,
@@ -27,13 +28,16 @@ function declaresAppUi(caps: unknown): boolean {
 	return mimeTypes.includes(APP_RESOURCE_MIME_TYPE);
 }
 
+// SDK は per-request envelope を `_meta` のキーのまま `mcpReq.envelope` に持ち上げる（2026-07-28 版のクライアントだけが送る）。
+function envelopeCapabilities(extra: ToolHandlerExtra | undefined): unknown {
+	const envelope = (extra as { mcpReq?: { envelope?: Record<string, unknown> } } | undefined)?.mcpReq?.envelope;
+	return envelope?.[CLIENT_CAPABILITIES_META_KEY];
+}
+
 /** per-request envelope に clientCapabilities があればそれだけを見て、initialize 時の宣言へは落ちない（`clientSupportsElicitation` の OR と意図的に違う）。bearer token を渡す判定なので、宣言が食い違うときは狭い側に倒す。 */
 export function clientSupportsAppUi(extra: ToolHandlerExtra | undefined): boolean {
-	const envelope = (extra as { mcpReq?: { envelope?: { clientCapabilities?: unknown } } } | undefined)?.mcpReq
-		?.envelope;
-	if (envelope && 'clientCapabilities' in envelope && envelope.clientCapabilities != null) {
-		return declaresAppUi(envelope.clientCapabilities);
-	}
+	const envelopeCaps = envelopeCapabilities(extra);
+	if (envelopeCaps != null) return declaresAppUi(envelopeCaps);
 	const server = (extra as { server?: { getClientCapabilities?: () => unknown } } | undefined)?.server;
 	const initCaps = typeof server?.getClientCapabilities === 'function' ? server.getClientCapabilities() : undefined;
 	return declaresAppUi(initCaps);
@@ -62,9 +66,7 @@ export function clientSupportsElicitation(extra: ToolHandlerExtra | undefined): 
 	const initCaps = typeof server?.getClientCapabilities === 'function' ? server.getClientCapabilities() : undefined;
 	if (declaresFormElicitation(initCaps)) return true;
 
-	const envelope = (extra as { mcpReq?: { envelope?: { clientCapabilities?: unknown } } } | undefined)?.mcpReq
-		?.envelope;
-	return declaresFormElicitation(envelope?.clientCapabilities);
+	return declaresFormElicitation(envelopeCapabilities(extra));
 }
 
 function readInputResponses(extra: ToolHandlerExtra | undefined): Record<string, unknown> | undefined {

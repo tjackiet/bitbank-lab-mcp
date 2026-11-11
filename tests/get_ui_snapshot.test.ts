@@ -1,3 +1,4 @@
+import { CLIENT_CAPABILITIES_META_KEY } from '@modelcontextprotocol/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CONFIRMATION_META_KEY } from '../src/mcp-apps-meta.js';
 import { clientSupportsElicitation, isAppUiExecuteAllowed } from '../src/private/elicitation.js';
@@ -122,7 +123,7 @@ describe('handler', () => {
 		const extra = {
 			mcpReq: {
 				envelope: {
-					clientCapabilities: {
+					[CLIENT_CAPABILITIES_META_KEY]: {
 						elicitation: { url: {} },
 						extensions: { [MCP_APPS_UI_EXTENSION_ID]: { mimeTypes: [APP_RESOURCE_MIME_TYPE] } },
 					},

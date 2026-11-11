@@ -232,7 +232,7 @@ pull hydration を使ったカードもボタン実行に成功しており（�
    - `mimeTypes` が欠落／空／該当型を含まない場合は**トークンを一切載せない**（fail-closed）
 
    **capability の取得元が食い違う場合の解決順序**: per-request envelope
-   （`extra.mcpReq.envelope.clientCapabilities`）が存在すればそれを**権威として採用**し、
+   （`extra.mcpReq.envelope['io.modelcontextprotocol/clientCapabilities']`。SDK は envelope を `_meta` のキー名のまま持ち上げる）が存在すればそれを**権威として採用**し、
    無い場合にのみ `server.getClientCapabilities()`（`initialize` 時の宣言）へフォールバックする。
    - 2026-07-28 系はリクエストごとの capability 提示が前提であり、envelope が「UI 非対応」と
      言っているのに `initialize` 時の宣言を根拠に載せるのは、より新しい宣言を無視することになる
