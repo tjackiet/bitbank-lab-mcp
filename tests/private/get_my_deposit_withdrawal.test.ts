@@ -721,6 +721,46 @@ describe('get_my_deposit_withdrawal — 全件でないときの注記', () => {
 		expect(result.summary).not.toContain('count を今回より大きく');
 	});
 
+	it('明細は新しいほうから 100 件まで本文に出し、超えた分は件数と明細を取るときの end を書く', async () => {
+		fakeApi(
+			Array.from({ length: 150 }, (_, i) => dep(i, T0 + i * 1000)),
+			[],
+		);
+
+		const { default: getMyDepositWithdrawal } = await import('../../tools/private/get_my_deposit_withdrawal.js');
+		const result = await getMyDepositWithdrawal({ asset: 'jpy', type: 'deposit' });
+
+		assertOk(result);
+		expect(result.summary.match(/\[dep-\d+\]/g)).toHaveLength(100);
+		expect(result.summary).toContain('[dep-149]');
+		expect(result.summary).toContain('[dep-50]');
+		expect(result.summary).not.toContain('[dep-49]');
+		const oldestShown = new Date(T0 + 50 * 1000).toISOString();
+		expect(result.summary).toContain(
+			`... 他 50件（本文の明細は新しいほうから 100件まで。残りは ${oldestShown} 以前です。明細が必要なら end に ${oldestShown} を指定して取得してください。境界の時刻は含まれるので uuid で重複を除いてください）`,
+		);
+	});
+
+	it('count=1 から案内どおり count を 100 に増やして続きを取ると、取りこぼしなく全件が本文に出る', async () => {
+		const all = Array.from({ length: 120 }, (_, i) => dep(i, T0 + i * 1000));
+		fakeApi(all, []);
+		const { default: getMyDepositWithdrawal } = await import('../../tools/private/get_my_deposit_withdrawal.js');
+		const since = new Date(T0).toISOString();
+		const nextEnd = (summary: string) => summary.match(/続きは end に (\S+?)（取得したいちばん古い時刻）/)?.[1];
+		const seen = new Set<string>();
+
+		let result = await getMyDepositWithdrawal({ asset: 'jpy', type: 'deposit', since, count: 1 });
+		for (let round = 0; round < 5; round++) {
+			assertOk(result);
+			for (const m of result.summary.matchAll(/\[(dep-\d+)\]/g)) seen.add(m[1]);
+			const end = nextEnd(result.summary);
+			if (end == null) break;
+			result = await getMyDepositWithdrawal({ asset: 'jpy', type: 'deposit', since, end, count: 100 });
+		}
+
+		expect([...seen].sort()).toEqual(all.map((d) => d.uuid).sort());
+	});
+
 	it('期間を指定せずページ数の上限で打ち切ったら、その理由と続きの end を書く', async () => {
 		fakeApi(
 			[],

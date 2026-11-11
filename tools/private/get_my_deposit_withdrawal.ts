@@ -158,6 +158,29 @@ function incompleteLines(parts: FlowPart[], count: number): string[] {
 	return lines;
 }
 
+const DW_DISPLAY_LIMIT = 100;
+
+// 続きの end に渡す時刻なので、timeOf はページ送りのカーソル（depositTime / withdrawalTime）と同じ時刻を返す。
+function pushDetailRows<T>(
+	lines: string[],
+	rows: T[],
+	timeOf: (row: T) => string | undefined,
+	format: (row: T) => string,
+): void {
+	const sorted = [...rows].sort((a, b) => (timeOf(b) ?? '').localeCompare(timeOf(a) ?? ''));
+	const shown = sorted.slice(0, DW_DISPLAY_LIMIT);
+	for (const row of shown) lines.push(format(row));
+	const hidden = sorted.length - shown.length;
+	if (hidden <= 0) return;
+	const last = shown[shown.length - 1];
+	const at = last != null ? timeOf(last) : undefined;
+	const next =
+		at != null
+			? `残りは ${at} 以前です。明細が必要なら end に ${at} を指定して取得してください。境界の時刻は含まれるので uuid で重複を除いてください`
+			: '明細が必要なら since / end で期間を絞って取得してください';
+	lines.push(`    ... 他 ${hidden}件（本文の明細は新しいほうから ${DW_DISPLAY_LIMIT}件まで。${next}）`);
+}
+
 export default async function getMyDepositWithdrawal(args: {
 	asset?: string;
 	type?: 'deposit' | 'withdrawal' | 'all';
@@ -339,6 +362,7 @@ export default async function getMyDepositWithdrawal(args: {
 			requested_at: toIsoMs(w.requested_at) ?? undefined,
 		}));
 
+		const depositDisplayTime = (d: (typeof deposits)[number]) => d.confirmed_at ?? d.found_at;
 		const lines: string[] = [];
 		const assetLabel = asset ? asset.toUpperCase() : '全通貨';
 		lines.push(`入出金履歴: ${assetLabel}`);
@@ -360,23 +384,25 @@ export default async function getMyDepositWithdrawal(args: {
 			if (jpyDeposits.length > 0) {
 				const totalJpy = jpyDeposits.reduce((sum, d) => sum + Number(d.amount), 0);
 				lines.push(`  JPY 入金: ${jpyDeposits.length}件 合計 ${formatPrice(Math.round(totalJpy))}`);
-				for (const d of jpyDeposits.slice(0, 5)) {
-					lines.push(
+				pushDetailRows(
+					lines,
+					jpyDeposits,
+					depositDisplayTime,
+					(d) =>
 						`    [${d.uuid}] JPY ${formatPrice(Math.round(Number(d.amount)))} (${d.status}${depositCategoryText(d.category)})${d.found_at ? ` ${d.found_at}` : ''}`,
-					);
-				}
-				if (jpyDeposits.length > 5) lines.push(`    ... 他 ${jpyDeposits.length - 5}件`);
+				);
 			}
 			if (cryptoDeposits.length > 0) {
 				const stakingCount = cryptoDeposits.filter((d) => d.category === 'STAKING').length;
 				const stakingText = stakingCount > 0 ? `、うちステーキング報酬（種別: STAKING）${stakingCount}件` : '';
-				lines.push(`  暗号資産入庫: ${cryptoDeposits.length}件${stakingText}（明細表示は先頭5件のみ）`);
-				for (const d of cryptoDeposits.slice(0, 5)) {
-					lines.push(
+				lines.push(`  暗号資産入庫: ${cryptoDeposits.length}件${stakingText}`);
+				pushDetailRows(
+					lines,
+					cryptoDeposits,
+					depositDisplayTime,
+					(d) =>
 						`    [${d.uuid}] ${d.asset.toUpperCase()} ${d.amount} (${d.status}${depositCategoryText(d.category)})${d.found_at ? ` ${d.found_at}` : ''}`,
-					);
-				}
-				if (cryptoDeposits.length > 5) lines.push(`    ... 他 ${cryptoDeposits.length - 5}件`);
+				);
 			}
 		} else {
 			lines.push('入金/入庫: 0件');
@@ -391,21 +417,23 @@ export default async function getMyDepositWithdrawal(args: {
 			if (jpyWithdrawals.length > 0) {
 				const totalJpy = jpyWithdrawals.reduce((sum, w) => sum + Number(w.amount), 0);
 				lines.push(`  JPY 出金: ${jpyWithdrawals.length}件 合計 ${formatPrice(Math.round(totalJpy))}`);
-				for (const w of jpyWithdrawals.slice(0, 5)) {
-					lines.push(
+				pushDetailRows(
+					lines,
+					jpyWithdrawals,
+					(w) => w.requested_at,
+					(w) =>
 						`    [${w.uuid}] JPY ${formatPrice(Math.round(Number(w.amount)))} (${w.status})${w.requested_at ? ` ${w.requested_at}` : ''}`,
-					);
-				}
-				if (jpyWithdrawals.length > 5) lines.push(`    ... 他 ${jpyWithdrawals.length - 5}件`);
+				);
 			}
 			if (cryptoWithdrawals.length > 0) {
-				lines.push(`  暗号資産出庫: ${cryptoWithdrawals.length}件（明細表示は先頭5件のみ）`);
-				for (const w of cryptoWithdrawals.slice(0, 5)) {
-					lines.push(
+				lines.push(`  暗号資産出庫: ${cryptoWithdrawals.length}件`);
+				pushDetailRows(
+					lines,
+					cryptoWithdrawals,
+					(w) => w.requested_at,
+					(w) =>
 						`    [${w.uuid}] ${w.asset.toUpperCase()} ${w.amount} (${w.status})${w.requested_at ? ` ${w.requested_at}` : ''}`,
-					);
-				}
-				if (cryptoWithdrawals.length > 5) lines.push(`    ... 他 ${cryptoWithdrawals.length - 5}件`);
+				);
 			}
 		} else {
 			lines.push('出金/出庫: 0件');
@@ -482,7 +510,7 @@ function deduplicateByUuid<T extends { uuid: string }>(items: T[]): T[] {
 export const toolDef: ToolDefinition = {
 	name: 'get_my_deposit_withdrawal',
 	description:
-		'[Deposit / Withdrawal / Transfer History] 入出金・入出庫の履歴（deposit / withdrawal / transfer / funding history）を取得。JPY入出金+暗号資産入出庫に対応。期間を指定しないときは入金・出金ごとに最大 1,000 件までさかのぼる（上限に達したら取得状態が partial になる）。Private API。',
+		'[Deposit / Withdrawal / Transfer History] 入出金・入出庫の履歴（deposit / withdrawal / transfer / funding history）を取得。JPY入出金+暗号資産入出庫に対応。期間を指定しないときは入金・出金ごとに最大 1,000 件までさかのぼる（上限に達したら取得状態が partial になる）。本文に出す明細は種類（JPY 入金・暗号資産入庫・JPY 出金・暗号資産出庫）ごとに新しいほうから 100 件まで（超えた分は件数と、明細を取るときに end に渡す時刻を書く）。Private API。',
 	inputSchema: GetMyDepositWithdrawalInputSchema,
 	handler: async (args: {
 		asset?: string;
