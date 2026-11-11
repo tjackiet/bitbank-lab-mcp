@@ -108,6 +108,28 @@ export function scanBoundaryIso(result: FilteredTradeHistory<unknown>): string |
 
 const INCOMPLETE_PREFIX = '※ 全件ではなく一部のみ取得されています。';
 
+const TRADE_DISPLAY_LIMIT = 100;
+
+// asc でも新しい側を出す。続きの案内が「表示した中で最も古い約定より前」の 1 通りで済む。
+export function tradesToDisplay<T>(trades: T[], order: 'asc' | 'desc'): T[] {
+	return order === 'asc' ? trades.slice(-TRADE_DISPLAY_LIMIT) : trades.slice(0, TRADE_DISPLAY_LIMIT);
+}
+
+export function hiddenTradesNote(
+	total: number,
+	shown: Array<{ executed_at: string }>,
+	order: 'asc' | 'desc',
+): string | null {
+	const hidden = total - shown.length;
+	if (hidden <= 0) return null;
+	const oldestShown = (order === 'asc' ? shown[0] : shown[shown.length - 1])?.executed_at;
+	const next =
+		oldestShown != null
+			? `残りの ${hidden}件は ${oldestShown} 以前の約定です。明細が必要なら end に ${oldestShown} を指定して取得してください。境界の時刻は含まれるので trade_id で重複を除いてください`
+			: '明細が必要なら since / end で期間を絞って取得してください';
+	return `... 他 ${hidden}件（本文の明細は新しいほうから ${TRADE_DISPLAY_LIMIT}件まで。${next}）`;
+}
+
 // 止めた理由（指定した件数に届いた / ページの上限などで打ち切った）を書き分け、LLM が続きを取れる時刻を出す。
 export function completenessNote(
 	result: FilteredTradeHistory<TradeRow>,

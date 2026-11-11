@@ -3,10 +3,14 @@ import { nowIso, parseIso8601, toIsoMs } from '../../lib/datetime.js';
 import { formatPrice } from '../../lib/formatter.js';
 import { fail, ok } from '../../lib/result.js';
 import {
+	depositTime,
+	type FlowStopReason,
+	MAX_PAGES,
 	type PaginatedDeposits as PaginatedDepositsOf,
 	type PaginatedWithdrawals as PaginatedWithdrawalsOf,
 	paginateDeposits,
 	paginateWithdrawals,
+	withdrawalTime,
 } from '../../src/handlers/portfolio/pagination.js';
 import { tryGet } from '../../src/handlers/portfolio/types.js';
 import { type BitbankPrivateClient, getDefaultClient } from '../../src/private/client.js';
@@ -64,7 +68,8 @@ async function singleFetchDeposits(
 	}
 	const batch = result.data.deposits || [];
 	const count = Number(params.count) || 100;
-	return { deposits: batch, complete: batch.length < count };
+	const complete = batch.length < count;
+	return { deposits: batch, complete, ...(complete ? {} : { stopReason: 'count' as const }) };
 }
 
 async function singleFetchWithdrawals(
@@ -77,7 +82,74 @@ async function singleFetchWithdrawals(
 	}
 	const batch = result.data.withdrawals || [];
 	const count = Number(params.count) || 100;
-	return { withdrawals: batch, complete: batch.length < count };
+	const complete = batch.length < count;
+	return { withdrawals: batch, complete, ...(complete ? {} : { stopReason: 'count' as const }) };
+}
+
+interface FlowPart {
+	label: string;
+	complete: boolean;
+	stopReason?: FlowStopReason;
+	error?: string;
+	cause?: unknown;
+	oldestMs: number | null;
+}
+
+function oldestOf(times: Array<number | undefined>): number | null {
+	const valid = times.filter((t): t is number => t != null && Number.isFinite(t));
+	return valid.length > 0 ? Math.min(...valid) : null;
+}
+
+function depositPart(label: string, r: PaginatedDeposits): FlowPart {
+	const { deposits, ...rest } = r;
+	return { label, ...rest, oldestMs: oldestOf(deposits.map(depositTime)) };
+}
+
+function withdrawalPart(label: string, r: PaginatedWithdrawals): FlowPart {
+	const { withdrawals, ...rest } = r;
+	return { label, ...rest, oldestMs: oldestOf(withdrawals.map(withdrawalTime)) };
+}
+
+// resumable: 一番古い時刻を end に渡せば先へ進める理由か。同じ時刻で詰まったときは同じ結果が返るだけなので案内しない。
+const FLOW_STOP_TEXT: Record<FlowStopReason, { text: (count: number) => string; resumable: boolean }> = {
+	count: {
+		text: (count) => `指定した件数（${count}件）に達したので取得を止めました。これより古い履歴もある可能性があります`,
+		resumable: true,
+	},
+	page_limit: {
+		text: () =>
+			`取得するページ数の上限（${MAX_PAGES} ページ）まで調べて打ち切りました。これより古い履歴は取得していません`,
+		resumable: true,
+	},
+	stalled: {
+		text: () =>
+			'同じ時刻の履歴が 1 ページ分を超えて並び、先へ進めずに打ち切りました。これより古い履歴は取得していません',
+		resumable: false,
+	},
+	no_timestamp: {
+		text: () => '時刻の無い履歴があり、先へ進めずに打ち切りました。これより古い履歴は取得していません',
+		resumable: false,
+	},
+};
+
+function incompleteLines(parts: FlowPart[], count: number): string[] {
+	const lines: string[] = [];
+	let resumable = false;
+	for (const p of parts) {
+		if (p.complete) continue;
+		if (p.error) {
+			lines.push(`  ${p.label}: 取得に失敗しました（末尾の警告を参照）`);
+			continue;
+		}
+		const stop = p.stopReason != null ? FLOW_STOP_TEXT[p.stopReason] : undefined;
+		if (!stop) continue;
+		const at = stop.resumable ? toIsoMs(p.oldestMs) : null;
+		if (at != null) resumable = true;
+		const next = at != null ? `。続きは end に ${at}（取得したいちばん古い時刻）を指定して取得してください` : '';
+		lines.push(`  ${p.label}: ${stop.text(count)}${next}`);
+	}
+	if (resumable) lines.push('  end は境界の時刻を含むので、同じ時刻の履歴は重複して返ります（uuid で除いてください）');
+	return lines;
 }
 
 export default async function getMyDepositWithdrawal(args: {
@@ -119,9 +191,8 @@ export default async function getMyDepositWithdrawal(args: {
 		let allDeposits: RawDeposit[] = [];
 		let allWithdrawals: RawWithdrawal[] = [];
 		const warnings: string[] = [];
-		let isComplete = true;
-		// 実際に呼んだ取得だけを入れる（type で呼ばなかった側は失敗の判定に含めない）。
-		const requested: Array<{ error?: string; cause?: unknown }> = [];
+		// 実際に呼んだ取得だけを入れる（type で呼ばなかった側は失敗や取得状態の判定に含めない）。
+		const parts: FlowPart[] = [];
 
 		if (asset) {
 			const params: Record<string, string> = { ...baseParams, asset };
@@ -142,13 +213,12 @@ export default async function getMyDepositWithdrawal(args: {
 					: Promise.resolve({ withdrawals: [] as RawWithdrawal[], complete: true } as PaginatedWithdrawals),
 			]);
 
-			if (fetchDeposits) requested.push(depResult);
-			if (fetchWithdrawals) requested.push(wdResult);
+			if (fetchDeposits) parts.push(depositPart('入金/入庫履歴', depResult));
+			if (fetchWithdrawals) parts.push(withdrawalPart('出金/出庫履歴', wdResult));
 			if (depResult.error) warnings.push(`入金/入庫履歴の取得に失敗: ${depResult.error}`);
 			if (wdResult.error) warnings.push(`出金/出庫履歴の取得に失敗: ${wdResult.error}`);
 			allDeposits = depResult.deposits;
 			allWithdrawals = wdResult.withdrawals;
-			isComplete = depResult.complete && wdResult.complete;
 		} else {
 			if (hasSinceEnd) {
 				const cryptoParams = { ...baseParams, count: String(count) };
@@ -169,8 +239,10 @@ export default async function getMyDepositWithdrawal(args: {
 						: Promise.resolve({ withdrawals: [], complete: true } as PaginatedWithdrawals),
 				]);
 
-				if (fetchDeposits) requested.push(cryptoDepResult, jpyDepResult);
-				if (fetchWithdrawals) requested.push(cryptoWdResult, jpyWdResult);
+				if (fetchDeposits)
+					parts.push(depositPart('暗号資産入庫履歴', cryptoDepResult), depositPart('JPY入金履歴', jpyDepResult));
+				if (fetchWithdrawals)
+					parts.push(withdrawalPart('暗号資産出庫履歴', cryptoWdResult), withdrawalPart('JPY出金履歴', jpyWdResult));
 				collectResults(
 					cryptoDepResult,
 					jpyDepResult,
@@ -184,8 +256,6 @@ export default async function getMyDepositWithdrawal(args: {
 						allWithdrawals = w;
 					},
 				);
-				isComplete =
-					cryptoDepResult.complete && jpyDepResult.complete && cryptoWdResult.complete && jpyWdResult.complete;
 			} else {
 				const [cryptoDepResult, jpyDepResult, cryptoWdResult, jpyWdResult] = await Promise.all([
 					fetchDeposits
@@ -202,8 +272,10 @@ export default async function getMyDepositWithdrawal(args: {
 						: Promise.resolve({ withdrawals: [], complete: true } as PaginatedWithdrawals),
 				]);
 
-				if (fetchDeposits) requested.push(cryptoDepResult, jpyDepResult);
-				if (fetchWithdrawals) requested.push(cryptoWdResult, jpyWdResult);
+				if (fetchDeposits)
+					parts.push(depositPart('暗号資産入庫履歴', cryptoDepResult), depositPart('JPY入金履歴', jpyDepResult));
+				if (fetchWithdrawals)
+					parts.push(withdrawalPart('暗号資産出庫履歴', cryptoWdResult), withdrawalPart('JPY出金履歴', jpyWdResult));
 				collectResults(
 					cryptoDepResult,
 					jpyDepResult,
@@ -217,14 +289,12 @@ export default async function getMyDepositWithdrawal(args: {
 						allWithdrawals = w;
 					},
 				);
-				isComplete =
-					cryptoDepResult.complete && jpyDepResult.complete && cryptoWdResult.complete && jpyWdResult.complete;
 			}
 		}
 
 		// 取得できなかったことを「入出金 0 件」と読ませないよう、1 件も取れずに全部失敗したら失敗として返す。
-		const failures = requested.filter((r) => r.error);
-		if (failures.length === requested.length && allDeposits.length + allWithdrawals.length === 0) {
+		const failures = parts.filter((r) => r.error);
+		if (failures.length === parts.length && allDeposits.length + allWithdrawals.length === 0) {
 			return GetMyDepositWithdrawalOutputSchema.parse(
 				failPrivateToolError(failures[0]?.cause, '入出金履歴の取得に失敗しました'),
 			);
@@ -234,6 +304,7 @@ export default async function getMyDepositWithdrawal(args: {
 		allDeposits = normalizeAssetCodes(deduplicateByUuid(allDeposits));
 		allWithdrawals = normalizeAssetCodes(deduplicateByUuid(allWithdrawals));
 
+		const isComplete = parts.every((r) => r.complete);
 		const timestamp = nowIso();
 
 		const deposits = allDeposits.map((d) => ({
@@ -272,7 +343,7 @@ export default async function getMyDepositWithdrawal(args: {
 			lines.push('※ 一部API取得失敗あり（詳細は末尾の警告を参照）');
 		}
 		if (!isComplete) {
-			lines.push('※ 全件ではなく一部のみ取得されています。API件数上限に達した可能性があります');
+			lines.push('※ 全件ではなく一部のみ取得されています。', ...incompleteLines(parts, count));
 		}
 		lines.push('');
 

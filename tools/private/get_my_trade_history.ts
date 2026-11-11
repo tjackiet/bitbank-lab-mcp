@@ -6,7 +6,13 @@ import type { RawTrade } from '../../src/handlers/portfolio/types.js';
 import { getDefaultClient } from '../../src/private/client.js';
 import { GetMyTradeHistoryInputSchema, GetMyTradeHistoryOutputSchema } from '../../src/private/schemas.js';
 import { failPrivateToolError } from '../../src/private/tool-error.js';
-import { completenessNote, fetchFilteredTradeHistory, scanBoundaryIso } from '../../src/private/trade-history.js';
+import {
+	completenessNote,
+	fetchFilteredTradeHistory,
+	hiddenTradesNote,
+	scanBoundaryIso,
+	tradesToDisplay,
+} from '../../src/private/trade-history.js';
 import type { ToolDefinition } from '../../src/tool-definition.js';
 
 // 現物の手数料は売買とも quote 建て。base 建てが非ゼロのときだけ併記する。
@@ -90,7 +96,7 @@ export default async function getMyTradeHistory(args: {
 		if (trades.length > 0) {
 			lines.push('');
 
-			const displayTrades = order === 'asc' ? trades.slice(-10) : trades.slice(0, 10);
+			const displayTrades = tradesToDisplay(trades, order);
 			for (const t of displayTrades) {
 				const sideLabel = t.side === 'buy' ? '買' : '売';
 				const isJpy = t.pair.includes('jpy');
@@ -100,9 +106,8 @@ export default async function getMyTradeHistory(args: {
 				);
 			}
 
-			if (trades.length > 10) {
-				lines.push(`... 他 ${trades.length - 10}件`);
-			}
+			const hiddenNote = hiddenTradesNote(trades.length, displayTrades, order);
+			if (hiddenNote) lines.push(hiddenNote);
 
 			const buyCount = trades.filter((t) => t.side === 'buy').length;
 			const sellCount = trades.filter((t) => t.side === 'sell').length;
@@ -137,7 +142,7 @@ export default async function getMyTradeHistory(args: {
 export const toolDef: ToolDefinition = {
 	name: 'get_my_trade_history',
 	description:
-		'[My Trades / Trade History / Fills] 自分の現物約定履歴（my trades / trade history / fills / executions）を取得。通貨ペア・期間・件数でフィルタ可能。Private API。' +
+		'[My Trades / Trade History / Fills] 自分の現物約定履歴（my trades / trade history / fills / executions）を取得。通貨ペア・期間・件数でフィルタ可能。本文に出す明細は新しいほうから 100 件まで（超えた分は件数と、明細を取るときに end に渡す時刻を書く）。Private API。' +
 		'※ 本ツールは現物約定専用。信用約定の取得は `get_margin_trade_history` を使う。',
 	inputSchema: GetMyTradeHistoryInputSchema,
 	handler: async (args: { pair?: string; count?: number; order?: 'asc' | 'desc'; since?: string; end?: string }) =>
