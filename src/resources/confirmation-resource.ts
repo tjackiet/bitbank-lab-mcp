@@ -6,7 +6,7 @@ import { appResourceUriFor, readConfirmationMeta } from '../mcp-apps-meta.js';
 import { isAppUiExecuteEnabled } from '../private/config.js';
 import { clientSupportsAppUi, clientSupportsElicitation, describeConfirmationGate } from '../private/elicitation.js';
 import type { ToolHandlerExtra } from '../tool-definition.js';
-import { getUiSnapshot, getUiSnapshotMeta } from '../ui-snapshot-cache.js';
+import { getUiSnapshotWithMeta } from '../ui-snapshot-cache.js';
 import { appResourceRegistry } from './app-resources.js';
 
 export interface ConfirmationResourceResult {
@@ -34,9 +34,9 @@ export function readConfirmationResource(
 	const sessionId = (extra as { sessionId?: string } | undefined)?.sessionId;
 	const closed = gateReason(appUri, extra);
 	const openUri = closed == null ? appUri : undefined;
-	const structuredContent = openUri ? getUiSnapshot(openUri, { sessionId }) : null;
-	const confirmation =
-		openUri && structuredContent ? readConfirmationMeta(getUiSnapshotMeta(openUri, { sessionId })) : undefined;
+	const found = openUri ? getUiSnapshotWithMeta(openUri, { sessionId }) : null;
+	const structuredContent = found?.structuredContent ?? null;
+	const confirmation = found ? readConfirmationMeta(found.meta) : undefined;
 	// トークンそのものは記録しない。実機で「カードが読んだか・渡したか・渡さなかった理由」を確かめるための記録。
 	log('info', {
 		type: 'confirmation_resource_read',

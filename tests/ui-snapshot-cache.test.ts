@@ -11,9 +11,12 @@ import {
 import {
 	_resetUiSnapshots,
 	clearUiSnapshot,
+	forgetSharedUiSnapshotMeta,
 	getUiSnapshot,
 	getUiSnapshotMeta,
+	getUiSnapshotWithMeta,
 	storeUiSnapshot,
+	sweepSharedUiSnapshots,
 	uiSnapshotKey,
 } from '../src/ui-snapshot-cache.js';
 
@@ -192,8 +195,83 @@ describe.skipIf(process.platform === 'win32')('ui-snapshot-cache（プロセス�
 		vi.mocked(log).mockClear();
 	});
 
+	function sharedFileText(): string {
+		const dir = path.join(root, 'confirm', 'snapshots');
+		return fs
+			.readdirSync(dir)
+			.map((n) => fs.readFileSync(path.join(dir, n), 'utf8'))
+			.join('\n');
+	}
+
+	it('カードに渡したトークンはファイルから消し、別プロセスは内容だけを読める', () => {
+		storeUiSnapshot(URI, structured, { nowMs: now }, meta, now + 60_000);
+		forgetSharedUiSnapshotMeta(URI, {}, 'tok-shared');
+		expect(sharedFileText()).not.toContain('tok-shared');
+		// 発行したプロセスのメモリには残る（同じプロセスで動くホストの挙動は変えない）。
+		expect(getUiSnapshotMeta(URI, { nowMs: now + 1000 })).toEqual(meta);
+		_resetUiSnapshots();
+		expect(getUiSnapshot(URI, { nowMs: now + 1000 })).toEqual(structured);
+		expect(getUiSnapshotMeta(URI, { nowMs: now + 1000 })).toBeNull();
+	});
+
+	it('掃除で、TTL を過ぎた控えと消した印のファイルを消す（期限切れのトークンは検証で弾かれるので、控えごと消える）', () => {
+		storeUiSnapshot(URI, structured, { nowMs: now }, meta, now + 60_000);
+		sweepSharedUiSnapshots(now + 60_001);
+		expect(sharedFileText()).toContain('preview');
+
+		sweepSharedUiSnapshots(now + 5 * 60_000 + 1);
+		expect(sharedFileText()).toBe('');
+
+		clearUiSnapshot(URI, { nowMs: now });
+		sweepSharedUiSnapshots(now + 5 * 60_000 + 1);
+		expect(sharedFileText()).toBe('');
+	});
+
+	it('渡したトークンと違うトークン（新しい preview）は消さない', () => {
+		storeUiSnapshot(URI, structured, { nowMs: now }, meta, now + 60_000);
+		const newer = { 'cc.bitbank/confirmation': { confirmation_token: 'tok-newer', expires_at: now + 70_000 } };
+		storeUiSnapshot(URI, { ok: true, summary: 'newer' }, { nowMs: now + 10 }, newer, now + 70_000);
+		forgetSharedUiSnapshotMeta(URI, {}, 'tok-shared');
+		_resetUiSnapshots();
+		expect(getUiSnapshotMeta(URI, { nowMs: now + 20 })).toEqual(newer);
+	});
+
+	it('掃除は、期限内のトークンと TTL 内の控えを残す', () => {
+		storeUiSnapshot(URI, structured, { nowMs: now }, meta, now + 60_000);
+		sweepSharedUiSnapshots(now + 1000);
+		expect(sharedFileText()).toContain('tok-shared');
+	});
+
 	it('形の合わないファイルは無視する', () => {
 		writeSharedRecord('snapshots', uiSnapshotKey(undefined, URI), { structuredContent: 'x', storedAt: 'y' });
 		expect(getUiSnapshot(URI, { nowMs: now })).toBeNull();
+	});
+});
+
+// 内容とトークンを別々に読むと、その間に置かれた新しい preview のトークンを古い内容に添えて返しうるので、同じ控えから返す。
+describe('getUiSnapshotWithMeta', () => {
+	const now = 1_800_000_000_000;
+	const meta = { 'cc.bitbank/confirmation': { confirmation_token: 'tok-pair', expires_at: now + 60_000 } };
+
+	it('内容とトークンを同じ控えから返す', () => {
+		storeUiSnapshot(URI, { ok: true, summary: 'a' }, { nowMs: now }, meta, now + 60_000);
+		expect(getUiSnapshotWithMeta(URI, { nowMs: now + 1 })).toEqual({
+			structuredContent: { ok: true, summary: 'a' },
+			meta,
+		});
+	});
+
+	it('トークンの期限が切れていれば、内容だけを返す', () => {
+		storeUiSnapshot(URI, { ok: true, summary: 'a' }, { nowMs: now }, meta, now + 60_000);
+		expect(getUiSnapshotWithMeta(URI, { nowMs: now + 60_001 })).toEqual({
+			structuredContent: { ok: true, summary: 'a' },
+			meta: null,
+		});
+	});
+
+	it('控えが無い・TTL を過ぎていれば null を返す', () => {
+		expect(getUiSnapshotWithMeta(URI, { nowMs: now })).toBeNull();
+		storeUiSnapshot(URI, { ok: true, summary: 'a' }, { nowMs: now });
+		expect(getUiSnapshotWithMeta(URI, { nowMs: now + TTL_MS + 1 })).toBeNull();
 	});
 });

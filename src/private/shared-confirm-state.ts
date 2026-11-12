@@ -180,10 +180,14 @@ function recordPath(kind: SharedRecordKind, key: string): string | null {
 	return activeDir == null ? null : path.join(activeDir, kind, `${hashName(key)}.json`);
 }
 
-// rename で置き換えるので、読む側が書きかけの JSON を見ることがない。共有が無効なら書く必要が無いので true を返す。
+// 共有が無効なら書く必要が無いので true を返す。
 export function writeSharedRecord(kind: SharedRecordKind, key: string, value: unknown): boolean {
 	const file = recordPath(kind, key);
-	if (file == null) return true;
+	return file == null ? true : writeFileAtomically(file, value);
+}
+
+// rename で置き換えるので、読む側が書きかけの JSON を見ることがない。
+function writeFileAtomically(file: string, value: unknown): boolean {
 	const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
 	try {
 		fs.writeFileSync(tmp, JSON.stringify(value), { mode: 0o600, flag: 'wx' });
@@ -217,5 +221,61 @@ export function deleteSharedRecord(kind: SharedRecordKind, key: string): void {
 		fs.rmSync(file, { force: true });
 	} catch {
 		// 消せなくても、読む側が期限と TTL で古い控えを捨てる。
+	}
+}
+
+// 読んでから書き換えるまでに別プロセスが新しい内容を置いていたら（rename で i-node が変わる）、手を出さない。
+// 残る隙は確認と rename の間だけで、そこで負けても失うのは新しい控え（カードにボタンが出ない）で、誤った発注にはならない。
+function sameFile(file: string, ino: number): boolean {
+	try {
+		return fs.statSync(file).ino === ino;
+	} catch {
+		return false;
+	}
+}
+
+export function updateSharedRecord(
+	kind: SharedRecordKind,
+	key: string,
+	update: (value: unknown) => unknown | undefined,
+): boolean {
+	const file = recordPath(kind, key);
+	if (file == null) return false;
+	try {
+		if (!isOwnRegularFile(file)) return false;
+		const { ino } = fs.statSync(file);
+		const next = update(JSON.parse(fs.readFileSync(file, 'utf8')));
+		if (next === undefined || !sameFile(file, ino)) return false;
+		return writeFileAtomically(file, next);
+	} catch {
+		return false;
+	}
+}
+
+// ファイル名はキーのハッシュで元のキーに戻せないので、中身だけを見て判断させる。読めない・壊れたファイルは消す。
+export function sweepSharedRecords(kind: SharedRecordKind, decide: (value: unknown) => 'keep' | 'remove'): void {
+	if (activeDir == null) return;
+	const dir = path.join(activeDir, kind);
+	let names: string[];
+	try {
+		names = fs.readdirSync(dir).filter((n) => n.endsWith('.json'));
+	} catch {
+		return;
+	}
+	for (const name of names) {
+		const file = path.join(dir, name);
+		try {
+			if (!isOwnRegularFile(file)) continue;
+			const { ino } = fs.statSync(file);
+			let value: unknown;
+			try {
+				value = JSON.parse(fs.readFileSync(file, 'utf8'));
+			} catch {
+				value = undefined;
+			}
+			if ((value === undefined || decide(value) === 'remove') && sameFile(file, ino)) fs.rmSync(file, { force: true });
+		} catch {
+			// 別プロセスが同時に消した等。次の掃除で拾う。
+		}
 	}
 }

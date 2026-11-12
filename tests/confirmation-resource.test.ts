@@ -1,5 +1,9 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { appResourceUriFor, CONFIRMATION_META_KEY, confirmationResourceUri } from '../src/mcp-apps-meta.js';
+import { disableSharedConfirmState, enableSharedConfirmState } from '../src/private/shared-confirm-state.js';
 import { APP_RESOURCE_MIME_TYPE, MCP_APPS_UI_EXTENSION_ID } from '../src/resources/app-resources.js';
 import { readConfirmationResource } from '../src/resources/confirmation-resource.js';
 import { _resetUiSnapshots, storeUiSnapshot } from '../src/ui-snapshot-cache.js';
@@ -77,6 +81,26 @@ describe('readConfirmationResource', () => {
 		storeWithToken();
 		expect(bodyOf(readConfirmationResource('bitbank-confirmation://evil', 'evil', extraWith(APP_UI_CAPS)))).toEqual({});
 		expect(bodyOf(readConfirmationResource(RESOURCE_URI, ['order'], extraWith(APP_UI_CAPS)))).toEqual({});
+	});
+});
+
+// リソースは読んだだけではトークンを消さない。消すのは、カードが受け取ったと知らせたとき（get_ui_snapshot の confirmation_token。ADR-0007 判断事項 D）。
+describe.skipIf(process.platform === 'win32')('readConfirmationResource（プロセス間で共有するとき）', () => {
+	it('別プロセスのカードが何度読んでも、知らせが来るまではトークンを返す', () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'confirm-resource-shared-'));
+		try {
+			enableSharedConfirmState(path.join(root, 'confirm'));
+			vi.stubEnv('BITBANK_MCP_APPS_EXECUTE', '1');
+			const confirmation = storeWithToken();
+			_resetUiSnapshots();
+
+			const expected = { structuredContent: STRUCTURED, confirmation };
+			expect(bodyOf(readConfirmationResource(RESOURCE_URI, 'order', extraWith(APP_UI_CAPS)))).toEqual(expected);
+			expect(bodyOf(readConfirmationResource(RESOURCE_URI, 'order', extraWith(APP_UI_CAPS)))).toEqual(expected);
+		} finally {
+			disableSharedConfirmState();
+			fs.rmSync(root, { recursive: true, force: true });
+		}
 	});
 });
 

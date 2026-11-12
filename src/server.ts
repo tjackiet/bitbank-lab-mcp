@@ -13,7 +13,7 @@ import { type PromptDef, prompts as promptDefs } from './prompts.js';
 import { appResourceRegistry } from './resources/app-resources.js';
 import { readConfirmationResource } from './resources/confirmation-resource.js';
 import { allToolDefs } from './tool-registry.js';
-import { storeUiSnapshot } from './ui-snapshot-cache.js';
+import { startSharedUiSnapshotSweep, storeUiSnapshot } from './ui-snapshot-cache.js';
 
 // serverInfo.version は package.json を単一ソースにする。package.json は publish 対象に含まれるので npm 経由の起動でも解決できる。
 const { version: packageVersion } = createRequire(import.meta.url)('../package.json') as {
@@ -267,7 +267,9 @@ server.registerResource(
 
 // Claude Desktop はチャットのツール実行とカードの要求を別プロセスで受けるので、オプトイン時だけ確認の状態をファイルで共有する（ADR-0007 判断事項 D）。
 if (isAppUiExecuteEnabled()) {
-	log('info', { type: 'shared_confirm_state', enabled: enableSharedConfirmState(), pid: process.pid });
+	const enabled = enableSharedConfirmState();
+	log('info', { type: 'shared_confirm_state', enabled, pid: process.pid });
+	if (enabled) startSharedUiSnapshotSweep();
 }
 
 const transport = new StdioServerTransport();

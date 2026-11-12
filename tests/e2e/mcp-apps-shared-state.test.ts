@@ -57,7 +57,8 @@ async function readConfirmation(client: Client) {
 	};
 }
 
-describe('E2E: preview とカードが別プロセスに届くとき', () => {
+// Windows では共有しない（ADR-0007 判断事項 D）ので、別プロセスへの受け渡しを前提にしたこの E2E は飛ばす。
+describe.skipIf(process.platform === 'win32')('E2E: preview とカードが別プロセスに届くとき', () => {
 	const clients: Client[] = [];
 	const dirs: string[] = [];
 
@@ -93,6 +94,14 @@ describe('E2E: preview とカードが別プロセスに届くとき', () => {
 		const body = await readConfirmation(card);
 		expect(body.confirmation?.confirmation_token).toBe(pushed?.confirmation_token);
 		expect(body.structuredContent).toEqual(preview.structuredContent);
+		// 読んだだけでは消さない（ホストが `_meta` を落としても、カードがリソースから取り直せる）。
+		expect((await readConfirmation(card)).confirmation?.confirmation_token).toBe(pushed?.confirmation_token);
+		// カードが受け取ったと知らせたら、共有ファイルから消える。
+		await card.callTool({
+			name: 'get_ui_snapshot',
+			arguments: { resource_uri: 'ui://order/confirm.html', confirmation_token: body.confirmation?.confirmation_token },
+		});
+		expect(await readConfirmation(card)).toEqual({});
 
 		const snapshot = (await card.callTool({
 			name: 'get_ui_snapshot',

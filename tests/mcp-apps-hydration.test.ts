@@ -5,6 +5,7 @@ import {
 	confirmationResourceToSnapshot,
 	DEFAULT_INITIAL_DELAY_MS,
 	DEFAULT_RETRY_DELAYS_MS,
+	keepConfirmationMeta,
 	pullConfirmationIfMissing,
 	type SnapshotHydrationOptions,
 	type SnapshotHydrationPhase,
@@ -615,5 +616,35 @@ describe('confirmationResourceToSnapshot（確認トークンのリソースの�
 		expect(confirmationResourceToSnapshot(resourceResult('not json'))).toBeUndefined();
 		expect(confirmationResourceToSnapshot({})).toBeUndefined();
 		expect(confirmationResourceToSnapshot(undefined)).toBeUndefined();
+	});
+});
+
+// トークンは共有ファイルから 1 回しか渡さないので、同じ preview がトークン無しで届き直しても、受け取り済みのトークンを消さない（ADR-0007 判断事項 D）。
+describe('keepConfirmationMeta', () => {
+	const structured = { ok: true, data: { preview: { pair: 'btc_jpy', amount: '0.001' } } };
+	const withToken = { [CONFIRMATION_META_KEY]: { confirmation_token: 'tok-keep', expires_at: Date.now() + 60_000 } };
+
+	it('同じ内容がトークン無しで届いたら、受け取り済みの `_meta` を返す', () => {
+		const sameButReordered = { data: { preview: { amount: '0.001', pair: 'btc_jpy' } }, ok: true };
+		expect(keepConfirmationMeta({ structured, meta: withToken }, sameButReordered, undefined)).toBe(withToken);
+	});
+
+	it('別の内容なら、受け取り済みのトークンを持ち越さない', () => {
+		const other = { ok: true, data: { preview: { pair: 'btc_jpy', amount: '1' } } };
+		expect(keepConfirmationMeta({ structured, meta: withToken }, other, {})).toEqual({});
+	});
+
+	it('届いた結果にトークンがあれば、それを使う', () => {
+		const fresh = { [CONFIRMATION_META_KEY]: { confirmation_token: 'tok-new', expires_at: Date.now() + 60_000 } };
+		expect(keepConfirmationMeta({ structured, meta: withToken }, structured, fresh)).toBe(fresh);
+	});
+
+	it('受け取り済みのトークンが期限切れなら持ち越さない（取り直しに進ませる）', () => {
+		const expired = { [CONFIRMATION_META_KEY]: { confirmation_token: 'tok-old', expires_at: 1_000 } };
+		expect(keepConfirmationMeta({ structured, meta: expired }, structured, undefined, 2_000)).toBeUndefined();
+	});
+
+	it('受け取り済みのトークンが無ければ、届いた `_meta` のまま', () => {
+		expect(keepConfirmationMeta(null, structured, undefined)).toBeUndefined();
 	});
 });
