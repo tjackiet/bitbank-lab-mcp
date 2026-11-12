@@ -84,9 +84,9 @@ describe('readConfirmationResource', () => {
 	});
 });
 
-// 共有ファイルに置いたトークンは、カード側のプロセスに 1 回渡したら消す（ADR-0007 判断事項 D）。
+// リソースは読んだだけではトークンを消さない。消すのは、カードが受け取ったと知らせたとき（get_ui_snapshot の confirmation_token。ADR-0007 判断事項 D）。
 describe.skipIf(process.platform === 'win32')('readConfirmationResource（プロセス間で共有するとき）', () => {
-	it('別プロセスのカードに 1 回渡したら、2 回目は何も返さない', () => {
+	it('別プロセスのカードが何度読んでも、知らせが来るまではトークンを返す', () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'confirm-resource-shared-'));
 		try {
 			enableSharedConfirmState(path.join(root, 'confirm'));
@@ -94,11 +94,9 @@ describe.skipIf(process.platform === 'win32')('readConfirmationResource（プロ
 			const confirmation = storeWithToken();
 			_resetUiSnapshots();
 
-			expect(bodyOf(readConfirmationResource(RESOURCE_URI, 'order', extraWith(APP_UI_CAPS)))).toEqual({
-				structuredContent: STRUCTURED,
-				confirmation,
-			});
-			expect(bodyOf(readConfirmationResource(RESOURCE_URI, 'order', extraWith(APP_UI_CAPS)))).toEqual({});
+			const expected = { structuredContent: STRUCTURED, confirmation };
+			expect(bodyOf(readConfirmationResource(RESOURCE_URI, 'order', extraWith(APP_UI_CAPS)))).toEqual(expected);
+			expect(bodyOf(readConfirmationResource(RESOURCE_URI, 'order', extraWith(APP_UI_CAPS)))).toEqual(expected);
 		} finally {
 			disableSharedConfirmState();
 			fs.rmSync(root, { recursive: true, force: true });

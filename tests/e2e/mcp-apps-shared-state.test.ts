@@ -94,7 +94,13 @@ describe.skipIf(process.platform === 'win32')('E2E: preview とカードが別�
 		const body = await readConfirmation(card);
 		expect(body.confirmation?.confirmation_token).toBe(pushed?.confirmation_token);
 		expect(body.structuredContent).toEqual(preview.structuredContent);
-		// 共有ファイルのトークンは 1 回渡したら消すので、もう一度読んでも何も返らない。
+		// 読んだだけでは消さない（ホストが `_meta` を落としても、カードがリソースから取り直せる）。
+		expect((await readConfirmation(card)).confirmation?.confirmation_token).toBe(pushed?.confirmation_token);
+		// カードが受け取ったと知らせたら、共有ファイルから消える。
+		await card.callTool({
+			name: 'get_ui_snapshot',
+			arguments: { resource_uri: 'ui://order/confirm.html', confirmation_token: body.confirmation?.confirmation_token },
+		});
 		expect(await readConfirmation(card)).toEqual({});
 
 		const snapshot = (await card.callTool({

@@ -145,49 +145,86 @@ describe('handler', () => {
 	});
 });
 
-// 共有ファイルに置いたトークンは、カード側のプロセスに 1 回渡したら消す。ファイルを読めるエージェントに使わせないため（ADR-0007 判断事項 D）。
+// 共有ファイルのトークンは、カードが受け取ったと知らせたら消す。読んだだけで消すと、ホストが `_meta` を落としたときにリソースから取り直せない（ADR-0007 判断事項 D）。
 describe.skipIf(process.platform === 'win32')('handler（プロセス間で共有するとき）', () => {
-	it('別プロセスのカードに 1 回渡したら、2 回目は `_meta` を返さず、ファイルにもトークンが残らない', async () => {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-snapshot-shared-'));
-		try {
-			enableSharedConfirmState(path.join(root, 'confirm'));
-			vi.stubEnv('BITBANK_MCP_APPS_EXECUTE', '1');
-			const expiresAt = Date.now() + 60_000;
-			storeUiSnapshot(
-				URI,
-				{ ok: true, summary: 'preview' },
-				{},
-				{ [CONFIRMATION_META_KEY]: { confirmation_token: 'tok-once', expires_at: expiresAt } },
-				expiresAt,
-			);
-			_resetUiSnapshots();
-			const extra = {
-				server: {
-					getClientCapabilities: () => ({
-						extensions: { [MCP_APPS_UI_EXTENSION_ID]: { mimeTypes: [APP_RESOURCE_MIME_TYPE] } },
-					}),
-				},
-			};
+	const extra = {
+		server: {
+			getClientCapabilities: () => ({
+				extensions: { [MCP_APPS_UI_EXTENSION_ID]: { mimeTypes: [APP_RESOURCE_MIME_TYPE] } },
+			}),
+		},
+	};
+	let root: string;
 
-			const first = (await toolDef.handler({ resource_uri: URI }, extra)) as { _meta?: Record<string, unknown> };
-			expect(first._meta?.[CONFIRMATION_META_KEY]).toMatchObject({ confirmation_token: 'tok-once' });
+	function sharedText(): string {
+		const dir = path.join(root, 'confirm', 'snapshots');
+		return fs
+			.readdirSync(dir)
+			.map((n) => fs.readFileSync(path.join(dir, n), 'utf8'))
+			.join('');
+	}
 
-			const second = (await toolDef.handler({ resource_uri: URI }, extra)) as {
-				_meta?: Record<string, unknown>;
-				structuredContent?: unknown;
-			};
-			expect(second._meta).toBeUndefined();
-			expect(second.structuredContent).toEqual({ ok: true, summary: 'preview' });
+	function storeFromOtherProcess(token: string) {
+		const expiresAt = Date.now() + 60_000;
+		storeUiSnapshot(
+			URI,
+			{ ok: true, summary: 'preview' },
+			{},
+			{ [CONFIRMATION_META_KEY]: { confirmation_token: token, expires_at: expiresAt } },
+			expiresAt,
+		);
+		_resetUiSnapshots();
+	}
 
-			const dir = path.join(root, 'confirm', 'snapshots');
-			const text = fs
-				.readdirSync(dir)
-				.map((n) => fs.readFileSync(path.join(dir, n), 'utf8'))
-				.join('');
-			expect(text).not.toContain('tok-once');
-		} finally {
-			disableSharedConfirmState();
-			fs.rmSync(root, { recursive: true, force: true });
-		}
+	afterEach(() => {
+		disableSharedConfirmState();
+		fs.rmSync(root, { recursive: true, force: true });
+	});
+
+	it('読んだだけではファイルのトークンを消さない（ホストが `_meta` を落としても、カードが取り直せる）', async () => {
+		root = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-snapshot-shared-'));
+		enableSharedConfirmState(path.join(root, 'confirm'));
+		vi.stubEnv('BITBANK_MCP_APPS_EXECUTE', '1');
+		storeFromOtherProcess('tok-once');
+
+		const first = (await toolDef.handler({ resource_uri: URI }, extra)) as { _meta?: Record<string, unknown> };
+		expect(first._meta?.[CONFIRMATION_META_KEY]).toMatchObject({ confirmation_token: 'tok-once' });
+		const second = (await toolDef.handler({ resource_uri: URI }, extra)) as { _meta?: Record<string, unknown> };
+		expect(second._meta?.[CONFIRMATION_META_KEY]).toMatchObject({ confirmation_token: 'tok-once' });
+	});
+
+	it('カードが受け取ったトークンを知らせたら、ファイルから消す', async () => {
+		root = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-snapshot-shared-'));
+		enableSharedConfirmState(path.join(root, 'confirm'));
+		vi.stubEnv('BITBANK_MCP_APPS_EXECUTE', '1');
+		storeFromOtherProcess('tok-once');
+
+		await toolDef.handler({ resource_uri: URI, confirmation_token: 'tok-once' }, extra);
+
+		expect(sharedText()).not.toContain('tok-once');
+		const after = (await toolDef.handler({ resource_uri: URI }, extra)) as {
+			_meta?: Record<string, unknown>;
+			structuredContent?: unknown;
+		};
+		expect(after._meta).toBeUndefined();
+		expect(after.structuredContent).toEqual({ ok: true, summary: 'preview' });
+	});
+
+	it('知らせたトークンが今のトークンと違えば消さない', async () => {
+		root = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-snapshot-shared-'));
+		enableSharedConfirmState(path.join(root, 'confirm'));
+		vi.stubEnv('BITBANK_MCP_APPS_EXECUTE', '1');
+		storeFromOtherProcess('tok-current');
+
+		await toolDef.handler({ resource_uri: URI, confirmation_token: 'tok-other' }, extra);
+
+		expect(sharedText()).toContain('tok-current');
+	});
+});
+
+describe('GetUiSnapshotInputSchema（受け取りの知らせ）', () => {
+	it('confirmation_token は省略でき、渡すなら文字列', () => {
+		expect(GetUiSnapshotInputSchema.safeParse({ resource_uri: URI, confirmation_token: 'x' }).success).toBe(true);
+		expect(GetUiSnapshotInputSchema.safeParse({ resource_uri: URI, confirmation_token: 1 }).success).toBe(false);
 	});
 });

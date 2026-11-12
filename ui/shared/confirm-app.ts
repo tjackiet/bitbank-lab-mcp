@@ -47,6 +47,7 @@ export function useConfirmApp(
 			const effectiveMeta = keepConfirmationMeta(withToken, structured, meta);
 			if (!applyToolResult(structured, effectiveMeta, hasPreviewRef.current)) return undefined;
 			withToken = readConfirmationMeta(effectiveMeta) ? { structured, meta: effectiveMeta } : null;
+			acknowledge(effectiveMeta);
 			hasPreviewRef.current = true;
 			setHydrationPhase('waiting');
 			return { meta: effectiveMeta };
@@ -67,6 +68,21 @@ export function useConfirmApp(
 		// connect() が pending のままアンマウントされると .then() は cleanup の後に走るので、破棄済みなら hydration を開始しない（#29）。
 		let disposed = false;
 		const connecting = mcpApp.connect();
+		let acknowledgedToken: string | undefined;
+		// 受け取ったトークンを知らせて、共有ファイルから消させる（ADR-0007 判断事項 D）。届かなくても期限と掃除で消える。
+		const acknowledge = (meta: unknown): void => {
+			const token = readConfirmationMeta(meta)?.confirmation_token;
+			if (!token || token === acknowledgedToken) return;
+			acknowledgedToken = token;
+			void connecting
+				.then(() =>
+					mcpApp.callServerTool(
+						{ name: 'get_ui_snapshot', arguments: { resource_uri: resourceUri, confirmation_token: token } },
+						{ timeout: SNAPSHOT_TIMEOUT_MS },
+					),
+				)
+				.catch(() => undefined);
+		};
 		// 取り直しの途中で新しい preview が届いたら、古い取り直しの結果を捨てる。
 		let previewSeq = 0;
 		const recoverConfirmation = (

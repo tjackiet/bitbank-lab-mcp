@@ -2,7 +2,6 @@
 // 返すのはホストへ送信済みのツール応答そのもので、新たな情報露出は無い（src/ui-snapshot-cache.ts）。
 
 import { fail } from '../lib/result.js';
-import { readConfirmationMeta } from '../src/mcp-apps-meta.js';
 import { clientSupportsElicitation, isAppUiExecuteAllowed } from '../src/private/elicitation.js';
 import { GetUiSnapshotInputSchema } from '../src/schema/ui.js';
 import type { ToolDefinition } from '../src/tool-definition.js';
@@ -17,9 +16,11 @@ export const toolDef: ToolDefinition = {
 	].join(' '),
 	inputSchema: GetUiSnapshotInputSchema,
 	handler: async (args, extra) => {
-		const { resource_uri } = args as { resource_uri: string };
+		const { resource_uri, confirmation_token } = args as { resource_uri: string; confirmation_token?: string };
 		// 呼び出し元のセッションを渡し、別セッションからの読み出しを拒否する（stdio では両者 undefined で一致する）。
 		const sessionId = (extra as { sessionId?: string } | undefined)?.sessionId;
+		// 確認 UI が受け取ったと知らせたトークンだけを共有ファイルから消す。読んだ時点で消すと、ホストが `_meta` を落としたときにリソースから取り直せない（ADR-0007 判断事項 D）。
+		if (confirmation_token) forgetSharedUiSnapshotMeta(resource_uri, { sessionId }, confirmation_token);
 		const snapshot = getUiSnapshot(resource_uri, { sessionId });
 		if (!snapshot) {
 			return fail('表示できるスナップショットがありません。preview ツールを再実行してください', 'snapshot_not_found');
@@ -29,8 +30,6 @@ export const toolDef: ToolDefinition = {
 			isAppUiExecuteAllowed(extra) && !clientSupportsElicitation(extra)
 				? getUiSnapshotMeta(resource_uri, { sessionId })
 				: null;
-		const delivered = readConfirmationMeta(meta)?.confirmation_token;
-		if (delivered) forgetSharedUiSnapshotMeta(resource_uri, { sessionId }, delivered);
 		return {
 			content: [
 				{
