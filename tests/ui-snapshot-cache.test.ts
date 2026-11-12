@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { log } from '../lib/logger.js';
 import {
 	disableSharedConfirmState,
 	enableSharedConfirmState,
@@ -15,6 +16,11 @@ import {
 	storeUiSnapshot,
 	uiSnapshotKey,
 } from '../src/ui-snapshot-cache.js';
+
+vi.mock('../lib/logger.js', async (importOriginal) => ({
+	...(await importOriginal<typeof import('../lib/logger.js')>()),
+	log: vi.fn(),
+}));
 
 const URI = 'ui://order/confirm.html';
 const TTL_MS = 5 * 60_000;
@@ -105,7 +111,7 @@ describe('ui-snapshot-cache', () => {
 });
 
 // Claude Desktop は preview とカードの要求を別プロセスで受けるので、オプトイン時は控えをファイルでも共有する（ADR-0007 判断事項 D）。
-describe('ui-snapshot-cache（プロセス間で共有するとき）', () => {
+describe.skipIf(process.platform === 'win32')('ui-snapshot-cache（プロセス間で共有するとき）', () => {
 	const URI = 'ui://order/confirm.html';
 	const now = 1_800_000_000_000;
 	const structured = { ok: true, summary: 'preview' };
@@ -174,6 +180,16 @@ describe('ui-snapshot-cache（プロセス間で共有するとき）', () => {
 		_resetUiSnapshots();
 		expect(getUiSnapshot(URI, { sessionId: 'b', nowMs: now + 1000 })).toBeNull();
 		expect(getUiSnapshotMeta(URI, { sessionId: 'b', nowMs: now + 1000 })).toBeNull();
+	});
+
+	it('控えをファイルに書けなければ、警告をログに残す（カード側のプロセスからは読めない）', () => {
+		fs.rmSync(path.join(root, 'confirm', 'snapshots'), { recursive: true });
+		fs.writeFileSync(path.join(root, 'confirm', 'snapshots'), 'not a dir');
+		storeUiSnapshot(URI, structured, { nowMs: now }, meta, now + 60_000);
+		const events = vi.mocked(log).mock.calls.filter(([, e]) => e.type === 'shared_snapshot_write_failed');
+		expect(events).toEqual([['warn', { type: 'shared_snapshot_write_failed', resourceUri: URI }]]);
+		expect(JSON.stringify(events)).not.toContain('tok-shared');
+		vi.mocked(log).mockClear();
 	});
 
 	it('形の合わないファイルは無視する', () => {

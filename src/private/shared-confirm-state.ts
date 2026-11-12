@@ -14,6 +14,9 @@ const NONCE_PATTERN = /^[0-9a-f]{64}$/;
 
 const PURGE_INTERVAL_MS = 60_000;
 
+// トークンの TTL の上限（confirmation.ts の MAX_TTL_MS）より長くしておく。中身を読めない印は、これより古いときだけ消す。
+const UNREADABLE_MARKER_MAX_AGE_MS = 10 * 60_000;
+
 let activeDir: string | null = null;
 let configuredDir: string | undefined;
 let lastPurgeMs: number | undefined;
@@ -33,11 +36,11 @@ function hashName(value: string): string {
 	return createHash('sha256').update(value).digest('hex');
 }
 
-// Windows はモードビットを持たず、ホームフォルダの ACL で本人に限られるので、所有者とモードの確認を省く。
+// Windows は mode を無視し、ACL を確かめる手段も入れていないので、本人だけに閉じられたと言えない。共有せずプロセス内の動きに戻す。
 function isPrivateDir(p: string): boolean {
+	if (process.platform === 'win32') return false;
 	const st = fs.lstatSync(p);
 	if (st.isSymbolicLink() || !st.isDirectory()) return false;
-	if (process.platform === 'win32') return true;
 	if (typeof process.getuid === 'function' && st.uid !== process.getuid()) return false;
 	if ((st.mode & 0o077) === 0) return true;
 	fs.chmodSync(p, 0o700);
@@ -47,7 +50,7 @@ function isPrivateDir(p: string): boolean {
 function isOwnRegularFile(p: string): boolean {
 	const st = fs.lstatSync(p);
 	if (st.isSymbolicLink() || !st.isFile()) return false;
-	return process.platform === 'win32' || typeof process.getuid !== 'function' || st.uid === process.getuid();
+	return typeof process.getuid !== 'function' || st.uid === process.getuid();
 }
 
 export function enableSharedConfirmState(dir: string = configuredDir ?? defaultDir()): boolean {
@@ -133,8 +136,12 @@ function purgeUsedMarkers(dir: string, nowMs: number): void {
 	for (const name of fs.readdirSync(usedDir)) {
 		const file = path.join(usedDir, name);
 		try {
-			const expiresAt = Number(fs.readFileSync(file, 'utf8'));
-			if (!Number.isFinite(expiresAt) || nowMs > expiresAt) fs.rmSync(file, { force: true });
+			const content = fs.readFileSync(file, 'utf8');
+			const expiresAt = content === '' ? Number.NaN : Number(content);
+			const expired = Number.isFinite(expiresAt)
+				? nowMs > expiresAt
+				: nowMs - fs.statSync(file).mtimeMs > UNREADABLE_MARKER_MAX_AGE_MS;
+			if (expired) fs.rmSync(file, { force: true });
 		} catch {
 			// 別プロセスが同時に消した等。次の掃除で拾う。
 		}
@@ -151,11 +158,21 @@ export function recordSharedTokenUse(token: string, expiresAt: number, nowMs: nu
 	} catch {
 		// 掃除の失敗で使用の記録まで止めない。
 	}
+	const name = hashName(token);
+	// used/ の外で書き終えてから link で置く。中身の無い印を別プロセスの掃除が期限切れと見て消し、同じトークンが 2 回通るのを防ぐ。
+	const staging = path.join(activeDir, `${name}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
 	try {
-		fs.writeFileSync(path.join(activeDir, 'used', hashName(token)), String(expiresAt), { mode: 0o600, flag: 'wx' });
+		fs.writeFileSync(staging, String(expiresAt), { mode: 0o600, flag: 'wx' });
+		fs.linkSync(staging, path.join(activeDir, 'used', name));
 		return 'recorded';
 	} catch (err) {
 		return errorCode(err) === 'EEXIST' ? 'already_used' : 'unavailable';
+	} finally {
+		try {
+			fs.rmSync(staging, { force: true });
+		} catch {
+			// 残っても used/ の外なので、使用済みの判定には影響しない。
+		}
 	}
 }
 
@@ -163,16 +180,22 @@ function recordPath(kind: SharedRecordKind, key: string): string | null {
 	return activeDir == null ? null : path.join(activeDir, kind, `${hashName(key)}.json`);
 }
 
-// rename で置き換えるので、読む側が書きかけの JSON を見ることがない。
-export function writeSharedRecord(kind: SharedRecordKind, key: string, value: unknown): void {
+// rename で置き換えるので、読む側が書きかけの JSON を見ることがない。共有が無効なら書く必要が無いので true を返す。
+export function writeSharedRecord(kind: SharedRecordKind, key: string, value: unknown): boolean {
 	const file = recordPath(kind, key);
-	if (file == null) return;
+	if (file == null) return true;
 	const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
 	try {
 		fs.writeFileSync(tmp, JSON.stringify(value), { mode: 0o600, flag: 'wx' });
 		fs.renameSync(tmp, file);
+		return true;
 	} catch {
-		fs.rmSync(tmp, { force: true });
+		try {
+			fs.rmSync(tmp, { force: true });
+		} catch {
+			// 書けない状態なら消せないこともある。読む側は .json しか見ない。
+		}
+		return false;
 	}
 }
 

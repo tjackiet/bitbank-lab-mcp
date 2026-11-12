@@ -1,6 +1,7 @@
 // 一部ホストで ui/notifications/tool-result が iframe に配信されないので、get_ui_snapshot の pull 型 hydration 用に直近の応答を保持する。
 // 保持するのはホストへ送信済みの応答だけだが、`_meta` は確認トークンを含みうるので getUiSnapshotMeta で別扱いにする。
 
+import { log } from '../lib/logger.js';
 import { deleteSharedRecord, readSharedRecord, writeSharedRecord } from './private/shared-confirm-state.js';
 
 const SNAPSHOT_TTL_MS = 5 * 60_000;
@@ -41,7 +42,8 @@ export function storeUiSnapshot(
 		...(metaExpiresAtMs != null ? { metaExpiresAtMs } : {}),
 	};
 	snapshots.set(key, entry);
-	writeSharedRecord('snapshots', key, entry);
+	// 書けないと、カード側のプロセスは控えを読めずボタンが出ない（発注はされない側に倒れる）。原因を追えるよう記録だけ残す。
+	if (!writeSharedRecord('snapshots', key, entry)) log('warn', { type: 'shared_snapshot_write_failed', resourceUri });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

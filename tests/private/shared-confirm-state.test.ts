@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -33,7 +34,7 @@ function modeOf(p: string): number {
 }
 
 // Claude Desktop がチャットのツール実行とカードの要求を別プロセスで受けるので、確認に要る状態をファイルで共有する（ADR-0007 判断事項 D）。
-describe('enableSharedConfirmState', () => {
+describe.skipIf(process.platform === 'win32')('enableSharedConfirmState', () => {
 	it('自分だけが読み書きできるフォルダを作って有効にする', () => {
 		expect(enableSharedConfirmState(dir)).toBe(true);
 		expect(isSharedConfirmStateEnabled()).toBe(true);
@@ -62,9 +63,20 @@ describe('enableSharedConfirmState', () => {
 		fs.writeFileSync(dir, 'x');
 		expect(enableSharedConfirmState(dir)).toBe(false);
 	});
+
+	it('Windows では共有しない（mode では他人の読み取りを防げず、ACL も確かめていない）', () => {
+		const original = Object.getOwnPropertyDescriptor(process, 'platform');
+		Object.defineProperty(process, 'platform', { value: 'win32' });
+		try {
+			expect(enableSharedConfirmState(dir)).toBe(false);
+			expect(isSharedConfirmStateEnabled()).toBe(false);
+		} finally {
+			if (original) Object.defineProperty(process, 'platform', original);
+		}
+	});
 });
 
-describe('sharedNonce', () => {
+describe.skipIf(process.platform === 'win32')('sharedNonce', () => {
 	it('無効なら null を返す', () => {
 		expect(sharedNonce()).toBeNull();
 	});
@@ -94,7 +106,7 @@ describe('sharedNonce', () => {
 	});
 });
 
-describe('recordSharedTokenUse', () => {
+describe.skipIf(process.platform === 'win32')('recordSharedTokenUse', () => {
 	const now = 1_800_000_000_000;
 
 	it('無効なら disabled を返す', () => {
@@ -124,6 +136,34 @@ describe('recordSharedTokenUse', () => {
 		expect(recordSharedTokenUse('tok', now + 60_000, now)).toBe('unavailable');
 	});
 
+	it('書きかけ（中身が空）の印は掃除で消さず、同じトークンは already_used のまま', () => {
+		enableSharedConfirmState(dir);
+		const marker = path.join(dir, 'used', createHash('sha256').update('tok-racing').digest('hex'));
+		fs.writeFileSync(marker, '', { mode: 0o600 });
+		// 掃除は「中身を読めない印」を作られた時刻で判断するので、テストの時計に合わせる。
+		fs.utimesSync(marker, now / 1000, now / 1000);
+		expect(recordSharedTokenUse('tok-other', now + 60_000, now)).toBe('recorded');
+		expect(fs.existsSync(marker)).toBe(true);
+		expect(recordSharedTokenUse('tok-racing', now + 60_000, now)).toBe('already_used');
+	});
+
+	it('印は中身を書き終えてから used/ に現れる（書きかけを他プロセスに見せない）', () => {
+		enableSharedConfirmState(dir);
+		recordSharedTokenUse('tok-a', now + 60_000, now);
+		const [name] = fs.readdirSync(path.join(dir, 'used'));
+		expect(fs.readFileSync(path.join(dir, 'used', name as string), 'utf8')).toBe(String(now + 60_000));
+		expect(fs.readdirSync(dir).filter((n) => n.endsWith('.tmp'))).toEqual([]);
+	});
+
+	it('中身を読めない印も、十分に古ければ掃除で消す', () => {
+		enableSharedConfirmState(dir);
+		const marker = path.join(dir, 'used', createHash('sha256').update('tok-stale').digest('hex'));
+		fs.writeFileSync(marker, '', { mode: 0o600 });
+		fs.utimesSync(marker, (now - 11 * 60_000) / 1000, (now - 11 * 60_000) / 1000);
+		recordSharedTokenUse('tok-other', now + 60_000, now);
+		expect(fs.existsSync(marker)).toBe(false);
+	});
+
 	it('期限を過ぎた印は、次に記録するときに消す', () => {
 		enableSharedConfirmState(dir);
 		recordSharedTokenUse('tok-old', now + 1_000, now);
@@ -132,7 +172,7 @@ describe('recordSharedTokenUse', () => {
 	});
 });
 
-describe('writeSharedRecord / readSharedRecord / deleteSharedRecord', () => {
+describe.skipIf(process.platform === 'win32')('writeSharedRecord / readSharedRecord / deleteSharedRecord', () => {
 	it('書いた値を別のキーと混ぜずに読み戻し、消せる', () => {
 		enableSharedConfirmState(dir);
 		writeSharedRecord('snapshots', 'key-a', { a: 1 });
@@ -153,9 +193,17 @@ describe('writeSharedRecord / readSharedRecord / deleteSharedRecord', () => {
 		expect(modeOf(path.join(dir, 'snapshots', name as string))).toBe(0o600);
 	});
 
-	it('無効なら書かず、読んでも null を返す', () => {
-		writeSharedRecord('snapshots', 'key', { a: 1 });
+	it('無効なら書かず（true を返す）、読んでも null を返す', () => {
+		expect(writeSharedRecord('snapshots', 'key', { a: 1 })).toBe(true);
 		expect(readSharedRecord('snapshots', 'key')).toBeNull();
+	});
+
+	it('書けなければ false を返す', () => {
+		enableSharedConfirmState(dir);
+		expect(writeSharedRecord('snapshots', 'key', { a: 1 })).toBe(true);
+		fs.rmSync(path.join(dir, 'snapshots'), { recursive: true });
+		fs.writeFileSync(path.join(dir, 'snapshots'), 'not a dir');
+		expect(writeSharedRecord('snapshots', 'key', { a: 1 })).toBe(false);
 	});
 
 	it('壊れた JSON は null を返す', () => {

@@ -526,7 +526,7 @@ describe('validateToken — 非有限の expiresAt', () => {
 });
 
 // Claude Desktop は preview とカードのボタンを別プロセスで受けるので、オプトイン時は署名鍵の乱数と使用済みの印を共有する（ADR-0007 判断事項 D）。
-describe('プロセス間で共有するとき', () => {
+describe.skipIf(process.platform === 'win32')('プロセス間で共有するとき', () => {
 	const now = 1700000000000;
 	const params = { pair: 'btc_jpy', amount: '0.001', side: 'buy', type: 'limit' };
 	let root: string;

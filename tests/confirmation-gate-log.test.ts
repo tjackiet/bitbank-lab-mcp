@@ -62,7 +62,7 @@ describe('confirmation_resource_read のログ', () => {
 	});
 
 	it.each([
-		['オプトインが無い', {}, APP_UI_CAPS, 'order', 'apps_execute_disabled'],
+		['オプトインが無い', { BITBANK_MCP_APPS_EXECUTE: '0' }, APP_UI_CAPS, 'order', 'apps_execute_disabled'],
 		['MCP Apps UI を宣言していない', { BITBANK_MCP_APPS_EXECUTE: '1' }, {}, 'order', 'no_app_ui'],
 		[
 			'elicitation を宣言している',
@@ -149,7 +149,7 @@ describe('confirmation_meta のログ（preview 側）', () => {
 	it('トークンを載せたかどうかと、判定に使った宣言の出どころを残す', async () => {
 		vi.stubEnv('BITBANK_MCP_APPS_EXECUTE', '1');
 		await withElicitedConfirmation({ ...opts, extra: extraWith(APP_UI_CAPS) });
-		vi.unstubAllEnvs();
+		vi.stubEnv('BITBANK_MCP_APPS_EXECUTE', '0');
 		await withElicitedConfirmation({ ...opts, extra: extraWith(APP_UI_CAPS) });
 		const events = loggedEvents('confirmation_meta');
 		expect(events).toEqual([

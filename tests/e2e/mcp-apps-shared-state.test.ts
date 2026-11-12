@@ -2,6 +2,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -9,8 +10,8 @@ import { CONFIRMATION_META_KEY } from '../../src/mcp-apps-meta.js';
 import { APP_RESOURCE_MIME_TYPE, MCP_APPS_UI_EXTENSION_ID } from '../../src/resources/app-resources.js';
 import { mockSpotPairsResponse, rawActiveOrdersResponse } from '../fixtures/private-api.js';
 
-const ENTRY = new URL('./mock-server-entry.ts', import.meta.url).pathname;
-const TSX_BIN = new URL('../../node_modules/.bin/tsx', import.meta.url).pathname;
+const ENTRY = fileURLToPath(new URL('./mock-server-entry.ts', import.meta.url));
+const TSX_BIN = fileURLToPath(new URL('../../node_modules/.bin/tsx', import.meta.url));
 
 const ORDER_ARGS = { pair: 'btc_jpy', amount: '0.01', side: 'buy', type: 'limit', price: '14000000' };
 
@@ -114,6 +115,29 @@ describe('E2E: preview とカードが別プロセスに届くとき', () => {
 
 		// 発注後は控えも消えるので、カードを開き直してもボタンは出ない。
 		expect(await readConfirmation(chat)).toEqual({});
+	}, 60_000);
+
+	it('2 つのプロセスで同じトークンを同時に使っても、発注は 1 回だけ通る', async () => {
+		const shared = tempDir();
+		const chat = await connect('e2e-chat-lane', shared);
+		const card = await connect('e2e-card-lane', shared);
+
+		await chat.callTool({ name: 'preview_order', arguments: ORDER_ARGS });
+		const body = await readConfirmation(card);
+		const execArgs = {
+			...ORDER_ARGS,
+			confirmation_token: body.confirmation?.confirmation_token,
+			token_expires_at: body.confirmation?.expires_at,
+		};
+
+		const results = (await Promise.all([
+			chat.callTool({ name: 'create_order', arguments: execArgs }),
+			card.callTool({ name: 'create_order', arguments: execArgs }),
+		])) as CallResult[];
+		const oks = results.map((r) => (r.structuredContent as { ok?: boolean } | undefined)?.ok);
+		expect(oks.filter((ok) => ok === true)).toHaveLength(1);
+		const rejected = results.find((r) => (r.structuredContent as { ok?: boolean } | undefined)?.ok !== true);
+		expect(rejected?.content?.[0]?.text).toContain('既に使用されています');
 	}, 60_000);
 
 	it('フォルダを共有していなければ、カード側のプロセスは何も受け取らない', async () => {
