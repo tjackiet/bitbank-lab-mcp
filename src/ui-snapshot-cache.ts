@@ -85,19 +85,20 @@ function readEntry(key: string): SnapshotEntry | undefined {
 }
 
 /** `_meta` にだけ短い期限と呼び出し側のゲート判定を課すため `getUiSnapshot` と分けている。呼び出し側は返す前に `isAppUiExecuteAllowed` を必ず確認すること（ここではゲート判定をしない）。 */
-export function getUiSnapshotMeta(resourceUri: string, scope: SnapshotScope = {}): Record<string, unknown> | null {
-	const key = uiSnapshotKey(scope.sessionId, resourceUri);
-	const entry = readEntry(key);
-	if (!entry?.meta) return null;
-	const now = scope.nowMs ?? Date.now();
-	// エントリの削除は getUiSnapshot に任せる（ここで消すと preview の再描画まで巻き添えになる）。
-	if (now - entry.storedAt > SNAPSHOT_TTL_MS) return null;
+function liveMeta(entry: SnapshotEntry, now: number): Record<string, unknown> | null {
+	if (!entry.meta || now - entry.storedAt > SNAPSHOT_TTL_MS) return null;
 	// トークンの期限切れ。entry は消さず `_meta` だけ落とす。
 	if (entry.metaExpiresAtMs != null && now > entry.metaExpiresAtMs) return null;
 	return entry.meta;
 }
 
-export function getUiSnapshot(resourceUri: string, scope: SnapshotScope = {}): Record<string, unknown> | null {
+export function getUiSnapshotMeta(resourceUri: string, scope: SnapshotScope = {}): Record<string, unknown> | null {
+	// エントリの削除は getUiSnapshot に任せる（ここで消すと preview の再描画まで巻き添えになる）。
+	const entry = readEntry(uiSnapshotKey(scope.sessionId, resourceUri));
+	return entry ? liveMeta(entry, scope.nowMs ?? Date.now()) : null;
+}
+
+function liveEntry(resourceUri: string, scope: SnapshotScope): SnapshotEntry | null {
 	const key = uiSnapshotKey(scope.sessionId, resourceUri);
 	const entry = readEntry(key);
 	if (!entry) return null;
@@ -106,7 +107,22 @@ export function getUiSnapshot(resourceUri: string, scope: SnapshotScope = {}): R
 		deleteSharedRecord('snapshots', key);
 		return null;
 	}
-	return entry.structuredContent;
+	return entry;
+}
+
+export function getUiSnapshot(resourceUri: string, scope: SnapshotScope = {}): Record<string, unknown> | null {
+	return liveEntry(resourceUri, scope)?.structuredContent ?? null;
+}
+
+// 内容とトークンを同じ控えから返す。別々に読むと、その間に別プロセスが置いた新しい preview のトークンを古い内容に添えて返しうる。
+export function getUiSnapshotWithMeta(
+	resourceUri: string,
+	scope: SnapshotScope = {},
+): { structuredContent: Record<string, unknown>; meta: Record<string, unknown> | null } | null {
+	const entry = liveEntry(resourceUri, scope);
+	return entry
+		? { structuredContent: entry.structuredContent, meta: liveMeta(entry, scope.nowMs ?? Date.now()) }
+		: null;
 }
 
 export function clearUiSnapshot(resourceUri: string, scope: SnapshotScope = {}): void {

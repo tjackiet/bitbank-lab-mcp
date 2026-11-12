@@ -14,6 +14,7 @@ import {
 	forgetSharedUiSnapshotMeta,
 	getUiSnapshot,
 	getUiSnapshotMeta,
+	getUiSnapshotWithMeta,
 	storeUiSnapshot,
 	sweepSharedUiSnapshots,
 	uiSnapshotKey,
@@ -244,5 +245,33 @@ describe.skipIf(process.platform === 'win32')('ui-snapshot-cache（プロセス�
 	it('形の合わないファイルは無視する', () => {
 		writeSharedRecord('snapshots', uiSnapshotKey(undefined, URI), { structuredContent: 'x', storedAt: 'y' });
 		expect(getUiSnapshot(URI, { nowMs: now })).toBeNull();
+	});
+});
+
+// 内容とトークンを別々に読むと、その間に置かれた新しい preview のトークンを古い内容に添えて返しうるので、同じ控えから返す。
+describe('getUiSnapshotWithMeta', () => {
+	const now = 1_800_000_000_000;
+	const meta = { 'cc.bitbank/confirmation': { confirmation_token: 'tok-pair', expires_at: now + 60_000 } };
+
+	it('内容とトークンを同じ控えから返す', () => {
+		storeUiSnapshot(URI, { ok: true, summary: 'a' }, { nowMs: now }, meta, now + 60_000);
+		expect(getUiSnapshotWithMeta(URI, { nowMs: now + 1 })).toEqual({
+			structuredContent: { ok: true, summary: 'a' },
+			meta,
+		});
+	});
+
+	it('トークンの期限が切れていれば、内容だけを返す', () => {
+		storeUiSnapshot(URI, { ok: true, summary: 'a' }, { nowMs: now }, meta, now + 60_000);
+		expect(getUiSnapshotWithMeta(URI, { nowMs: now + 60_001 })).toEqual({
+			structuredContent: { ok: true, summary: 'a' },
+			meta: null,
+		});
+	});
+
+	it('控えが無い・TTL を過ぎていれば null を返す', () => {
+		expect(getUiSnapshotWithMeta(URI, { nowMs: now })).toBeNull();
+		storeUiSnapshot(URI, { ok: true, summary: 'a' }, { nowMs: now });
+		expect(getUiSnapshotWithMeta(URI, { nowMs: now + TTL_MS + 1 })).toBeNull();
 	});
 });
