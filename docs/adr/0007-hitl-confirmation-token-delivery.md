@@ -517,6 +517,9 @@ push（`ui/notifications/tool-result`）だけでなく、iframe 自身が呼ん
   カード自身が呼んだツール（`get_ui_snapshot`）の結果には `_meta` が残ると読める。ボタンが出なかった主因はプロセスの分離で、
   確認トークンのリソース（判断事項 C）は、`get_ui_snapshot` の `_meta` も落とすホスト向けの予備として残す
 - チャットのツール実行は、Desktop の「local agent mode」が別のクライアントとしてつないでいる
+- ToolSearch で `preview_order` を読み込んだのと同じターンで呼ぶと、Desktop は確認カードを作らない（カード側のプロセスに要求が
+  ひとつも来ない）。読み込み済みなら 1 回目から出る。モデルからはカードの有無が見えず「カードを表示した」と答えるので、
+  preview の案内の最後に「カードが表示されない場合は、もう一度プレビューを頼むと表示されます。」を添える（`src/private/preview-confirmation.ts`）
 
 回帰は `tests/private/shared-confirm-state.test.ts`、`tests/private/confirmation.test.ts`（別プロセスで発行・使用したトークン）、
 `tests/ui-snapshot-cache.test.ts`（別プロセスの控え・消した時刻）、`tests/e2e/mcp-apps-shared-state.test.ts`（2 つのサーバーで

@@ -628,12 +628,26 @@ describe('`_meta` 経路の案内文言', () => {
 		});
 	}
 
+	// ToolSearch で読み込んだ直後の呼び出しなどで、ホストがカードを作らないことがある。モデルからは見えないので、ユーザーに出し直し方を伝える。
+	for (const c of PREVIEW_CASES) {
+		it(`${c.name}: カードが表示されないときの出し直し方を案内の最後に添える`, async () => {
+			process.env.BITBANK_MCP_APPS_EXECUTE = '1';
+			const { toolDef } = await c.load();
+			const result = (await toolDef.handler(c.args as never, appUiCtx())) as HandlerResult;
+			const text = result.content?.[0]?.text ?? '';
+			expect(text.trimEnd().endsWith('カードが表示されない場合は、もう一度プレビューを頼むと表示されます。')).toBe(
+				true,
+			);
+		});
+	}
+
 	it('ゲート off では従来どおり「実行に対応していません」を案内する', async () => {
 		const { toolDef } = await import('../../tools/private/preview_order.js');
 		const result = (await toolDef.handler(ORDER_ARGS as never, appUiCtx())) as HandlerResult;
 		const text = result.content?.[0]?.text ?? '';
 		expect(text).toContain('このホストでは取引実行に対応していません');
 		expect(text).not.toContain('ボタンを押さない限り');
+		expect(text).not.toContain('もう一度プレビューを頼むと表示されます');
 	});
 });
 
