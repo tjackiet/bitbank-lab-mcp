@@ -4,12 +4,12 @@ import { orderIdNote } from '../ui/shared/format.js';
 // 発注完了の表示で、create_order の summary に入っている注文 ID をカードがもう一度足していた。
 describe('orderIdNote', () => {
 	it('完了メッセージに注文 ID が入っていれば、足さない', () => {
-		const summary = '注文発注完了: BTC/JPY\n  注文ID: 62116311124\n  ステータス: UNFILLED';
-		expect(orderIdNote(summary, 62116311124)).toBeNull();
+		const summary = '注文発注完了: BTC/JPY\n  注文ID: 1001\n  ステータス: UNFILLED';
+		expect(orderIdNote(summary, 1001)).toBeNull();
 	});
 
 	it('完了メッセージに注文 ID が無ければ（既定の文言のとき）、足す', () => {
-		expect(orderIdNote('注文を受け付けました', 62116311124)).toBe('注文ID: 62116311124');
+		expect(orderIdNote('注文を受け付けました', 1001)).toBe('注文ID: 1001');
 	});
 
 	it('別の注文 ID しか入っていなければ、足す', () => {
