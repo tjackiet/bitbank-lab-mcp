@@ -12,6 +12,7 @@ import {
 	readSharedRecord,
 	recordSharedTokenUse,
 	sharedNonce,
+	sweepSharedRecords,
 	writeSharedRecord,
 } from '../../src/private/shared-confirm-state.js';
 
@@ -212,5 +213,36 @@ describe.skipIf(process.platform === 'win32')('writeSharedRecord / readSharedRec
 		const [name] = fs.readdirSync(path.join(dir, 'snapshots'));
 		fs.writeFileSync(path.join(dir, 'snapshots', name as string), '{broken');
 		expect(readSharedRecord('snapshots', 'key')).toBeNull();
+	});
+});
+
+describe.skipIf(process.platform === 'win32')('sweepSharedRecords', () => {
+	it('判定に従って、残す・消す・書き換えるを行い、壊れたファイルは消す', () => {
+		enableSharedConfirmState(dir);
+		writeSharedRecord('snapshots', 'keep', { v: 'keep' });
+		writeSharedRecord('snapshots', 'remove', { v: 'remove' });
+		writeSharedRecord('snapshots', 'replace', { v: 'replace', secret: 'x' });
+		writeSharedRecord('snapshots', 'broken', { v: 'broken' });
+		const broken = fs.readdirSync(path.join(dir, 'snapshots')).find((n) => {
+			const text = fs.readFileSync(path.join(dir, 'snapshots', n), 'utf8');
+			return text.includes('broken');
+		});
+		fs.writeFileSync(path.join(dir, 'snapshots', broken as string), '{broken');
+
+		sweepSharedRecords('snapshots', (value) => {
+			const v = (value as { v: string }).v;
+			if (v === 'remove') return 'remove';
+			if (v === 'replace') return { replace: { v: 'replaced' } };
+			return 'keep';
+		});
+
+		expect(readSharedRecord('snapshots', 'keep')).toEqual({ v: 'keep' });
+		expect(readSharedRecord('snapshots', 'remove')).toBeNull();
+		expect(readSharedRecord('snapshots', 'replace')).toEqual({ v: 'replaced' });
+		expect(fs.readdirSync(path.join(dir, 'snapshots'))).toHaveLength(2);
+	});
+
+	it('無効なら何もしない', () => {
+		expect(() => sweepSharedRecords('snapshots', () => 'remove')).not.toThrow();
 	});
 });

@@ -4,11 +4,12 @@ import { App as McpApp, applyDocumentTheme, getDocumentTheme } from '@modelconte
 import { type RefObject, useEffect, useRef, useState } from 'react';
 import {
 	confirmationResourceToSnapshot,
+	keepConfirmationMeta,
 	pullConfirmationIfMissing,
 	type SnapshotHydrationPhase,
 	startSnapshotHydration,
 } from '../../src/mcp-apps-hydration.js';
-import { confirmationResourceUri } from '../../src/mcp-apps-meta.js';
+import { confirmationResourceUri, readConfirmationMeta } from '../../src/mcp-apps-meta.js';
 import { applyHostStyles } from './host-styles';
 
 const CONNECT_TIMEOUT_MS = 7_000;
@@ -40,11 +41,15 @@ export function useConfirmApp(
 		const mcpApp = new McpApp({ name: appName, version: '0.1.0' });
 		appRef.current = mcpApp;
 
-		const applyPreviewResult = (structured: unknown, meta: unknown): boolean => {
-			if (!applyToolResult(structured, meta, hasPreviewRef.current)) return false;
+		let withToken: { structured: unknown; meta: unknown } | null = null;
+		// 取り込んだときは、実際に使った `_meta`（受け取り済みのトークンを持ち越したもの）を返す。
+		const applyPreviewResult = (structured: unknown, meta: unknown): { meta: unknown } | undefined => {
+			const effectiveMeta = keepConfirmationMeta(withToken, structured, meta);
+			if (!applyToolResult(structured, effectiveMeta, hasPreviewRef.current)) return undefined;
+			withToken = readConfirmationMeta(effectiveMeta) ? { structured, meta: effectiveMeta } : null;
 			hasPreviewRef.current = true;
 			setHydrationPhase('waiting');
-			return true;
+			return { meta: effectiveMeta };
 		};
 
 		const fetchSnapshot = () =>
@@ -87,8 +92,9 @@ export function useConfirmApp(
 		};
 
 		mcpApp.ontoolresult = (params) => {
-			if (!applyPreviewResult(params?.structuredContent, params?._meta)) return;
-			recoverConfirmation(params?.structuredContent, params?._meta, [fetchSnapshot, fetchConfirmationResource]);
+			const applied = applyPreviewResult(params?.structuredContent, params?._meta);
+			if (!applied) return;
+			recoverConfirmation(params?.structuredContent, applied.meta, [fetchSnapshot, fetchConfirmationResource]);
 		};
 
 		mcpApp.onhostcontextchanged = (ctx) => {
@@ -122,7 +128,7 @@ export function useConfirmApp(
 							throw new Error('snapshot did not contain a usable preview');
 						}
 						// スナップショットは取り直したばかりなので、トークンが無ければ残りの経路（リソース）だけを試す。
-						if (applied) recoverConfirmation(snapshot.structuredContent, snapshot._meta, [fetchConfirmationResource]);
+						if (applied) recoverConfirmation(snapshot.structuredContent, applied.meta, [fetchConfirmationResource]);
 					},
 					onPhase: setHydrationPhase,
 				});

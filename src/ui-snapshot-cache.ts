@@ -2,7 +2,12 @@
 // 保持するのはホストへ送信済みの応答だけだが、`_meta` は確認トークンを含みうるので getUiSnapshotMeta で別扱いにする。
 
 import { log } from '../lib/logger.js';
-import { deleteSharedRecord, readSharedRecord, writeSharedRecord } from './private/shared-confirm-state.js';
+import {
+	deleteSharedRecord,
+	readSharedRecord,
+	sweepSharedRecords,
+	writeSharedRecord,
+} from './private/shared-confirm-state.js';
 
 const SNAPSHOT_TTL_MS = 5 * 60_000;
 
@@ -107,6 +112,47 @@ export function clearUiSnapshot(resourceUri: string, scope: SnapshotScope = {}):
 	snapshots.delete(key);
 	// ファイルを消すだけだと、控えをメモリに持つ別プロセスがそれを返し続けるので、消した時刻を残す。
 	writeSharedRecord('snapshots', key, { clearedAt: scope.nowMs ?? Date.now() });
+}
+
+function withoutMeta(entry: SnapshotEntry): SnapshotEntry {
+	const { meta: _meta, metaExpiresAtMs: _expires, ...rest } = entry;
+	return rest;
+}
+
+// ファイルを読めるエージェントに残ったトークンを使わせないよう、カード側のプロセスに渡したらファイルから消す（ADR-0007 判断事項 D）。メモリは触らない。
+export function forgetSharedUiSnapshotMeta(resourceUri: string, scope: SnapshotScope = {}): void {
+	const key = uiSnapshotKey(scope.sessionId, resourceUri);
+	const shared = toSnapshotEntry(readSharedRecord('snapshots', key));
+	if (shared?.meta) writeSharedRecord('snapshots', key, withoutMeta(shared));
+}
+
+// カードが一度も読まなかった控え（注文内容・トークン）をファイルに残し続けないための掃除。
+export function sweepSharedUiSnapshots(nowMs: number = Date.now()): void {
+	sweepSharedRecords('snapshots', (value) => {
+		const clearedAt = clearedAtOf(value);
+		if (clearedAt != null) return nowMs - clearedAt > SNAPSHOT_TTL_MS ? 'remove' : 'keep';
+		const entry = toSnapshotEntry(value);
+		if (!entry || nowMs - entry.storedAt > SNAPSHOT_TTL_MS) return 'remove';
+		if (entry.meta && entry.metaExpiresAtMs != null && nowMs > entry.metaExpiresAtMs) {
+			return { replace: withoutMeta(entry) };
+		}
+		return 'keep';
+	});
+}
+
+const SWEEP_INTERVAL_MS = 30_000;
+let sweepTimer: ReturnType<typeof setInterval> | undefined;
+
+export function startSharedUiSnapshotSweep(): void {
+	sweepSharedUiSnapshots();
+	if (sweepTimer) return;
+	sweepTimer = setInterval(() => sweepSharedUiSnapshots(), SWEEP_INTERVAL_MS);
+	sweepTimer.unref?.();
+}
+
+export function stopSharedUiSnapshotSweep(): void {
+	if (sweepTimer) clearInterval(sweepTimer);
+	sweepTimer = undefined;
 }
 
 export function _resetUiSnapshots(): void {

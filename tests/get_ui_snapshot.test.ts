@@ -1,7 +1,11 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { CLIENT_CAPABILITIES_META_KEY } from '@modelcontextprotocol/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CONFIRMATION_META_KEY } from '../src/mcp-apps-meta.js';
 import { clientSupportsElicitation, isAppUiExecuteAllowed } from '../src/private/elicitation.js';
+import { disableSharedConfirmState, enableSharedConfirmState } from '../src/private/shared-confirm-state.js';
 import {
 	APP_RESOURCE_MIME_TYPE,
 	appResourceRegistry,
@@ -138,5 +142,52 @@ describe('handler', () => {
 		// snapshot 側の判定: 同じ述語を使っているので `_meta` を返す
 		const result = (await toolDef.handler({ resource_uri: URI }, extra)) as { _meta?: Record<string, unknown> };
 		expect(result._meta).toEqual(meta);
+	});
+});
+
+// 共有ファイルに置いたトークンは、カード側のプロセスに 1 回渡したら消す。ファイルを読めるエージェントに使わせないため（ADR-0007 判断事項 D）。
+describe.skipIf(process.platform === 'win32')('handler（プロセス間で共有するとき）', () => {
+	it('別プロセスのカードに 1 回渡したら、2 回目は `_meta` を返さず、ファイルにもトークンが残らない', async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-snapshot-shared-'));
+		try {
+			enableSharedConfirmState(path.join(root, 'confirm'));
+			vi.stubEnv('BITBANK_MCP_APPS_EXECUTE', '1');
+			const expiresAt = Date.now() + 60_000;
+			storeUiSnapshot(
+				URI,
+				{ ok: true, summary: 'preview' },
+				{},
+				{ [CONFIRMATION_META_KEY]: { confirmation_token: 'tok-once', expires_at: expiresAt } },
+				expiresAt,
+			);
+			_resetUiSnapshots();
+			const extra = {
+				server: {
+					getClientCapabilities: () => ({
+						extensions: { [MCP_APPS_UI_EXTENSION_ID]: { mimeTypes: [APP_RESOURCE_MIME_TYPE] } },
+					}),
+				},
+			};
+
+			const first = (await toolDef.handler({ resource_uri: URI }, extra)) as { _meta?: Record<string, unknown> };
+			expect(first._meta?.[CONFIRMATION_META_KEY]).toMatchObject({ confirmation_token: 'tok-once' });
+
+			const second = (await toolDef.handler({ resource_uri: URI }, extra)) as {
+				_meta?: Record<string, unknown>;
+				structuredContent?: unknown;
+			};
+			expect(second._meta).toBeUndefined();
+			expect(second.structuredContent).toEqual({ ok: true, summary: 'preview' });
+
+			const dir = path.join(root, 'confirm', 'snapshots');
+			const text = fs
+				.readdirSync(dir)
+				.map((n) => fs.readFileSync(path.join(dir, n), 'utf8'))
+				.join('');
+			expect(text).not.toContain('tok-once');
+		} finally {
+			disableSharedConfirmState();
+			fs.rmSync(root, { recursive: true, force: true });
+		}
 	});
 });

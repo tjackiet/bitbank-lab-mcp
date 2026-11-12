@@ -5,7 +5,7 @@ import { fail } from '../lib/result.js';
 import { clientSupportsElicitation, isAppUiExecuteAllowed } from '../src/private/elicitation.js';
 import { GetUiSnapshotInputSchema } from '../src/schema/ui.js';
 import type { ToolDefinition } from '../src/tool-definition.js';
-import { getUiSnapshot, getUiSnapshotMeta } from '../src/ui-snapshot-cache.js';
+import { forgetSharedUiSnapshotMeta, getUiSnapshot, getUiSnapshotMeta } from '../src/ui-snapshot-cache.js';
 
 export const toolDef: ToolDefinition = {
 	name: 'get_ui_snapshot',
@@ -28,6 +28,7 @@ export const toolDef: ToolDefinition = {
 			isAppUiExecuteAllowed(extra) && !clientSupportsElicitation(extra)
 				? getUiSnapshotMeta(resource_uri, { sessionId })
 				: null;
+		if (meta) forgetSharedUiSnapshotMeta(resource_uri, { sessionId });
 		return {
 			content: [
 				{

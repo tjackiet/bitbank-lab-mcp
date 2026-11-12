@@ -11,9 +11,11 @@ import {
 import {
 	_resetUiSnapshots,
 	clearUiSnapshot,
+	forgetSharedUiSnapshotMeta,
 	getUiSnapshot,
 	getUiSnapshotMeta,
 	storeUiSnapshot,
+	sweepSharedUiSnapshots,
 	uiSnapshotKey,
 } from '../src/ui-snapshot-cache.js';
 
@@ -190,6 +192,45 @@ describe.skipIf(process.platform === 'win32')('ui-snapshot-cache（プロセス�
 		expect(events).toEqual([['warn', { type: 'shared_snapshot_write_failed', resourceUri: URI }]]);
 		expect(JSON.stringify(events)).not.toContain('tok-shared');
 		vi.mocked(log).mockClear();
+	});
+
+	function sharedFileText(): string {
+		const dir = path.join(root, 'confirm', 'snapshots');
+		return fs
+			.readdirSync(dir)
+			.map((n) => fs.readFileSync(path.join(dir, n), 'utf8'))
+			.join('\n');
+	}
+
+	it('カードに渡したトークンはファイルから消し、別プロセスは内容だけを読める', () => {
+		storeUiSnapshot(URI, structured, { nowMs: now }, meta, now + 60_000);
+		forgetSharedUiSnapshotMeta(URI);
+		expect(sharedFileText()).not.toContain('tok-shared');
+		// 発行したプロセスのメモリには残る（同じプロセスで動くホストの挙動は変えない）。
+		expect(getUiSnapshotMeta(URI, { nowMs: now + 1000 })).toEqual(meta);
+		_resetUiSnapshots();
+		expect(getUiSnapshot(URI, { nowMs: now + 1000 })).toEqual(structured);
+		expect(getUiSnapshotMeta(URI, { nowMs: now + 1000 })).toBeNull();
+	});
+
+	it('掃除で、期限の切れたトークンを消し、TTL を過ぎた控えと消した印のファイルを消す', () => {
+		storeUiSnapshot(URI, structured, { nowMs: now }, meta, now + 60_000);
+		sweepSharedUiSnapshots(now + 60_001);
+		expect(sharedFileText()).not.toContain('tok-shared');
+		expect(sharedFileText()).toContain('preview');
+
+		sweepSharedUiSnapshots(now + 5 * 60_000 + 1);
+		expect(sharedFileText()).toBe('');
+
+		clearUiSnapshot(URI, { nowMs: now });
+		sweepSharedUiSnapshots(now + 5 * 60_000 + 1);
+		expect(sharedFileText()).toBe('');
+	});
+
+	it('掃除は、期限内のトークンと TTL 内の控えを残す', () => {
+		storeUiSnapshot(URI, structured, { nowMs: now }, meta, now + 60_000);
+		sweepSharedUiSnapshots(now + 1000);
+		expect(sharedFileText()).toContain('tok-shared');
 	});
 
 	it('形の合わないファイルは無視する', () => {

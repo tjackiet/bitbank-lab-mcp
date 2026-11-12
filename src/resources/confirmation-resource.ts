@@ -6,7 +6,7 @@ import { appResourceUriFor, readConfirmationMeta } from '../mcp-apps-meta.js';
 import { isAppUiExecuteEnabled } from '../private/config.js';
 import { clientSupportsAppUi, clientSupportsElicitation, describeConfirmationGate } from '../private/elicitation.js';
 import type { ToolHandlerExtra } from '../tool-definition.js';
-import { getUiSnapshot, getUiSnapshotMeta } from '../ui-snapshot-cache.js';
+import { forgetSharedUiSnapshotMeta, getUiSnapshot, getUiSnapshotMeta } from '../ui-snapshot-cache.js';
 import { appResourceRegistry } from './app-resources.js';
 
 export interface ConfirmationResourceResult {
@@ -45,6 +45,7 @@ export function readConfirmationResource(
 		reason: closed ?? (!structuredContent ? 'no_snapshot' : !confirmation ? 'no_token' : null),
 		gate: describeConfirmationGate(extra),
 	});
+	if (openUri && confirmation) forgetSharedUiSnapshotMeta(openUri, { sessionId });
 	const body = confirmation ? { structuredContent, confirmation } : {};
 	return { contents: [{ uri, mimeType: 'application/json', text: JSON.stringify(body) }] };
 }

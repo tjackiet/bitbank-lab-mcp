@@ -158,6 +158,16 @@ export async function pullConfirmationIfMissing(opts: ConfirmationPullOptions): 
 	return false;
 }
 
+// トークンは共有ファイルから 1 回しか渡さないので、同じ preview がトークン無しで届き直しても、受け取り済みのトークンを消さない（ADR-0007 判断事項 D）。
+export function keepConfirmationMeta(
+	previous: { structured: unknown; meta: unknown } | null,
+	structured: unknown,
+	meta: unknown,
+): unknown {
+	if (readConfirmationMeta(meta) || !previous) return meta;
+	return canonicalJson(previous.structured) === canonicalJson(structured) ? previous.meta : meta;
+}
+
 export function confirmationResourceToSnapshot(
 	result: unknown,
 ): { structuredContent: unknown; _meta: Record<string, unknown> } | undefined {

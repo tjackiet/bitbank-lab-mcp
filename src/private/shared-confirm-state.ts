@@ -180,10 +180,14 @@ function recordPath(kind: SharedRecordKind, key: string): string | null {
 	return activeDir == null ? null : path.join(activeDir, kind, `${hashName(key)}.json`);
 }
 
-// rename で置き換えるので、読む側が書きかけの JSON を見ることがない。共有が無効なら書く必要が無いので true を返す。
+// 共有が無効なら書く必要が無いので true を返す。
 export function writeSharedRecord(kind: SharedRecordKind, key: string, value: unknown): boolean {
 	const file = recordPath(kind, key);
-	if (file == null) return true;
+	return file == null ? true : writeFileAtomically(file, value);
+}
+
+// rename で置き換えるので、読む側が書きかけの JSON を見ることがない。
+function writeFileAtomically(file: string, value: unknown): boolean {
 	const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
 	try {
 		fs.writeFileSync(tmp, JSON.stringify(value), { mode: 0o600, flag: 'wx' });
@@ -217,5 +221,37 @@ export function deleteSharedRecord(kind: SharedRecordKind, key: string): void {
 		fs.rmSync(file, { force: true });
 	} catch {
 		// 消せなくても、読む側が期限と TTL で古い控えを捨てる。
+	}
+}
+
+export type SweepDecision = 'keep' | 'remove' | { replace: unknown };
+
+// ファイル名はキーのハッシュで元のキーに戻せないので、中身だけを見て判断させる。読めない・壊れたファイルは消す。
+export function sweepSharedRecords(kind: SharedRecordKind, decide: (value: unknown) => SweepDecision): void {
+	if (activeDir == null) return;
+	const dir = path.join(activeDir, kind);
+	let names: string[];
+	try {
+		names = fs.readdirSync(dir).filter((n) => n.endsWith('.json'));
+	} catch {
+		return;
+	}
+	for (const name of names) {
+		const file = path.join(dir, name);
+		try {
+			if (!isOwnRegularFile(file)) continue;
+			let value: unknown;
+			try {
+				value = JSON.parse(fs.readFileSync(file, 'utf8'));
+			} catch {
+				fs.rmSync(file, { force: true });
+				continue;
+			}
+			const decision = decide(value);
+			if (decision === 'remove') fs.rmSync(file, { force: true });
+			else if (decision !== 'keep') writeFileAtomically(file, decision.replace);
+		} catch {
+			// 別プロセスが同時に消した等。次の掃除で拾う。
+		}
 	}
 }
