@@ -13,6 +13,7 @@ import {
 	recordSharedTokenUse,
 	sharedNonce,
 	sweepSharedRecords,
+	updateSharedRecord,
 	writeSharedRecord,
 } from '../../src/private/shared-confirm-state.js';
 
@@ -217,11 +218,10 @@ describe.skipIf(process.platform === 'win32')('writeSharedRecord / readSharedRec
 });
 
 describe.skipIf(process.platform === 'win32')('sweepSharedRecords', () => {
-	it('判定に従って、残す・消す・書き換えるを行い、壊れたファイルは消す', () => {
+	it('判定に従って残す・消すを行い、壊れたファイルは消す', () => {
 		enableSharedConfirmState(dir);
 		writeSharedRecord('snapshots', 'keep', { v: 'keep' });
 		writeSharedRecord('snapshots', 'remove', { v: 'remove' });
-		writeSharedRecord('snapshots', 'replace', { v: 'replace', secret: 'x' });
 		writeSharedRecord('snapshots', 'broken', { v: 'broken' });
 		const broken = fs.readdirSync(path.join(dir, 'snapshots')).find((n) => {
 			const text = fs.readFileSync(path.join(dir, 'snapshots', n), 'utf8');
@@ -229,20 +229,32 @@ describe.skipIf(process.platform === 'win32')('sweepSharedRecords', () => {
 		});
 		fs.writeFileSync(path.join(dir, 'snapshots', broken as string), '{broken');
 
-		sweepSharedRecords('snapshots', (value) => {
-			const v = (value as { v: string }).v;
-			if (v === 'remove') return 'remove';
-			if (v === 'replace') return { replace: { v: 'replaced' } };
-			return 'keep';
-		});
+		sweepSharedRecords('snapshots', (value) => ((value as { v: string }).v === 'remove' ? 'remove' : 'keep'));
 
 		expect(readSharedRecord('snapshots', 'keep')).toEqual({ v: 'keep' });
 		expect(readSharedRecord('snapshots', 'remove')).toBeNull();
-		expect(readSharedRecord('snapshots', 'replace')).toEqual({ v: 'replaced' });
-		expect(fs.readdirSync(path.join(dir, 'snapshots'))).toHaveLength(2);
+		expect(fs.readdirSync(path.join(dir, 'snapshots'))).toHaveLength(1);
 	});
 
 	it('無効なら何もしない', () => {
 		expect(() => sweepSharedRecords('snapshots', () => 'remove')).not.toThrow();
+	});
+});
+
+describe.skipIf(process.platform === 'win32')('updateSharedRecord', () => {
+	it('今の中身から作った値で書き換え、undefined なら書き換えない', () => {
+		enableSharedConfirmState(dir);
+		writeSharedRecord('snapshots', 'key', { v: 1 });
+		expect(updateSharedRecord('snapshots', 'key', (value) => ({ v: (value as { v: number }).v + 1 }))).toBe(true);
+		expect(readSharedRecord('snapshots', 'key')).toEqual({ v: 2 });
+		expect(updateSharedRecord('snapshots', 'key', () => undefined)).toBe(false);
+		expect(readSharedRecord('snapshots', 'key')).toEqual({ v: 2 });
+	});
+
+	it('ファイルが無い・共有が無効なら何もしない', () => {
+		expect(updateSharedRecord('snapshots', 'key', () => ({ v: 1 }))).toBe(false);
+		enableSharedConfirmState(dir);
+		expect(updateSharedRecord('snapshots', 'missing', () => ({ v: 1 }))).toBe(false);
+		expect(readSharedRecord('snapshots', 'missing')).toBeNull();
 	});
 });

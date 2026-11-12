@@ -163,8 +163,12 @@ export function keepConfirmationMeta(
 	previous: { structured: unknown; meta: unknown } | null,
 	structured: unknown,
 	meta: unknown,
+	nowMs: number = Date.now(),
 ): unknown {
 	if (readConfirmationMeta(meta) || !previous) return meta;
+	// 期限切れを持ち越すと、取り直し（pullConfirmationIfMissing）がトークンありと見て走らない。
+	const retained = readConfirmationMeta(previous.meta);
+	if (!retained || nowMs > retained.expires_at) return meta;
 	return canonicalJson(previous.structured) === canonicalJson(structured) ? previous.meta : meta;
 }
 

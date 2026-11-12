@@ -224,10 +224,36 @@ export function deleteSharedRecord(kind: SharedRecordKind, key: string): void {
 	}
 }
 
-export type SweepDecision = 'keep' | 'remove' | { replace: unknown };
+// 読んでから書き換えるまでに別プロセスが新しい内容を置いていたら（rename で i-node が変わる）、手を出さない。
+// 残る隙は確認と rename の間だけで、そこで負けても失うのは新しい控え（カードにボタンが出ない）で、誤った発注にはならない。
+function sameFile(file: string, ino: number): boolean {
+	try {
+		return fs.statSync(file).ino === ino;
+	} catch {
+		return false;
+	}
+}
+
+export function updateSharedRecord(
+	kind: SharedRecordKind,
+	key: string,
+	update: (value: unknown) => unknown | undefined,
+): boolean {
+	const file = recordPath(kind, key);
+	if (file == null) return false;
+	try {
+		if (!isOwnRegularFile(file)) return false;
+		const { ino } = fs.statSync(file);
+		const next = update(JSON.parse(fs.readFileSync(file, 'utf8')));
+		if (next === undefined || !sameFile(file, ino)) return false;
+		return writeFileAtomically(file, next);
+	} catch {
+		return false;
+	}
+}
 
 // ファイル名はキーのハッシュで元のキーに戻せないので、中身だけを見て判断させる。読めない・壊れたファイルは消す。
-export function sweepSharedRecords(kind: SharedRecordKind, decide: (value: unknown) => SweepDecision): void {
+export function sweepSharedRecords(kind: SharedRecordKind, decide: (value: unknown) => 'keep' | 'remove'): void {
 	if (activeDir == null) return;
 	const dir = path.join(activeDir, kind);
 	let names: string[];
@@ -240,16 +266,14 @@ export function sweepSharedRecords(kind: SharedRecordKind, decide: (value: unkno
 		const file = path.join(dir, name);
 		try {
 			if (!isOwnRegularFile(file)) continue;
+			const { ino } = fs.statSync(file);
 			let value: unknown;
 			try {
 				value = JSON.parse(fs.readFileSync(file, 'utf8'));
 			} catch {
-				fs.rmSync(file, { force: true });
-				continue;
+				value = undefined;
 			}
-			const decision = decide(value);
-			if (decision === 'remove') fs.rmSync(file, { force: true });
-			else if (decision !== 'keep') writeFileAtomically(file, decision.replace);
+			if ((value === undefined || decide(value) === 'remove') && sameFile(file, ino)) fs.rmSync(file, { force: true });
 		} catch {
 			// 別プロセスが同時に消した等。次の掃除で拾う。
 		}

@@ -45,7 +45,7 @@ export function readConfirmationResource(
 		reason: closed ?? (!structuredContent ? 'no_snapshot' : !confirmation ? 'no_token' : null),
 		gate: describeConfirmationGate(extra),
 	});
-	if (openUri && confirmation) forgetSharedUiSnapshotMeta(openUri, { sessionId });
+	if (openUri && confirmation) forgetSharedUiSnapshotMeta(openUri, { sessionId }, confirmation.confirmation_token);
 	const body = confirmation ? { structuredContent, confirmation } : {};
 	return { contents: [{ uri, mimeType: 'application/json', text: JSON.stringify(body) }] };
 }

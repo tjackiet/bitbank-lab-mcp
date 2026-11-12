@@ -2,6 +2,7 @@
 // 返すのはホストへ送信済みのツール応答そのもので、新たな情報露出は無い（src/ui-snapshot-cache.ts）。
 
 import { fail } from '../lib/result.js';
+import { readConfirmationMeta } from '../src/mcp-apps-meta.js';
 import { clientSupportsElicitation, isAppUiExecuteAllowed } from '../src/private/elicitation.js';
 import { GetUiSnapshotInputSchema } from '../src/schema/ui.js';
 import type { ToolDefinition } from '../src/tool-definition.js';
@@ -28,7 +29,8 @@ export const toolDef: ToolDefinition = {
 			isAppUiExecuteAllowed(extra) && !clientSupportsElicitation(extra)
 				? getUiSnapshotMeta(resource_uri, { sessionId })
 				: null;
-		if (meta) forgetSharedUiSnapshotMeta(resource_uri, { sessionId });
+		const delivered = readConfirmationMeta(meta)?.confirmation_token;
+		if (delivered) forgetSharedUiSnapshotMeta(resource_uri, { sessionId }, delivered);
 		return {
 			content: [
 				{

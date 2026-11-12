@@ -639,6 +639,11 @@ describe('keepConfirmationMeta', () => {
 		expect(keepConfirmationMeta({ structured, meta: withToken }, structured, fresh)).toBe(fresh);
 	});
 
+	it('受け取り済みのトークンが期限切れなら持ち越さない（取り直しに進ませる）', () => {
+		const expired = { [CONFIRMATION_META_KEY]: { confirmation_token: 'tok-old', expires_at: 1_000 } };
+		expect(keepConfirmationMeta({ structured, meta: expired }, structured, undefined, 2_000)).toBeUndefined();
+	});
+
 	it('受け取り済みのトークンが無ければ、届いた `_meta` のまま', () => {
 		expect(keepConfirmationMeta(null, structured, undefined)).toBeUndefined();
 	});

@@ -204,7 +204,7 @@ describe.skipIf(process.platform === 'win32')('ui-snapshot-cache（プロセス�
 
 	it('カードに渡したトークンはファイルから消し、別プロセスは内容だけを読める', () => {
 		storeUiSnapshot(URI, structured, { nowMs: now }, meta, now + 60_000);
-		forgetSharedUiSnapshotMeta(URI);
+		forgetSharedUiSnapshotMeta(URI, {}, 'tok-shared');
 		expect(sharedFileText()).not.toContain('tok-shared');
 		// 発行したプロセスのメモリには残る（同じプロセスで動くホストの挙動は変えない）。
 		expect(getUiSnapshotMeta(URI, { nowMs: now + 1000 })).toEqual(meta);
@@ -213,10 +213,9 @@ describe.skipIf(process.platform === 'win32')('ui-snapshot-cache（プロセス�
 		expect(getUiSnapshotMeta(URI, { nowMs: now + 1000 })).toBeNull();
 	});
 
-	it('掃除で、期限の切れたトークンを消し、TTL を過ぎた控えと消した印のファイルを消す', () => {
+	it('掃除で、TTL を過ぎた控えと消した印のファイルを消す（期限切れのトークンは検証で弾かれるので、控えごと消える）', () => {
 		storeUiSnapshot(URI, structured, { nowMs: now }, meta, now + 60_000);
 		sweepSharedUiSnapshots(now + 60_001);
-		expect(sharedFileText()).not.toContain('tok-shared');
 		expect(sharedFileText()).toContain('preview');
 
 		sweepSharedUiSnapshots(now + 5 * 60_000 + 1);
@@ -225,6 +224,15 @@ describe.skipIf(process.platform === 'win32')('ui-snapshot-cache（プロセス�
 		clearUiSnapshot(URI, { nowMs: now });
 		sweepSharedUiSnapshots(now + 5 * 60_000 + 1);
 		expect(sharedFileText()).toBe('');
+	});
+
+	it('渡したトークンと違うトークン（新しい preview）は消さない', () => {
+		storeUiSnapshot(URI, structured, { nowMs: now }, meta, now + 60_000);
+		const newer = { 'cc.bitbank/confirmation': { confirmation_token: 'tok-newer', expires_at: now + 70_000 } };
+		storeUiSnapshot(URI, { ok: true, summary: 'newer' }, { nowMs: now + 10 }, newer, now + 70_000);
+		forgetSharedUiSnapshotMeta(URI, {}, 'tok-shared');
+		_resetUiSnapshots();
+		expect(getUiSnapshotMeta(URI, { nowMs: now + 20 })).toEqual(newer);
 	});
 
 	it('掃除は、期限内のトークンと TTL 内の控えを残す', () => {

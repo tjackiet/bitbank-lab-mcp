@@ -2,10 +2,12 @@
 // 保持するのはホストへ送信済みの応答だけだが、`_meta` は確認トークンを含みうるので getUiSnapshotMeta で別扱いにする。
 
 import { log } from '../lib/logger.js';
+import { readConfirmationMeta } from './mcp-apps-meta.js';
 import {
 	deleteSharedRecord,
 	readSharedRecord,
 	sweepSharedRecords,
+	updateSharedRecord,
 	writeSharedRecord,
 } from './private/shared-confirm-state.js';
 
@@ -120,23 +122,22 @@ function withoutMeta(entry: SnapshotEntry): SnapshotEntry {
 }
 
 // ファイルを読めるエージェントに残ったトークンを使わせないよう、カード側のプロセスに渡したらファイルから消す（ADR-0007 判断事項 D）。メモリは触らない。
-export function forgetSharedUiSnapshotMeta(resourceUri: string, scope: SnapshotScope = {}): void {
-	const key = uiSnapshotKey(scope.sessionId, resourceUri);
-	const shared = toSnapshotEntry(readSharedRecord('snapshots', key));
-	if (shared?.meta) writeSharedRecord('snapshots', key, withoutMeta(shared));
+// 渡したトークンと同じときだけ消す。読んだ後に新しい preview が置かれていたら、そのトークンは消さない。
+export function forgetSharedUiSnapshotMeta(resourceUri: string, scope: SnapshotScope, deliveredToken: string): void {
+	updateSharedRecord('snapshots', uiSnapshotKey(scope.sessionId, resourceUri), (value) => {
+		const entry = toSnapshotEntry(value);
+		const token = readConfirmationMeta(entry?.meta)?.confirmation_token;
+		return entry && token === deliveredToken ? withoutMeta(entry) : undefined;
+	});
 }
 
-// カードが一度も読まなかった控え（注文内容・トークン）をファイルに残し続けないための掃除。
+// カードが一度も読まなかった控え（注文内容）をファイルに残し続けないための掃除。期限切れのトークンは検証で弾かれるので、控えごと TTL で消す。
 export function sweepSharedUiSnapshots(nowMs: number = Date.now()): void {
 	sweepSharedRecords('snapshots', (value) => {
 		const clearedAt = clearedAtOf(value);
 		if (clearedAt != null) return nowMs - clearedAt > SNAPSHOT_TTL_MS ? 'remove' : 'keep';
 		const entry = toSnapshotEntry(value);
-		if (!entry || nowMs - entry.storedAt > SNAPSHOT_TTL_MS) return 'remove';
-		if (entry.meta && entry.metaExpiresAtMs != null && nowMs > entry.metaExpiresAtMs) {
-			return { replace: withoutMeta(entry) };
-		}
-		return 'keep';
+		return !entry || nowMs - entry.storedAt > SNAPSHOT_TTL_MS ? 'remove' : 'keep';
 	});
 }
 
