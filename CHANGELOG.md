@@ -25,6 +25,7 @@
 - `get_my_deposit_withdrawal`：本文に出す明細を、種類（JPY 入金・暗号資産入庫・JPY 出金・暗号資産出庫）ごとに先頭 5 件から新しいほうの 100 件までに増やす。超えた分は件数と、明細を取るときに `end` に渡す時刻（本文に出した中でいちばん古い時刻）を書く。これまでは、取得が全件でないときの続きの案内（取得したいちばん古い時刻）に従うと、本文に出なかった明細を飛ばしていた。
 - `get_margin_status`：建玉の金額の見出しを「建玉総評価額 / 保有建玉 / 注文中建玉」から「建玉合計（時価ではない）/ 保有分（建値ベース）/ 新規注文中」に変える。保有分は建玉ごとの `product`（建値ベース）の合計と一致することを実口座で確認しており、時価で評価した額ではないのに「評価額」と書いていた。ドキュメントの呼び方（建玉合計・建玉の保有分・建玉の新規発注中）に合わせた。新規注文中の分の基準は確認できていないので書かない。
 - `get_tickers_jpy` / `get_my_assets` / `analyze_my_portfolio`：価格一覧（`tickers_jpy`）の取得先を、環境変数 `TICKERS_JPY_URL` で差し替えられないようにする。起動したフォルダの `.env` にこの変数があると、評価額や損益が別の価格で計算され、本物の数字として表示されていた。使っていたのはテストだけ（`file://` でローカルの JSON を読む、`about:timeout` で応答が返らない状態をまねる）で、テストは fetch のモックに置き換えた。
+- 確認トークンのリソース（`bitbank-confirmation://{app}`）：渡さなかったときの理由（`reason`：`unknown_app` / `apps_execute_disabled` / `no_app_ui` / `elicitation` / `no_snapshot` / `no_token`）をログ（`confirmation_resource_read`）に残す。preview 側でもトークンを載せたかをログ（`confirmation_meta`）に残す。どちらも、判定に使った宣言の出どころ（per-request envelope / initialize）、セッション ID のハッシュの先頭 8 桁、接続時のクライアント名、プロセス ID を添える（トークンとセッション ID そのものは残さない）。Claude Desktop でリソースが `delivered: false` を返し、理由が分からなかったため
 
 ### Added
 
@@ -35,6 +36,7 @@
 
 ### Fixed
 
+- 確認カード（注文と取消）：最新の Claude Desktop でボタンが出ない件の続き。Claude Desktop は、設定に 1 つ登録したサーバーを 2 つ起動し、チャットのツール実行（preview）とカードの要求（控えの取得・確認トークンのリソース・ボタンの発注）を別々のプロセスで受ける。preview の控え・署名鍵に混ぜる乱数・使用済みトークンの記録がプロセスの中にしか無かったので、カード側のプロセスは preview を知らず、トークンを渡せず、渡せても発注の検証に通らなかった。オプトイン（`BITBANK_MCP_APPS_EXECUTE=1`）時だけ、この 3 つを `~/.bitbank-lab-mcp/confirm`（本人だけが読み書きできるフォルダ）で共有する。使用済みの印は排他作成で置き、2 つのプロセスで同じトークンが 2 回通らないようにする。発注後に消した控えは、もう一方のプロセスでも消えたものとして扱う。トークンが通る範囲は「同じ OS ユーザーで、このフォルダを使うプロセス」に広がる。Windows では共有しない（ADR-0007 判断事項 D）
 - 確認カード（注文と取消）：最新の Claude Desktop でボタンが出ない件の続き。Claude Desktop は、カード自身が呼んだ `get_ui_snapshot` の結果からも `_meta` を落としていた。一覧に出さないリソース `bitbank-confirmation://{app}` を追加し、カードはトークンが届かないときにこれを読んで、本文からトークンを受け取る。渡す条件は `_meta` と同じ（`BITBANK_MCP_APPS_EXECUTE=1`、MCP Apps UI の宣言、elicitation 非対応、同じセッション、期限内）で、満たさなければ本文は空。`resources/list` には出さない。この経路は「モデルが MCP リソースを自分で読めない」ことを前提にする（ADR-0007 判断事項 C）。
 - 確認カード（注文と取消）：最新の Claude Desktop で「注文を確定する」などのボタンが出なくなっていた。サーバーは確認トークンをツール結果の `_meta` に載せているが、ホストがカードへ渡す結果に `_meta` が含まれなくなったと見られる。カードがトークン無しで内容を受け取ったときは、`get_ui_snapshot` を 1 回だけ呼んでトークンを取り直す。`get_ui_snapshot` がトークンを返す条件（`BITBANK_MCP_APPS_EXECUTE=1` かつクライアントが MCP Apps UI を宣言し、elicitation 非対応）は変わらない。ホストがこちらの結果の `_meta` も渡さない場合は、ボタンが出ないまま（実行できない側に倒れる）。
 - MCP Apps の実行経路（`BITBANK_MCP_APPS_EXECUTE=1`）と elicitation の判定が、2026-07-28 版のクライアントが送るリクエストごとの capability（per-request envelope）を読めていなかった。SDK は envelope を `_meta` のキー名（`io.modelcontextprotocol/clientCapabilities`）のまま渡すのに、`clientCapabilities` という名前で読んでいたため、そのクライアントでは確認カード（MCP Apps UI）も elicitation も常に「非対応」と判定されていた。2025 系のクライアント（`initialize` で宣言する。現行の Claude Desktop）は影響を受けない。

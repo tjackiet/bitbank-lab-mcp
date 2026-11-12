@@ -437,7 +437,7 @@ push（`ui/notifications/tool-result`）だけでなく、iframe 自身が呼ん
   （テンプレート自体は `resources/templates/list` に出る）
 - iframe は push → `get_ui_snapshot` の `_meta` → このリソース の順に試し、内容が push と同じときだけ取り込む
   （`src/mcp-apps-hydration.ts` の `pullConfirmationIfMissing`）
-- 読まれたか・渡したかだけをサーバーの記録に残す（`confirmation_resource_read`。トークンは残さない）
+- 読まれたか・渡したか・渡さなかった理由をサーバーの記録に残す（`confirmation_resource_read`。トークンは残さない）。preview 側も、トークンを載せたかを `confirmation_meta` に残す。どちらも、判定に使った宣言の出どころ（per-request envelope / initialize）、セッション ID のハッシュの先頭 8 桁、接続時のクライアント名、プロセス ID を添える
 
 **新しく置く前提**: 「モデルが MCP リソースを自分で読めない」こと。Claude Desktop ではリソースはユーザーが添付するもので、
 モデルが読む手段は無い。**実測で確かめること**（ボタンが出るか、モデルがトークンを読めないか）。
@@ -445,6 +445,48 @@ push（`ui/notifications/tool-result`）だけでなく、iframe 自身が呼ん
 **リスク**: モデルがリソースを読めるホスト（例: リソースを読むツールをモデルに渡すクライアント）が、同時に MCP Apps UI を
 宣言すると、モデルがトークンを読んで HITL をバイパスできる。MCP Apps UI を宣言しないホストではゲートで閉じる。
 「想定リスクの境界」の表に追加した。
+
+### D. preview とカードが別プロセスに届くときの共有 — **採用（2026-11-12）**
+
+**観察**（Claude Desktop 実測 / 2026-11-12）:
+
+- 設定に登録したサーバーは 1 つなのに、Desktop は同じコマンドでサーバーを 2 つ起動する
+- チャットのツール実行（`preview_order`）は一方に、カードの要求（UI の HTML、`get_ui_snapshot`、確認トークンのリソース）は
+  もう一方に届く。Desktop のログ（`mcp.log`）にはカード側の接続しか出ない
+- カード側のプロセスには preview の控えが無く、リソースは `no_snapshot` を返していた（判断事項 C のログで判明）
+- 控え・署名鍵の乱数・使用済み記録がプロセスの中にしか無いので、トークンを渡せても、ボタンの発注は検証に通らない
+
+**決定**: オプトイン（ゲート 1）が有効なときだけ、次の 3 つを `~/.bitbank-lab-mcp/confirm`（フォルダ 700、ファイル 600）で
+共有する（`src/private/shared-confirm-state.ts`。`src/server.ts` の起動時に有効化）。
+
+- preview の控え（`snapshots/`。`structuredContent` と確認トークン入りの `_meta`、トークンの期限）。メモリとファイルで新しいほうを返す。
+  発注後は「消した時刻」を残し、控えをメモリに持つ別プロセスにも消えたことを伝える（カードにボタンが出直さない）
+- 署名鍵に混ぜる乱数（`nonce`）。一時ファイルに書いてから link で置くので、書きかけを読まない。鍵は `BITBANK_API_SECRET` + この乱数で、
+  乱数だけでは署名できない。読めなければプロセスごとの乱数に戻る（別プロセスでは `token_invalid`。安全側）
+- 使用済みトークンの印（`used/`）。`used/` の外で書き終えてから link で置き（既にあれば `EEXIST`）、2 つのプロセスが同時に使っても 1 回しか通らない。
+  中身の無い印を別プロセスの掃除が期限切れと見て消すことも無い。印を置けなければ実行しない。期限切れの印は掃除する
+- ファイル名はキーとトークンのハッシュ。フォルダがシンボリックリンク・他人の所有・権限を絞れないときは共有せず、従来のプロセス内の動きに戻る
+- Windows では共有しない。mode が効かず、ACL を確かめる処理も入れていないので、本人だけに閉じられたと言えないため
+- 控えをファイルに書けなかったときは警告をログに残す（`shared_snapshot_write_failed`）。カード側のプロセスは控えを読めずボタンが出ないが、発注はされない側に倒れる
+- 場所は環境変数や設定では変えられない（E2E だけが、サーバーを起動する前に一時フォルダを指定する）
+
+**広がる前提**: トークンが通る範囲が「同じプロセス」から「同じ OS ユーザーで、同じフォルダを使うプロセス」に広がる。
+
+- 同じユーザーのプロセスは、Desktop の設定ファイルにある `BITBANK_API_SECRET` をもともと読めるので、ローカルに対する露出はほとんど増えない
+- 別のクライアント（例: 同じ設定の Claude Code）でも、ゲート（オプトイン + MCP Apps UI 宣言 + elicitation 非対応）を通れば、
+  Desktop の preview で発行したトークンを 60 秒以内に読める。発行したクライアントとの照合は、Desktop の 2 つのプロセスが
+  同じクライアント名を名乗るかが未確認のため入れていない（入れて名前が違えば、また動かなくなる）。ログの `gate.client` / `gate.pid` で
+  確かめてから判断する
+- 「モデルがトークンを読めない」の前提（結果 `_meta` とリソースはモデルに見えない）は変わらない
+- トークン（60 秒）と注文内容がディスクに置かれる。期限の切れたトークンは返さず、控えのファイルは TTL（5 分）を過ぎたら消す
+- 再起動後も、期限内の未使用トークンは通る（「ワンタイム性の保証範囲」項目 2 の「再起動で無効化」は、オプトイン時だけ緩む）。
+  使用済みの印は残るので、使用済みトークンは通らない
+
+**代わりに考えたもの**: このホストではボタンを使わない（オプトインを外す）。誤った案内は止まるが、ボタンでの発注ができなくなるので採らない。
+
+回帰は `tests/private/shared-confirm-state.test.ts`、`tests/private/confirmation.test.ts`（別プロセスで発行・使用したトークン）、
+`tests/ui-snapshot-cache.test.ts`（別プロセスの控え・消した時刻）、`tests/e2e/mcp-apps-shared-state.test.ts`（2 つのサーバーで
+preview → カード側でトークン → 発注 → もう一方での使い回しは拒否）。
 
 ## Consequences
 
@@ -490,7 +532,8 @@ push（`ui/notifications/tool-result`）だけでなく、iframe 自身が呼ん
 | アカウント全資産が一発で消える | × | × accept / token は 1 件（または preview した ID 集合）にバインド |
 | 別セッションへの token 持ち出し | 該当なし | △ stdio では別セッションが存在しない。HTTP 化する場合は「レビュー判断事項 B」が必須前提 |
 | 使用済み token の replay（時計の非単調性） | 該当なし | △ 前方ジャンプで生存記録が消える / TTL 直後の後方ステップで期限判定が再び通る。下記「ワンタイム性の保証範囲」 |
-| 使用済み token の replay（プロセス再起動 / 複数プロセス） | 該当なし | × 署名鍵に per-process nonce を混ぜ、再起動後・別プロセスでは `token_invalid`（2026-08-17 修正） |
+| 使用済み token の replay（プロセス再起動 / 複数プロセス） | 該当なし | × 共有した使用済みの印で `token_already_used`（判断事項 D）。共有できないときは per-process nonce で `token_invalid`（2026-08-17 修正） |
+| 同じ OS ユーザーの別クライアントへの token 持ち出し | 該当なし | △ ゲートを通る別クライアントは、共有した控えから 60 秒以内に読める（判断事項 D。発行元クライアントとの照合は未導入） |
 
 ## ワンタイム性の保証範囲（2026-08-14 追記）
 
@@ -574,6 +617,9 @@ pending 確認が再起動で失効するのと同じで、fail-closed 側に倒
 
 回帰は `tests/private/confirmation.test.ts`（再起動後の使用済み / 未使用トークン、
 再発行トークンの正常系、別プロセス相当で同一 params でもトークンが一致しないこと）。
+
+> **2026-11-12**: オプトイン時は判断事項 D で、署名鍵の乱数と使用済みの印をプロセス間で共有する。
+> 別プロセスでの使用済みトークンは共有の印で `token_already_used` になり、再起動後も期限内の未使用トークンは通る。
 
 > **時計（項目 1）は依然として未修正。** 署名鍵をプロセスに束縛しても、
 > **同一プロセス内**での「記録 purge 後の巻き戻し」は閉じない。項目 1 と 2 は別の穴である。
@@ -668,3 +714,5 @@ claude.ai 向けトラッカーが Desktop の直接の窓口とみなせる）�
 | iframe のボタン | `ui/{order,cancel}-confirm/src/App.tsx` |
 | 不変条件のテスト | `tests/private/mcp-apps-execute.test.ts`（PR で走る） |
 | wire レベルの `_meta` 透過回帰 | `tests/e2e/mcp-apps-meta.test.ts`（手動 / nightly のみ） |
+| プロセス間の共有（オプトイン時） | `src/private/shared-confirm-state.ts`（有効化は `src/server.ts`、利用は `src/private/confirmation.ts` と `src/ui-snapshot-cache.ts`） |
+| 2 プロセスの回帰 | `tests/e2e/mcp-apps-shared-state.test.ts`（手動 / nightly のみ） |
