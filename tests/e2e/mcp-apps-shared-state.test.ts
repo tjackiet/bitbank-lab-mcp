@@ -57,7 +57,8 @@ async function readConfirmation(client: Client) {
 	};
 }
 
-describe('E2E: preview とカードが別プロセスに届くとき', () => {
+// Windows では共有しない（ADR-0007 判断事項 D）ので、別プロセスへの受け渡しを前提にしたこの E2E は飛ばす。
+describe.skipIf(process.platform === 'win32')('E2E: preview とカードが別プロセスに届くとき', () => {
 	const clients: Client[] = [];
 	const dirs: string[] = [];
 
