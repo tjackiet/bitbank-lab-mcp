@@ -56,7 +56,7 @@ describe('confirmation_resource_read のログ', () => {
 				app: 'order',
 				delivered: true,
 				reason: null,
-				gate: { envelope: 'none', initialize: 'app_ui', session: null },
+				gate: { envelope: 'none', initialize: 'app_ui', session: null, client: null, pid: process.pid },
 			},
 		]);
 	});
@@ -102,8 +102,27 @@ describe('confirmation_resource_read のログ', () => {
 describe('describeConfirmationGate', () => {
 	it('per-request envelope と initialize の宣言を別々に返す', () => {
 		const extra = extraWith(APP_UI_CAPS, { mcpReq: { envelope: { [CLIENT_CAPABILITIES_META_KEY]: {} } } });
-		expect(describeConfirmationGate(extra)).toEqual({ envelope: 'no_app_ui', initialize: 'app_ui', session: null });
-		expect(describeConfirmationGate(undefined)).toEqual({ envelope: 'none', initialize: 'none', session: null });
+		expect(describeConfirmationGate(extra)).toEqual({
+			envelope: 'no_app_ui',
+			initialize: 'app_ui',
+			session: null,
+			client: null,
+			pid: process.pid,
+		});
+		expect(describeConfirmationGate(undefined)).toEqual({
+			envelope: 'none',
+			initialize: 'none',
+			session: null,
+			client: null,
+			pid: process.pid,
+		});
+	});
+
+	it('接続時のクライアント名とプロセス ID を返す', () => {
+		const extra = {
+			server: { getClientCapabilities: () => ({}), getClientVersion: () => ({ name: 'claude-ai', version: '1' }) },
+		};
+		expect(describeConfirmationGate(extra)).toMatchObject({ client: 'claude-ai', pid: process.pid });
 	});
 
 	it('同じセッション ID なら同じ値、違えば違う値になる', () => {
@@ -134,8 +153,16 @@ describe('confirmation_meta のログ（preview 側）', () => {
 		await withElicitedConfirmation({ ...opts, extra: extraWith(APP_UI_CAPS) });
 		const events = loggedEvents('confirmation_meta');
 		expect(events).toEqual([
-			{ type: 'confirmation_meta', attached: true, gate: { envelope: 'none', initialize: 'app_ui', session: null } },
-			{ type: 'confirmation_meta', attached: false, gate: { envelope: 'none', initialize: 'app_ui', session: null } },
+			{
+				type: 'confirmation_meta',
+				attached: true,
+				gate: { envelope: 'none', initialize: 'app_ui', session: null, client: null, pid: process.pid },
+			},
+			{
+				type: 'confirmation_meta',
+				attached: false,
+				gate: { envelope: 'none', initialize: 'app_ui', session: null, client: null, pid: process.pid },
+			},
 		]);
 		expect(JSON.stringify(events)).not.toContain(TOKEN);
 	});

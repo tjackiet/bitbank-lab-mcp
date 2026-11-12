@@ -59,9 +59,18 @@ export interface ConfirmationGateView {
 	envelope: AppUiDeclaration;
 	initialize: AppUiDeclaration;
 	session: string | null;
+	client: string | null;
+	pid: number;
 }
 
-// 実機でゲートが閉じた理由をログで切り分けるため。セッション ID は値を残さず、照合できるようハッシュの先頭だけを返す。
+function clientName(extra: ToolHandlerExtra | undefined): string | null {
+	const server = (extra as { server?: { getClientVersion?: () => unknown } } | undefined)?.server;
+	const info = typeof server?.getClientVersion === 'function' ? server.getClientVersion() : undefined;
+	const name = (info as { name?: unknown } | undefined)?.name;
+	return typeof name === 'string' ? name : null;
+}
+
+// 実機でゲートが閉じた理由と、preview とカードがどのプロセス・どのクライアントに届いたかをログで切り分けるため。セッション ID は値を残さず、照合できるようハッシュの先頭だけを返す。
 export function describeConfirmationGate(extra: ToolHandlerExtra | undefined): ConfirmationGateView {
 	const sessionId = (extra as { sessionId?: unknown } | undefined)?.sessionId;
 	return {
@@ -71,6 +80,8 @@ export function describeConfirmationGate(extra: ToolHandlerExtra | undefined): C
 			typeof sessionId === 'string' && sessionId !== ''
 				? createHash('sha256').update(sessionId).digest('hex').slice(0, 8)
 				: null,
+		client: clientName(extra),
+		pid: process.pid,
 	};
 }
 

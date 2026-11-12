@@ -4,9 +4,11 @@ import { isInputRequiredResult, McpServer, ResourceTemplate } from '@modelcontex
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import type { z } from 'zod';
 import { toPublicError } from '../lib/error.js';
-import { logError, logToolRun } from '../lib/logger.js';
+import { log, logError, logToolRun } from '../lib/logger.js';
 import { CONFIRMATION_META_KEY, CONFIRMATION_RESOURCE_TEMPLATE } from './mcp-apps-meta.js';
+import { isAppUiExecuteEnabled } from './private/config.js';
 import { requestStateCodec } from './private/request-state.js';
+import { enableSharedConfirmState } from './private/shared-confirm-state.js';
 import { type PromptDef, prompts as promptDefs } from './prompts.js';
 import { appResourceRegistry } from './resources/app-resources.js';
 import { readConfirmationResource } from './resources/confirmation-resource.js';
@@ -262,6 +264,11 @@ server.registerResource(
 		// 2025 系接続の client capabilities 判定（getClientCapabilities）に要るので、ツールと同じく内部 Server を合流させる。
 		readConfirmationResource(uri.href, variables.app, { ...ctx, server: server.server }),
 );
+
+// Claude Desktop はチャットのツール実行とカードの要求を別プロセスで受けるので、オプトイン時だけ確認の状態をファイルで共有する（ADR-0007 判断事項 D）。
+if (isAppUiExecuteEnabled()) {
+	log('info', { type: 'shared_confirm_state', enabled: enableSharedConfirmState(), pid: process.pid });
+}
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
