@@ -437,7 +437,7 @@ push（`ui/notifications/tool-result`）だけでなく、iframe 自身が呼ん
   （テンプレート自体は `resources/templates/list` に出る）
 - iframe は push → `get_ui_snapshot` の `_meta` → このリソース の順に試し、内容が push と同じときだけ取り込む
   （`src/mcp-apps-hydration.ts` の `pullConfirmationIfMissing`）
-- 読まれたか・渡したかだけをサーバーの記録に残す（`confirmation_resource_read`。トークンは残さない）
+- 読まれたか・渡したか・渡さなかった理由をサーバーの記録に残す（`confirmation_resource_read`。トークンは残さない）。preview 側も、トークンを載せたかを `confirmation_meta` に残す。どちらも、判定に使った宣言の出どころ（per-request envelope / initialize）と、セッション ID のハッシュの先頭 8 桁を添える
 
 **新しく置く前提**: 「モデルが MCP リソースを自分で読めない」こと。Claude Desktop ではリソースはユーザーが添付するもので、
 モデルが読む手段は無い。**実測で確かめること**（ボタンが出るか、モデルがトークンを読めないか）。

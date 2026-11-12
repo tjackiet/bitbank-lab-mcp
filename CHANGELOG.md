@@ -25,6 +25,7 @@
 - `get_my_deposit_withdrawal`：本文に出す明細を、種類（JPY 入金・暗号資産入庫・JPY 出金・暗号資産出庫）ごとに先頭 5 件から新しいほうの 100 件までに増やす。超えた分は件数と、明細を取るときに `end` に渡す時刻（本文に出した中でいちばん古い時刻）を書く。これまでは、取得が全件でないときの続きの案内（取得したいちばん古い時刻）に従うと、本文に出なかった明細を飛ばしていた。
 - `get_margin_status`：建玉の金額の見出しを「建玉総評価額 / 保有建玉 / 注文中建玉」から「建玉合計（時価ではない）/ 保有分（建値ベース）/ 新規注文中」に変える。保有分は建玉ごとの `product`（建値ベース）の合計と一致することを実口座で確認しており、時価で評価した額ではないのに「評価額」と書いていた。ドキュメントの呼び方（建玉合計・建玉の保有分・建玉の新規発注中）に合わせた。新規注文中の分の基準は確認できていないので書かない。
 - `get_tickers_jpy` / `get_my_assets` / `analyze_my_portfolio`：価格一覧（`tickers_jpy`）の取得先を、環境変数 `TICKERS_JPY_URL` で差し替えられないようにする。起動したフォルダの `.env` にこの変数があると、評価額や損益が別の価格で計算され、本物の数字として表示されていた。使っていたのはテストだけ（`file://` でローカルの JSON を読む、`about:timeout` で応答が返らない状態をまねる）で、テストは fetch のモックに置き換えた。
+- 確認トークンのリソース（`bitbank-confirmation://{app}`）：渡さなかったときの理由（`reason`：`unknown_app` / `apps_execute_disabled` / `no_app_ui` / `elicitation` / `no_snapshot` / `no_token`）をログ（`confirmation_resource_read`）に残す。preview 側でもトークンを載せたかをログ（`confirmation_meta`）に残す。どちらも、判定に使った宣言の出どころ（per-request envelope / initialize）と、セッション ID のハッシュの先頭 8 桁を添える（トークンとセッション ID そのものは残さない）。Claude Desktop でリソースが `delivered: false` を返し、理由が分からなかったため
 
 ### Added
 

@@ -1,6 +1,7 @@
 // token を `structuredContent` に載せる UI 実行経路は採らない。`structuredContent` をモデルコンテキストへ入れるホストが実在する（ADR-0007）。
 // SEP-1865 は iframe 起源の tools/call を識別できないので、`_meta` 経路ではトークン所持そのものが認可の実体になる（ADR-0007）。
 
+import { createHash } from 'node:crypto';
 import {
 	CLIENT_CAPABILITIES_META_KEY,
 	type InputRequiredResult,
@@ -8,6 +9,7 @@ import {
 	inputResponse,
 	type ServerContext,
 } from '@modelcontextprotocol/server';
+import { log } from '../../lib/logger.js';
 import { toStructured } from '../../lib/result.js';
 import { CONFIRMATION_META_KEY, type ConfirmationMetaPayload } from '../mcp-apps-meta.js';
 import { APP_RESOURCE_MIME_TYPE, MCP_APPS_UI_EXTENSION_ID } from '../resources/app-resources.js';
@@ -34,13 +36,42 @@ function envelopeCapabilities(extra: ToolHandlerExtra | undefined): unknown {
 	return envelope?.[CLIENT_CAPABILITIES_META_KEY];
 }
 
+function initializeCapabilities(extra: ToolHandlerExtra | undefined): unknown {
+	const server = (extra as { server?: { getClientCapabilities?: () => unknown } } | undefined)?.server;
+	return typeof server?.getClientCapabilities === 'function' ? server.getClientCapabilities() : undefined;
+}
+
 /** per-request envelope に clientCapabilities があればそれだけを見て、initialize 時の宣言へは落ちない（`clientSupportsElicitation` の OR と意図的に違う）。bearer token を渡す判定なので、宣言が食い違うときは狭い側に倒す。 */
 export function clientSupportsAppUi(extra: ToolHandlerExtra | undefined): boolean {
 	const envelopeCaps = envelopeCapabilities(extra);
 	if (envelopeCaps != null) return declaresAppUi(envelopeCaps);
-	const server = (extra as { server?: { getClientCapabilities?: () => unknown } } | undefined)?.server;
-	const initCaps = typeof server?.getClientCapabilities === 'function' ? server.getClientCapabilities() : undefined;
-	return declaresAppUi(initCaps);
+	return declaresAppUi(initializeCapabilities(extra));
+}
+
+type AppUiDeclaration = 'none' | 'app_ui' | 'no_app_ui';
+
+function appUiDeclaration(caps: unknown): AppUiDeclaration {
+	if (caps == null) return 'none';
+	return declaresAppUi(caps) ? 'app_ui' : 'no_app_ui';
+}
+
+export interface ConfirmationGateView {
+	envelope: AppUiDeclaration;
+	initialize: AppUiDeclaration;
+	session: string | null;
+}
+
+// 実機でゲートが閉じた理由をログで切り分けるため。セッション ID は値を残さず、照合できるようハッシュの先頭だけを返す。
+export function describeConfirmationGate(extra: ToolHandlerExtra | undefined): ConfirmationGateView {
+	const sessionId = (extra as { sessionId?: unknown } | undefined)?.sessionId;
+	return {
+		envelope: appUiDeclaration(envelopeCapabilities(extra)),
+		initialize: appUiDeclaration(initializeCapabilities(extra)),
+		session:
+			typeof sessionId === 'string' && sessionId !== ''
+				? createHash('sha256').update(sessionId).digest('hex').slice(0, 8)
+				: null,
+	};
 }
 
 /** preview 側のトークン配送と execute ハンドラの解錠で同じ述語を使う。片方だけ緩いと「載せないのに実行できる」「載せたのに実行できない」が生まれる。 */
@@ -62,9 +93,7 @@ function declaresFormElicitation(caps: unknown): boolean {
 }
 
 export function clientSupportsElicitation(extra: ToolHandlerExtra | undefined): boolean {
-	const server = (extra as { server?: { getClientCapabilities?: () => unknown } } | undefined)?.server;
-	const initCaps = typeof server?.getClientCapabilities === 'function' ? server.getClientCapabilities() : undefined;
-	if (declaresFormElicitation(initCaps)) return true;
+	if (declaresFormElicitation(initializeCapabilities(extra))) return true;
 
 	return declaresFormElicitation(envelopeCapabilities(extra));
 }
@@ -137,7 +166,9 @@ export interface WithElicitedConfirmationOptions {
 }
 
 function withConfirmationMeta(fallback: McpResponse, opts: WithElicitedConfirmationOptions): McpResponse {
-	if (!opts.metaConfirmation || !isAppUiExecuteAllowed(opts.extra)) return fallback;
+	const attached = !!opts.metaConfirmation && isAppUiExecuteAllowed(opts.extra);
+	log('info', { type: 'confirmation_meta', attached, gate: describeConfirmationGate(opts.extra) });
+	if (!attached) return fallback;
 	return {
 		...fallback,
 		...(opts.appUiFallbackText ? { content: [{ type: 'text', text: opts.appUiFallbackText }] } : {}),
