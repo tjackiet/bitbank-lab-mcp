@@ -20,6 +20,9 @@
     `BITBANK_API_SECRET` + per-process nonce へ変更。ワンショット性の保証範囲（プロセス内）と
     トークンの有効範囲を一致させ、再起動 / 別プロセスでの replay を閉じた
     （「ワンタイム性の保証範囲」項目 2）。Decision 自体は変更しない
+  - 2026-11-26（**文書のみ**。Decision は変更しない）: Elicitation が Claude / Claude Code で GA に
+    なったとの告知（2026-11-24）を受けて、計測 2 の再実行手順を「経路 1 への移行確認」節に追加した。
+    実測はまだ行っていない
 
 ## Decision（2026-08-13 改訂 — 現行）
 
@@ -706,6 +709,74 @@ CI が保証していない性質を保証しているように見せてしま�
 トークンは preview 系と `get_ui_snapshot` の **2 経路**で `_meta` に載るため、**片方だけの計測では
 足りない**。計測 1 のみを再実行すると、通常ツールの `_meta` がモデル可視になる変更を検知できず、
 HITL バイパスの成立を見逃す。
+
+### 経路 1 への移行確認（計測 2 の再実行手順 / 2026-11-26 追記）
+
+**トリガー**: 上の再測定トリガーに加えて、Anthropic が Claude の elicitation 対応を告知したとき。
+2026-11-24 の告知（<https://claude.com/resources/articles/skills-over-mcp-tasks-and-more>）で
+Elicitation が Claude / Claude Code で GA とされた。ただし対象として挙がっているのはプラン
+（Pro / Max / Ultra）だけで、**ローカル stdio の Claude Desktop が宣言するかは書かれていない**。
+だから実測で確かめる。コード変更は要らない。
+
+> **注意**: 経路 1 に入ると、ネイティブ確認ダイアログで accept した時点で**実際に発注される**。
+> 計測中は必ず拒否するか、ダイアログを閉じる。指値は板から大きく離れた価格・最小数量にしておく。
+
+#### 準備
+
+1. Claude Desktop を最新版に更新し、バージョンを控える。
+2. `claude_desktop_config.json` の `env` に `LOG_DIR` を足す。既定の出力先はパッケージ直下の
+   `logs/` で、npx 経由だとキャッシュ配下になり探しにくい。
+3. 1 回目は `BITBANK_MCP_APPS_EXECUTE` を**設定しない**。
+
+#### 手順 1: 宣言された capability（Desktop 側のログ）
+
+Desktop の MCP 通信ログ（macOS: `~/Library/Logs/Claude/mcp-server-<サーバー名>.log`、
+Windows: `%APPDATA%\Claude\logs\mcp-server-<サーバー名>.log`）で、再起動直後の接続を見る。
+
+- `initialize` がある（2025 系で接続）: `params.protocolVersion` と `params.capabilities` を控える。
+  `capabilities.elicitation` が `{}` か `{ "form": {} }` なら form 対応（`declaresFormElicitation()` と同じ基準）。
+- `initialize` が無く `server/discover` がある（2026-07-28 で接続）: capability は各リクエストの
+  `_meta["io.modelcontextprotocol/clientCapabilities"]` に載る。手順 2 の `tools/call` の行で見る。
+
+計測 2 の値（`protocolVersion: "2025-11-25"`、capability は `extensions["io.modelcontextprotocol/ui"]` のみ、
+`clientInfo.name: "claude-ai"`）と比べる。ログには口座情報を含むツール結果も残るので、
+ADR へは該当する行だけを転記する。
+
+#### 手順 2: 実際に入った経路
+
+Desktop で `preview_order` を呼ばせ（例: 「BTC/JPY を 1 円で 0.0001 指値買いする preview を出して」）、
+画面と `$LOG_DIR/YYYY-MM-DD.jsonl` を見る。
+
+| 観測 | 経路 1（elicitation / MRTR） | 経路 2 / 3 |
+|---|---|---|
+| 画面 | ネイティブ確認ダイアログ（preview の要約と「この注文を発注する」の真偽値 1 項目） | ダイアログ無し。カード、または「このホストでは取引実行に対応していません」 |
+| ログ | `preview_order` の `tool_run` の `result.summary` が `"[MRTR] input_required round"` | `"type":"confirmation_meta"` の行が出る（`attached: true` なら経路 2、`false` なら経路 3） |
+
+`confirmation_meta` の `gate` が示すのは MCP Apps UI の宣言だけで、elicitation の有無は出ない。
+elicitation の有無は手順 1 で判断する。
+
+経路 1 に入ったら、続けて次を確かめる。
+
+- 拒否したとき、拒否文言（`declinedText`）だけが返り、注文が出ていないこと（`get_my_orders` で確認）。
+- ダイアログを閉じた（cancel）ときも同じであること。
+- プレビューカードが描画されるか、確認がダイアログのテキストだけになるか。UX 判断の材料として
+  スクリーンショットを残す。
+
+#### 手順 3: 優先順位の実機確認（経路 1 に入った場合のみ）
+
+`BITBANK_MCP_APPS_EXECUTE=1` を足して Desktop を再起動し、手順 2 を繰り返す。引き続き経路 1 に入り、
+**`confirmation_meta` の行が出ない**ことを確かめる。「テストで固定する不変条件」節の項目 5
+（elicitation を宣言したホストには、オプトイン on でもトークンが載らない）を実機で確認する手順である。
+
+#### 結果の扱い
+
+- **経路 1 に入った**: 計測 5 として本 ADR の Context に記録する。「将来ホスト挙動が変わったときに
+  何が壊れるか」の表にある「その時点で本オプトインは役目を終える」に当たるので、
+  `BITBANK_MCP_APPS_EXECUTE` 経路を残す / 非推奨にする / 撤去するかを別途判断する。
+  Codex / Cursor 向け manifest を配布しているため、他ホストでの宣言状況も判断材料に入れる。
+- **経路 1 に入らなかった**: Decision は変えない。オプトインを使い続けるなら、上の手順で
+  計測 1 と計測 4 も再実行する。`anthropics/claude-ai-mcp#153` の状況も確認する。
+- 比較用に Claude Code でも手順 1・2 を行うと、同じ告知で GA とされたホストとの差が分かる。
 
 ## Future direction: SEP-2322 (Multi Round-Trip Requests)
 
