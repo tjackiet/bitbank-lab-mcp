@@ -82,7 +82,10 @@ const SKILLS_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 function collectSkillViewUsages(): ViewUsage[] {
 	const files = (fs.readdirSync(SKILLS_ROOT, { recursive: true }) as string[]).filter((f) => f.endsWith('.md'));
 	return files.flatMap((file) =>
-		extractViewUsages(`skills/${file}`, fs.readFileSync(path.join(SKILLS_ROOT, file), 'utf8')),
+		extractViewUsages(
+			`skills/${file.split(path.sep).join('/')}`,
+			fs.readFileSync(path.join(SKILLS_ROOT, file), 'utf8'),
+		),
 	);
 }
 

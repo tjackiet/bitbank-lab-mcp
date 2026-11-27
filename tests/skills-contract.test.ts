@@ -20,6 +20,14 @@ const SKILL_NAMES = fs
 	.filter((d) => d.isDirectory() && fs.existsSync(path.join(SKILLS_ROOT, d.name, 'SKILL.md')))
 	.map((d) => d.name);
 
+// core.symlinks=false の Windows では、git が symlink をリンク先のパスを書いた普通のファイルとして置く。
+function linkTarget(link: string): string | undefined {
+	const stat = fs.lstatSync(link, { throwIfNoEntry: false });
+	if (stat?.isSymbolicLink()) return fs.realpathSync(link);
+	if (stat?.isFile()) return fs.realpathSync(path.resolve(path.dirname(link), fs.readFileSync(link, 'utf8').trim()));
+	return undefined;
+}
+
 function frontmatter(skill: string): string {
 	const text = fs.readFileSync(path.join(SKILLS_ROOT, skill, 'SKILL.md'), 'utf8');
 	return text.match(/^---\n([\s\S]*?)\n---\n/)?.[1] ?? '';
@@ -55,7 +63,7 @@ describe('Skill のフロントマター（Agent Skills の命名規則）', () 
 		it(`${skill}: INDEX.md の一覧と .claude/skills のリンクにある`, () => {
 			const index = fs.readFileSync(path.join(SKILLS_ROOT, 'INDEX.md'), 'utf8');
 			expect(index).toContain(`(./${skill}/SKILL.md)`);
-			expect(fs.existsSync(path.join(ROOT, '.claude/skills', skill, 'SKILL.md'))).toBe(true);
+			expect(linkTarget(path.join(ROOT, '.claude/skills', skill))).toBe(fs.realpathSync(path.join(SKILLS_ROOT, skill)));
 		});
 	}
 });
