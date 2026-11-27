@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import { isPrivateApiEnabled } from '../src/private/config.js';
@@ -73,6 +76,16 @@ function collectViewUsages(defs: readonly PromptDef[]): ViewUsage[] {
 	);
 }
 
+const SKILLS_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../plugins/bitbank-lab-mcp/skills');
+
+// SKILL.md の prompt 区間外と references/ は Prompt に入らないので、Skill の markdown を直接読む。
+function collectSkillViewUsages(): ViewUsage[] {
+	const files = (fs.readdirSync(SKILLS_ROOT, { recursive: true }) as string[]).filter((f) => f.endsWith('.md'));
+	return files.flatMap((file) =>
+		extractViewUsages(`skills/${file}`, fs.readFileSync(path.join(SKILLS_ROOT, file), 'utf8')),
+	);
+}
+
 function viewSchemaOf(toolName: string): z.ZodTypeAny | undefined {
 	const def = allToolDefs.find((d) => d.name === toolName);
 	if (!def) return undefined;
@@ -119,6 +132,14 @@ describe('prompts の view 値がツールの Zod enum と一致する', () => {
 
 	it('抽出が空振りしていない（正規表現が壊れたら気づける）', () => {
 		expect(collectViewUsages(prompts).length).toBeGreaterThan(0);
+	});
+
+	it('全 Skill（SKILL.md と references/）のツール呼び出し例の view が有効値である', () => {
+		expect(findInvalidViewUsages(collectSkillViewUsages())).toEqual([]);
+	});
+
+	it('Skill からの抽出が空振りしていない', () => {
+		expect(collectSkillViewUsages().some((u) => u.promptName === 'skills/chart-pattern-analysis/SKILL.md')).toBe(true);
 	});
 
 	it('無効値を混ぜたプロンプトは検出される（検査自体の有効性）', () => {

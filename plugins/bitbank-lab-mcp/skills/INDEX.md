@@ -18,6 +18,18 @@ bitbank-lab-mcp に同梱する Agent Skill の索引。
 |---|---|---|
 | [`investment-onboarding`](./investment-onboarding/SKILL.md) | リスク許容度・運用スタイル・戦術を最小限の問い（最大 3 問）で絞り込み、該当する戦術ガイドと MCP ツールへ誘導する。 | 「何から始めればいい？」「どう運用すれば？」「bitbank で運用したい」 |
 
+### Market Read
+
+| Skill | 概要 | 代表的なユーザー発話 |
+|---|---|---|
+| [`support-resistance-analysis`](./support-resistance-analysis/SKILL.md) | 過去の反応実績（★）・板の厚み・直近の攻防からサポート / レジスタンスを評価し、シナリオと構造図にまとめる。 | 「ETH のサポレジどう？」「どこで止まりそう？」「上値の抵抗線は？」 |
+
+### Signal & Strategy
+
+| Skill | 概要 | 代表的なユーザー発話 |
+|---|---|---|
+| [`chart-pattern-analysis`](./chart-pattern-analysis/SKILL.md) | 日足のチャートパターン（形成中・完成済み）とローソク足パターンを検出し、鮮度と現在価格との距離で重要度を付ける。 | 「ダブルトップ出てる？」「三角持ち合いになってる？」「パターン分析して」 |
+
 <!--
 今後追加する際のカテゴリ案（CLI 側 INDEX.md と揃える）:
 

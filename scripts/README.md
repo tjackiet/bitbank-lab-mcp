@@ -7,6 +7,8 @@ MCP ツールをコマンドラインから単体実行するためのスクリ�
 | スクリプト | npm script | 説明 |
 |---|---|---|
 | `gen_types.ts` | `npm run gen:types` | `src/schemas.ts` の Zod スキーマから `src/types/schemas.generated.d.ts` を生成 |
+| `gen_skill_prompts.ts` | なし（`npx tsx scripts/gen_skill_prompts.ts`） | `plugins/bitbank-lab-mcp/skills/*/SKILL.md` の `<!-- prompt:start -->`〜`<!-- prompt:end -->` を `src/prompts/skill-sections.generated.ts` に埋め込む（MCP Prompt の本文になる。生成物はコミットする。ずれは `tests/skills-contract.test.ts` が検出） |
+| `skill-prompts.ts` | なし | 上の生成処理の本体（テストからも使う） |
 
 ## ログ・レポート
 
