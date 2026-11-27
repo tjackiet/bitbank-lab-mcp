@@ -1,4 +1,5 @@
-import { DISCLAIMER_MARKET, DISCLAIMER_SHORT } from './shared.js';
+import { DISCLAIMER_MARKET } from './shared.js';
+import { SKILL_PROMPT_SECTIONS } from './skill-sections.generated.js';
 import { PromptCategory, type PromptDef, PromptLevel } from './types.js';
 
 function userMessage(text: string) {
@@ -36,38 +37,11 @@ const INDICATORS_TEXT = `代表的な指標を使ってBTCを分析して
 
 ${DISCLAIMER_MARKET}`;
 
-const SUPPORT_RESISTANCE_TEXT = `BTCのサポート・レジスタンスを分析して
+const PROMPT_PAIR = 'btc_jpy';
 
-【方針】テキストのみ。ツール実行後は中間説明なしで最終出力へ。
-
-【ツール（この順）】
-1. analyze_support_resistance(pair=btc_jpy, lookbackDays=90, topN=3) — ★・形成情報は content をそのまま使用。独自計算・日付推測禁止
-2. get_orderbook(pair=btc_jpy, mode=raw)
-3. get_orderbook(pair=btc_jpy, mode=pressure, bandsPct=[0.005, 0.01, 0.02])
-4. analyze_sma_snapshot(pair=btc_jpy, type=1day, periods=[25, 75, 200]) — 任意
-
-【板】bitbank は通常±5-6%まで。範囲内は BTC 数量を記載。範囲外は「取得範囲外（過去実績で評価）」と明記。推測・不明は禁止。★の上書きはしない（板は補足のみ）。
-
-【表現（厳守）】
-- 過去7-10日で一度でも価格がラインを割り込んだ場合:「試され」「防衛中」「疲弊」は禁止
-- 使う: 接触、崩壊、再割れリスク、信頼性低下
-- 直近7日以内に崩壊 → ★を1段階減格し理由を明記
-- 出力前: セクション間で「試され」と「崩壊」が矛盾していないか確認
-
-【出力】必ず「📌 分析範囲について」から開始（前置き・ツール結果の説明は不要）
-
-📌 分析範囲について — 板は±5%程度、遠い価格帯は過去反応実績で評価
-
-## 1. 現在の状況（要約）— 現在価格、最重要ポイント、板バランス、トレンド
-## 2. サポートライン — 検出分のみ。背景・板・意義。タイプ名は出さない
-## 3. レジスタンスライン — 同様
-## 4. シナリオ — 下抜け/上抜け/レンジ（確率・トリガー・ターゲット・根拠）
-## 5. 注意点
-## 6. 構造図 — 上からレジスタンス→現在→サポートの簡潔テキスト図（★・距離%・短い注記）
-
-数値: 価格はカンマ区切り、%は小数1桁、BTCは小数1桁。
-
-${DISCLAIMER_MARKET}`;
+function skillPromptText(request: string, skill: keyof typeof SKILL_PROMPT_SECTIONS): string {
+	return `${request}\n\n${SKILL_PROMPT_SECTIONS[skill].replaceAll('<pair>', PROMPT_PAIR)}`;
+}
 
 export const intermediatePrompts: PromptDef[] = [
 	{
@@ -112,34 +86,10 @@ export const intermediatePrompts: PromptDef[] = [
 			tags: ['intermediate', 'flow', 'cvd', 'volume', 'transactions', 'short-term'],
 		},
 	},
-	// `limit=180` は据え置き（#127）。
 	{
 		name: '中級：BTCのパターン分析をして',
 		description: '中級者向け：短期（1〜3本足）から中長期（大型パターン）まで、複数の時間軸でパターンを検出',
-		messages: userMessage(`BTCのチャートパターン分析
-
-【核心ルール】
-- 完成後80日超 → 無視
-- ターゲット到達済み（100%超）→ ⚪低
-- 完成後40日超 → 最大🟡中
-- ネック/ターゲットから10%超離れ → ⚪低
-- 中間処理の説明は出さない
-
-【ツール】
-1) detect_patterns(pair=btc_jpy, type=1day, limit=180, view=detailed, includeForming=true, includeCompleted=true, requireCurrentInPattern=true, currentRelevanceDays=80)
-2) analyze_candle_patterns(pair=btc_jpy, type=1day, allow_partial_patterns=false)
-   ※検出時は render_candle_pattern_diagram でSVG表示
-
-【重要度】±10%以内で「余裕が無い軸」の警告が無い=🔴、±10%以内で警告あり=🟡、それ以外=⚪。整合度の点数では線を引かない（完成済みパターンの過去の実績では、整合度が高いほど目標に届きやすいという関係は無かった）
-
-【出力】
-## 1. 形成中（切迫性順、なければ検出なし）
-## 2. 完成済み（80日未満、重要度順）
-## 3. 短期ローソク足（なければ検出なし）
-## 4. 総合解釈
-## 5. シナリオ（強気/弱気/中立）
-
-${DISCLAIMER_SHORT}`),
+		messages: userMessage(skillPromptText('BTCのチャートパターン分析', 'chart-pattern-analysis')),
 		metadata: {
 			level: PromptLevel.INTERMEDIATE,
 			category: PromptCategory.ANALYSIS,
@@ -150,7 +100,7 @@ ${DISCLAIMER_SHORT}`),
 	{
 		name: '中級：BTCのサポレジを分析して',
 		description: '中級者向け：過去の反応×板の厚み×直近の攻防から、価格帯の強弱を統合的に分析',
-		messages: userMessage(SUPPORT_RESISTANCE_TEXT),
+		messages: userMessage(skillPromptText('BTCのサポート・レジスタンスを分析して', 'support-resistance-analysis')),
 		metadata: {
 			level: PromptLevel.INTERMEDIATE,
 			category: PromptCategory.ANALYSIS,
