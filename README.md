@@ -108,7 +108,14 @@ API キーの権限は「[API キー](#api-キー)」を参照してください
 
 ### 3. Plugin として入れる（同梱 Skill も使う）
 
-Claude Code では、同梱の Skill（`investment-onboarding` など）も一緒に入ります。Claude Desktop は plugin に未対応です。
+同梱の Skill（サポレジ分析・パターン分析など）が、会話の流れで使われるようになります。
+
+**Claude Desktop**：「カスタマイズ」→「プラグイン」→「追加」→「マーケットプレイスを追加」で `bitbankinc/bitbank-lab-mcp` を入れ、「＋」で追加。
+
+- チャットは plugin の MCP サーバーを起動しません。ツールは「1.」の設定で別に登録してください。
+- 設定のサーバー名を `bitbank-lab-mcp` にしていると「＋」が出ません（plugin と同名のため）。
+
+**Claude Code**：
 
 ```bash
 /plugin marketplace add bitbankinc/bitbank-lab-mcp
