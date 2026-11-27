@@ -12,6 +12,7 @@ import {
 import { DISCLAIMER_MARKET, DISCLAIMER_SHORT } from '../src/prompts/shared.js';
 import { SKILL_PROMPT_SECTIONS } from '../src/prompts/skill-sections.generated.js';
 import { prompts } from '../src/prompts.js';
+import { skillLinks } from './helpers/skill-links.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SKILLS_ROOT = path.join(ROOT, SKILLS_DIR);
@@ -19,14 +20,6 @@ const SKILL_NAMES = fs
 	.readdirSync(SKILLS_ROOT, { withFileTypes: true })
 	.filter((d) => d.isDirectory() && fs.existsSync(path.join(SKILLS_ROOT, d.name, 'SKILL.md')))
 	.map((d) => d.name);
-
-// core.symlinks=false の Windows では、git が symlink をリンク先のパスを書いた普通のファイルとして置く。
-function linkTarget(link: string): string | undefined {
-	const stat = fs.lstatSync(link, { throwIfNoEntry: false });
-	if (stat?.isSymbolicLink()) return fs.realpathSync(link);
-	if (stat?.isFile()) return fs.realpathSync(path.resolve(path.dirname(link), fs.readFileSync(link, 'utf8').trim()));
-	return undefined;
-}
 
 function frontmatter(skill: string): string {
 	const text = fs.readFileSync(path.join(SKILLS_ROOT, skill, 'SKILL.md'), 'utf8');
@@ -63,7 +56,8 @@ describe('Skill のフロントマター（Agent Skills の命名規則）', () 
 		it(`${skill}: INDEX.md の一覧と .claude/skills のリンクにある`, () => {
 			const index = fs.readFileSync(path.join(SKILLS_ROOT, 'INDEX.md'), 'utf8');
 			expect(index).toContain(`(./${skill}/SKILL.md)`);
-			expect(linkTarget(path.join(ROOT, '.claude/skills', skill))).toBe(fs.realpathSync(path.join(SKILLS_ROOT, skill)));
+			const link = skillLinks(path.join(ROOT, '.claude/skills')).find((l) => l.name === skill);
+			expect(link).toEqual({ name: skill, target: path.join(SKILLS_ROOT, skill) });
 		});
 	}
 });

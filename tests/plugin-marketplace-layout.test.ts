@@ -13,6 +13,7 @@
  *      （食い違うと `Plugin "<name>" not found in marketplace` になる）
  *   3. そのディレクトリに top-level `bin/` が無い
  *   4. `.claude/skills/` のシンボリックリンクが、移動後の skill（`SKILL.md`）を指している
+ *      （core.symlinks=false で普通のファイルとして置かれたものは、git の mode が 120000 のときだけリンクとみなす）
  *   5. Cursor / Codex の manifest の `skills` が、移動後の skill の置き場所を指している（#408）
  */
 
@@ -20,7 +21,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { GIT_SYMLINK_MODE, gitModeOf, skillLinks } from './helpers/skill-links.js';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -106,19 +108,6 @@ describe('Cursor / Codex の manifest の skills', () => {
 	}
 });
 
-// core.symlinks=false の Windows では、git が symlink をリンク先のパスを書いた普通のファイルとして置く。
-function skillLinks(dir: string): Array<{ name: string; target: string }> {
-	return fs
-		.readdirSync(dir, { withFileTypes: true })
-		.filter((d) => !d.name.startsWith('.') && (d.isSymbolicLink() || d.isFile()))
-		.map((d) => ({
-			name: d.name,
-			target: d.isSymbolicLink()
-				? path.join(dir, d.name)
-				: path.resolve(dir, fs.readFileSync(path.join(dir, d.name), 'utf8').trim()),
-		}));
-}
-
 describe('.claude/skills のシンボリックリンク', () => {
 	const skillsDir = path.join(PACKAGE_ROOT, '.claude/skills');
 	const links = skillLinks(skillsDir);
@@ -127,26 +116,57 @@ describe('.claude/skills のシンボリックリンク', () => {
 		expect(links.length).toBeGreaterThan(0);
 	});
 
-	for (const { name, target } of links) {
-		it(`${name} が SKILL.md のある skill を指している`, () => {
-			expect(fs.existsSync(path.join(target, 'SKILL.md')), `.claude/skills/${name} のリンク切れ`).toBe(true);
+	for (const link of links) {
+		it(`${link.name} が SKILL.md のある skill を指す symlink である`, () => {
+			expect(link).not.toHaveProperty('problem');
+			const target = 'target' in link ? link.target : '';
+			expect(fs.existsSync(path.join(target, 'SKILL.md')), `.claude/skills/${link.name} のリンク切れ`).toBe(true);
 		});
 	}
 
-	it('symlink の代わりにリンク先のパスを書いたファイル（core.symlinks=false）もリンクとしてたどり、.DS_Store などの隠しファイルは数えない', () => {
-		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-links-'));
-		try {
+	describe('普通のファイルの扱い（core.symlinks=false の checkout を模す）', () => {
+		let tmp = '';
+		beforeEach(() => {
+			tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-links-'));
 			fs.mkdirSync(path.join(tmp, 'real/skill-a'), { recursive: true });
 			fs.writeFileSync(path.join(tmp, 'real/skill-a/SKILL.md'), '');
 			fs.mkdirSync(path.join(tmp, 'links'));
 			fs.writeFileSync(path.join(tmp, 'links/skill-a'), '../real/skill-a');
 			fs.writeFileSync(path.join(tmp, 'links/.DS_Store'), '');
-			const links = skillLinks(path.join(tmp, 'links'));
-			expect(links.map((l) => l.name)).toEqual(['skill-a']);
-			const [link] = links;
-			expect(fs.existsSync(path.join(link?.target ?? '', 'SKILL.md'))).toBe(true);
-		} finally {
+		});
+		afterEach(() => {
 			fs.rmSync(tmp, { recursive: true, force: true });
-		}
+		});
+
+		it('git が symlink（mode 120000）として持つファイルはリンク先をたどり、.DS_Store などの隠しファイルは数えない', () => {
+			const links = skillLinks(path.join(tmp, 'links'), () => GIT_SYMLINK_MODE);
+			expect(links).toEqual([{ name: 'skill-a', target: path.join(tmp, 'real/skill-a') }]);
+		});
+
+		it.each([
+			['普通のファイルとして追跡（100644）', '100644', '100644'],
+			['未追跡', undefined, '未追跡'],
+		])('%s のファイルは、中身がリンク先のパスでもリンクとして扱わない', (_label, mode, shown) => {
+			const links = skillLinks(path.join(tmp, 'links'), () => mode);
+			expect(links).toHaveLength(1);
+			expect(links[0]).not.toHaveProperty('target');
+			expect(links[0]).toHaveProperty('problem', expect.stringContaining(`git の mode: ${shown}`));
+		});
+
+		it('本物の symlink は git の mode を見ずにたどる', () => {
+			fs.rmSync(path.join(tmp, 'links/skill-a'));
+			// Windows で権限なしに作れるのは junction だけで、junction は絶対パスしか指せない。
+			fs.symlinkSync(path.join(tmp, 'real/skill-a'), path.join(tmp, 'links/skill-a'), 'junction');
+			const links = skillLinks(path.join(tmp, 'links'), () => {
+				throw new Error('symlink では git を呼ばない');
+			});
+			expect(links).toEqual([{ name: 'skill-a', target: path.join(tmp, 'real/skill-a') }]);
+		});
+	});
+
+	it('gitModeOf はリポジトリの symlink に 120000、普通のファイルに 100644、未追跡に undefined を返す', () => {
+		expect(gitModeOf(path.join(skillsDir, 'investment-onboarding'))).toBe(GIT_SYMLINK_MODE);
+		expect(gitModeOf(path.join(PACKAGE_ROOT, 'CLAUDE.md'))).toBe('100644');
+		expect(gitModeOf(path.join(PACKAGE_ROOT, 'no-such-file-for-test'))).toBeUndefined();
 	});
 });
