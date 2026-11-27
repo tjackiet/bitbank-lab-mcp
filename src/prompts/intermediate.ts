@@ -1,14 +1,5 @@
-import { SKILL_PROMPT_SECTIONS } from './skill-sections.generated.js';
+import { skillPromptText, userMessage } from './skill-prompt.js';
 import { PromptCategory, type PromptDef, PromptLevel } from './types.js';
-
-function userMessage(text: string) {
-	return [{ role: 'user' as const, content: [{ type: 'text', text }] }];
-}
-
-function skillPromptText(request: string, skill: keyof typeof SKILL_PROMPT_SECTIONS): string {
-	const section = SKILL_PROMPT_SECTIONS[skill].replaceAll('<pair>', 'btc_jpy').replaceAll('<PAIR>', 'BTC/JPY');
-	return `${request}\n\n${section}`;
-}
 
 export const intermediatePrompts: PromptDef[] = [
 	{
