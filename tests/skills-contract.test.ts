@@ -9,9 +9,11 @@ import {
 	renderGeneratedModule,
 	SKILLS_DIR,
 } from '../scripts/skill-prompts.js';
-import { DISCLAIMER_MARKET, DISCLAIMER_SHORT } from '../src/prompts/shared.js';
+import { beginnerPrompts } from '../src/prompts/beginner.js';
+import { intermediatePrompts } from '../src/prompts/intermediate.js';
+import { reportPrompts } from '../src/prompts/reports.js';
+import { DISCLAIMER_MARKET, DISCLAIMER_SHORT, VISUALIZER_OUTPUT_BLOCK } from '../src/prompts/shared.js';
 import { SKILL_PROMPT_SECTIONS } from '../src/prompts/skill-sections.generated.js';
-import { prompts } from '../src/prompts.js';
 import { skillLinks } from './helpers/skill-links.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -79,6 +81,8 @@ describe('SKILL.md から Prompt 本文への埋め込み', () => {
 市況は刻々と変動するため、実際のトレード前には最新状況を再確認してください。
 投資判断はご自身の責任でお願いします。`;
 
+	// ポートフォリオは API キーが無いと公開一覧から外れるので、フィルタ前の定義から探す。
+	const ALL_PROMPT_DEFS = [...reportPrompts, ...beginnerPrompts, ...intermediatePrompts];
 	const BTC = { pair: 'btc_jpy', display: 'BTC/JPY', asset: 'BTC' };
 	const ETH = { pair: 'eth_jpy', display: 'ETH/JPY', asset: 'ETH' };
 	const cases = [
@@ -94,12 +98,14 @@ describe('SKILL.md から Prompt 本文への埋め込み', () => {
 		{ prompt: '🔰 BTCの価格を分析して', skill: 'beginner-price-analysis', disclaimer: DISCLAIMER_MARKET, ...BTC },
 		{ prompt: '🔰 ETHの価格を分析して', skill: 'beginner-price-analysis', disclaimer: DISCLAIMER_MARKET, ...ETH },
 		{ prompt: '🔰 今注目のコインは？', skill: 'trending-coins', disclaimer: DISCLAIMER_SHORT, ...BTC },
+		{ prompt: '🌅 おはようレポート', skill: 'morning-report', disclaimer: DISCLAIMER_MARKET, ...BTC },
+		{ prompt: '💼 ポートフォリオ分析レポート', skill: 'portfolio-report', disclaimer: DISCLAIMER_MARKET, ...BTC },
 	] as const;
 
 	for (const { prompt: promptName, skill, disclaimer, pair, display, asset } of cases) {
 		describe(`Prompt: ${promptName}`, () => {
 			const section = SKILL_PROMPT_SECTIONS[skill];
-			const text = prompts.find((p) => p.name === promptName)?.messages[0]?.content[0]?.text ?? '';
+			const text = ALL_PROMPT_DEFS.find((p) => p.name === promptName)?.messages[0]?.content[0]?.text ?? '';
 
 			it(`本文は ${skill} の区間の <pair> / <PAIR> / <ASSET> を ${pair} / ${display} / ${asset} に置き換えたもので、プレースホルダが残らない`, () => {
 				expect(text).toContain(
@@ -187,6 +193,46 @@ describe('SKILL.md から Prompt 本文への埋め込み', () => {
 		['¥ は使わない'],
 	])('注目コインの区間に「%s」が残っている', (phrase) => {
 		expect(SKILL_PROMPT_SECTIONS['trending-coins']).toContain(phrase);
+	});
+
+	it.each([
+		['【ツール（この 3 つだけ。追加呼び出し禁止）】'],
+		['**必ず並列で** 呼ぶ'],
+		['前日比(24h) = get_ticker が算出済みの 24h変動'],
+		['<svg><polyline>'],
+		['render_chart_svg は使わない'],
+		['close が 1 点だけのとき（n < 2）は x の除算ができないため、polyline を描かず'],
+		['【出さないもの】'],
+	])('おはようレポートの区間に「%s」が残っている', (phrase) => {
+		expect(SKILL_PROMPT_SECTIONS['morning-report']).toContain(phrase);
+	});
+
+	it.each([
+		['analyze_my_portfolio(include_pnl=true, include_technical=true, include_deposit_withdrawal=true)'],
+		['monthly_equity_series'],
+		['**同じ図の使い回し禁止。**'],
+		['⚠️ 本レポートの数値は所得税計算に使用できません。'],
+	])('ポートフォリオの区間に「%s」が残っている', (phrase) => {
+		expect(SKILL_PROMPT_SECTIONS['portfolio-report']).toContain(phrase);
+	});
+
+	it.each([
+		['morning-report'],
+		['portfolio-report'],
+	] as const)('%s の区間は Visualizer の出力指示を shared.ts と同じ文面で含む', (skill) => {
+		expect(SKILL_PROMPT_SECTIONS[skill]).toContain(VISUALIZER_OUTPUT_BLOCK);
+	});
+
+	it.each([
+		['API キーが設定されていないため、口座の情報は取得できません'],
+		['残高や損益を推測したりしない'],
+		['`BITBANK_API_KEY` と `BITBANK_API_SECRET` の両方'],
+		['「出金」権限は付けない'],
+		['チャットに貼らせない'],
+	])('ポートフォリオの Skill（区間外）に API キーが無いときの指示「%s」がある', (phrase) => {
+		const skillMd = fs.readFileSync(path.join(SKILLS_ROOT, 'portfolio-report', 'SKILL.md'), 'utf8');
+		const outsideSection = skillMd.slice(0, skillMd.indexOf('<!-- prompt:start -->'));
+		expect(outsideSection).toContain(phrase);
 	});
 });
 

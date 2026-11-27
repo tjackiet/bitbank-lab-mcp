@@ -26,6 +26,7 @@ bitbank-lab-mcp に同梱する Agent Skill の索引。
 | [`order-flow-analysis`](./order-flow-analysis/SKILL.md) | 直近の約定から CVD・Aggressor Ratio・出来高スパイクを読み、買いと売りのどちらが優勢かをまとめる（デイトレ〜短期スイングの地合い確認向け）。 | 「今買われてる？売られてる？」「フロー見て」「CVD どうなってる？」 |
 | [`beginner-price-analysis`](./beginner-price-analysis/SKILL.md) | 最近の値動き（1 週間〜3 か月）と RSI・移動平均線・一目均衡表を、専門用語をかみ砕いて初心者向けにまとめる。 | 「最近のビットコインの動きを教えて」「初心者にも分かるように ETH を分析して」 |
 | [`trending-coins`](./trending-coins/SKILL.md) | 通貨強弱スコア・24 時間上昇率・出来高の上位から、いま注目されている銘柄を紹介する。 | 「今注目のコインは？」「最近強い銘柄ある？」「出来高が多いコインは？」 |
+| [`morning-report`](./morning-report/SKILL.md) | 今朝の現在値・前日比(24h)・24 時間のミニスパークライン・地合いだけを、5 秒で把握できる軽量レポートにする。 | 「おはようレポート」「今朝のビットコインどう？」「寝てる間にどうなった？」 |
 
 ### Signal & Strategy
 
@@ -33,6 +34,12 @@ bitbank-lab-mcp に同梱する Agent Skill の索引。
 |---|---|---|
 | [`chart-pattern-analysis`](./chart-pattern-analysis/SKILL.md) | 日足のチャートパターン（形成中・完成済み）とローソク足パターンを検出し、鮮度と現在価格との距離で重要度を付ける。 | 「ダブルトップ出てる？」「三角持ち合いになってる？」「パターン分析して」 |
 | [`indicator-analysis`](./indicator-analysis/SKILL.md) | RSI・MACD・移動平均線・一目均衡表・ボリンジャーバンドを横断して日足の総合判定を出し、次の転換サインを具体化する。 | 「RSI どう？」「MACD クロスしてる？」「テクニカル的に強い？」 |
+
+### Portfolio
+
+| Skill | 概要 | 代表的なユーザー発話 |
+|---|---|---|
+| [`portfolio-report`](./portfolio-report/SKILL.md) | 口座の残高・資産推移・保有銘柄の騰落・構成比・入出金を視覚化する。API キー（参照権限）が必要で、無いときはその旨と設定方法を案内する。 | 「私の資産どうなってる？」「ポートフォリオを見せて」「今月の資産の増減は？」 |
 
 <!--
 今後追加する際のカテゴリ案（CLI 側 INDEX.md と揃える）:

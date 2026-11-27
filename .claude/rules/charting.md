@@ -5,6 +5,7 @@ paths:
   - "src/handlers/*chart*.ts"
   - "src/handlers/*render*.ts"
   - "src/prompts.ts"
+  - "plugins/bitbank-lab-mcp/skills/morning-report/SKILL.md"
 ---
 
 # チャート・可視化ポリシー
@@ -33,4 +34,4 @@ Cursor では `savePng: true` + ワークスペース内の `outputDir` を推�
 
 ## 例外
 
-- おはようレポート（`src/prompts.ts` の ohayo）では `<svg><polyline>` 簡易スパークラインをインライン生成してよい
+- おはようレポート（`plugins/bitbank-lab-mcp/skills/morning-report/SKILL.md`。MCP Prompt「🌅 おはようレポート」も同じ本文）では `<svg><polyline>` 簡易スパークラインをインライン生成してよい
