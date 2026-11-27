@@ -68,6 +68,7 @@ MCP ツール（bitbank-lab-mcp）が使える前提で動く。
      ・点 i の x = 16 + i/(n−1) × (480 − 32)
      ・点 i の y = M + (1 − (close_i − min)/(max − min)) × (140 − 2M)
      ・max == min（無変化）のときは全点 y = 70 の水平線にする（ゼロ除算回避）
+     ・close が 1 点だけのとき（n < 2）は x の除算ができないため、polyline を描かず、その 1 点の close を数値で示す
    - <svg> に overflow="visible"、<polyline> は fill="none" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"。
    - 線色は方向で（任意）: 上げ=緑 / 下げ=赤 / 横ばい=グレー。
    - 始点(≈24h前)・終点(≈現在)の close 値だけ数値で添える。見出しは対象期間のみ簡潔に（例「直近24h（6/15 18:00→6/16 17:00 JST）」。本数・「終値」等の語は不要）。装飾はこれ以上盛らない。

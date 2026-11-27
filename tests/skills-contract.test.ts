@@ -201,6 +201,7 @@ describe('SKILL.md から Prompt 本文への埋め込み', () => {
 		['前日比(24h) = get_ticker が算出済みの 24h変動'],
 		['<svg><polyline>'],
 		['render_chart_svg は使わない'],
+		['close が 1 点だけのとき（n < 2）は x の除算ができないため、polyline を描かず'],
 		['【出さないもの】'],
 	])('おはようレポートの区間に「%s」が残っている', (phrase) => {
 		expect(SKILL_PROMPT_SECTIONS['morning-report']).toContain(phrase);
