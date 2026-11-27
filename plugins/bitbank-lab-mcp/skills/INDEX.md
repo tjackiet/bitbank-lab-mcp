@@ -24,6 +24,8 @@ bitbank-lab-mcp に同梱する Agent Skill の索引。
 |---|---|---|
 | [`support-resistance-analysis`](./support-resistance-analysis/SKILL.md) | 過去の反応実績（★）・板の厚み・直近の攻防からサポート / レジスタンスを評価し、シナリオと構造図にまとめる。 | 「ETH のサポレジどう？」「どこで止まりそう？」「上値の抵抗線は？」 |
 | [`order-flow-analysis`](./order-flow-analysis/SKILL.md) | 直近の約定から CVD・Aggressor Ratio・出来高スパイクを読み、買いと売りのどちらが優勢かをまとめる（デイトレ〜短期スイングの地合い確認向け）。 | 「今買われてる？売られてる？」「フロー見て」「CVD どうなってる？」 |
+| [`beginner-price-analysis`](./beginner-price-analysis/SKILL.md) | 最近の値動き（1 週間〜3 か月）と RSI・移動平均線・一目均衡表を、専門用語をかみ砕いて初心者向けにまとめる。 | 「最近のビットコインの動きを教えて」「初心者にも分かるように ETH を分析して」 |
+| [`trending-coins`](./trending-coins/SKILL.md) | 通貨強弱スコア・24 時間上昇率・出来高の上位から、いま注目されている銘柄を紹介する。 | 「今注目のコインは？」「最近強い銘柄ある？」「出来高が多いコインは？」 |
 
 ### Signal & Strategy
 

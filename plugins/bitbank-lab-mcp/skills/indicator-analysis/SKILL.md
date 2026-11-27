@@ -7,6 +7,7 @@ description: |
   「BTC をテクニカルで見て」「ETH の RSI どう？」「MACD はクロスしてる？」
   「雲の上？下？」「買われすぎ？売られすぎ？」「移動平均線との乖離は？」
   「主要指標で分析して」「テクニカル的に強い？弱い？」のような発話で使う。
+  最近の値動きを初心者向けにやさしく知りたい発話は beginner-price-analysis を使う。
   通貨ペアはユーザーの指定に従い、指定がなければ BTC/JPY。
 metadata:
   author: bitbank-aiforge

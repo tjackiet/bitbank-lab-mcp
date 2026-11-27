@@ -79,22 +79,34 @@ describe('SKILL.md から Prompt 本文への埋め込み', () => {
 市況は刻々と変動するため、実際のトレード前には最新状況を再確認してください。
 投資判断はご自身の責任でお願いします。`;
 
+	const BTC = { pair: 'btc_jpy', display: 'BTC/JPY', asset: 'BTC' };
+	const ETH = { pair: 'eth_jpy', display: 'ETH/JPY', asset: 'ETH' };
 	const cases = [
-		{ prompt: '中級：BTCのサポレジを分析して', skill: 'support-resistance-analysis', disclaimer: DISCLAIMER_MARKET },
-		{ prompt: '中級：BTCのパターン分析をして', skill: 'chart-pattern-analysis', disclaimer: DISCLAIMER_SHORT },
-		{ prompt: '中級：主要指標でBTCを分析して', skill: 'indicator-analysis', disclaimer: DISCLAIMER_MARKET },
-		{ prompt: '中級：BTCのフロー分析をして', skill: 'order-flow-analysis', disclaimer: DISCLAIMER_FLOW },
+		{
+			prompt: '中級：BTCのサポレジを分析して',
+			skill: 'support-resistance-analysis',
+			disclaimer: DISCLAIMER_MARKET,
+			...BTC,
+		},
+		{ prompt: '中級：BTCのパターン分析をして', skill: 'chart-pattern-analysis', disclaimer: DISCLAIMER_SHORT, ...BTC },
+		{ prompt: '中級：主要指標でBTCを分析して', skill: 'indicator-analysis', disclaimer: DISCLAIMER_MARKET, ...BTC },
+		{ prompt: '中級：BTCのフロー分析をして', skill: 'order-flow-analysis', disclaimer: DISCLAIMER_FLOW, ...BTC },
+		{ prompt: '🔰 BTCの価格を分析して', skill: 'beginner-price-analysis', disclaimer: DISCLAIMER_MARKET, ...BTC },
+		{ prompt: '🔰 ETHの価格を分析して', skill: 'beginner-price-analysis', disclaimer: DISCLAIMER_MARKET, ...ETH },
+		{ prompt: '🔰 今注目のコインは？', skill: 'trending-coins', disclaimer: DISCLAIMER_SHORT, ...BTC },
 	] as const;
 
-	for (const { prompt: promptName, skill, disclaimer } of cases) {
+	for (const { prompt: promptName, skill, disclaimer, pair, display, asset } of cases) {
 		describe(`Prompt: ${promptName}`, () => {
 			const section = SKILL_PROMPT_SECTIONS[skill];
 			const text = prompts.find((p) => p.name === promptName)?.messages[0]?.content[0]?.text ?? '';
 
-			it(`本文は ${skill} の区間の <pair> / <PAIR> を btc_jpy / BTC/JPY に置き換えたもので、プレースホルダが残らない`, () => {
-				expect(text).toContain(section.replaceAll('<pair>', 'btc_jpy').replaceAll('<PAIR>', 'BTC/JPY'));
-				expect(text).not.toMatch(/<pair>|<PAIR>/);
-				expect(text).toContain('pair=btc_jpy');
+			it(`本文は ${skill} の区間の <pair> / <PAIR> / <ASSET> を ${pair} / ${display} / ${asset} に置き換えたもので、プレースホルダが残らない`, () => {
+				expect(text).toContain(
+					section.replaceAll('<pair>', pair).replaceAll('<PAIR>', display).replaceAll('<ASSET>', asset),
+				);
+				expect(text).not.toMatch(/<pair>|<PAIR>|<ASSET>/);
+				expect(text.includes(`pair=${pair}`)).toBe(section.includes('pair=<pair>'));
 			});
 
 			it('Skill 側でもツール呼び出しはペアを固定しない', () => {
@@ -154,6 +166,27 @@ describe('SKILL.md から Prompt 本文への埋め込み', () => {
 		['📸 YYYY/MM/DD HH:MM:SS JST 時点'],
 	])('フローの区間に「%s」が残っている', (phrase) => {
 		expect(SKILL_PROMPT_SECTIONS['order-flow-analysis']).toContain(phrase);
+	});
+
+	it.each([
+		['get_candles(pair=<pair>, type=1day, limit=90)'],
+		['analyze_market_signal(pair=<pair>, type=1day)'],
+		['analyze_indicators(pair=<pair>, type=1day, limit=50)'],
+		['# 📊 <ASSET>分析レポート'],
+		['わかりやすい言葉（正式名称）'],
+		['RSI は値 ÷ 10 で 10 ブロック'],
+		['+2% 以上 = 上昇、-2% 以下 = 下落'],
+	])('初心者向け価格分析の区間に「%s」が残っている', (phrase) => {
+		expect(SKILL_PROMPT_SECTIONS['beginner-price-analysis']).toContain(phrase);
+	});
+
+	it.each([
+		['analyze_currency_strength(topN=10)` を 1 回だけ'],
+		['get_ticker` / `get_tickers_jpy` は不要'],
+		['スコア = 24h 変化率(40%) + RSI(30%) + SMA25 乖離(25%) + 出来高順位(5%)'],
+		['¥ は使わない'],
+	])('注目コインの区間に「%s」が残っている', (phrase) => {
+		expect(SKILL_PROMPT_SECTIONS['trending-coins']).toContain(phrase);
 	});
 });
 
