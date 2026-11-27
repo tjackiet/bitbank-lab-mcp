@@ -73,9 +73,17 @@ describe('SKILL.md から Prompt 本文への埋め込み', () => {
 		expect({ ...SKILL_PROMPT_SECTIONS }).toEqual(expected);
 	});
 
+	// フローの免責事項は shared.ts に無い独自の文面で、Prompt にあった文面のまま残す。
+	const DISCLAIMER_FLOW = `---
+⚠️ 免責事項：この分析は参考情報であり、解釈には誤差が含まれる場合があります。
+市況は刻々と変動するため、実際のトレード前には最新状況を再確認してください。
+投資判断はご自身の責任でお願いします。`;
+
 	const cases = [
 		{ prompt: '中級：BTCのサポレジを分析して', skill: 'support-resistance-analysis', disclaimer: DISCLAIMER_MARKET },
 		{ prompt: '中級：BTCのパターン分析をして', skill: 'chart-pattern-analysis', disclaimer: DISCLAIMER_SHORT },
+		{ prompt: '中級：主要指標でBTCを分析して', skill: 'indicator-analysis', disclaimer: DISCLAIMER_MARKET },
+		{ prompt: '中級：BTCのフロー分析をして', skill: 'order-flow-analysis', disclaimer: DISCLAIMER_FLOW },
 	] as const;
 
 	for (const { prompt: promptName, skill, disclaimer } of cases) {
@@ -83,9 +91,9 @@ describe('SKILL.md から Prompt 本文への埋め込み', () => {
 			const section = SKILL_PROMPT_SECTIONS[skill];
 			const text = prompts.find((p) => p.name === promptName)?.messages[0]?.content[0]?.text ?? '';
 
-			it(`本文は ${skill} の区間を btc_jpy に置き換えたもので、<pair> が残らない`, () => {
-				expect(text).toContain(section.replaceAll('<pair>', 'btc_jpy'));
-				expect(text).not.toContain('<pair>');
+			it(`本文は ${skill} の区間の <pair> / <PAIR> を btc_jpy / BTC/JPY に置き換えたもので、プレースホルダが残らない`, () => {
+				expect(text).toContain(section.replaceAll('<pair>', 'btc_jpy').replaceAll('<PAIR>', 'BTC/JPY'));
+				expect(text).not.toMatch(/<pair>|<PAIR>/);
 				expect(text).toContain('pair=btc_jpy');
 			});
 
@@ -124,6 +132,28 @@ describe('SKILL.md から Prompt 本文への埋め込み', () => {
 		['render_candle_pattern_diagram'],
 	])('パターンの区間に「%s」が残っている', (phrase) => {
 		expect(SKILL_PROMPT_SECTIONS['chart-pattern-analysis']).toContain(phrase);
+	});
+
+	it.each([
+		['analyze_indicators(pair=<pair>, type=1day, limit=200)'],
+		['# 📊 <PAIR> 日足分析レポート'],
+		['content の数値をそのまま使う'],
+		['矛盾は明示'],
+		['## 🎯 次の転換サイン'],
+	])('主要指標の区間に「%s」が残っている', (phrase) => {
+		expect(SKILL_PROMPT_SECTIONS['indicator-analysis']).toContain(phrase);
+	});
+
+	it.each([
+		['get_flow_metrics(pair=<pair>, limit=300, bucketMs=60000, view=full, nonZeroOnly=true)'],
+		['get_transactions(pair=<pair>, limit=200, view=full)'],
+		['Aggressor Ratio（50% を基準）'],
+		['Volume Spike（z > 2）'],
+		['直近 1〜3 時間を重視'],
+		['鮮度が足りない'],
+		['📸 YYYY/MM/DD HH:MM:SS JST 時点'],
+	])('フローの区間に「%s」が残っている', (phrase) => {
+		expect(SKILL_PROMPT_SECTIONS['order-flow-analysis']).toContain(phrase);
 	});
 });
 
